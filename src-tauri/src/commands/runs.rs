@@ -1,0 +1,181 @@
+use crate::db::DbPool;
+use crate::models::run::{Run, RunSummary};
+use log::{info, warn};
+
+#[tauri::command]
+pub async fn list_runs(
+    limit: Option<i64>,
+    offset: Option<i64>,
+    task_id: Option<String>,
+    state_filter: Option<String>,
+    db: tauri::State<'_, DbPool>,
+) -> Result<Vec<RunSummary>, String> {
+    let pool = db.0.clone();
+    let limit = limit.unwrap_or(100);
+    let offset = offset.unwrap_or(0);
+
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+
+        let mut sql = String::from(
+            "SELECT r.id, r.task_id, t.name as task_name, r.schedule_id,
+                    r.agent_id, a.name as agent_name,
+                    r.state, r.trigger, r.exit_code,
+                    r.started_at, r.finished_at, r.duration_ms, r.retry_count, r.created_at
+             FROM runs r
+             LEFT JOIN tasks t ON t.id = r.task_id
+             LEFT JOIN agents a ON a.id = r.agent_id
+             WHERE 1=1"
+        );
+
+        if task_id.is_some() {
+            sql.push_str(" AND r.task_id = ?3");
+        }
+        info!("State filter: {:?}", state_filter);
+        if state_filter.is_some() && state_filter.as_ref().unwrap() != "all" {
+            info!("Applying state filter: {}", state_filter.as_ref().unwrap());
+            sql.push_str(" AND r.state = ?4");
+        }
+        sql.push_str(" ORDER BY r.created_at DESC LIMIT ?1 OFFSET ?2");
+        
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        info!("SQL Query: {:?}", stmt.expanded_sql());
+
+        let runs = stmt
+            .query_map(
+                rusqlite::params![limit, offset, task_id, state_filter],
+                |row| {
+                    Ok(RunSummary {
+                        id: row.get(0)?,
+                        task_id: row.get(1)?,
+                        task_name: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                        schedule_id: row.get(3)?,
+                        agent_id: row.get(4)?,
+                        agent_name: row.get(5)?,
+                        state: row.get(6)?,
+                        trigger: row.get(7)?,
+                        exit_code: row.get(8)?,
+                        started_at: row.get(9)?,
+                        finished_at: row.get(10)?,
+                        duration_ms: row.get(11)?,
+                        retry_count: row.get(12)?,
+                        created_at: row.get(13)?,
+                    })
+                },
+            )
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(runs)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_run(id: String, db: tauri::State<'_, DbPool>) -> Result<Run, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT id, task_id, schedule_id, agent_id, state, trigger, exit_code, pid,
+                    log_path, started_at, finished_at, duration_ms, retry_count,
+                    parent_run_id, metadata, created_at
+             FROM runs WHERE id = ?1",
+            rusqlite::params![id],
+            |row| {
+                let meta_str: String = row.get(14)?;
+                Ok(Run {
+                    id: row.get(0)?,
+                    task_id: row.get(1)?,
+                    schedule_id: row.get(2)?,
+                    agent_id: row.get(3)?,
+                    state: row.get(4)?,
+                    trigger: row.get(5)?,
+                    exit_code: row.get(6)?,
+                    pid: row.get(7)?,
+                    log_path: row.get(8)?,
+                    started_at: row.get(9)?,
+                    finished_at: row.get(10)?,
+                    duration_ms: row.get(11)?,
+                    retry_count: row.get(12)?,
+                    parent_run_id: row.get(13)?,
+                    metadata: serde_json::from_str(&meta_str).unwrap_or(serde_json::Value::Null),
+                    created_at: row.get(15)?,
+                })
+            },
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_active_runs(db: tauri::State<'_, DbPool>) -> Result<Vec<RunSummary>, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT r.id, r.task_id, t.name as task_name, r.schedule_id,
+                        r.agent_id, a.name as agent_name,
+                        r.state, r.trigger, r.exit_code,
+                        r.started_at, r.finished_at, r.duration_ms, r.retry_count, r.created_at
+                 FROM runs r
+                 LEFT JOIN tasks t ON t.id = r.task_id
+                 LEFT JOIN agents a ON a.id = r.agent_id
+                 WHERE r.state IN ('pending', 'queued', 'running')
+                 ORDER BY r.created_at DESC",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let runs = stmt
+            .query_map([], |row| {
+                Ok(RunSummary {
+                    id: row.get(0)?,
+                    task_id: row.get(1)?,
+                    task_name: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    schedule_id: row.get(3)?,
+                    agent_id: row.get(4)?,
+                    agent_name: row.get(5)?,
+                    state: row.get(6)?,
+                    trigger: row.get(7)?,
+                    exit_code: row.get(8)?,
+                    started_at: row.get(9)?,
+                    finished_at: row.get(10)?,
+                    duration_ms: row.get(11)?,
+                    retry_count: row.get(12)?,
+                    created_at: row.get(13)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(runs)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn read_run_log(run_id: String, db: tauri::State<'_, DbPool>) -> Result<String, String> {
+    let pool = db.0.clone();
+    let log_path: String = tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT log_path FROM runs WHERE id = ?1",
+            rusqlite::params![run_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    tokio::fs::read_to_string(&log_path)
+        .await
+        .map_err(|e| format!("cannot read log file: {}", e))
+}

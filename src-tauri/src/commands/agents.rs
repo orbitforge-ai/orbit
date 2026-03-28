@@ -1,0 +1,97 @@
+use ulid::Ulid;
+
+use crate::db::DbPool;
+use crate::models::agent::{Agent, CreateAgent};
+
+#[tauri::command]
+pub async fn list_agents(db: tauri::State<'_, DbPool>) -> Result<Vec<Agent>, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, description, state, max_concurrent_runs, heartbeat_at, created_at, updated_at
+                 FROM agents ORDER BY created_at ASC",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let agents = stmt
+            .query_map([], |row| {
+                Ok(Agent {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    state: row.get(3)?,
+                    max_concurrent_runs: row.get(4)?,
+                    heartbeat_at: row.get(5)?,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(agents)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn create_agent(
+    payload: CreateAgent,
+    db: tauri::State<'_, DbPool>,
+) -> Result<Agent, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let id = Ulid::new().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let max_runs = payload.max_concurrent_runs.unwrap_or(5);
+
+        conn.execute(
+            "INSERT INTO agents (id, name, description, state, max_concurrent_runs, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'idle', ?4, ?5, ?5)",
+            rusqlite::params![id, payload.name, payload.description, max_runs, now],
+        )
+        .map_err(|e| e.to_string())?;
+
+        conn.query_row(
+            "SELECT id, name, description, state, max_concurrent_runs, heartbeat_at, created_at, updated_at
+             FROM agents WHERE id = ?1",
+            rusqlite::params![id],
+            |row| {
+                Ok(Agent {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    state: row.get(3)?,
+                    max_concurrent_runs: row.get(4)?,
+                    heartbeat_at: row.get(5)?,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                })
+            },
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn delete_agent(id: String, db: tauri::State<'_, DbPool>) -> Result<(), String> {
+    if id == "01HZDEFAULTDEFAULTDEFAULTDA" {
+        return Err("cannot delete the default agent".to_string());
+    }
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM agents WHERE id = ?1", rusqlite::params![id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}

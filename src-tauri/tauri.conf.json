@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "orbit",
+  "productName": "Orbit",
   "version": "0.1.0",
-  "identifier": "com.orbitforge.orbit",
+  "identifier": "ai.orbitforge.orbit",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -12,9 +12,13 @@
   "app": {
     "windows": [
       {
-        "title": "orbit",
-        "width": 800,
-        "height": 600
+        "title": "Orbit",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "decorations": true,
+        "transparent": false
       }
     ],
     "security": {
@@ -30,6 +34,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
   }
 }
