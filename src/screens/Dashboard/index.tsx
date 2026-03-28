@@ -10,7 +10,7 @@ import { useLiveRunStore } from "../../store/liveRunStore";
 import { useUiStore } from "../../store/uiStore";
 import { formatDuration, formatElapsed } from "../../lib/formatDuration";
 import { humanSchedule } from "../../lib/humanSchedule";
-import { RecurringConfig, RunSummary } from "../../types";
+import { RecurringConfig, RunState } from "../../types";
 
 export function Dashboard() {
   const queryClient = useQueryClient();
@@ -108,7 +108,7 @@ export function Dashboard() {
             {activeRunList.map((run) => (
               <ActiveRunCard
                 key={run.runId}
-                run={run as RunSummary}
+                run={run}
                 onClick={() => {
                   selectRun(run.runId);
                   navigate("history");
@@ -212,7 +212,7 @@ function ActiveRunCard({
   run,
   onClick,
 }: {
-  run: RunSummary & { runId?: string; taskName?: string };
+  run: { id?: string; runId?: string; taskName?: string; state: RunState; startedAt: string | null };
   onClick: () => void;
 }) {
   const liveRun = useLiveRunStore(

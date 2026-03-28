@@ -78,8 +78,30 @@ pub async fn run_shell(
         let mut log_file = tokio::fs::File::create(&log_path_clone)
             .await
             .expect("cannot create log file");
+        let mut bytes_written: u64 = 0;
+        let mut rotation_index: u8 = 0;
 
         use tokio::io::AsyncWriteExt;
+
+        async fn rotate_log(
+            log_path: &PathBuf,
+            current_file: tokio::fs::File,
+            rotation_index: &mut u8,
+        ) -> tokio::fs::File {
+            drop(current_file);
+            // Rotate up to 3 old files: .log.3 is discarded if present
+            for i in (1..=(*rotation_index).min(2)).rev() {
+                let from = log_path.with_extension(format!("log.{}", i));
+                let to = log_path.with_extension(format!("log.{}", i + 1));
+                let _ = tokio::fs::rename(&from, &to).await;
+            }
+            let rotated = log_path.with_extension("log.1");
+            let _ = tokio::fs::rename(log_path, &rotated).await;
+            *rotation_index = (*rotation_index + 1).min(3);
+            tokio::fs::File::create(log_path)
+                .await
+                .expect("cannot create rotated log file")
+        }
 
         loop {
             tokio::select! {
@@ -87,7 +109,13 @@ pub async fn run_shell(
                     match line {
                         Ok(Some(l)) => {
                             let entry = format!("{}\n", l);
-                            let _ = log_file.write_all(entry.as_bytes()).await;
+                            let entry_bytes = entry.as_bytes();
+                            let _ = log_file.write_all(entry_bytes).await;
+                            bytes_written += entry_bytes.len() as u64;
+                            if bytes_written >= 50 * 1024 * 1024 {
+                                log_file = rotate_log(&log_path_clone, log_file, &mut rotation_index).await;
+                                bytes_written = 0;
+                            }
                             batch.push(("stdout".to_string(), l));
                         }
                         _ => break,
@@ -97,7 +125,13 @@ pub async fn run_shell(
                     match line {
                         Ok(Some(l)) => {
                             let entry = format!("[stderr] {}\n", l);
-                            let _ = log_file.write_all(entry.as_bytes()).await;
+                            let entry_bytes = entry.as_bytes();
+                            let _ = log_file.write_all(entry_bytes).await;
+                            bytes_written += entry_bytes.len() as u64;
+                            if bytes_written >= 50 * 1024 * 1024 {
+                                log_file = rotate_log(&log_path_clone, log_file, &mut rotation_index).await;
+                                bytes_written = 0;
+                            }
                             batch.push(("stderr".to_string(), l));
                         }
                         _ => {}

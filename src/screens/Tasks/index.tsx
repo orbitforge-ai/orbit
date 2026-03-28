@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play, Trash2, ToggleLeft, ToggleRight } from "lucide-react";
+import { Play, Pencil, Trash2, ToggleLeft, ToggleRight } from "lucide-react";
 import { tasksApi } from "../../api/tasks";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useUiStore } from "../../store/uiStore";
@@ -8,7 +8,7 @@ import {info} from '@tauri-apps/plugin-log'
 import { confirm } from '@tauri-apps/plugin-dialog';
 
 export function TasksScreen() {
-  const { navigate } = useUiStore();
+  const { navigate, editTask } = useUiStore();
   const queryClient = useQueryClient();
 
   const { data: tasks = [], isLoading } = useQuery({
@@ -85,6 +85,13 @@ export function TasksScreen() {
                   className="p-1.5 rounded text-[#64748b] hover:text-green-400 hover:bg-green-500/10 transition-colors"
                 >
                   <Play size={14} />
+                </button>
+                <button
+                  onClick={() => editTask(task.id)}
+                  title="Edit"
+                  className="p-1.5 rounded text-[#64748b] hover:text-white hover:bg-[#2a2d3e] transition-colors"
+                >
+                  <Pencil size={14} />
                 </button>
                 <button
                   onClick={() => handleToggle(task)}
