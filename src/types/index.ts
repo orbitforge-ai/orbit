@@ -16,7 +16,7 @@ export interface Task {
   name: string;
   description: string | null;
   kind: "shell_command" | "script_file" | "http_request" | "agent_step";
-  config: ShellCommandConfig | HttpRequestConfig | Record<string, unknown>;
+  config: ShellCommandConfig | ScriptFileConfig | HttpRequestConfig | AgentStepConfig | Record<string, unknown>;
   maxDurationSeconds: number;
   maxRetries: number;
   retryDelaySeconds: number;
@@ -36,6 +36,13 @@ export interface ShellCommandConfig {
   shell?: string;
 }
 
+export interface ScriptFileConfig {
+  scriptPath: string;
+  interpreter?: string;
+  workingDirectory?: string;
+  environment?: Record<string, string>;
+}
+
 export interface HttpRequestConfig {
   url: string;
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -43,6 +50,13 @@ export interface HttpRequestConfig {
   body?: string;
   timeoutSeconds?: number;
   expectedStatusCodes?: number[];
+}
+
+export interface AgentStepConfig {
+  command: string;
+  workingDirectory?: string;
+  environment?: Record<string, string>;
+  sessionId?: string;
 }
 
 export type RunState =
@@ -116,6 +130,16 @@ export interface OneShotConfig {
   timezone: string;
 }
 
+export interface Session {
+  id: string;
+  name: string;
+  description: string | null;
+  environment: Record<string, string>;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ─── IPC event payloads ───────────────────────────────────────────────────────
 
 export interface LogLine {
@@ -142,13 +166,14 @@ export interface CreateTask {
   name: string;
   description?: string;
   kind: Task["kind"];
-  config: ShellCommandConfig | HttpRequestConfig | Record<string, unknown>;
+  config: ShellCommandConfig | ScriptFileConfig | HttpRequestConfig | AgentStepConfig | Record<string, unknown>;
   maxDurationSeconds?: number;
   maxRetries?: number;
   retryDelaySeconds?: number;
   concurrencyPolicy?: Task["concurrencyPolicy"];
   tags?: string[];
   agentId?: string;
+  sessionId?: string;
 }
 
 export interface CreateSchedule {
@@ -161,4 +186,24 @@ export interface CreateAgent {
   name: string;
   description?: string;
   maxConcurrentRuns?: number;
+}
+
+export interface UpdateAgent {
+  name?: string;
+  description?: string;
+  maxConcurrentRuns?: number;
+}
+
+export interface CreateSession {
+  name: string;
+  description?: string;
+  environment?: Record<string, string>;
+  tags?: string[];
+}
+
+export interface UpdateSession {
+  name?: string;
+  description?: string;
+  environment?: Record<string, string>;
+  tags?: string[];
 }

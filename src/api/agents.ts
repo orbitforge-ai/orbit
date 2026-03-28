@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Agent, CreateAgent } from "../types";
+import { Agent, CreateAgent, UpdateAgent } from "../types";
 
 export const agentsApi = {
   list: (): Promise<Agent[]> =>
@@ -8,6 +8,12 @@ export const agentsApi = {
   create: (payload: CreateAgent): Promise<Agent> =>
     invoke("create_agent", { payload }),
 
+  update: (id: string, payload: UpdateAgent): Promise<Agent> =>
+    invoke("update_agent", { id, payload }),
+
   delete: (id: string): Promise<void> =>
     invoke("delete_agent", { id }),
+
+  cancelRun: (runId: string): Promise<void> =>
+    invoke("cancel_run", { runId }),
 };

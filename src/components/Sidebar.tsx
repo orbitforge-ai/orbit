@@ -4,6 +4,7 @@ import {
   History,
   Bot,
   Clock,
+  Boxes,
   Plus,
 } from "lucide-react";
 import { cn } from "../lib/cn";
@@ -15,6 +16,7 @@ const NAV_ITEMS = [
   { id: "history" as const, label: "Run History", icon: History },
   { id: "agents" as const, label: "Agents", icon: Bot },
   { id: "schedules" as const, label: "Schedules", icon: Clock },
+  { id: "sessions" as const, label: "Sessions", icon: Boxes },
 ];
 
 export function Sidebar() {

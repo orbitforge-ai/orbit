@@ -6,9 +6,18 @@ type Screen =
   | "history"
   | "agents"
   | "schedules"
+  | "sessions"
   | "task-builder"
   | "schedule-builder"
   | "task-edit";
+
+function getPersistedScreen(): Screen {
+  try {
+    const saved = localStorage.getItem("orbit:lastScreen");
+    if (saved) return saved as Screen;
+  } catch {}
+  return "dashboard";
+}
 
 interface UiStore {
   screen: Screen;
@@ -25,13 +34,16 @@ interface UiStore {
 }
 
 export const useUiStore = create<UiStore>((set) => ({
-  screen: "dashboard",
+  screen: getPersistedScreen(),
   selectedRunId: null,
   selectedTaskId: null,
   editingTaskId: null,
   logPanelOpen: false,
 
-  navigate: (screen) => set({ screen }),
+  navigate: (screen) => {
+    try { localStorage.setItem("orbit:lastScreen", screen); } catch {}
+    set({ screen });
+  },
   selectRun: (id) => set({ selectedRunId: id, logPanelOpen: id !== null }),
   selectTask: (id) => set({ selectedTaskId: id }),
   editTask: (id) => set({ editingTaskId: id, screen: "task-edit" }),

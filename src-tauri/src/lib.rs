@@ -53,10 +53,11 @@ pub fn run() {
             app.manage(db_pool.clone());
             app.manage(executor_tx_state);
 
-            // Start execution engine
+            // Start execution engine (now takes tx clone for retry scheduling)
             let engine = ExecutorEngine::new(
                 db_pool.clone(),
                 executor_rx,
+                executor_tx.clone(),
                 app.handle().clone(),
                 log_dir.clone(),
             );
@@ -123,7 +124,15 @@ pub fn run() {
             // Agents
             commands::agents::list_agents,
             commands::agents::create_agent,
-            commands::agents::delete_agent
+            commands::agents::update_agent,
+            commands::agents::delete_agent,
+            commands::agents::cancel_run,
+            // Sessions
+            commands::sessions::list_sessions,
+            commands::sessions::get_session,
+            commands::sessions::create_session,
+            commands::sessions::update_session,
+            commands::sessions::delete_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

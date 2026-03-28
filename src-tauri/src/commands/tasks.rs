@@ -221,6 +221,47 @@ pub async fn update_task(
           )
           .map_err(|e| e.to_string())?;
       }
+      if let Some(max_duration) = payload.max_duration_seconds {
+        conn
+          .execute(
+            "UPDATE tasks SET max_duration_seconds = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![max_duration, now, id]
+          )
+          .map_err(|e| e.to_string())?;
+      }
+      if let Some(max_retries) = payload.max_retries {
+        conn
+          .execute(
+            "UPDATE tasks SET max_retries = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![max_retries, now, id]
+          )
+          .map_err(|e| e.to_string())?;
+      }
+      if let Some(retry_delay) = payload.retry_delay_seconds {
+        conn
+          .execute(
+            "UPDATE tasks SET retry_delay_seconds = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![retry_delay, now, id]
+          )
+          .map_err(|e| e.to_string())?;
+      }
+      if let Some(policy) = &payload.concurrency_policy {
+        conn
+          .execute(
+            "UPDATE tasks SET concurrency_policy = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![policy, now, id]
+          )
+          .map_err(|e| e.to_string())?;
+      }
+      if let Some(tags) = &payload.tags {
+        let t = serde_json::to_string(tags).map_err(|e| e.to_string())?;
+        conn
+          .execute(
+            "UPDATE tasks SET tags = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![t, now, id]
+          )
+          .map_err(|e| e.to_string())?;
+      }
 
       conn
         .query_row(
@@ -334,6 +375,8 @@ pub async fn trigger_task(
           task,
           schedule_id: None,
           trigger: "manual".to_string(),
+          retry_count: 0,
+          parent_run_id: None,
         })
         .map_err(|e| e.to_string())?;
 
