@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use tokio::time::{interval, Duration};
+use tracing::{error, info, warn};
 use ulid::Ulid;
 
 use crate::db::DbPool;
@@ -24,18 +25,23 @@ impl SchedulerEngine {
         app: tauri::AppHandle,
         log_dir: PathBuf,
     ) -> Self {
-        Self { db, executor_tx, app, log_dir }
+        Self {
+            db,
+            executor_tx,
+            app,
+            log_dir,
+        }
     }
 
     pub async fn run(self) {
-        tracing::info!("SchedulerEngine started");
+        info!("SchedulerEngine started");
 
         // On startup: recover orphaned runs and compute initial next_run_at values
         if let Err(e) = self.recover_orphans() {
-            tracing::warn!("orphan recovery failed: {}", e);
+            warn!("orphan recovery failed: {}", e);
         }
         if let Err(e) = self.recompute_next_runs() {
-            tracing::warn!("next_run_at recompute failed: {}", e);
+            warn!("next_run_at recompute failed: {}", e);
         }
 
         let mut tick = interval(Duration::from_secs(10));
@@ -43,7 +49,7 @@ impl SchedulerEngine {
         loop {
             tick.tick().await;
             if let Err(e) = self.tick() {
-                tracing::error!("scheduler tick failed: {}", e);
+                error!("scheduler tick failed: {}", e);
             }
         }
     }
@@ -55,12 +61,12 @@ impl SchedulerEngine {
 
         // Find all enabled schedules where next_run_at <= now
         let mut stmt = conn
-            .prepare(
-                "SELECT s.id, s.task_id, s.kind, s.config, s.enabled, s.next_run_at, s.last_run_at, s.created_at, s.updated_at
+      .prepare(
+        "SELECT s.id, s.task_id, s.kind, s.config, s.enabled, s.next_run_at, s.last_run_at, s.created_at, s.updated_at
                  FROM schedules s
-                 WHERE s.enabled = 1 AND s.next_run_at <= ?1",
-            )
-            .map_err(|e| e.to_string())?;
+                 WHERE s.enabled = 1 AND s.next_run_at <= ?1"
+      )
+      .map_err(|e| e.to_string())?;
 
         let due: Vec<(String, String, String, String)> = stmt
             .query_map(rusqlite::params![now], |row| {
@@ -81,26 +87,29 @@ impl SchedulerEngine {
             // Load the task
             let task = match load_task(&conn, &task_id) {
                 Some(t) if t.enabled => t,
-                _ => continue,
+                _ => {
+                    continue;
+                }
             };
 
             // Create a Run record
             let run_id = Ulid::new().to_string();
             let log_path = self.log_dir.join(format!("{}.log", run_id));
 
-            conn.execute(
-                "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, metadata, created_at)
+            conn
+        .execute(
+          "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, metadata, created_at)
                  VALUES (?1, ?2, ?3, ?4, 'pending', 'scheduled', ?5, 0, '{}', ?6)",
-                rusqlite::params![
-                    run_id,
-                    task_id,
-                    schedule_id,
-                    task.agent_id,
-                    log_path.to_string_lossy().to_string(),
-                    now,
-                ],
-            )
-            .map_err(|e| e.to_string())?;
+          rusqlite::params![
+            run_id,
+            task_id,
+            schedule_id,
+            task.agent_id,
+            log_path.to_string_lossy().to_string(),
+            now
+          ]
+        )
+        .map_err(|e| e.to_string())?;
 
             // Enqueue to executor
             let _ = self.executor_tx.0.send(RunRequest {
@@ -114,15 +123,16 @@ impl SchedulerEngine {
             if let Ok(cfg) = serde_json::from_str::<RecurringConfig>(&config_str) {
                 if let Ok(cron_expr) = to_cron(&cfg) {
                     let next = compute_next(&cron_expr);
-                    conn.execute(
-                        "UPDATE schedules SET next_run_at = ?1, last_run_at = ?2, updated_at = ?2 WHERE id = ?3",
-                        rusqlite::params![next, now, schedule_id],
-                    )
-                    .ok();
+                    conn
+            .execute(
+              "UPDATE schedules SET next_run_at = ?1, last_run_at = ?2, updated_at = ?2 WHERE id = ?3",
+              rusqlite::params![next, now, schedule_id]
+            )
+            .ok();
                 }
             }
 
-            tracing::info!(run_id = run_id, schedule_id = schedule_id, "run enqueued");
+            info!(run_id = run_id, schedule_id = schedule_id, "run enqueued");
         }
 
         Ok(())
@@ -135,8 +145,10 @@ impl SchedulerEngine {
         let now = chrono::Utc::now().to_rfc3339();
 
         let mut stmt = conn
-            .prepare("SELECT id, kind, config FROM schedules WHERE enabled = 1 AND (next_run_at IS NULL OR next_run_at < ?1)")
-            .map_err(|e| e.to_string())?;
+      .prepare(
+        "SELECT id, kind, config FROM schedules WHERE enabled = 1 AND (next_run_at IS NULL OR next_run_at < ?1)"
+      )
+      .map_err(|e| e.to_string())?;
 
         let rows: Vec<(String, String, String)> = stmt
             .query_map(rusqlite::params![now], |row| {
@@ -219,8 +231,7 @@ fn load_task(conn: &rusqlite::Connection, task_id: &str) -> Option<Task> {
                 name: row.get(1)?,
                 description: row.get(2)?,
                 kind: row.get(3)?,
-                config: serde_json::from_str(&config_str)
-                    .unwrap_or(serde_json::Value::Null),
+                config: serde_json::from_str(&config_str).unwrap_or(serde_json::Value::Null),
                 max_duration_seconds: row.get(5)?,
                 max_retries: row.get(6)?,
                 retry_delay_seconds: row.get(7)?,

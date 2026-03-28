@@ -2,9 +2,17 @@ use crate::models::run::RunState;
 
 #[derive(Debug, Clone)]
 pub enum ExecutorEvent {
-    Started { pid: u32 },
-    Succeeded { exit_code: i32, duration_ms: i64 },
-    Failed { exit_code: Option<i32>, reason: String },
+    Started {
+        pid: u32,
+    },
+    Succeeded {
+        exit_code: i32,
+        duration_ms: i64,
+    },
+    Failed {
+        exit_code: Option<i32>,
+        reason: String,
+    },
     TimedOut,
     Cancelled,
 }
@@ -52,10 +60,7 @@ mod tests {
 
     #[test]
     fn invalid_transition_rejected() {
-        let result = transition(
-            &RunState::Success,
-            &ExecutorEvent::Started { pid: 1 },
-        );
+        let result = transition(&RunState::Success, &ExecutorEvent::Started { pid: 1 });
         assert!(result.is_err());
     }
 }

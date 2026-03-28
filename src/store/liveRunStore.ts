@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { LogLine, RunState, RunSummary } from "../types";
+import { info } from "@tauri-apps/plugin-log";
 
 interface LiveRun {
   runId: string;
@@ -46,7 +47,29 @@ export const useLiveRunStore = create<LiveRunStore>((set) => ({
   updateRunState: (runId, newState) =>
     set((state) => {
       const run = state.activeRuns[runId];
-      if (!run) return state;
+
+      // If run doesn't exist yet (e.g., manually triggered task), create a placeholder
+      // so subsequent log chunks can be stored. This ensures manual triggers work
+      // even when the Dashboard isn't mounted to call upsertRun first.
+      if (!run) {
+        info(`Manually triggered run ${runId}`);
+        const placeholder: LiveRun = {
+          runId,
+          taskName: "Unknown Task",
+          state: newState,
+          startedAt: null,
+          logs: [],
+        };
+        const updated = { ...state.activeRuns, [runId]: placeholder };
+
+        if (TERMINAL_STATES.includes(newState)) {
+          setTimeout(() => {
+            useLiveRunStore.getState().removeRun(runId);
+          }, 5000);
+        }
+
+        return { activeRuns: updated };
+      }
 
       const updated = { ...state.activeRuns, [runId]: { ...run, state: newState } };
 

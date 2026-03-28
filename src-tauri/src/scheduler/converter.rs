@@ -80,7 +80,10 @@ pub fn next_n_runs(cfg: &RecurringConfig, n: usize) -> Vec<String> {
     results
 }
 
-fn advance(cfg: &RecurringConfig, from: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
+fn advance(
+    cfg: &RecurringConfig,
+    from: chrono::DateTime<chrono::Utc>,
+) -> chrono::DateTime<chrono::Utc> {
     use chrono::Duration;
 
     match cfg.interval_unit.as_str() {
@@ -92,11 +95,12 @@ fn advance(cfg: &RecurringConfig, from: chrono::DateTime<chrono::Utc>) -> chrono
             let naive = from.naive_utc();
             let month0 = naive.date().month() - 1; // convert to 0-based
             let new_month = (month0 + cfg.interval_value) % 12 + 1; // back to 1-based
-            let new_year = naive.date().year()
-                + ((month0 + cfg.interval_value) / 12) as i32;
+            let new_year = naive.date().year() + ((month0 + cfg.interval_value) / 12) as i32;
             chrono::NaiveDate::from_ymd_opt(new_year, new_month, 1)
                 .and_then(|d| d.and_hms_opt(naive.hour(), naive.minute(), 0))
-                .map(|dt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc))
+                .map(|dt| {
+                    chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)
+                })
                 .unwrap_or(from)
         }
         _ => from,

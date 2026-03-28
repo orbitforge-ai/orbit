@@ -14,7 +14,7 @@ export const runsApi = {
       limit: params.limit ?? 100,
       offset: params.offset ?? 0,
       taskId: params.taskId ?? null,
-      stateFilter: params.stateFilter ?? null,
+      stateFilter: params.stateFilter && params.stateFilter !== "all" ? params.stateFilter : null,
     }),
 
   getActive: (): Promise<RunSummary[]> =>

@@ -1,5 +1,6 @@
 use serde::Serialize;
 use tauri::Emitter;
+use tracing::warn;
 
 // ─── Event Payloads ──────────────────────────────────────────────────────────
 
@@ -53,7 +54,7 @@ pub fn emit_log_chunk(app: &tauri::AppHandle, run_id: &str, lines: Vec<(String, 
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
     if let Err(e) = app.emit("run:log_chunk", &payload) {
-        tracing::warn!("failed to emit run:log_chunk: {}", e);
+        warn!("failed to emit run:log_chunk: {}", e);
     }
 }
 
@@ -70,6 +71,6 @@ pub fn emit_run_state_changed(
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
     if let Err(e) = app.emit("run:state_changed", &payload) {
-        tracing::warn!("failed to emit run:state_changed: {}", e);
+        warn!("failed to emit run:state_changed: {}", e);
     }
 }

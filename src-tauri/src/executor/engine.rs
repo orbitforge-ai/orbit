@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Semaphore};
+use tracing::{error, info, warn};
 
 use crate::db::DbPool;
 use crate::events::emitter::emit_run_state_changed;
@@ -53,7 +54,7 @@ impl ExecutorEngine {
     }
 
     pub async fn run(mut self) {
-        tracing::info!("ExecutorEngine started");
+        info!("ExecutorEngine started");
         while let Some(req) = self.rx.recv().await {
             let db = self.db.clone();
             let app = self.app.clone();
@@ -64,13 +65,13 @@ impl ExecutorEngine {
                 let permit = semaphore.acquire_owned().await.expect("semaphore closed");
 
                 if let Err(e) = run_one(req, db, app, log_dir).await {
-                    tracing::error!("run failed: {}", e);
+                    error!("run failed: {}", e);
                 }
 
                 drop(permit);
             });
         }
-        tracing::warn!("ExecutorEngine channel closed — shutting down");
+        warn!("ExecutorEngine channel closed — shutting down");
     }
 }
 
@@ -85,7 +86,12 @@ async fn run_one(
 
     // Transition: pending → running (state update in DB)
     update_run_state(&db, &run_id, &RunState::Running, None, None, None)?;
-    emit_run_state_changed(&app, &run_id, RunState::Pending.as_str(), RunState::Running.as_str());
+    emit_run_state_changed(
+        &app,
+        &run_id,
+        RunState::Pending.as_str(),
+        RunState::Running.as_str(),
+    );
 
     let log_path = log_dir.join(format!("{}.log", run_id));
     let timeout_secs = task.max_duration_seconds as u64;
@@ -114,8 +120,7 @@ async fn run_one(
                 }
             };
 
-            let next_state = transition(&RunState::Running, &event)
-                .unwrap_or(RunState::Failure);
+            let next_state = transition(&RunState::Running, &event).unwrap_or(RunState::Failure);
 
             update_run_state(
                 &db,
@@ -142,7 +147,12 @@ async fn run_one(
 
             let metadata = serde_json::json!({ "error": reason });
             update_run_state(&db, &run_id, &next_state, Some(-1), None, Some(metadata))?;
-            emit_run_state_changed(&app, &run_id, RunState::Running.as_str(), next_state.as_str());
+            emit_run_state_changed(
+                &app,
+                &run_id,
+                RunState::Running.as_str(),
+                next_state.as_str(),
+            );
         }
     }
 
@@ -191,7 +201,7 @@ fn update_run_state(
             started_at,
             finished_at,
             metadata.map(|m| m.to_string()),
-            run_id,
+            run_id
         ],
     )
     .map_err(|e| e.to_string())?;

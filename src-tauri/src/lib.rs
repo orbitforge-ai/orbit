@@ -12,6 +12,8 @@ use tauri::Manager;
 use db::connection::init as init_db;
 use executor::engine::{ExecutorEngine, ExecutorTx};
 use scheduler::SchedulerEngine;
+use tauri_plugin_log::{Builder, Target, TargetKind};
+use tracing::info;
 
 fn data_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
@@ -24,15 +26,17 @@ fn log_dir() -> PathBuf {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("orbit=debug,warn")),
-        )
-        .init();
-
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            Builder::new()
+                .targets([
+                    Target::new(TargetKind::Stdout),
+                    Target::new(TargetKind::LogDir { file_name: None }),
+                ])
+                .build(),
+        )
         .setup(|app| {
             let db_pool = init_db(data_dir())?;
             let log_dir = log_dir();
@@ -65,7 +69,7 @@ pub fn run() {
             );
             tauri::async_runtime::spawn(async move { scheduler.run().await });
 
-            tracing::info!("Orbit initialised");
+            info!("Orbit initialised");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -91,7 +95,7 @@ pub fn run() {
             // Agents
             commands::agents::list_agents,
             commands::agents::create_agent,
-            commands::agents::delete_agent,
+            commands::agents::delete_agent
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

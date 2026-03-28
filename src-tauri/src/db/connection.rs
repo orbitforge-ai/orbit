@@ -1,6 +1,7 @@
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use std::path::PathBuf;
+use tracing::info;
 
 const MIGRATION: &str = include_str!("migrations/0001_initial.sql");
 
@@ -10,9 +11,7 @@ const MIGRATION: &str = include_str!("migrations/0001_initial.sql");
 pub struct DbPool(pub Pool<SqliteConnectionManager>);
 
 impl DbPool {
-    pub fn get(
-        &self,
-    ) -> Result<r2d2::PooledConnection<SqliteConnectionManager>, r2d2::Error> {
+    pub fn get(&self) -> Result<r2d2::PooledConnection<SqliteConnectionManager>, r2d2::Error> {
         self.0.get()
     }
 }
@@ -28,6 +27,6 @@ pub fn init(data_dir: PathBuf) -> Result<DbPool, Box<dyn std::error::Error>> {
     let conn = pool.get()?;
     conn.execute_batch(MIGRATION)?;
 
-    tracing::info!("Database initialised at {:?}", db_path);
+    info!("Database initialised at {:?}", db_path);
     Ok(DbPool(pool))
 }

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+use tracing::debug;
 
 use crate::events::emitter::{emit_log_chunk, emit_run_state_changed};
 use crate::models::run::RunState;
@@ -54,7 +55,12 @@ pub async fn run_shell(
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
 
     let pid = child.id().unwrap_or(0);
-    emit_run_state_changed(app, run_id, RunState::Pending.as_str(), RunState::Running.as_str());
+    emit_run_state_changed(
+        app,
+        run_id,
+        RunState::Pending.as_str(),
+        RunState::Running.as_str(),
+    );
 
     let stdout = child.stdout.take().expect("stdout should be piped");
     let stderr = child.stderr.take().expect("stderr should be piped");
@@ -128,7 +134,7 @@ pub async fn run_shell(
     let duration_ms = start.elapsed().as_millis() as i64;
     let exit_code = exit_status.code().unwrap_or(-1);
 
-    tracing::debug!(
+    debug!(
         run_id = run_id,
         pid = pid,
         exit_code = exit_code,

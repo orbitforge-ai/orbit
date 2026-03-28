@@ -4,6 +4,8 @@ import { tasksApi } from "../../api/tasks";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useUiStore } from "../../store/uiStore";
 import { Task } from "../../types";
+import {info} from '@tauri-apps/plugin-log'
+import { confirm } from '@tauri-apps/plugin-dialog';
 
 export function TasksScreen() {
   const { navigate } = useUiStore();
@@ -15,18 +17,20 @@ export function TasksScreen() {
   });
 
   async function handleTrigger(task: Task) {
+    console.log(`Triggering task: ${task.name}`);
     await tasksApi.trigger(task.id);
     queryClient.invalidateQueries({ queryKey: ["runs"] });
     navigate("history");
   }
 
   async function handleToggle(task: Task) {
+    info(`${!task.enabled ? "Enabling" : "Disabling"} task: ${task.name}`);
     await tasksApi.update(task.id, { enabled: !task.enabled });
     queryClient.invalidateQueries({ queryKey: ["tasks"] });
   }
 
   async function handleDelete(task: Task) {
-    if (!confirm(`Delete "${task.name}"?`)) return;
+    if (!await confirm(`Are you sure you want to delete "${task.name}"?`, { title: "Confirm Delete", })) return;
     await tasksApi.delete(task.id);
     queryClient.invalidateQueries({ queryKey: ["tasks"] });
   }
@@ -90,6 +94,7 @@ export function TasksScreen() {
                   {task.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
                 </button>
                 <button
+                  type="button"
                   onClick={() => handleDelete(task)}
                   title="Delete"
                   className="p-1.5 rounded text-[#64748b] hover:text-red-400 hover:bg-red-500/10 transition-colors"

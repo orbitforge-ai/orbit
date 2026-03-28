@@ -1,6 +1,5 @@
 use crate::db::DbPool;
 use crate::models::run::{Run, RunSummary};
-use log::{info, warn};
 
 #[tauri::command]
 pub async fn list_runs(
@@ -17,6 +16,11 @@ pub async fn list_runs(
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
 
+        // Build params in ORDER: limit, offset (fixed positions), then optional filters
+        let mut extra_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        extra_params.push(Box::new(limit));
+        extra_params.push(Box::new(offset));
+
         let mut sql = String::from(
             "SELECT r.id, r.task_id, t.name as task_name, r.schedule_id,
                     r.agent_id, a.name as agent_name,
@@ -25,44 +29,32 @@ pub async fn list_runs(
              FROM runs r
              LEFT JOIN tasks t ON t.id = r.task_id
              LEFT JOIN agents a ON a.id = r.agent_id
-             WHERE 1=1"
+             WHERE 1=1",
         );
 
-        if task_id.is_some() {
-            sql.push_str(" AND r.task_id = ?3");
+        // Add filter conditions after WHERE 1=1, binding to params after limit/offset
+        if let Some(ref tid) = task_id {
+            let n = extra_params.len() + 1;
+            sql.push_str(&format!(" AND r.task_id = ?{n}"));
+            extra_params.push(Box::new(tid.clone()));
         }
-        info!("State filter: {:?}", state_filter);
-        if state_filter.is_some() && state_filter.as_ref().unwrap() != "all" {
-            info!("Applying state filter: {}", state_filter.as_ref().unwrap());
-            sql.push_str(" AND r.state = ?4");
+
+        let apply_state = state_filter.as_deref().map(|s| s != "all").unwrap_or(false);
+        if apply_state {
+            let n = extra_params.len() + 1;
+            sql.push_str(&format!(" AND r.state = ?{n}"));
+            extra_params.push(Box::new(state_filter.clone().unwrap()));
         }
+
         sql.push_str(" ORDER BY r.created_at DESC LIMIT ?1 OFFSET ?2");
-        
+
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        info!("SQL Query: {:?}", stmt.expanded_sql());
+
+        let params_refs: Vec<&dyn rusqlite::ToSql> =
+            extra_params.iter().map(|p| p.as_ref()).collect();
 
         let runs = stmt
-            .query_map(
-                rusqlite::params![limit, offset, task_id, state_filter],
-                |row| {
-                    Ok(RunSummary {
-                        id: row.get(0)?,
-                        task_id: row.get(1)?,
-                        task_name: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                        schedule_id: row.get(3)?,
-                        agent_id: row.get(4)?,
-                        agent_name: row.get(5)?,
-                        state: row.get(6)?,
-                        trigger: row.get(7)?,
-                        exit_code: row.get(8)?,
-                        started_at: row.get(9)?,
-                        finished_at: row.get(10)?,
-                        duration_ms: row.get(11)?,
-                        retry_count: row.get(12)?,
-                        created_at: row.get(13)?,
-                    })
-                },
-            )
+            .query_map(params_refs.as_slice(), map_row_to_run_summary)
             .map_err(|e| e.to_string())?
             .filter_map(|r| r.ok())
             .collect();
@@ -71,6 +63,25 @@ pub async fn list_runs(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn map_row_to_run_summary(row: &rusqlite::Row) -> rusqlite::Result<RunSummary> {
+    Ok(RunSummary {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        task_name: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+        schedule_id: row.get(3)?,
+        agent_id: row.get(4)?,
+        agent_name: row.get(5)?,
+        state: row.get(6)?,
+        trigger: row.get(7)?,
+        exit_code: row.get(8)?,
+        started_at: row.get(9)?,
+        finished_at: row.get(10)?,
+        duration_ms: row.get(11)?,
+        retry_count: row.get(12)?,
+        created_at: row.get(13)?,
+    })
 }
 
 #[tauri::command]
