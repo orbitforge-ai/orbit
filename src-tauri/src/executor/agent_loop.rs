@@ -7,6 +7,7 @@ use crate::db::DbPool;
 use crate::events::emitter::{ emit_agent_iteration, emit_agent_tool_result, emit_chat_context_update, emit_log_chunk };
 use crate::executor::compaction;
 use crate::executor::agent_tools::{ self, ToolExecutionContext };
+use crate::executor::context::{ self, ContextMode, ContextRequest };
 use crate::executor::keychain;
 use crate::executor::llm_provider::{
   self,
@@ -102,11 +103,6 @@ pub async fn run_agent_loop(
     }
   );
 
-  // ── Load system prompt ───────────────────────────────────────────────
-  let system_prompt = workspace
-    ::read_workspace_file(agent_id, "system_prompt.md")
-    .unwrap_or_else(|_| "You are a helpful autonomous agent.".to_string());
-
   // ── Resolve provider + API key ───────────────────────────────────────
   let provider_name = &ws_config.provider;
   let api_key = keychain::retrieve_api_key(provider_name).map_err(|_| {
@@ -123,17 +119,6 @@ pub async fn run_agent_loop(
     e
   })?;
 
-  let llm_config = LlmConfig {
-    model,
-    max_tokens: DEFAULT_MAX_TOKENS_PER_CALL,
-    temperature: Some(ws_config.temperature),
-    system_prompt,
-  };
-
-  // ── Build tool definitions ───────────────────────────────────────────
-  let tools: Vec<ToolDefinition> = agent_tools::build_tool_definitions(&ws_config.allowed_tools);
-  let tool_ctx = ToolExecutionContext::new(agent_id);
-
   // ── Apply template variable substitution to goal ─────────────────────
   let mut goal = cfg.goal.clone();
   if let Some(ref vars) = cfg.template_vars {
@@ -141,6 +126,33 @@ pub async fn run_agent_loop(
       goal = goal.replace(&format!("{{{{{}}}}}", key), value);
     }
   }
+
+  // ── Build context via pipeline ──────────────────────────────────────
+  let pipeline = context::default_pipeline();
+  let ctx_request = ContextRequest {
+    agent_id: agent_id.to_string(),
+    mode: ContextMode::AgentLoop,
+    session_id: None,
+    run_id: run_id.to_string(),
+    goal: Some(goal.clone()),
+    ws_config: ws_config.clone(),
+    existing_messages: None,
+  };
+  let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
+    log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
+    log.flush_to_file(log_path);
+    e
+  })?;
+
+  let llm_config = LlmConfig {
+    model,
+    max_tokens: DEFAULT_MAX_TOKENS_PER_CALL,
+    temperature: Some(ws_config.temperature),
+    system_prompt: snapshot.system_prompt,
+  };
+
+  let tools: Vec<ToolDefinition> = snapshot.tools;
+  let tool_ctx = ToolExecutionContext::new(agent_id);
 
   // ── Init conversation ────────────────────────────────────────────────
   let mut messages: Vec<ChatMessage> = vec![ChatMessage {
@@ -444,11 +456,6 @@ pub async fn run_agent_prompt(
   let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
   let model = ws_config.model.clone();
 
-  // ── Load system prompt ───────────────────────────────────────────────
-  let system_prompt = workspace
-    ::read_workspace_file(agent_id, "system_prompt.md")
-    .unwrap_or_else(|_| "You are a helpful assistant.".to_string());
-
   // ── Resolve provider + API key ───────────────────────────────────────
   let provider_name = &ws_config.provider;
   let api_key = keychain::retrieve_api_key(provider_name).map_err(|_| {
@@ -465,11 +472,28 @@ pub async fn run_agent_prompt(
     e
   })?;
 
+  // ── Build context via pipeline ──────────────────────────────────────
+  let pipeline = context::default_pipeline();
+  let ctx_request = ContextRequest {
+    agent_id: agent_id.to_string(),
+    mode: ContextMode::SingleShot,
+    session_id: None,
+    run_id: run_id.to_string(),
+    goal: Some(cfg.prompt.clone()),
+    ws_config: ws_config.clone(),
+    existing_messages: None,
+  };
+  let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
+    log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
+    log.flush_to_file(log_path);
+    e
+  })?;
+
   let llm_config = LlmConfig {
     model: model.clone(),
     max_tokens: DEFAULT_MAX_TOKENS_PER_CALL,
     temperature: Some(ws_config.temperature),
-    system_prompt,
+    system_prompt: snapshot.system_prompt,
   };
 
   log.log(
@@ -489,13 +513,17 @@ pub async fn run_agent_prompt(
     return Err("cancelled".to_string());
   }
 
-  let messages: Vec<ChatMessage> = vec![ChatMessage {
-    role: "user".to_string(),
-    content: vec![ContentBlock::Text {
-      text: cfg.prompt.clone(),
-    }],
-    created_at: None,
-  }];
+  let messages: Vec<ChatMessage> = if snapshot.messages.is_empty() {
+    vec![ChatMessage {
+      role: "user".to_string(),
+      content: vec![ContentBlock::Text {
+        text: cfg.prompt.clone(),
+      }],
+      created_at: None,
+    }]
+  } else {
+    snapshot.messages
+  };
 
   emit_agent_iteration(app, run_id, 1, "llm_call", None, 0);
 
@@ -601,9 +629,6 @@ pub async fn run_pulse(
 
   // ── Load workspace config ────────────────────────────────────────────
   let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
-  let system_prompt = workspace
-    ::read_workspace_file(agent_id, "system_prompt.md")
-    .unwrap_or_else(|_| "You are a helpful assistant.".to_string());
 
   let provider_name = &ws_config.provider;
   let api_key = keychain::retrieve_api_key(provider_name).map_err(|_| {
@@ -619,24 +644,17 @@ pub async fn run_pulse(
     e
   })?;
 
-  let llm_config = LlmConfig {
-    model: ws_config.model.clone(),
-    max_tokens: DEFAULT_MAX_TOKENS_PER_CALL,
-    temperature: Some(ws_config.temperature),
-    system_prompt,
-  };
-
-  // ── Find or create Pulse chat session ────────────────────────────────
+  // ── Find or create Pulse chat session + save user message ───────────
   let pool = db.0.clone();
   let aid = agent_id.to_string();
   let goal_text = goal.to_string();
 
-  let (session_id, history) = tokio::task
+  let session_id = tokio::task
     ::spawn_blocking({
       let pool = pool.clone();
       let aid = aid.clone();
       let goal_text = goal_text.clone();
-      move || -> Result<(String, Vec<ChatMessage>), String> {
+      move || -> Result<String, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
 
@@ -656,30 +674,6 @@ pub async fn run_pulse(
             );
             sid
           });
-
-        // Load existing messages (exclude compacted ones)
-        let mut stmt = conn
-          .prepare(
-            "SELECT role, content FROM chat_messages
-                     WHERE session_id = ?1 AND is_compacted = 0 ORDER BY created_at ASC"
-          )
-          .map_err(|e| e.to_string())?;
-
-        let mut messages: Vec<ChatMessage> = stmt
-          .query_map(rusqlite::params![session_id], |row| {
-            let role: String = row.get(0)?;
-            let content_json: String = row.get(1)?;
-            Ok((role, content_json))
-          })
-          .map_err(|e| e.to_string())?
-          .filter_map(|r| r.ok())
-          .map(|(role, content_json)| {
-            let content: Vec<ContentBlock> = serde_json
-              ::from_str(&content_json)
-              .unwrap_or_default();
-            ChatMessage { role, content, created_at: None }
-          })
-          .collect();
 
         // Save user message (the pulse prompt)
         let msg_id = ulid::Ulid::new().to_string();
@@ -701,16 +695,35 @@ pub async fn run_pulse(
           )
           .map_err(|e| e.to_string())?;
 
-        messages.push(ChatMessage {
-          role: "user".to_string(),
-          content: user_content,
-          created_at: None,
-        });
-
-        Ok((session_id, messages))
+        Ok(session_id)
       }
     }).await
     .map_err(|e| e.to_string())??;
+
+  // ── Build context via pipeline ──────────────────────────────────────
+  let pipeline = context::default_pipeline();
+  let ctx_request = ContextRequest {
+    agent_id: agent_id.to_string(),
+    mode: ContextMode::Pulse,
+    session_id: Some(session_id.clone()),
+    run_id: run_id.to_string(),
+    goal: Some(goal.to_string()),
+    ws_config: ws_config.clone(),
+    existing_messages: None,
+  };
+  let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
+    log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
+    log.flush_to_file(log_path);
+    e
+  })?;
+
+  let llm_config = LlmConfig {
+    model: ws_config.model.clone(),
+    max_tokens: DEFAULT_MAX_TOKENS_PER_CALL,
+    temperature: Some(ws_config.temperature),
+    system_prompt: snapshot.system_prompt,
+  };
+  let history = snapshot.messages;
 
   log.log(
     app,

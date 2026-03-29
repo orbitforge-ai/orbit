@@ -29,7 +29,7 @@ export function SchedulesTab({ agentId }: { agentId: string }) {
   return (
     <div className="p-6 space-y-8 h-full overflow-y-auto">
       <PulseSection agentId={agentId} />
-      <div className="border-t border-[#2a2d3e]" />
+      <div className="border-t border-edge" />
       <AgentSchedulesList agentId={agentId} />
     </div>
   );
@@ -82,51 +82,51 @@ function PulseSection({ agentId }: { agentId: string }) {
     <section className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Zap size={16} className="text-[#f59e0b]" />
+          <Zap size={16} className="text-warning" />
           <h4 className="text-sm font-semibold text-white">Pulse</h4>
         </div>
 
         {/* Enable/disable toggle */}
         <div className="flex items-center gap-2">
-          <span className={`text-xs ${enabled ? "text-emerald-400" : "text-[#64748b]"}`}>
+          <span className={`text-xs ${enabled ? "text-emerald-400" : "text-muted"}`}>
             {enabled ? "Active" : "Inactive"}
           </span>
           <Switch.Root
             checked={enabled}
             onCheckedChange={setEnabled}
-            className="w-9 h-5 rounded-full bg-[#2a2d3e] data-[state=checked]:bg-emerald-500 transition-colors outline-none"
+            className="w-9 h-5 rounded-full bg-edge data-[state=checked]:bg-emerald-500 transition-colors outline-none"
           >
             <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
           </Switch.Root>
         </div>
       </div>
 
-      <p className="text-xs text-[#64748b]">
+      <p className="text-xs text-muted">
         Define a recurring prompt that runs automatically on a schedule.
         All responses are logged to a dedicated Pulse chat session.
       </p>
 
       {/* Pulse content editor */}
       <div>
-        <label className="text-xs text-[#64748b] mb-1 block">Prompt</label>
+        <label className="text-xs text-muted mb-1 block">Prompt</label>
         <textarea
           value={content}
           onChange={(e) => setContent(e.target.value)}
           rows={6}
-          className="w-full px-3 py-2 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm font-mono resize-y focus:outline-none focus:border-[#6366f1] leading-relaxed"
+          className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm font-mono resize-y focus:outline-none focus:border-accent leading-relaxed"
           placeholder="Describe what this agent should do on each pulse..."
         />
       </div>
 
       {/* Schedule picker */}
       <div>
-        <label className="text-xs text-[#64748b] mb-1 block">Frequency</label>
+        <label className="text-xs text-muted mb-1 block">Frequency</label>
         <RecurringPicker value={schedule} onChange={setSchedule} />
       </div>
 
       {/* Status info */}
       {pulseConfig?.nextRunAt && enabled && (
-        <div className="flex items-center gap-2 text-xs text-[#64748b]">
+        <div className="flex items-center gap-2 text-xs text-muted">
           <Clock size={11} />
           <span>
             Next run:{" "}
@@ -135,7 +135,7 @@ function PulseSection({ agentId }: { agentId: string }) {
         </div>
       )}
       {pulseConfig?.lastRunAt && (
-        <div className="flex items-center gap-2 text-xs text-[#64748b]">
+        <div className="flex items-center gap-2 text-xs text-muted">
           <Clock size={11} />
           <span>
             Last run:{" "}
@@ -149,7 +149,7 @@ function PulseSection({ agentId }: { agentId: string }) {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#6366f1] hover:bg-[#818cf8] disabled:opacity-50 text-white text-sm font-medium transition-colors"
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-sm font-medium transition-colors"
         >
           <Save size={14} />
           {saving ? "Saving..." : saved ? "Saved" : "Save Pulse"}
@@ -169,7 +169,7 @@ function PulseSection({ agentId }: { agentId: string }) {
               setTriggering(false);
             }}
             disabled={triggering}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#2a2d3e] text-[#94a3b8] hover:text-white hover:border-[#4a4d6e] disabled:opacity-50 text-xs transition-colors"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-edge text-secondary hover:text-white hover:border-edge-hover disabled:opacity-50 text-xs transition-colors"
           >
             <Play size={12} />
             {triggering ? "Running..." : "Run Now"}
@@ -179,7 +179,7 @@ function PulseSection({ agentId }: { agentId: string }) {
         {pulseConfig?.sessionId && (
           <button
             onClick={() => navigate("chat")}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#2a2d3e] text-[#94a3b8] hover:text-white hover:border-[#4a4d6e] text-xs transition-colors"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-edge text-secondary hover:text-white hover:border-edge-hover text-xs transition-colors"
           >
             <ExternalLink size={12} />
             View Pulse Log
@@ -234,7 +234,7 @@ function AgentSchedulesList({ agentId }: { agentId: string }) {
       <h4 className="text-sm font-semibold text-white">Task Schedules</h4>
 
       {agentSchedules.length === 0 ? (
-        <p className="text-xs text-[#64748b]">
+        <p className="text-xs text-muted">
           No schedules for this agent's tasks. Create one from the Schedules screen.
         </p>
       ) : (
@@ -246,15 +246,15 @@ function AgentSchedulesList({ agentId }: { agentId: string }) {
             return (
               <div
                 key={schedule.id}
-                className="flex items-center gap-3 px-4 py-3 rounded-lg border border-[#2a2d3e] bg-[#1a1d27]"
+                className="flex items-center gap-3 px-4 py-3 rounded-lg border border-edge bg-surface"
               >
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-white truncate">
                     {getTaskName(schedule.taskId)}
                   </p>
-                  <p className="text-xs text-[#64748b]">{description}</p>
+                  <p className="text-xs text-muted">{description}</p>
                   {schedule.nextRunAt && (
-                    <p className="text-[10px] text-[#4a4d6e] mt-0.5">
+                    <p className="text-[10px] text-border-hover mt-0.5">
                       Next: {new Date(schedule.nextRunAt).toLocaleString()}
                     </p>
                   )}
@@ -263,14 +263,14 @@ function AgentSchedulesList({ agentId }: { agentId: string }) {
                 <Switch.Root
                   checked={schedule.enabled}
                   onCheckedChange={() => handleToggle(schedule)}
-                  className="w-9 h-5 rounded-full bg-[#2a2d3e] data-[state=checked]:bg-emerald-500 transition-colors outline-none shrink-0"
+                  className="w-9 h-5 rounded-full bg-edge data-[state=checked]:bg-emerald-500 transition-colors outline-none shrink-0"
                 >
                   <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
                 </Switch.Root>
 
                 <button
                   onClick={() => handleDelete(schedule)}
-                  className="p-1.5 rounded text-[#64748b] hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
+                  className="p-1.5 rounded text-muted hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
                 >
                   <Trash2 size={13} />
                 </button>

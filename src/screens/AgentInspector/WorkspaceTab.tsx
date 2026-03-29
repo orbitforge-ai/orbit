@@ -183,10 +183,10 @@ export function WorkspaceTab({ agentId }: { agentId: string }) {
   return (
     <div className="flex flex-col h-full">
       {/* Path bar */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-[#2a2d3e] bg-[#13151e]">
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-edge bg-panel">
         <button
           onClick={handleCopyPath}
-          className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-mono text-[#64748b] hover:text-white hover:bg-[#1a1d27] transition-colors truncate min-w-0"
+          className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-mono text-muted hover:text-white hover:bg-surface transition-colors truncate min-w-0"
           title="Click to copy path"
         >
           {copied ? <Check size={11} className="text-emerald-400 shrink-0" /> : <Copy size={11} className="shrink-0" />}
@@ -195,14 +195,14 @@ export function WorkspaceTab({ agentId }: { agentId: string }) {
         <div className="flex items-center gap-1 shrink-0 ml-auto">
           <button
             onClick={handleOpenInFinder}
-            className="p-1.5 rounded text-[#64748b] hover:text-[#818cf8] hover:bg-[#6366f1]/10 transition-colors"
+            className="p-1.5 rounded text-muted hover:text-accent-hover hover:bg-accent/10 transition-colors"
             title="Open in Finder"
           >
             <FolderOpen size={14} />
           </button>
           <button
             onClick={() => setAgentTab("config")}
-            className="p-1.5 rounded text-[#64748b] hover:text-[#818cf8] hover:bg-[#6366f1]/10 transition-colors"
+            className="p-1.5 rounded text-muted hover:text-accent-hover hover:bg-accent/10 transition-colors"
             title="Edit agent config"
           >
             <Settings size={14} />
@@ -212,24 +212,24 @@ export function WorkspaceTab({ agentId }: { agentId: string }) {
 
       <div className="flex flex-1 min-h-0">
         {/* File tree */}
-        <div className="w-[240px] flex flex-col border-r border-[#2a2d3e]">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-[#2a2d3e]">
+        <div className="w-[240px] flex flex-col border-r border-edge">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-edge">
             <div className="flex items-center gap-2 min-w-0">
               {currentPath !== "." && (
                 <button
                   onClick={navigateUp}
-                  className="p-1 rounded text-[#64748b] hover:text-white hover:bg-[#2a2d3e] shrink-0"
+                  className="p-1 rounded text-muted hover:text-white hover:bg-edge shrink-0"
                 >
                   <ArrowLeft size={13} />
                 </button>
               )}
-              <span className="text-[10px] text-[#64748b] font-mono truncate">
+              <span className="text-[10px] text-muted font-mono truncate">
                 {currentPath === "." ? "/" : `/${currentPath}`}
               </span>
             </div>
             <button
               onClick={() => setCreating(true)}
-              className="p-1 rounded text-[#64748b] hover:text-[#818cf8] hover:bg-[#6366f1]/10 shrink-0"
+              className="p-1 rounded text-muted hover:text-accent-hover hover:bg-accent/10 shrink-0"
             >
               <Plus size={13} />
             </button>
@@ -237,7 +237,7 @@ export function WorkspaceTab({ agentId }: { agentId: string }) {
 
           <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5">
             {isLoading && (
-              <div className="text-center py-4 text-[#64748b] text-xs">Loading...</div>
+              <div className="text-center py-4 text-muted text-xs">Loading...</div>
             )}
 
             {creating && (
@@ -252,7 +252,7 @@ export function WorkspaceTab({ agentId }: { agentId: string }) {
                     if (e.key === "Escape") setCreating(false);
                   }}
                   autoFocus
-                  className="flex-1 px-2 py-1 rounded bg-[#0f1117] border border-[#6366f1] text-white text-xs focus:outline-none"
+                  className="flex-1 px-2 py-1 rounded bg-background border border-accent text-white text-xs focus:outline-none"
                 />
               </div>
             )}
@@ -267,24 +267,24 @@ export function WorkspaceTab({ agentId }: { agentId: string }) {
                   key={file.name}
                   className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer group ${
                     isActive
-                      ? "bg-[#6366f1]/15 text-white"
-                      : "text-[#94a3b8] hover:bg-[#1a1d27] hover:text-white"
+                      ? "bg-accent/15 text-white"
+                      : "text-secondary hover:bg-surface hover:text-white"
                   }`}
                   onClick={() => handleOpenFile(file)}
                 >
                   {file.isDir ? (
-                    <Folder size={13} className="text-[#818cf8] shrink-0" />
+                    <Folder size={13} className="text-accent-hover shrink-0" />
                   ) : (
                     <File
                       size={13}
                       className={`shrink-0 ${
-                        isSpecialFile(file.name) ? "text-amber-400" : "text-[#64748b]"
+                        isSpecialFile(file.name) ? "text-amber-400" : "text-muted"
                       }`}
                     />
                   )}
                   <span className="text-xs truncate flex-1 font-mono">{file.name}</span>
                   {file.isDir && (
-                    <ChevronRight size={11} className="text-[#64748b] shrink-0" />
+                    <ChevronRight size={11} className="text-muted shrink-0" />
                   )}
                   {!file.isDir && !isSpecialFile(file.name) && (
                     <button
@@ -292,7 +292,7 @@ export function WorkspaceTab({ agentId }: { agentId: string }) {
                         e.stopPropagation();
                         handleDelete(file);
                       }}
-                      className="hidden group-hover:block p-0.5 rounded text-[#64748b] hover:text-red-400"
+                      className="hidden group-hover:block p-0.5 rounded text-muted hover:text-red-400"
                     >
                       <Trash2 size={10} />
                     </button>
@@ -302,7 +302,7 @@ export function WorkspaceTab({ agentId }: { agentId: string }) {
             })}
 
             {!isLoading && files.length === 0 && (
-              <div className="text-center py-4 text-[#64748b] text-xs">
+              <div className="text-center py-4 text-muted text-xs">
                 Empty directory
               </div>
             )}
@@ -313,12 +313,12 @@ export function WorkspaceTab({ agentId }: { agentId: string }) {
         <div className="flex-1 flex flex-col min-w-0">
           {editingFile ? (
             <>
-              <div className="flex items-center justify-between px-4 py-2 border-b border-[#2a2d3e]">
-                <span className="text-xs text-[#94a3b8] font-mono truncate">{editingFile}</span>
+              <div className="flex items-center justify-between px-4 py-2 border-b border-edge">
+                <span className="text-xs text-secondary font-mono truncate">{editingFile}</span>
                 <button
                   onClick={handleSave}
                   disabled={saving}
-                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#6366f1] hover:bg-[#818cf8] disabled:opacity-50 text-white text-xs font-medium shrink-0"
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-xs font-medium shrink-0"
                 >
                   <Save size={11} />
                   {saving ? "Saving..." : "Save"}
@@ -352,7 +352,7 @@ export function WorkspaceTab({ agentId }: { agentId: string }) {
               </div>
             </>
           ) : (
-            <div className="flex items-center justify-center h-full text-[#64748b] text-sm">
+            <div className="flex items-center justify-center h-full text-muted text-sm">
               Select a file to edit
             </div>
           )}

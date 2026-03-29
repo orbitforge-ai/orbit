@@ -226,10 +226,10 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
         <div
           ref={scrollRef}
           onScroll={handleScroll}
-          className="h-full overflow-y-auto p-4 space-y-4"
+          className="h-full overflow-y-auto overflow-x-hidden p-4 space-y-4"
         >
           {displayMessages.length === 0 && (
-            <div className="flex items-center justify-center h-full text-[#64748b] text-sm">
+            <div className="flex items-center justify-center h-full text-muted text-sm">
               Send a message to start the conversation.
             </div>
           )}
@@ -246,7 +246,7 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
                 setAutoScroll(true);
               }
             }}
-            className="absolute bottom-3 right-3 p-2 rounded-full bg-[#1a1d27] border border-[#2a2d3e] text-[#64748b] hover:text-white hover:border-[#6366f1] shadow-lg transition-colors"
+            className="absolute bottom-3 right-3 p-2 rounded-full bg-surface border border-edge text-muted hover:text-white hover:border-accent shadow-lg transition-colors"
           >
             <ArrowDown size={14} />
           </button>

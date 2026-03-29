@@ -3,8 +3,10 @@ use tracing::{ debug, info, warn };
 use ulid::Ulid;
 
 use crate::db::DbPool;
-use crate::events::emitter::{ emit_agent_iteration, emit_chat_context_update };
+use crate::events::emitter::{ emit_agent_iteration, emit_agent_tool_result, emit_chat_context_update };
+use crate::executor::agent_tools::{ self, ToolExecutionContext };
 use crate::executor::compaction;
+use crate::executor::context::{ self, ContextMode, ContextRequest };
 use crate::executor::keychain;
 use crate::executor::llm_provider::{ self, ChatMessage, ContentBlock, LlmConfig };
 use crate::executor::workspace;
@@ -362,9 +364,6 @@ async fn do_llm_chat(
 ) -> Result<(), String> {
   // Load agent config
   let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
-  let system_prompt = workspace
-    ::read_workspace_file(agent_id, "system_prompt.md")
-    .unwrap_or_else(|_| "You are a helpful assistant.".to_string());
 
   let provider_name = &ws_config.provider;
   let api_key = keychain
@@ -373,13 +372,30 @@ async fn do_llm_chat(
 
   let provider = llm_provider::create_provider(provider_name, api_key)?;
 
-  let context_window = compaction::effective_context_window(&ws_config);
+  // Build context via pipeline (messages already loaded, pass them to avoid re-query)
+  let pipeline = context::default_pipeline();
+  let ctx_request = ContextRequest {
+    agent_id: agent_id.to_string(),
+    mode: ContextMode::Chat,
+    session_id: Some(session_id.to_string()),
+    run_id: stream_id.to_string(),
+    goal: None,
+    ws_config: ws_config.clone(),
+    existing_messages: Some(messages),
+  };
+  let snapshot = pipeline.build(&ctx_request, db).await?;
+  let messages = snapshot.messages;
+
+  let context_window = snapshot.token_budget.context_window;
+
+  info!("System prompt: {}", snapshot.system_prompt);
+  info!("Context built with {} messages (window: {} tokens)", messages.len(), context_window);
 
   let config = LlmConfig {
     model: ws_config.model.clone(),
     max_tokens: MAX_TOKENS_PER_CALL,
     temperature: Some(ws_config.temperature),
-    system_prompt,
+    system_prompt: snapshot.system_prompt,
   };
 
   // Debug logging for context verification
@@ -409,7 +425,7 @@ async fn do_llm_chat(
     input_tokens = input_tokens,
     output_tokens = output_tokens,
     context_window = context_window,
-    usage_percent = format!("{:.1}%", (input_tokens as f64 / context_window as f64) * 100.0),
+    usage_percent = format!("{:.1}%", ((input_tokens as f64) / (context_window as f64)) * 100.0),
     "Context usage: {} / {} tokens",
     input_tokens,
     context_window
@@ -459,7 +475,7 @@ async fn do_llm_chat(
     info!(
       session_id = session_id,
       "Context usage {:.1}% exceeds threshold {:.0}%, triggering compaction",
-      (input_tokens as f64 / context_window as f64) * 100.0,
+      ((input_tokens as f64) / (context_window as f64)) * 100.0,
       threshold * 100.0
     );
 
@@ -471,19 +487,22 @@ async fn do_llm_chat(
     let db = DbPool(db.0.clone());
 
     // Need a new provider instance for the compaction summary call
-    let compact_api_key = keychain::retrieve_api_key(provider_name)
+    let compact_api_key = keychain
+      ::retrieve_api_key(provider_name)
       .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
     let compact_provider = llm_provider::create_provider(provider_name, compact_api_key)?;
 
     tauri::async_runtime::spawn(async move {
-      match compaction::perform_compaction(
-        &agent_id,
-        &session_id,
-        compact_provider.as_ref(),
-        &ws_config,
-        &app,
-        &db,
-      ).await {
+      match
+        compaction::perform_compaction(
+          &agent_id,
+          &session_id,
+          compact_provider.as_ref(),
+          &ws_config,
+          &app,
+          &db
+        ).await
+      {
         Ok(()) => info!(session_id = %session_id, "Background compaction completed"),
         Err(e) => warn!(session_id = %session_id, "Background compaction failed: {}", e),
       }
@@ -533,7 +552,7 @@ pub async fn get_context_usage(
   let input_tokens = last_input_tokens.unwrap_or(0);
 
   let usage_percent = if context_window > 0 {
-    (input_tokens as f64 / context_window as f64) * 100.0
+    ((input_tokens as f64) / (context_window as f64)) * 100.0
   } else {
     0.0
   };
@@ -556,22 +575,27 @@ pub async fn compact_chat_session(
   let pool = db.0.clone();
 
   // Look up agent_id for this session
-  let agent_id: String = tokio::task::spawn_blocking({
-    let pool = pool.clone();
-    let sid = session_id.clone();
-    move || -> Result<String, String> {
-      let conn = pool.get().map_err(|e| e.to_string())?;
-      conn.query_row(
-        "SELECT agent_id FROM chat_sessions WHERE id = ?1",
-        rusqlite::params![sid],
-        |row| row.get(0),
-      ).map_err(|e| format!("session not found: {}", e))
-    }
-  }).await.map_err(|e| e.to_string())??;
+  let agent_id: String = tokio::task
+    ::spawn_blocking({
+      let pool = pool.clone();
+      let sid = session_id.clone();
+      move || -> Result<String, String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        conn
+          .query_row(
+            "SELECT agent_id FROM chat_sessions WHERE id = ?1",
+            rusqlite::params![sid],
+            |row| row.get(0)
+          )
+          .map_err(|e| format!("session not found: {}", e))
+      }
+    }).await
+    .map_err(|e| e.to_string())??;
 
   let ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
   let provider_name = &ws_config.provider;
-  let api_key = keychain::retrieve_api_key(provider_name)
+  let api_key = keychain
+    ::retrieve_api_key(provider_name)
     .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
   let provider = llm_provider::create_provider(provider_name, api_key)?;
 
@@ -582,7 +606,7 @@ pub async fn compact_chat_session(
     provider.as_ref(),
     &ws_config,
     &app,
-    &db_pool,
+    &db_pool
   ).await?;
 
   // Refetch and emit updated context usage

@@ -14,7 +14,13 @@ const AVAILABLE_TOOLS = [
   { id: "read_file", label: "Read Files" },
   { id: "write_file", label: "Write Files" },
   { id: "list_files", label: "List Files" },
+  { id: "web_search", label: "Web Search" },
   { id: "finish", label: "Finish (always enabled)" },
+];
+
+const SEARCH_PROVIDERS = [
+  { value: "brave", label: "Brave Search" },
+  { value: "tavily", label: "Tavily" },
 ];
 
 const MODEL_OPTIONS: Record<string, { label: string; value: string }[]> = {
@@ -106,7 +112,7 @@ export function ConfigTab({ agentId }: { agentId: string }) {
   }
 
   if (!config) {
-    return <div className="p-6 text-[#64748b] text-sm">Loading configuration...</div>;
+    return <div className="p-6 text-muted text-sm">Loading configuration...</div>;
   }
 
   const models = MODEL_OPTIONS[config.provider] ?? [];
@@ -120,7 +126,7 @@ export function ConfigTab({ agentId }: { agentId: string }) {
         <h4 className="text-sm font-semibold text-white">Model</h4>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-[#64748b] mb-1 block">Provider</label>
+            <label className="text-xs text-muted mb-1 block">Provider</label>
             <Select.Root
               value={config.provider}
               onValueChange={(value) => {
@@ -128,17 +134,17 @@ export function ConfigTab({ agentId }: { agentId: string }) {
                 llmApi.hasApiKey(value).then(setHasKey).catch(() => setHasKey(false));
               }}
             >
-              <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]">
+              <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent">
                 <Select.Value />
-                <Select.Icon><ChevronDown size={14} className="text-[#64748b]" /></Select.Icon>
+                <Select.Icon><ChevronDown size={14} className="text-muted" /></Select.Icon>
               </Select.Trigger>
               <Select.Portal>
-                <Select.Content className="rounded-lg bg-[#1a1d27] border border-[#2a2d3e] shadow-xl overflow-hidden z-50">
+                <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
                   <Select.Viewport className="p-1">
-                    <Select.Item value="anthropic" className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-[#6366f1]/20">
+                    <Select.Item value="anthropic" className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20">
                       <Select.ItemText>Anthropic</Select.ItemText>
                     </Select.Item>
-                    <Select.Item value="minimax" className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-[#6366f1]/20">
+                    <Select.Item value="minimax" className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20">
                       <Select.ItemText>MiniMax</Select.ItemText>
                     </Select.Item>
                   </Select.Viewport>
@@ -147,25 +153,25 @@ export function ConfigTab({ agentId }: { agentId: string }) {
             </Select.Root>
           </div>
           <div>
-            <label className="text-xs text-[#64748b] mb-1 block">Model</label>
+            <label className="text-xs text-muted mb-1 block">Model</label>
             <Select.Root
               value={config.model}
               onValueChange={(value) => setConfig({ ...config, model: value })}
             >
-              <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]">
+              <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent">
                 <Select.Value />
-                <Select.Icon><ChevronDown size={14} className="text-[#64748b]" /></Select.Icon>
+                <Select.Icon><ChevronDown size={14} className="text-muted" /></Select.Icon>
               </Select.Trigger>
               <Select.Portal>
-                <Select.Content className="rounded-lg bg-[#1a1d27] border border-[#2a2d3e] shadow-xl overflow-hidden z-50">
+                <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
                   <Select.Viewport className="p-1">
                     {models.map((m) => (
-                      <Select.Item key={m.value} value={m.value} className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-[#6366f1]/20">
+                      <Select.Item key={m.value} value={m.value} className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20">
                         <Select.ItemText>{m.label}</Select.ItemText>
                       </Select.Item>
                     ))}
                     {!models.find((m) => m.value === config.model) && (
-                      <Select.Item value={config.model} className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-[#6366f1]/20">
+                      <Select.Item value={config.model} className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20">
                         <Select.ItemText>{config.model}</Select.ItemText>
                       </Select.Item>
                     )}
@@ -180,7 +186,7 @@ export function ConfigTab({ agentId }: { agentId: string }) {
       {/* API Key */}
       <section className="space-y-3">
         <h4 className="text-sm font-semibold text-white">API Key</h4>
-        <div className="rounded-xl border border-[#2a2d3e] bg-[#1a1d27] p-4">
+        <div className="rounded-xl border border-edge bg-surface p-4">
           {hasKey ? (
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -205,19 +211,19 @@ export function ConfigTab({ agentId }: { agentId: string }) {
                 onChange={(e) => setKeyInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSetApiKey()}
                 autoFocus
-                className="w-full px-3 py-2 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm font-mono focus:outline-none focus:border-[#6366f1]"
+                className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm font-mono focus:outline-none focus:border-accent"
               />
               <div className="flex gap-2">
                 <button
                   onClick={handleSetApiKey}
                   disabled={!keyInput.trim()}
-                  className="px-3 py-1.5 rounded-lg bg-[#6366f1] hover:bg-[#818cf8] disabled:opacity-50 text-white text-xs font-medium"
+                  className="px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-xs font-medium"
                 >
                   Save Key
                 </button>
                 <button
                   onClick={() => setShowKeyInput(false)}
-                  className="px-3 py-1.5 rounded-lg text-[#64748b] hover:text-white text-xs"
+                  className="px-3 py-1.5 rounded-lg text-muted hover:text-white text-xs"
                 >
                   Cancel
                 </button>
@@ -226,7 +232,7 @@ export function ConfigTab({ agentId }: { agentId: string }) {
           ) : (
             <button
               onClick={() => setShowKeyInput(true)}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-[#4a4d6e] text-[#94a3b8] hover:text-white hover:border-[#6366f1] text-sm w-full transition-colors"
+              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-edge-hover text-secondary hover:text-white hover:border-accent text-sm w-full transition-colors"
             >
               <Key size={14} />
               Set {config.provider} API key
@@ -239,7 +245,7 @@ export function ConfigTab({ agentId }: { agentId: string }) {
       <section className="space-y-3">
         <div>
           <h4 className="text-sm font-semibold text-white">Behavior</h4>
-          <p className="text-xs text-[#64748b] mt-1">Controls how predictable or creative the agent's responses are. Lower values stick to the most likely answer, higher values introduce more variety.</p>
+          <p className="text-xs text-muted mt-1">Controls how predictable or creative the agent's responses are. Lower values stick to the most likely answer, higher values introduce more variety.</p>
         </div>
         <div className="flex gap-2">
           {[
@@ -255,19 +261,19 @@ export function ConfigTab({ agentId }: { agentId: string }) {
                 onClick={() => setConfig({ ...config, temperature: preset.value })}
                 className={`flex-1 flex flex-col items-center px-2 py-2.5 rounded-lg border text-center transition-colors ${
                   selected
-                    ? "border-[#6366f1] bg-[#6366f1]/10"
-                    : "border-[#2a2d3e] bg-[#1a1d27] hover:border-[#4a4d6e]"
+                    ? "border-accent bg-accent/10"
+                    : "border-edge bg-surface hover:border-edge-hover"
                 }`}
               >
-                <span className={`text-sm font-medium ${selected ? "text-[#a5b4fc]" : "text-white"}`}>
+                <span className={`text-sm font-medium ${selected ? "text-accent-light" : "text-white"}`}>
                   {preset.label}
                 </span>
-                <span className="text-[11px] text-[#64748b] mt-0.5 leading-tight">{preset.desc}</span>
+                <span className="text-[11px] text-muted mt-0.5 leading-tight">{preset.desc}</span>
               </button>
             );
           })}
           <div className="flex flex-col items-center gap-1">
-            <label className="text-[11px] text-[#64748b]">Custom</label>
+            <label className="text-[11px] text-muted">Custom</label>
             <input
               type="number"
               min={0}
@@ -278,9 +284,9 @@ export function ConfigTab({ agentId }: { agentId: string }) {
                 const v = parseFloat(e.target.value);
                 if (!isNaN(v) && v >= 0 && v <= 2) setConfig({ ...config, temperature: v });
               }}
-              className="w-16 px-2 py-1.5 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm font-mono text-center focus:outline-none focus:border-[#6366f1]"
+              className="w-16 px-2 py-1.5 rounded-lg bg-background border border-edge text-white text-sm font-mono text-center focus:outline-none focus:border-accent"
             />
-            <span className="text-[10px] text-[#64748b]">0 – 2</span>
+            <span className="text-[10px] text-muted">0 – 2</span>
           </div>
         </div>
       </section>
@@ -290,25 +296,25 @@ export function ConfigTab({ agentId }: { agentId: string }) {
         <h4 className="text-sm font-semibold text-white">Limits</h4>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-[#64748b] mb-1 block">Max Iterations</label>
+            <label className="text-xs text-muted mb-1 block">Max Iterations</label>
             <input
               type="number"
               min={1}
               max={100}
               value={config.maxIterations}
               onChange={(e) => setConfig({ ...config, maxIterations: parseInt(e.target.value) || 25 })}
-              className="w-full px-3 py-2 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]"
+              className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
             />
           </div>
           <div>
-            <label className="text-xs text-[#64748b] mb-1 block">Max Total Tokens</label>
+            <label className="text-xs text-muted mb-1 block">Max Total Tokens</label>
             <input
               type="number"
               min={1000}
               step={10000}
               value={config.maxTotalTokens}
               onChange={(e) => setConfig({ ...config, maxTotalTokens: parseInt(e.target.value) || 200000 })}
-              className="w-full px-3 py-2 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]"
+              className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
             />
           </div>
         </div>
@@ -318,11 +324,11 @@ export function ConfigTab({ agentId }: { agentId: string }) {
       <section className="space-y-3">
         <div>
           <h4 className="text-sm font-semibold text-white">Context Management</h4>
-          <p className="text-xs text-[#64748b] mt-1">Controls automatic conversation compaction when the context window fills up.</p>
+          <p className="text-xs text-muted mt-1">Controls automatic conversation compaction when the context window fills up.</p>
         </div>
         <div className="grid grid-cols-3 gap-3">
           <div>
-            <label className="text-xs text-[#64748b] mb-1 block">Compaction Threshold</label>
+            <label className="text-xs text-muted mb-1 block">Compaction Threshold</label>
             <div className="flex items-center gap-2">
               <input
                 type="number"
@@ -335,13 +341,13 @@ export function ConfigTab({ agentId }: { agentId: string }) {
                   if (!isNaN(v) && v >= 10 && v <= 95)
                     setConfig({ ...config, compactionThreshold: v / 100 });
                 }}
-                className="w-full px-3 py-2 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]"
+                className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
               />
-              <span className="text-xs text-[#64748b] shrink-0">%</span>
+              <span className="text-xs text-muted shrink-0">%</span>
             </div>
           </div>
           <div>
-            <label className="text-xs text-[#64748b] mb-1 block">Messages to Retain</label>
+            <label className="text-xs text-muted mb-1 block">Messages to Retain</label>
             <input
               type="number"
               min={2}
@@ -350,11 +356,11 @@ export function ConfigTab({ agentId }: { agentId: string }) {
               onChange={(e) =>
                 setConfig({ ...config, compactionRetainCount: parseInt(e.target.value) || 12 })
               }
-              className="w-full px-3 py-2 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]"
+              className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
             />
           </div>
           <div>
-            <label className="text-xs text-[#64748b] mb-1 block">Context Window Override</label>
+            <label className="text-xs text-muted mb-1 block">Context Window Override</label>
             <input
               type="number"
               min={1000}
@@ -368,8 +374,45 @@ export function ConfigTab({ agentId }: { agentId: string }) {
                   contextWindowOverride: raw ? parseInt(raw) || undefined : undefined,
                 });
               }}
-              className="w-full px-3 py-2 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1] placeholder:text-[#4a4d6e]"
+              className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent placeholder:text-border-hover"
             />
+          </div>
+        </div>
+      </section>
+
+      {/* Web Search Provider */}
+      <section className="space-y-3">
+        <div>
+          <h4 className="text-sm font-semibold text-white">Web Search</h4>
+          <p className="text-xs text-muted mt-1">Search provider used by the web_search tool. Requires an API key for the selected provider.</p>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-muted mb-1 block">Provider</label>
+            <Select.Root
+              value={config.webSearchProvider}
+              onValueChange={(value) => setConfig({ ...config, webSearchProvider: value })}
+            >
+              <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent">
+                <Select.Value />
+                <Select.Icon><ChevronDown size={14} className="text-muted" /></Select.Icon>
+              </Select.Trigger>
+              <Select.Portal>
+                <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
+                  <Select.Viewport className="p-1">
+                    {SEARCH_PROVIDERS.map((p) => (
+                      <Select.Item key={p.value} value={p.value} className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20">
+                        <Select.ItemText>{p.label}</Select.ItemText>
+                      </Select.Item>
+                    ))}
+                  </Select.Viewport>
+                </Select.Content>
+              </Select.Portal>
+            </Select.Root>
+          </div>
+          <div>
+            <label className="text-xs text-muted mb-1 block">API Key</label>
+            <SearchKeyStatus provider={config.webSearchProvider} />
           </div>
         </div>
       </section>
@@ -387,22 +430,22 @@ export function ConfigTab({ agentId }: { agentId: string }) {
                 onClick={() => !isFinish && toggleTool(tool.id)}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg border transition-colors cursor-pointer ${
                   checked
-                    ? "border-[#6366f1]/30 bg-[#6366f1]/5"
-                    : "border-[#2a2d3e] bg-[#1a1d27]"
+                    ? "border-accent/30 bg-accent/5"
+                    : "border-edge bg-surface"
                 } ${isFinish ? "opacity-60 cursor-not-allowed" : ""}`}
               >
                 <Checkbox.Root
                   checked={checked}
                   disabled={isFinish}
                   onCheckedChange={() => !isFinish && toggleTool(tool.id)}
-                  className="flex items-center justify-center w-4 h-4 rounded border border-[#4a4d6e] bg-[#0f1117] data-[state=checked]:bg-[#6366f1] data-[state=checked]:border-[#6366f1]"
+                  className="flex items-center justify-center w-4 h-4 rounded border border-edge-hover bg-background data-[state=checked]:bg-accent data-[state=checked]:border-accent"
                 >
                   <Checkbox.Indicator>
                     <Check size={10} className="text-white" />
                   </Checkbox.Indicator>
                 </Checkbox.Root>
                 <span className="text-sm text-white">{tool.label}</span>
-                <span className="text-xs text-[#64748b] font-mono">{tool.id}</span>
+                <span className="text-xs text-muted font-mono">{tool.id}</span>
               </div>
             );
           })}
@@ -414,7 +457,7 @@ export function ConfigTab({ agentId }: { agentId: string }) {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#6366f1] hover:bg-[#818cf8] disabled:opacity-50 text-white text-sm font-medium transition-colors"
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-sm font-medium transition-colors"
         >
           {saved ? <Check size={14} /> : <Save size={14} />}
           {saving ? "Saving..." : saved ? "Saved" : "Save Configuration"}
@@ -426,5 +469,73 @@ export function ConfigTab({ agentId }: { agentId: string }) {
         )}
       </div>
     </div>
+  );
+}
+
+function SearchKeyStatus({ provider }: { provider: string }) {
+  const [hasKey, setHasKey] = useState(false);
+  const [keyInput, setKeyInput] = useState("");
+  const [showInput, setShowInput] = useState(false);
+
+  useEffect(() => {
+    llmApi.hasApiKey(provider).then(setHasKey).catch(() => setHasKey(false));
+  }, [provider]);
+
+  async function handleSet() {
+    if (!keyInput.trim()) return;
+    try {
+      await llmApi.setApiKey(provider, keyInput.trim());
+      setHasKey(true);
+      setKeyInput("");
+      setShowInput(false);
+    } catch (err) {
+      console.error("Failed to set search API key:", err);
+    }
+  }
+
+  if (hasKey) {
+    return (
+      <div className="flex items-center gap-2 h-[38px]">
+        <Check size={14} className="text-emerald-400" />
+        <span className="text-sm text-emerald-400">Configured</span>
+        <button
+          onClick={async () => {
+            await llmApi.deleteApiKey(provider);
+            setHasKey(false);
+          }}
+          className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-xs text-red-400 hover:bg-red-500/10"
+        >
+          <Trash2 size={11} /> Remove
+        </button>
+      </div>
+    );
+  }
+
+  if (showInput) {
+    return (
+      <div className="flex gap-2">
+        <input
+          type="password"
+          placeholder={`${provider} API key...`}
+          value={keyInput}
+          onChange={(e) => setKeyInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleSet()}
+          autoFocus
+          className="flex-1 px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm font-mono focus:outline-none focus:border-accent"
+        />
+        <button onClick={handleSet} className="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium">Save</button>
+        <button onClick={() => setShowInput(false)} className="px-2 py-1.5 text-muted text-xs">Cancel</button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setShowInput(true)}
+      className="flex items-center gap-2 w-full px-3 py-2 rounded-lg border border-dashed border-edge-hover text-secondary hover:text-white hover:border-accent text-sm transition-colors"
+    >
+      <Key size={14} />
+      Set {provider} API key
+    </button>
   );
 }

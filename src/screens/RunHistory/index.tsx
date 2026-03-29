@@ -86,7 +86,7 @@ export function RunHistory() {
         top={
           <div className="flex flex-col h-full">
             {/* Toolbar */}
-            <div className="flex items-center gap-2 px-4 py-3 border-b border-[#2a2d3e]">
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-edge">
               <h2 className="text-sm font-semibold text-white mr-2">Run History</h2>
               <div className="flex gap-1">
                 {STATE_OPTIONS.map((opt) => (
@@ -95,8 +95,8 @@ export function RunHistory() {
                     onClick={() => setStateFilter(opt.value)}
                     className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
                       stateFilter === opt.value
-                        ? "bg-[#6366f1] text-white"
-                        : "text-[#64748b] hover:text-white hover:bg-[#2a2d3e]"
+                        ? "bg-accent text-white"
+                        : "text-muted hover:text-white hover:bg-edge"
                     }`}
                   >
                     {opt.label}
@@ -108,26 +108,26 @@ export function RunHistory() {
             {/* Table */}
             <div className="flex-1 overflow-y-auto">
               {isLoading ? (
-                <div className="p-8 text-center text-[#64748b] text-sm">Loading…</div>
+                <div className="p-8 text-center text-muted text-sm">Loading…</div>
               ) : runs.length === 0 ? (
-                <div className="p-8 text-center text-[#64748b] text-sm">
+                <div className="p-8 text-center text-muted text-sm">
                   No runs found
                 </div>
               ) : (
                 <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-[#13151e] border-b border-[#2a2d3e]">
+                  <thead className="sticky top-0 bg-panel border-b border-edge">
                     <tr>
                       {["Task", "State", "Trigger", "Started", "Duration"].map((h) => (
                         <th
                           key={h}
-                          className="px-4 py-2 text-left text-xs font-medium text-[#64748b] uppercase tracking-wider"
+                          className="px-4 py-2 text-left text-xs font-medium text-muted uppercase tracking-wider"
                         >
                           {h}
                         </th>
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#2a2d3e]">
+                  <tbody className="divide-y divide-border">
                     {runs.map((run) => (
                       <RunRow
                         key={run.id}
@@ -143,9 +143,9 @@ export function RunHistory() {
           </div>
         }
         bottom={
-          <div className="flex flex-col h-full p-3 bg-[#0f1117]">
+          <div className="flex flex-col h-full p-3 bg-background">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-[#64748b]">
+              <span className="text-xs font-medium text-muted">
                 {selectedRunId
                   ? liveMode
                     ? "Live output"
@@ -155,7 +155,7 @@ export function RunHistory() {
               {selectedRunId && (
                 <button
                   onClick={() => runsApi.readLog(selectedRunId).then(downloadLog)}
-                  className="flex items-center gap-1 text-xs text-[#64748b] hover:text-white transition-colors"
+                  className="flex items-center gap-1 text-xs text-muted hover:text-white transition-colors"
                 >
                   <Download size={12} />
                   Download
@@ -183,7 +183,7 @@ function RunRow({
     <tr
       onClick={onClick}
       className={`cursor-pointer transition-colors ${
-        selected ? "bg-[#6366f1]/10" : "hover:bg-[#1a1d27]"
+        selected ? "bg-accent/10" : "hover:bg-surface"
       }`}
     >
       <td className="px-4 py-2.5 font-medium text-white truncate max-w-[200px]">
@@ -192,11 +192,11 @@ function RunRow({
       <td className="px-4 py-2.5">
         <StatusBadge state={run.state} />
       </td>
-      <td className="px-4 py-2.5 text-[#64748b] capitalize">{run.trigger}</td>
-      <td className="px-4 py-2.5 text-[#64748b] whitespace-nowrap">
+      <td className="px-4 py-2.5 text-muted capitalize">{run.trigger}</td>
+      <td className="px-4 py-2.5 text-muted whitespace-nowrap">
         {run.startedAt ? new Date(run.startedAt).toLocaleString() : "—"}
       </td>
-      <td className="px-4 py-2.5 text-[#64748b]">
+      <td className="px-4 py-2.5 text-muted">
         {formatDuration(run.durationMs)}
       </td>
     </tr>

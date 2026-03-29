@@ -69,10 +69,10 @@ export function AgentRunView({ runId, onBack }: AgentRunViewProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-[#2a2d3e]">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-edge">
         <button
           onClick={onBack}
-          className="p-1.5 rounded text-[#64748b] hover:text-white hover:bg-[#2a2d3e]"
+          className="p-1.5 rounded text-muted hover:text-white hover:bg-edge"
         >
           <ArrowLeft size={16} />
         </button>
@@ -80,18 +80,18 @@ export function AgentRunView({ runId, onBack }: AgentRunViewProps) {
           <p className="text-sm font-semibold text-white truncate">
             Agent Run {runId.slice(0, 8)}...
           </p>
-          <p className="text-xs text-[#64748b]">
+          <p className="text-xs text-muted">
             {run?.state ?? liveRun?.state ?? "pending"}
           </p>
         </div>
 
         {/* Stats badges */}
         <div className="flex items-center gap-3 text-xs">
-          <div className="flex items-center gap-1 text-[#818cf8]">
+          <div className="flex items-center gap-1 text-accent-hover">
             <Cpu size={12} />
             <span>Iter {iteration}</span>
           </div>
-          <div className="flex items-center gap-1 text-[#64748b]">
+          <div className="flex items-center gap-1 text-muted">
             <span>{totalTokens.toLocaleString()} tokens</span>
           </div>
           {agentState?.currentAction && (
@@ -105,7 +105,7 @@ export function AgentRunView({ runId, onBack }: AgentRunViewProps) {
               {agentState.currentAction === "finished" && (
                 <CheckCircle size={12} className="text-emerald-400" />
               )}
-              <span className="text-[#94a3b8]">{agentState.currentAction}</span>
+              <span className="text-secondary">{agentState.currentAction}</span>
             </div>
           )}
         </div>

@@ -115,24 +115,24 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
   const canSend = !disabled && (text.trim().length > 0 || attachments.length > 0);
 
   return (
-    <div className="border-t border-[#2a2d3e] bg-[#13151e]">
+    <div className="border-t border-edge bg-panel">
       {/* Attachment previews */}
       {attachments.length > 0 && (
         <div className="flex gap-2 px-4 pt-3 flex-wrap">
           {attachments.map((att) => (
             <div
               key={att.id}
-              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#1a1d27] border border-[#2a2d3e] text-xs"
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-surface border border-edge text-xs"
             >
               {att.type === "image" ? (
-                <ImageIcon size={12} className="text-[#818cf8]" />
+                <ImageIcon size={12} className="text-accent-hover" />
               ) : (
-                <FileText size={12} className="text-[#f59e0b]" />
+                <FileText size={12} className="text-warning" />
               )}
-              <span className="text-[#94a3b8] max-w-[120px] truncate">{att.name}</span>
+              <span className="text-secondary max-w-[120px] truncate">{att.name}</span>
               <button
                 onClick={() => removeAttachment(att.id)}
-                className="text-[#64748b] hover:text-white"
+                className="text-muted hover:text-white"
               >
                 <X size={10} />
               </button>
@@ -146,7 +146,7 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled}
-          className="p-2 rounded-lg text-[#64748b] hover:text-white hover:bg-[#1a1d27] disabled:opacity-50 transition-colors shrink-0 mb-0.5"
+          className="p-2 rounded-lg text-muted hover:text-white hover:bg-surface disabled:opacity-50 transition-colors shrink-0 mb-0.5"
         >
           <Paperclip size={16} />
         </button>
@@ -167,7 +167,7 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
           disabled={disabled}
           placeholder="Type a message..."
           rows={1}
-          className="flex-1 px-3 py-2 rounded-xl bg-[#0f1117] border border-[#2a2d3e] text-white text-sm resize-none focus:outline-none focus:border-[#6366f1] disabled:opacity-50 placeholder:text-[#4a4d6e]"
+          className="flex-1 px-3 py-2 rounded-xl bg-background border border-edge text-white text-sm resize-none focus:outline-none focus:border-accent disabled:opacity-50 placeholder:text-border-hover"
           style={{ maxHeight: 200 }}
         />
 
@@ -178,7 +178,7 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
         <button
           onClick={handleSend}
           disabled={!canSend}
-          className="p-2 rounded-lg bg-[#6366f1] hover:bg-[#818cf8] disabled:opacity-30 disabled:hover:bg-[#6366f1] text-white transition-colors shrink-0 mb-0.5"
+          className="p-2 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-30 disabled:hover:bg-accent text-white transition-colors shrink-0 mb-0.5"
         >
           <Send size={16} />
         </button>

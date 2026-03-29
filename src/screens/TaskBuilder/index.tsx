@@ -212,16 +212,16 @@ export function TaskBuilder() {
                   i < stepIndex
                     ? "bg-green-500 text-white"
                     : i === stepIndex
-                    ? "bg-[#6366f1] text-white"
-                    : "bg-[#2a2d3e] text-[#64748b]"
+                    ? "bg-accent text-white"
+                    : "bg-edge text-muted"
                 }`}
               >
                 {i < stepIndex ? <Check size={12} /> : i + 1}
               </div>
-              <span className={`text-sm ${i === stepIndex ? "text-white font-medium" : "text-[#64748b]"}`}>
+              <span className={`text-sm ${i === stepIndex ? "text-white font-medium" : "text-muted"}`}>
                 {s}
               </span>
-              {i < STEPS.length - 1 && <div className="w-8 h-px bg-[#2a2d3e] mx-1" />}
+              {i < STEPS.length - 1 && <div className="w-8 h-px bg-edge mx-1" />}
             </div>
           ))}
         </div>
@@ -262,14 +262,14 @@ export function TaskBuilder() {
                     onClick={() => setKind(id)}
                     className={`flex items-start gap-3 px-4 py-3 rounded-xl border transition-colors text-left ${
                       id === kind
-                        ? "border-[#6366f1] bg-[#6366f1]/10"
-                        : "border-[#2a2d3e] bg-[#1a1d27] hover:border-[#4a4d6e]"
+                        ? "border-accent bg-accent/10"
+                        : "border-edge bg-surface hover:border-edge-hover"
                     }`}
                   >
-                    <Icon size={18} className={id === kind ? "text-[#818cf8] mt-0.5" : "text-[#64748b] mt-0.5"} />
+                    <Icon size={18} className={id === kind ? "text-accent-hover mt-0.5" : "text-muted mt-0.5"} />
                     <div>
                       <p className="text-sm font-medium text-white">{label}</p>
-                      <p className="text-xs text-[#64748b]">{desc}</p>
+                      <p className="text-xs text-muted">{desc}</p>
                     </div>
                   </button>
                 ))}
@@ -285,7 +285,7 @@ export function TaskBuilder() {
                     onChange={e => setCommand(e.target.value)}
                     rows={6}
                     placeholder={"#!/bin/bash\necho 'Hello from Orbit!'"}
-                    className="w-full px-4 py-3 rounded-lg bg-[#0a0c12] border border-[#2a2d3e] text-green-400 text-sm font-mono placeholder-[#2a2d3e] focus:outline-none focus:border-[#6366f1] resize-none"
+                    className="w-full px-4 py-3 rounded-lg bg-inset border border-edge text-green-400 text-sm font-mono placeholder-border focus:outline-none focus:border-accent resize-none"
                   />
                 </Field>
                 <Field label="Working directory (optional)">
@@ -302,7 +302,7 @@ export function TaskBuilder() {
                   onChange={e => setPrompt(e.target.value)}
                   rows={6}
                   placeholder="e.g., Summarize the key trends in our latest sales data and suggest three action items."
-                  className="w-full px-4 py-3 rounded-lg bg-[#0a0c12] border border-[#2a2d3e] text-white text-sm placeholder-[#2a2d3e] focus:outline-none focus:border-[#6366f1] resize-none leading-relaxed"
+                  className="w-full px-4 py-3 rounded-lg bg-inset border border-edge text-white text-sm placeholder-border focus:outline-none focus:border-accent resize-none leading-relaxed"
                 />
               </Field>
             )}
@@ -332,7 +332,7 @@ export function TaskBuilder() {
                     onChange={e => setGoal(e.target.value)}
                     rows={5}
                     placeholder="e.g., Create a Python script that scrapes weather data and saves it to a CSV file"
-                    className="w-full px-4 py-3 rounded-lg bg-[#0a0c12] border border-[#2a2d3e] text-white text-sm placeholder-[#2a2d3e] focus:outline-none focus:border-[#6366f1] resize-none leading-relaxed"
+                    className="w-full px-4 py-3 rounded-lg bg-inset border border-edge text-white text-sm placeholder-border focus:outline-none focus:border-accent resize-none leading-relaxed"
                   />
                 </Field>
                 <div className="grid grid-cols-2 gap-4">
@@ -353,15 +353,15 @@ export function TaskBuilder() {
                 <Field label="URL">
                   <div className="flex gap-2">
                     <Select.Root value={httpMethod} onValueChange={(v) => setHttpMethod(v as HttpRequestConfig["method"])}>
-                      <Select.Trigger className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-[#1a1d27] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]">
+                      <Select.Trigger className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-surface border border-edge text-white text-sm focus:outline-none focus:border-accent">
                         <Select.Value />
-                        <Select.Icon><ChevronDown size={14} className="text-[#64748b]" /></Select.Icon>
+                        <Select.Icon><ChevronDown size={14} className="text-muted" /></Select.Icon>
                       </Select.Trigger>
                       <Select.Portal>
-                        <Select.Content className="rounded-lg bg-[#1a1d27] border border-[#2a2d3e] shadow-xl overflow-hidden z-50">
+                        <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
                           <Select.Viewport className="p-1">
                             {["GET", "POST", "PUT", "PATCH", "DELETE"].map(m => (
-                              <Select.Item key={m} value={m} className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-[#6366f1]/20">
+                              <Select.Item key={m} value={m} className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20">
                                 <Select.ItemText>{m}</Select.ItemText>
                               </Select.Item>
                             ))}
@@ -385,13 +385,13 @@ export function TaskBuilder() {
                           onChange={e => setHttpHeaders(prev => prev.map((x, j) => j === i ? { ...x, v: e.target.value } : x))}
                           className={`${inputCls} flex-1`} />
                         <button onClick={() => setHttpHeaders(prev => prev.filter((_, j) => j !== i))}
-                          className="p-1.5 text-[#64748b] hover:text-red-400">
+                          className="p-1.5 text-muted hover:text-red-400">
                           <Minus size={14} />
                         </button>
                       </div>
                     ))}
                     <button onClick={() => setHttpHeaders(prev => [...prev, { k: "", v: "" }])}
-                      className="flex items-center gap-1.5 text-xs text-[#6366f1] hover:text-[#818cf8]">
+                      className="flex items-center gap-1.5 text-xs text-accent hover:text-accent-hover">
                       <Plus size={12} /> Add header
                     </button>
                   </div>
@@ -400,14 +400,14 @@ export function TaskBuilder() {
                 {["POST", "PUT", "PATCH"].includes(httpMethod) && (
                   <Field label="Body">
                     <textarea value={httpBody} onChange={e => setHttpBody(e.target.value)} rows={4}
-                      placeholder='{"key": "value"}' className="w-full px-4 py-3 rounded-lg bg-[#0a0c12] border border-[#2a2d3e] text-green-400 text-sm font-mono placeholder-[#2a2d3e] focus:outline-none focus:border-[#6366f1] resize-none" />
+                      placeholder='{"key": "value"}' className="w-full px-4 py-3 rounded-lg bg-inset border border-edge text-green-400 text-sm font-mono placeholder-border focus:outline-none focus:border-accent resize-none" />
                   </Field>
                 )}
 
                 <Field label="Expected status codes (optional)">
                   <input type="text" value={httpExpectedCodes} onChange={e => setHttpExpectedCodes(e.target.value)}
                     placeholder="200, 201, 204" className={inputCls} />
-                  <p className="text-xs text-[#64748b] mt-1">Comma-separated. Leave blank for any 2xx.</p>
+                  <p className="text-xs text-muted mt-1">Comma-separated. Leave blank for any 2xx.</p>
                 </Field>
               </>
             )}
@@ -426,16 +426,16 @@ export function TaskBuilder() {
                     onClick={() => setAgentId(agent.id)}
                     className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border transition-colors text-left ${
                       agent.id === agentId
-                        ? "border-[#6366f1] bg-[#6366f1]/10"
-                        : "border-[#2a2d3e] bg-[#1a1d27] hover:border-[#4a4d6e]"
+                        ? "border-accent bg-accent/10"
+                        : "border-edge bg-surface hover:border-edge-hover"
                     }`}
                   >
-                    <Bot size={16} className={agent.id === agentId ? "text-[#818cf8]" : "text-[#64748b]"} />
+                    <Bot size={16} className={agent.id === agentId ? "text-accent-hover" : "text-muted"} />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-white">{agent.name}</p>
-                      <p className="text-xs text-[#64748b]">Max {agent.maxConcurrentRuns} concurrent</p>
+                      <p className="text-xs text-muted">Max {agent.maxConcurrentRuns} concurrent</p>
                     </div>
-                    {agent.id === agentId && <Check size={14} className="text-[#6366f1]" />}
+                    {agent.id === agentId && <Check size={14} className="text-accent" />}
                   </button>
                 ))}
               </div>
@@ -450,16 +450,16 @@ export function TaskBuilder() {
                     onClick={() => setConcurrencyPolicy(opt.value as CreateTask["concurrencyPolicy"])}
                     className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg border transition-colors text-left ${
                       opt.value === concurrencyPolicy
-                        ? "border-[#6366f1] bg-[#6366f1]/10"
-                        : "border-[#2a2d3e] bg-[#1a1d27] hover:border-[#4a4d6e]"
+                        ? "border-accent bg-accent/10"
+                        : "border-edge bg-surface hover:border-edge-hover"
                     }`}
                   >
                     <div className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 ${
-                      opt.value === concurrencyPolicy ? "border-[#6366f1] bg-[#6366f1]" : "border-[#4a5568]"
+                      opt.value === concurrencyPolicy ? "border-accent bg-accent" : "border-edge-hover"
                     }`} />
                     <div>
                       <p className="text-sm font-medium text-white">{opt.label}</p>
-                      <p className="text-xs text-[#64748b]">{opt.hint}</p>
+                      <p className="text-xs text-muted">{opt.hint}</p>
                     </div>
                   </button>
                 ))}
@@ -475,12 +475,12 @@ export function TaskBuilder() {
                 onValueChange={([v]) => setMaxDurationMinutes(v)}
                 className="relative flex items-center w-full h-5 select-none touch-none"
               >
-                <Slider.Track className="relative grow h-1 rounded-full bg-[#2a2d3e]">
-                  <Slider.Range className="absolute h-full rounded-full bg-[#6366f1]" />
+                <Slider.Track className="relative grow h-1 rounded-full bg-edge">
+                  <Slider.Range className="absolute h-full rounded-full bg-accent" />
                 </Slider.Track>
-                <Slider.Thumb className="block w-4 h-4 rounded-full bg-white shadow-md border-2 border-[#6366f1] focus:outline-none focus:ring-2 focus:ring-[#6366f1]/40" />
+                <Slider.Thumb className="block w-4 h-4 rounded-full bg-white shadow-md border-2 border-accent focus:outline-none focus:ring-2 focus:ring-accent/40" />
               </Slider.Root>
-              <div className="flex justify-between text-xs text-[#64748b] mt-1">
+              <div className="flex justify-between text-xs text-muted mt-1">
                 <span>1 min</span><span>1 hr</span><span>6 hrs</span>
               </div>
             </Field>
@@ -507,8 +507,8 @@ export function TaskBuilder() {
                   <button key={sk} type="button" onClick={() => setScheduleKind(sk)}
                     className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-colors ${
                       sk === scheduleKind
-                        ? "border-[#6366f1] bg-[#6366f1]/10 text-[#818cf8]"
-                        : "border-[#2a2d3e] bg-[#1a1d27] text-[#64748b] hover:border-[#4a4d6e]"
+                        ? "border-accent bg-accent/10 text-accent-hover"
+                        : "border-edge bg-surface text-muted hover:border-edge-hover"
                     }`}
                   >
                     {sk === "none" ? "Manual" : sk === "recurring" ? "Recurring" : "One time"}
@@ -518,7 +518,7 @@ export function TaskBuilder() {
             </Field>
 
             {scheduleKind === "none" && (
-              <p className="text-center py-8 text-[#64748b] text-sm">
+              <p className="text-center py-8 text-muted text-sm">
                 Run manually from the Dashboard or Tasks screen.
               </p>
             )}
@@ -538,7 +538,7 @@ export function TaskBuilder() {
                     className={inputCls} />
                 </Field>
                 {oneShotDate && (
-                  <p className="text-sm text-[#94a3b8]">
+                  <p className="text-sm text-secondary">
                     Will run on {new Date(`${oneShotDate}T${oneShotTime}`).toLocaleString()}
                   </p>
                 )}
@@ -550,7 +550,7 @@ export function TaskBuilder() {
         {/* ── Step 4: Review ── */}
         {step === "Review" && (
           <div className="space-y-4">
-            <div className="rounded-xl border border-[#2a2d3e] bg-[#1a1d27] p-5">
+            <div className="rounded-xl border border-edge bg-surface p-5">
               <h3 className="text-sm font-semibold text-white mb-4">Summary</h3>
               <dl className="space-y-3">
                 <Row label="Name" value={name} />
@@ -595,27 +595,27 @@ export function TaskBuilder() {
       </div>
 
       {/* Navigation */}
-      <div className="flex items-center justify-between pt-6 border-t border-[#2a2d3e] mt-6">
+      <div className="flex items-center justify-between pt-6 border-t border-edge mt-6">
         {stepIndex > 0 ? (
           <button onClick={() => setStep(STEPS[stepIndex - 1])}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-[#64748b] hover:text-white hover:bg-[#2a2d3e] text-sm transition-colors">
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-muted hover:text-white hover:bg-edge text-sm transition-colors">
             <ChevronLeft size={14} /> Back
           </button>
         ) : (
           <button onClick={() => navigate("dashboard")}
-            className="px-4 py-2 rounded-lg text-[#64748b] hover:text-white text-sm transition-colors">
+            className="px-4 py-2 rounded-lg text-muted hover:text-white text-sm transition-colors">
             Cancel
           </button>
         )}
 
         {stepIndex < STEPS.length - 1 ? (
           <button disabled={!canProceed()} onClick={() => setStep(STEPS[stepIndex + 1])}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#6366f1] hover:bg-[#818cf8] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors">
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors">
             Continue <ChevronRight size={14} />
           </button>
         ) : (
           <button disabled={creating} onClick={handleCreate}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#6366f1] hover:bg-[#818cf8] disabled:opacity-50 text-white text-sm font-medium transition-colors">
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-sm font-medium transition-colors">
             {creating ? "Creating…" : "Create Task"} <Check size={14} />
           </button>
         )}
@@ -625,12 +625,12 @@ export function TaskBuilder() {
 }
 
 const inputCls =
-  "w-full px-4 py-2.5 rounded-lg bg-[#1a1d27] border border-[#2a2d3e] text-white text-sm placeholder-[#4a5568] focus:outline-none focus:border-[#6366f1]";
+  "w-full px-4 py-2.5 rounded-lg bg-surface border border-edge text-white text-sm placeholder-border-hover focus:outline-none focus:border-accent";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-sm font-medium text-[#94a3b8] mb-1.5">{label}</label>
+      <label className="block text-sm font-medium text-secondary mb-1.5">{label}</label>
       {children}
     </div>
   );
@@ -639,7 +639,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function Row({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex gap-3">
-      <dt className="w-28 flex-shrink-0 text-xs text-[#64748b] pt-0.5">{label}</dt>
+      <dt className="w-28 flex-shrink-0 text-xs text-muted pt-0.5">{label}</dt>
       <dd className={`flex-1 text-sm text-white break-all ${mono ? "font-mono text-green-400" : ""}`}>
         {value}
       </dd>

@@ -1,0 +1,382 @@
+use tracing::debug;
+
+use crate::db::connection::DbPool;
+use crate::executor::agent_tools;
+use crate::executor::compaction;
+use crate::executor::llm_provider::{
+    model_context_window, ChatMessage, ContentBlock, ToolDefinition,
+};
+use crate::executor::workspace::{self, AgentWorkspaceConfig};
+
+// ─── Core types ─────────────────────────────────────────────────────────────
+
+/// Everything needed to make an LLM call. Built incrementally by the pipeline.
+#[derive(Debug, Clone)]
+pub struct ContextSnapshot {
+    pub system_prompt: String,
+    pub messages: Vec<ChatMessage>,
+    pub tools: Vec<ToolDefinition>,
+    pub token_budget: TokenBudget,
+    pub metadata: ContextMeta,
+}
+
+impl ContextSnapshot {
+    pub fn empty(request: &ContextRequest) -> Self {
+        let context_window = request
+            .ws_config
+            .context_window_override
+            .unwrap_or_else(|| model_context_window(&request.ws_config.model));
+        let threshold = compaction::effective_threshold(&request.ws_config);
+
+        Self {
+            system_prompt: String::new(),
+            messages: Vec::new(),
+            tools: Vec::new(),
+            token_budget: TokenBudget {
+                context_window,
+                max_output_tokens: 4096,
+                used_input_tokens: 0,
+                compaction_threshold: threshold,
+            },
+            metadata: ContextMeta {
+                agent_id: request.agent_id.clone(),
+                session_id: request.session_id.clone(),
+                mode: request.mode.clone(),
+            },
+        }
+    }
+}
+
+/// Immutable request describing what we're building context for.
+#[derive(Debug, Clone)]
+pub struct ContextRequest {
+    pub agent_id: String,
+    pub mode: ContextMode,
+    pub session_id: Option<String>,
+    pub run_id: String,
+    pub goal: Option<String>,
+    pub ws_config: AgentWorkspaceConfig,
+    /// For agent_loop: messages managed in-memory during the loop.
+    pub existing_messages: Option<Vec<ChatMessage>>,
+}
+
+/// What kind of LLM interaction is being built.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ContextMode {
+    AgentLoop,
+    Pulse,
+    Chat,
+    SingleShot,
+}
+
+impl std::fmt::Display for ContextMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ContextMode::AgentLoop => write!(f, "agent_loop"),
+            ContextMode::Pulse => write!(f, "pulse"),
+            ContextMode::Chat => write!(f, "chat"),
+            ContextMode::SingleShot => write!(f, "single_shot"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TokenBudget {
+    pub context_window: u32,
+    pub max_output_tokens: u32,
+    pub used_input_tokens: u32,
+    pub compaction_threshold: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContextMeta {
+    pub agent_id: String,
+    pub session_id: Option<String>,
+    pub mode: ContextMode,
+}
+
+// ─── Stage trait + Pipeline ─────────────────────────────────────────────────
+
+#[async_trait::async_trait]
+pub trait ContextStage: Send + Sync {
+    /// Transform the context snapshot. Called in pipeline order.
+    async fn process(
+        &self,
+        snapshot: ContextSnapshot,
+        request: &ContextRequest,
+        db: &DbPool,
+    ) -> Result<ContextSnapshot, String>;
+
+    /// Human-readable name for logging/debugging.
+    fn name(&self) -> &str;
+}
+
+pub struct ContextPipeline {
+    stages: Vec<Box<dyn ContextStage>>,
+}
+
+impl ContextPipeline {
+    pub fn new() -> Self {
+        Self { stages: Vec::new() }
+    }
+
+    pub fn add_stage(&mut self, stage: Box<dyn ContextStage>) {
+        self.stages.push(stage);
+    }
+
+    pub async fn build(
+        &self,
+        request: &ContextRequest,
+        db: &DbPool,
+    ) -> Result<ContextSnapshot, String> {
+        let mut snapshot = ContextSnapshot::empty(request);
+
+        for stage in &self.stages {
+            debug!(stage = stage.name(), "Running context stage");
+            snapshot = stage.process(snapshot, request, db).await?;
+        }
+
+        Ok(snapshot)
+    }
+}
+
+/// Construct the default context pipeline with all built-in stages.
+pub fn default_pipeline() -> ContextPipeline {
+    let mut p = ContextPipeline::new();
+    p.add_stage(Box::new(BasePromptStage));
+    p.add_stage(Box::new(MessageHistoryStage));
+    p.add_stage(Box::new(ToolResolutionStage));
+    p
+}
+
+// ─── BasePromptStage ────────────────────────────────────────────────────────
+
+/// Loads the system prompt from disk and appends runtime context metadata.
+pub struct BasePromptStage;
+
+#[async_trait::async_trait]
+impl ContextStage for BasePromptStage {
+    async fn process(
+        &self,
+        mut snapshot: ContextSnapshot,
+        request: &ContextRequest,
+        db: &DbPool,
+    ) -> Result<ContextSnapshot, String> {
+        // Load base system prompt from the agent's workspace
+        let base_prompt = workspace::read_workspace_file(&request.agent_id, "system_prompt.md")
+            .unwrap_or_else(|_| "You are a helpful assistant.".to_string());
+
+        // Gather runtime context
+        let agent_name = {
+            let pool = db.0.clone();
+            let aid = request.agent_id.clone();
+            tokio::task::spawn_blocking(move || -> String {
+                if let Ok(conn) = pool.get() {
+                    conn.query_row(
+                        "SELECT name FROM agents WHERE id = ?1",
+                        rusqlite::params![aid],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or_else(|_| aid)
+                } else {
+                    aid
+                }
+            })
+            .await
+            .unwrap_or_else(|_| request.agent_id.clone())
+        };
+
+        // Session info
+        let session_info = if let Some(ref sid) = request.session_id {
+            let pool = db.0.clone();
+            let sid = sid.clone();
+            tokio::task::spawn_blocking(move || -> Option<(String, u32)> {
+                let conn = pool.get().ok()?;
+                let title: String = conn
+                    .query_row(
+                        "SELECT title FROM chat_sessions WHERE id = ?1",
+                        rusqlite::params![sid],
+                        |row| row.get(0),
+                    )
+                    .ok()?;
+                let count: u32 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM chat_messages WHERE session_id = ?1 AND is_compacted = 0",
+                        rusqlite::params![sid],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+                Some((title, count))
+            })
+            .await
+            .ok()
+            .flatten()
+        } else {
+            None
+        };
+
+        // List workspace files (top-level only, lightweight)
+        let workspace_files = workspace::list_workspace_files(&request.agent_id, "workspace")
+            .unwrap_or_default()
+            .iter()
+            .map(|f| {
+                if f.is_dir {
+                    format!("{}/", f.name)
+                } else {
+                    f.name.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        // Tool names from config
+        let tool_names = request.ws_config.allowed_tools.join(", ");
+
+        // Build the runtime context section
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let mut context_section = format!(
+            "\n\n## Current Context\n- Agent: {}\n- Mode: {}\n",
+            agent_name, request.mode
+        );
+
+        if let Some((title, count)) = session_info {
+            context_section.push_str(&format!("- Session: {} ({} messages)\n", title, count));
+        }
+
+        if !workspace_files.is_empty() {
+            context_section.push_str(&format!("- Workspace files: {}\n", workspace_files));
+        }
+
+        if !tool_names.is_empty() {
+            context_section.push_str(&format!("- Available tools: {}\n", tool_names));
+        }
+
+        context_section.push_str(&format!("- Date: {}\n", today));
+
+        snapshot.system_prompt = format!("{}{}", base_prompt, context_section);
+        Ok(snapshot)
+    }
+
+    fn name(&self) -> &str {
+        "BasePrompt"
+    }
+}
+
+// ─── MessageHistoryStage ────────────────────────────────────────────────────
+
+/// Loads conversation messages from the database or uses in-memory messages.
+pub struct MessageHistoryStage;
+
+#[async_trait::async_trait]
+impl ContextStage for MessageHistoryStage {
+    async fn process(
+        &self,
+        mut snapshot: ContextSnapshot,
+        request: &ContextRequest,
+        db: &DbPool,
+    ) -> Result<ContextSnapshot, String> {
+        // If caller already has messages in memory, use them directly (avoids re-query)
+        if let Some(ref msgs) = request.existing_messages {
+            snapshot.messages = msgs.clone();
+            return Ok(snapshot);
+        }
+
+        match request.mode {
+            ContextMode::AgentLoop => {
+                // Agent loop manages messages in-memory; if no existing_messages,
+                // messages stay empty (first iteration builds from goal)
+            }
+            ContextMode::Pulse | ContextMode::Chat => {
+                // Load non-compacted messages from DB
+                if let Some(ref sid) = request.session_id {
+                    let pool = db.0.clone();
+                    let sid = sid.clone();
+                    let messages = tokio::task::spawn_blocking(move || -> Result<Vec<ChatMessage>, String> {
+                        let conn = pool.get().map_err(|e| e.to_string())?;
+                        let mut stmt = conn
+                            .prepare(
+                                "SELECT role, content FROM chat_messages
+                                 WHERE session_id = ?1 AND is_compacted = 0
+                                 ORDER BY created_at ASC",
+                            )
+                            .map_err(|e| e.to_string())?;
+
+                        let msgs = stmt
+                            .query_map(rusqlite::params![sid], |row| {
+                                let role: String = row.get(0)?;
+                                let content_json: String = row.get(1)?;
+                                Ok((role, content_json))
+                            })
+                            .map_err(|e| e.to_string())?
+                            .filter_map(|r| r.ok())
+                            .map(|(role, content_json)| {
+                                let content: Vec<ContentBlock> =
+                                    serde_json::from_str(&content_json).unwrap_or_default();
+                                ChatMessage {
+                                    role,
+                                    content,
+                                    created_at: None,
+                                }
+                            })
+                            .collect();
+                        Ok(msgs)
+                    })
+                    .await
+                    .map_err(|e| e.to_string())??;
+
+                    snapshot.messages = messages;
+                }
+            }
+            ContextMode::SingleShot => {
+                // Build a single user message from the goal
+                if let Some(ref goal) = request.goal {
+                    snapshot.messages = vec![ChatMessage {
+                        role: "user".to_string(),
+                        content: vec![ContentBlock::Text {
+                            text: goal.clone(),
+                        }],
+                        created_at: None,
+                    }];
+                }
+            }
+        }
+
+        Ok(snapshot)
+    }
+
+    fn name(&self) -> &str {
+        "MessageHistory"
+    }
+}
+
+// ─── ToolResolutionStage ────────────────────────────────────────────────────
+
+/// Resolves available tools from the agent workspace config.
+pub struct ToolResolutionStage;
+
+#[async_trait::async_trait]
+impl ContextStage for ToolResolutionStage {
+    async fn process(
+        &self,
+        mut snapshot: ContextSnapshot,
+        request: &ContextRequest,
+        _db: &DbPool,
+    ) -> Result<ContextSnapshot, String> {
+        match request.mode {
+            ContextMode::AgentLoop => {
+                snapshot.tools =
+                    agent_tools::build_tool_definitions(&request.ws_config.allowed_tools);
+            }
+            ContextMode::SingleShot | ContextMode::Pulse | ContextMode::Chat => {
+                // No tools for single-shot, pulse, or chat modes
+                snapshot.tools = Vec::new();
+            }
+        }
+
+        Ok(snapshot)
+    }
+
+    fn name(&self) -> &str {
+        "ToolResolution"
+    }
+}

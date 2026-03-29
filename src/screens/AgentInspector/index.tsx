@@ -46,7 +46,7 @@ export function AgentInspector() {
 
   // No agent selected — prompt
   return (
-    <div className="flex items-center justify-center h-full text-[#64748b] text-sm">
+    <div className="flex items-center justify-center h-full text-muted text-sm">
       Select an agent from the sidebar
     </div>
   );
@@ -79,7 +79,7 @@ function NewAgentView() {
 
   return (
     <div className="flex items-center justify-center h-full">
-      <div className="w-full max-w-md rounded-xl border border-[#2a2d3e] bg-[#1a1d27] p-6 space-y-4">
+      <div className="w-full max-w-md rounded-xl border border-edge bg-surface p-6 space-y-4">
         <h3 className="text-base font-semibold text-white">Create New Agent</h3>
         <input
           type="text"
@@ -87,37 +87,37 @@ function NewAgentView() {
           value={name}
           onChange={(e) => setName(e.target.value)}
           autoFocus
-          className="w-full px-3 py-2 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]"
+          className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
         />
         <input
           type="text"
           placeholder="Description (optional)"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          className="w-full px-3 py-2 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]"
+          className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
         />
         <div className="flex items-center gap-2">
-          <label className="text-xs text-[#64748b]">Max concurrent runs:</label>
+          <label className="text-xs text-muted">Max concurrent runs:</label>
           <input
             type="number"
             min={1}
             max={50}
             value={maxConcurrent}
             onChange={(e) => setMaxConcurrent(Number(e.target.value))}
-            className="w-20 px-2 py-1.5 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]"
+            className="w-20 px-2 py-1.5 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
           />
         </div>
         <div className="flex gap-2 pt-1">
           <button
             onClick={handleSave}
             disabled={saving || !name.trim()}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#6366f1] hover:bg-[#818cf8] disabled:opacity-50 text-white text-sm font-medium"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-sm font-medium"
           >
             <Save size={14} /> {saving ? 'Creating...' : 'Create Agent'}
           </button>
           <button
             onClick={() => navigate('dashboard')}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-[#64748b] hover:text-white text-sm"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-muted hover:text-white text-sm"
           >
             <X size={14} /> Cancel
           </button>
@@ -136,7 +136,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
 
   if (!agent) {
     return (
-      <div className="flex items-center justify-center h-full text-[#64748b] text-sm">
+      <div className="flex items-center justify-center h-full text-muted text-sm">
         Agent not found. Select one from the sidebar.
       </div>
     );
@@ -157,18 +157,18 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
   return (
     <div className="flex flex-col h-full">
       {/* Header with tabs */}
-      <div className="border-b border-[#2a2d3e]">
+      <div className="border-b border-edge">
         <div className="flex items-center justify-between px-6 pt-4 pb-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-[#6366f1]/20 flex items-center justify-center">
-              <Bot size={18} className="text-[#818cf8]" />
+            <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center">
+              <Bot size={18} className="text-accent-hover" />
             </div>
             <div>
               <h3 className="text-base font-semibold text-white">{agent.name}</h3>
               <div className="flex items-center gap-2">
                 <StatusBadge state={agent.state} />
                 {agent.description && (
-                  <span className="text-xs text-[#64748b]">{agent.description}</span>
+                  <span className="text-xs text-muted">{agent.description}</span>
                 )}
               </div>
             </div>
@@ -176,7 +176,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
           {agent.id !== DEFAULT_AGENT_ID && (
             <button
               onClick={() => setShowRunDialog(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#6366f1] hover:bg-[#818cf8] text-white text-xs font-medium transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-medium transition-colors"
             >
               <Play size={12} /> Run Agent
             </button>
@@ -191,8 +191,8 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
               onClick={() => setAgentTab(tab.id)}
               className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-t-lg border-b-2 transition-colors ${
                 agentTab === tab.id
-                  ? 'border-[#6366f1] text-white bg-[#6366f1]/10'
-                  : 'border-transparent text-[#64748b] hover:text-white'
+                  ? 'border-accent text-white bg-accent/10'
+                  : 'border-transparent text-muted hover:text-white'
               }`}
             >
               <tab.icon size={13} />
@@ -254,7 +254,7 @@ function OverviewContent({
     if (run.taskName.includes('Pulse')) {
       return (
         <div className="flex items-center gap-1">
-          <Zap size={16} className="text-[#f59e0b]" />
+          <Zap size={16} className="text-warning" />
           <>{'Pulse'}</>
         </div>
       );
@@ -311,12 +311,12 @@ function OverviewContent({
               <div
                 key={run.id}
                 onClick={() => handleRunClick(run)}
-                className="flex items-center gap-3 px-4 py-3 rounded-lg border border-[#2a2d3e] bg-[#1a1d27] cursor-pointer hover:border-[#4a4d6e]"
+                className="flex items-center gap-3 px-4 py-3 rounded-lg border border-edge bg-surface cursor-pointer hover:border-edge-hover"
               >
                 <Activity size={14} className="text-blue-400 animate-pulse" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-white truncate">{parseName(run)}</p>
-                  <p className="text-xs text-[#64748b]">
+                  <p className="text-xs text-muted">
                     {run.trigger} &middot; started{' '}
                     {run.startedAt ? new Date(run.startedAt).toLocaleTimeString() : '...'}
                   </p>
@@ -340,21 +340,21 @@ function OverviewContent({
       <div>
         <h4 className="text-sm font-semibold text-white mb-3">Recent Runs</h4>
         {recentRuns.length === 0 ? (
-          <p className="text-sm text-[#64748b]">No runs yet for this agent.</p>
+          <p className="text-sm text-muted">No runs yet for this agent.</p>
         ) : (
           <div className="space-y-1">
             {recentRuns.slice(0, 20).map((run) => (
               <div
                 key={run.id}
                 onClick={() => handleRunClick(run)}
-                className="flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-[#1a1d27] cursor-pointer"
+                className="flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-surface cursor-pointer"
               >
                 <StatusBadge state={run.state} />
                 <p className="text-sm text-white flex-1 truncate">{parseName(run)}</p>
-                <p className="text-xs text-[#64748b]">
+                <p className="text-xs text-muted">
                   {run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : '--'}
                 </p>
-                <p className="text-xs text-[#64748b]">
+                <p className="text-xs text-muted">
                   {run.createdAt ? new Date(run.createdAt).toLocaleString() : ''}
                 </p>
               </div>
@@ -368,9 +368,9 @@ function OverviewContent({
 
 function StatCard({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className="rounded-xl border border-[#2a2d3e] bg-[#1a1d27] p-4">
-      <p className="text-xs text-[#64748b] mb-1">{label}</p>
-      <p className={`text-xl font-semibold ${accent ? 'text-[#818cf8]' : 'text-white'}`}>{value}</p>
+    <div className="rounded-xl border border-edge bg-surface p-4">
+      <p className="text-xs text-muted mb-1">{label}</p>
+      <p className={`text-xl font-semibold ${accent ? 'text-accent-hover' : 'text-white'}`}>{value}</p>
     </div>
   );
 }

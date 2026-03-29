@@ -76,13 +76,13 @@ export function Dashboard() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-semibold text-white">Dashboard</h2>
-          <p className="text-sm text-[#64748b] mt-0.5">
+          <p className="text-sm text-muted mt-0.5">
             {tasks.length} tasks · {schedules.filter((s) => s.enabled).length} active schedules
           </p>
         </div>
         <button
           onClick={() => navigate("task-builder")}
-          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#6366f1] hover:bg-[#818cf8] text-white text-sm font-medium transition-colors"
+          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors"
         >
           <Plus size={14} />
           New Task
@@ -91,7 +91,7 @@ export function Dashboard() {
 
       {/* Active Now */}
       <section>
-        <h3 className="text-sm font-medium text-[#64748b] uppercase tracking-wider mb-3">
+        <h3 className="text-sm font-medium text-muted uppercase tracking-wider mb-3">
           Active Now
           {activeRunList.length > 0 && (
             <span className="ml-2 px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 text-xs normal-case font-normal">
@@ -101,9 +101,9 @@ export function Dashboard() {
         </h3>
 
         {activeRunList.length === 0 ? (
-          <div className="rounded-xl border border-[#2a2d3e] bg-[#1a1d27] p-8 text-center">
-            <Play size={24} className="text-[#2a2d3e] mx-auto mb-2" />
-            <p className="text-sm text-[#64748b]">No runs in progress</p>
+          <div className="rounded-xl border border-edge bg-surface p-8 text-center">
+            <Play size={24} className="text-border mx-auto mb-2" />
+            <p className="text-sm text-muted">No runs in progress</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-3">
@@ -124,10 +124,10 @@ export function Dashboard() {
       {/* Upcoming */}
       {upcoming.length > 0 && (
         <section>
-          <h3 className="text-sm font-medium text-[#64748b] uppercase tracking-wider mb-3">
+          <h3 className="text-sm font-medium text-muted uppercase tracking-wider mb-3">
             Upcoming
           </h3>
-          <div className="rounded-xl border border-[#2a2d3e] bg-[#1a1d27] divide-y divide-[#2a2d3e] overflow-hidden">
+          <div className="rounded-xl border border-edge bg-surface divide-y divide-border overflow-hidden">
             {upcoming.map((sched) => {
               const task = tasks.find((t) => t.id === sched.taskId);
               const nextRunDate = new Date(sched.nextRunAt!);
@@ -136,18 +136,18 @@ export function Dashboard() {
 
               return (
                 <div key={sched.id} className="flex items-center gap-3 px-4 py-3">
-                  <Clock size={14} className="text-[#6366f1] flex-shrink-0" />
+                  <Clock size={14} className="text-accent flex-shrink-0" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-white truncate">
                       {task?.name ?? "Unknown task"}
                     </p>
                     {sched.kind === "recurring" && (
-                      <p className="text-xs text-[#64748b]">
+                      <p className="text-xs text-muted">
                         {humanSchedule(sched.config as RecurringConfig)}
                       </p>
                     )}
                   </div>
-                  <span className="text-xs text-[#64748b] flex-shrink-0">
+                  <span className="text-xs text-muted flex-shrink-0">
                     {diffMins <= 0
                       ? "Now"
                       : diffMins < 60
@@ -163,20 +163,20 @@ export function Dashboard() {
 
       {/* Recent Activity */}
       <section>
-        <h3 className="text-sm font-medium text-[#64748b] uppercase tracking-wider mb-3">
+        <h3 className="text-sm font-medium text-muted uppercase tracking-wider mb-3">
           Recent Activity
         </h3>
 
         {recentRuns.length === 0 ? (
-          <div className="rounded-xl border border-[#2a2d3e] bg-[#1a1d27] p-8 text-center">
-            <CheckCircle size={24} className="text-[#2a2d3e] mx-auto mb-2" />
-            <p className="text-sm text-[#64748b]">No runs yet</p>
-            <p className="text-xs text-[#64748b] mt-1">
+          <div className="rounded-xl border border-edge bg-surface p-8 text-center">
+            <CheckCircle size={24} className="text-border mx-auto mb-2" />
+            <p className="text-sm text-muted">No runs yet</p>
+            <p className="text-xs text-muted mt-1">
               Create a task and it will appear here once it runs
             </p>
           </div>
         ) : (
-          <div className="rounded-xl border border-[#2a2d3e] bg-[#1a1d27] overflow-hidden">
+          <div className="rounded-xl border border-edge bg-surface overflow-hidden">
             {recentRuns.map((run, i) => (
               <button
                 key={run.id}
@@ -184,21 +184,21 @@ export function Dashboard() {
                   selectRun(run.id);
                   navigate("history");
                 }}
-                className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-[#222533] text-left transition-colors ${
-                  i > 0 ? "border-t border-[#2a2d3e]" : ""
+                className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-surface-hover text-left transition-colors ${
+                  i > 0 ? "border-t border-edge" : ""
                 }`}
               >
                 <StatusBadge state={run.state} className="flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-white truncate">{run.taskName}</p>
-                  <p className="text-xs text-[#64748b]">
+                  <p className="text-xs text-muted">
                     {run.trigger === "scheduled" ? "Scheduled" : "Manual"} ·{" "}
                     {run.startedAt
                       ? new Date(run.startedAt).toLocaleString()
                       : "—"}
                   </p>
                 </div>
-                <span className="text-xs text-[#64748b] flex-shrink-0">
+                <span className="text-xs text-muted flex-shrink-0">
                   {formatDuration(run.durationMs)}
                 </span>
               </button>
@@ -232,12 +232,12 @@ function ActiveRunCard({
       <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse flex-shrink-0" />
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-white truncate">{taskName}</p>
-        <p className="text-xs text-[#64748b]">
+        <p className="text-xs text-muted">
           <StatusBadge state={state} className="mr-1" />
           {formatElapsed(startedAt)}
         </p>
       </div>
-      <XCircle size={14} className="text-[#64748b] flex-shrink-0 hover:text-red-400" />
+      <XCircle size={14} className="text-muted flex-shrink-0 hover:text-red-400" />
     </button>
   );
 }

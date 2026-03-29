@@ -38,11 +38,11 @@ export function TasksScreen() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-6 py-4 border-b border-[#2a2d3e]">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-edge">
         <h2 className="text-lg font-semibold text-white">Tasks</h2>
         <button
           onClick={() => navigate("task-builder")}
-          className="px-3 py-1.5 rounded-lg bg-[#6366f1] hover:bg-[#818cf8] text-white text-sm font-medium transition-colors"
+          className="px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors"
         >
           + New Task
         </button>
@@ -50,23 +50,23 @@ export function TasksScreen() {
 
       <div className="flex-1 overflow-y-auto">
         {isLoading && (
-          <div className="p-8 text-center text-[#64748b] text-sm">Loading…</div>
+          <div className="p-8 text-center text-muted text-sm">Loading…</div>
         )}
         {!isLoading && tasks.length === 0 && (
           <div className="p-16 text-center">
-            <p className="text-[#64748b] text-sm">No tasks yet</p>
+            <p className="text-muted text-sm">No tasks yet</p>
             <button
               onClick={() => navigate("task-builder")}
-              className="mt-3 px-4 py-2 rounded-lg bg-[#6366f1] text-white text-sm"
+              className="mt-3 px-4 py-2 rounded-lg bg-accent text-white text-sm"
             >
               Create your first task
             </button>
           </div>
         )}
 
-        <div className="divide-y divide-[#2a2d3e]">
+        <div className="divide-y divide-border">
           {tasks.map((task) => (
-            <div key={task.id} className="flex items-center gap-3 px-6 py-4 hover:bg-[#1a1d27] transition-colors">
+            <div key={task.id} className="flex items-center gap-3 px-6 py-4 hover:bg-surface transition-colors">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <p className="text-sm font-medium text-white truncate">{task.name}</p>
@@ -74,7 +74,7 @@ export function TasksScreen() {
                     <StatusBadge state="cancelled" />
                   )}
                 </div>
-                <p className="text-xs text-[#64748b] mt-0.5 capitalize">
+                <p className="text-xs text-muted mt-0.5 capitalize">
                   {task.kind.replace("_", " ")}
                 </p>
               </div>
@@ -83,21 +83,21 @@ export function TasksScreen() {
                 <button
                   onClick={() => handleTrigger(task)}
                   title="Run now"
-                  className="p-1.5 rounded text-[#64748b] hover:text-green-400 hover:bg-green-500/10 transition-colors"
+                  className="p-1.5 rounded text-muted hover:text-green-400 hover:bg-green-500/10 transition-colors"
                 >
                   <Play size={14} />
                 </button>
                 <button
                   onClick={() => editTask(task.id)}
                   title="Edit"
-                  className="p-1.5 rounded text-[#64748b] hover:text-white hover:bg-[#2a2d3e] transition-colors"
+                  className="p-1.5 rounded text-muted hover:text-white hover:bg-edge transition-colors"
                 >
                   <Pencil size={14} />
                 </button>
                 <button
                   onClick={() => handleToggle(task)}
                   title={task.enabled ? "Disable" : "Enable"}
-                  className="p-1.5 rounded text-[#64748b] hover:text-white hover:bg-[#2a2d3e] transition-colors"
+                  className="p-1.5 rounded text-muted hover:text-white hover:bg-edge transition-colors"
                 >
                   {task.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
                 </button>
@@ -105,7 +105,7 @@ export function TasksScreen() {
                   type="button"
                   onClick={() => handleDelete(task)}
                   title="Delete"
-                  className="p-1.5 rounded text-[#64748b] hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                  className="p-1.5 rounded text-muted hover:text-red-400 hover:bg-red-500/10 transition-colors"
                 >
                   <Trash2 size={14} />
                 </button>

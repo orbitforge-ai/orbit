@@ -81,11 +81,11 @@ export function SessionList({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[#2a2d3e]">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-edge">
         <h3 className="text-sm font-semibold text-white">Chats</h3>
         <button
           onClick={onNewSession}
-          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#6366f1] hover:bg-[#818cf8] text-white text-xs font-medium transition-colors"
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-medium transition-colors"
         >
           <Plus size={12} /> New
         </button>
@@ -94,7 +94,7 @@ export function SessionList({
       {/* Session list */}
       <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
         {sessions.length === 0 && (
-          <div className="text-center py-12 text-[#64748b] text-xs">
+          <div className="text-center py-12 text-muted text-xs">
             {showArchived ? "No archived chats." : "No chats yet. Start a new one!"}
           </div>
         )}
@@ -112,18 +112,18 @@ export function SessionList({
             onClick={() => onSelectSession(session.id)}
             className={`group relative flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${
               activeSessionId === session.id
-                ? "bg-[#6366f1]/15 text-white"
-                : "text-[#94a3b8] hover:bg-[#1a1d27] hover:text-white"
+                ? "bg-accent/15 text-white"
+                : "text-secondary hover:bg-surface hover:text-white"
             }`}
           >
             {isPulse ? (
-              <Zap size={14} className="shrink-0 text-[#f59e0b]" />
+              <Zap size={14} className="shrink-0 text-warning" />
             ) : (
               <MessageSquare size={14} className="shrink-0 opacity-50" />
             )}
             <div className="flex-1 min-w-0">
               <p className="text-sm truncate">{session.title}</p>
-              <p className="text-[10px] text-[#64748b]">{formatTime(session.updatedAt)}</p>
+              <p className="text-[10px] text-muted">{formatTime(session.updatedAt)}</p>
             </div>
 
             {/* Context menu trigger */}
@@ -132,7 +132,7 @@ export function SessionList({
                 e.stopPropagation();
                 setMenuSessionId(menuSessionId === session.id ? null : session.id);
               }}
-              className="opacity-0 group-hover:opacity-100 p-1 rounded text-[#64748b] hover:text-white transition-opacity"
+              className="opacity-0 group-hover:opacity-100 p-1 rounded text-muted hover:text-white transition-opacity"
             >
               <MoreHorizontal size={14} />
             </button>
@@ -141,12 +141,12 @@ export function SessionList({
             {menuSessionId === session.id && (
               <div
                 ref={menuRef}
-                className="absolute right-2 top-full mt-1 z-50 rounded-lg bg-[#1a1d27] border border-[#2a2d3e] shadow-xl py-1 min-w-[140px]"
+                className="absolute right-2 top-full mt-1 z-50 rounded-lg bg-surface border border-edge shadow-xl py-1 min-w-[140px]"
                 onClick={(e) => e.stopPropagation()}
               >
                 <button
                   onClick={() => handleArchive(session)}
-                  className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-[#94a3b8] hover:text-white hover:bg-[#222533]"
+                  className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-secondary hover:text-white hover:bg-surface-hover"
                 >
                   {session.archived ? (
                     <>
@@ -172,10 +172,10 @@ export function SessionList({
       </div>
 
       {/* Footer: archived toggle */}
-      <div className="px-4 py-2 border-t border-[#2a2d3e]">
+      <div className="px-4 py-2 border-t border-edge">
         <button
           onClick={() => setShowArchived(!showArchived)}
-          className="flex items-center gap-1.5 text-[10px] text-[#64748b] hover:text-[#94a3b8] transition-colors"
+          className="flex items-center gap-1.5 text-[10px] text-muted hover:text-secondary transition-colors"
         >
           <Eye size={10} />
           {showArchived ? "Hide archived" : "Show archived"}
