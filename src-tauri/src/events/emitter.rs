@@ -42,6 +42,47 @@ pub struct NextRunEntry {
     pub run_at: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentLlmChunkPayload {
+    pub run_id: String,
+    pub delta: String,
+    pub iteration: u32,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentIterationPayload {
+    pub run_id: String,
+    pub iteration: u32,
+    pub action: String, // "llm_call" | "tool_exec" | "finished"
+    pub tool_name: Option<String>,
+    pub total_tokens: u32,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentContentBlockPayload {
+    pub run_id: String,
+    pub iteration: u32,
+    pub block_type: String, // "thinking" | "tool_use"
+    pub block: serde_json::Value,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentToolResultPayload {
+    pub run_id: String,
+    pub iteration: u32,
+    pub tool_use_id: String,
+    pub content: String,
+    pub is_error: bool,
+    pub timestamp: String,
+}
+
 // ─── Emit helpers ────────────────────────────────────────────────────────────
 
 pub fn emit_log_chunk(app: &tauri::AppHandle, run_id: &str, lines: Vec<(String, String)>) {
@@ -72,5 +113,38 @@ pub fn emit_run_state_changed(
     };
     if let Err(e) = app.emit("run:state_changed", &payload) {
         warn!("failed to emit run:state_changed: {}", e);
+    }
+}
+
+pub fn emit_agent_llm_chunk(app: &tauri::AppHandle, run_id: &str, delta: &str, iteration: u32) {
+    let payload = AgentLlmChunkPayload {
+        run_id: run_id.to_string(),
+        delta: delta.to_string(),
+        iteration,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    if let Err(e) = app.emit("agent:llm_chunk", &payload) {
+        warn!("failed to emit agent:llm_chunk: {}", e);
+    }
+}
+
+pub fn emit_agent_iteration(
+    app: &tauri::AppHandle,
+    run_id: &str,
+    iteration: u32,
+    action: &str,
+    tool_name: Option<&str>,
+    total_tokens: u32,
+) {
+    let payload = AgentIterationPayload {
+        run_id: run_id.to_string(),
+        iteration,
+        action: action.to_string(),
+        tool_name: tool_name.map(|s| s.to_string()),
+        total_tokens,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    if let Err(e) = app.emit("agent:iteration", &payload) {
+        warn!("failed to emit agent:iteration: {}", e);
     }
 }

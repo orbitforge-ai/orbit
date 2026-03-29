@@ -5,7 +5,7 @@ use tokio::process::Command;
 use tracing::debug;
 
 use crate::events::emitter::emit_log_chunk;
-use crate::models::task::{AgentStepConfig, ScriptFileConfig, ShellCommandConfig};
+use crate::models::task::{ScriptFileConfig, ShellCommandConfig};
 
 /// Result of running a process.
 pub struct ProcessResult {
@@ -64,36 +64,6 @@ pub async fn run_script(
         run_id,
         interpreter,
         &[&cfg.script_path],
-        &cwd,
-        cfg.environment.as_ref(),
-        log_path,
-        timeout_secs,
-        app,
-        cancel,
-    )
-    .await
-}
-
-/// Runs an agent_step task (shell command in agent context, may inject session env vars).
-pub async fn run_agent_step(
-    run_id: &str,
-    cfg: &AgentStepConfig,
-    log_path: &PathBuf,
-    timeout_secs: u64,
-    app: &tauri::AppHandle,
-    cancel: tokio::sync::oneshot::Receiver<()>,
-) -> Result<ProcessResult, String> {
-    let shell = "/bin/sh";
-    let cwd = cfg
-        .working_directory
-        .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
-
-    run_command(
-        run_id,
-        shell,
-        &["-c", &cfg.command],
         &cwd,
         cfg.environment.as_ref(),
         log_path,

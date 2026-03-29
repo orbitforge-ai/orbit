@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { ChevronDown } from "lucide-react";
+import * as Select from "@radix-ui/react-select";
 import { schedulesApi } from "../../api/schedules";
 import { tasksApi } from "../../api/tasks";
 import { StatusBadge } from "../../components/StatusBadge";
@@ -93,18 +95,23 @@ export function ScheduleBuilderScreen() {
               <label className="block text-xs font-medium text-[#64748b] mb-1.5">
                 Task
               </label>
-              <select
-                value={selectedTaskId}
-                onChange={(e) => setSelectedTaskId(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg bg-[#1a1d27] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]"
-              >
-                <option value="">Select a task…</option>
-                {tasks.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
+              <Select.Root value={selectedTaskId} onValueChange={setSelectedTaskId}>
+                <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-[#1a1d27] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]">
+                  <Select.Value placeholder="Select a task…" />
+                  <Select.Icon><ChevronDown size={14} className="text-[#64748b]" /></Select.Icon>
+                </Select.Trigger>
+                <Select.Portal>
+                  <Select.Content className="rounded-lg bg-[#1a1d27] border border-[#2a2d3e] shadow-xl overflow-hidden z-50">
+                    <Select.Viewport className="p-1">
+                      {tasks.map((t) => (
+                        <Select.Item key={t.id} value={t.id} className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-[#6366f1]/20">
+                          <Select.ItemText>{t.name}</Select.ItemText>
+                        </Select.Item>
+                      ))}
+                    </Select.Viewport>
+                  </Select.Content>
+                </Select.Portal>
+              </Select.Root>
             </div>
 
             <RecurringPicker value={config} onChange={setConfig} />

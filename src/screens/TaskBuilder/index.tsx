@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Terminal, Globe, FileCode, Bot,
-  ChevronRight, ChevronLeft, Check, Plus, Minus,
+  Terminal, Globe, FileCode, Bot, Cpu,
+  ChevronRight, ChevronLeft, Check, Plus, Minus, ChevronDown,
 } from "lucide-react";
+import * as Select from "@radix-ui/react-select";
+import * as Slider from "@radix-ui/react-slider";
 import { tasksApi } from "../../api/tasks";
 import { schedulesApi } from "../../api/schedules";
 import { agentsApi } from "../../api/agents";
@@ -11,21 +13,22 @@ import { useUiStore } from "../../store/uiStore";
 import { RecurringPicker } from "../ScheduleBuilder/RecurringPicker";
 import { humanSchedule } from "../../lib/humanSchedule";
 import {
-  AgentStepConfig, CreateTask, HttpRequestConfig,
+  AgentLoopConfig, AgentStepConfig, CreateTask, HttpRequestConfig,
   OneShotConfig, RecurringConfig, ScriptFileConfig, ShellCommandConfig,
 } from "../../types";
 
 const STEPS = ["What", "Who", "When", "Review"] as const;
 type Step = (typeof STEPS)[number];
 
-type TaskKind = "shell_command" | "script_file" | "http_request" | "agent_step";
+type TaskKind = "shell_command" | "script_file" | "http_request" | "agent_step" | "agent_loop";
 type ScheduleKind = "none" | "recurring" | "one_shot";
 
 const KIND_OPTIONS: { id: TaskKind; label: string; description: string; icon: React.ElementType }[] = [
   { id: "shell_command", label: "Shell Command", description: "Run a bash/sh command", icon: Terminal },
   { id: "script_file",   label: "Script File",   description: "Execute a file on disk",   icon: FileCode },
   { id: "http_request",  label: "HTTP Request",  description: "Call a URL or webhook",     icon: Globe },
-  { id: "agent_step",    label: "Agent Step",    description: "Run a command on an agent", icon: Bot },
+  { id: "agent_step",    label: "Prompt",         description: "Send a prompt to the agent's LLM", icon: Bot },
+  { id: "agent_loop",    label: "Agent Loop",    description: "Autonomous LLM-powered agent", icon: Cpu },
 ];
 
 const CONCURRENCY_OPTIONS: { value: string; label: string; hint: string }[] = [
@@ -55,6 +58,14 @@ export function TaskBuilder() {
   // Script file config
   const [scriptPath, setScriptPath] = useState("");
   const [interpreter, setInterpreter] = useState("/bin/sh");
+
+  // Agent step (prompt) config
+  const [prompt, setPrompt] = useState("");
+
+  // Agent loop config
+  const [goal, setGoal] = useState("");
+  const [loopMaxIterations, setLoopMaxIterations] = useState(25);
+  const [loopMaxTokens, setLoopMaxTokens] = useState(200000);
 
   // HTTP config
   const [httpUrl, setHttpUrl] = useState("");
@@ -93,9 +104,11 @@ export function TaskBuilder() {
   const canProceed = (): boolean => {
     if (step === "What") {
       if (!name.trim()) return false;
-      if (kind === "shell_command" || kind === "agent_step") return command.trim().length > 0;
+      if (kind === "shell_command") return command.trim().length > 0;
+      if (kind === "agent_step") return prompt.trim().length > 0;
       if (kind === "script_file") return scriptPath.trim().length > 0;
       if (kind === "http_request") return httpUrl.trim().length > 0;
+      if (kind === "agent_loop") return goal.trim().length > 0;
     }
     if (step === "When" && scheduleKind === "one_shot") {
       return oneShotDate.trim().length > 0;
@@ -127,8 +140,13 @@ export function TaskBuilder() {
       return cfg;
     }
     if (kind === "agent_step") {
-      const cfg: AgentStepConfig = { command };
-      if (workingDir.trim()) cfg.workingDirectory = workingDir.trim();
+      const cfg: AgentStepConfig = { prompt };
+      return cfg;
+    }
+    if (kind === "agent_loop") {
+      const cfg: AgentLoopConfig = { goal };
+      if (loopMaxIterations !== 25) cfg.maxIterations = loopMaxIterations;
+      if (loopMaxTokens !== 200000) cfg.maxTotalTokens = loopMaxTokens;
       return cfg;
     }
     return {};
@@ -259,7 +277,7 @@ export function TaskBuilder() {
             </Field>
 
             {/* Config panel for each kind */}
-            {(kind === "shell_command" || kind === "agent_step") && (
+            {kind === "shell_command" && (
               <>
                 <Field label="Command">
                   <textarea
@@ -275,6 +293,18 @@ export function TaskBuilder() {
                     placeholder="~/scripts" className={inputCls} />
                 </Field>
               </>
+            )}
+
+            {kind === "agent_step" && (
+              <Field label="Prompt">
+                <textarea
+                  value={prompt}
+                  onChange={e => setPrompt(e.target.value)}
+                  rows={6}
+                  placeholder="e.g., Summarize the key trends in our latest sales data and suggest three action items."
+                  className="w-full px-4 py-3 rounded-lg bg-[#0a0c12] border border-[#2a2d3e] text-white text-sm placeholder-[#2a2d3e] focus:outline-none focus:border-[#6366f1] resize-none leading-relaxed"
+                />
+              </Field>
             )}
 
             {kind === "script_file" && (
@@ -294,19 +324,51 @@ export function TaskBuilder() {
               </>
             )}
 
+            {kind === "agent_loop" && (
+              <>
+                <Field label="Goal">
+                  <textarea
+                    value={goal}
+                    onChange={e => setGoal(e.target.value)}
+                    rows={5}
+                    placeholder="e.g., Create a Python script that scrapes weather data and saves it to a CSV file"
+                    className="w-full px-4 py-3 rounded-lg bg-[#0a0c12] border border-[#2a2d3e] text-white text-sm placeholder-[#2a2d3e] focus:outline-none focus:border-[#6366f1] resize-none leading-relaxed"
+                  />
+                </Field>
+                <div className="grid grid-cols-2 gap-4">
+                  <Field label="Max iterations">
+                    <input type="number" min={1} max={100} value={loopMaxIterations}
+                      onChange={e => setLoopMaxIterations(Number(e.target.value))} className={inputCls} />
+                  </Field>
+                  <Field label="Max total tokens">
+                    <input type="number" min={1000} step={10000} value={loopMaxTokens}
+                      onChange={e => setLoopMaxTokens(Number(e.target.value))} className={inputCls} />
+                  </Field>
+                </div>
+              </>
+            )}
+
             {kind === "http_request" && (
               <>
                 <Field label="URL">
                   <div className="flex gap-2">
-                    <select
-                      value={httpMethod}
-                      onChange={e => setHttpMethod(e.target.value as HttpRequestConfig["method"])}
-                      className="px-3 py-2.5 rounded-lg bg-[#1a1d27] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]"
-                    >
-                      {["GET", "POST", "PUT", "PATCH", "DELETE"].map(m => (
-                        <option key={m} value={m}>{m}</option>
-                      ))}
-                    </select>
+                    <Select.Root value={httpMethod} onValueChange={(v) => setHttpMethod(v as HttpRequestConfig["method"])}>
+                      <Select.Trigger className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-[#1a1d27] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]">
+                        <Select.Value />
+                        <Select.Icon><ChevronDown size={14} className="text-[#64748b]" /></Select.Icon>
+                      </Select.Trigger>
+                      <Select.Portal>
+                        <Select.Content className="rounded-lg bg-[#1a1d27] border border-[#2a2d3e] shadow-xl overflow-hidden z-50">
+                          <Select.Viewport className="p-1">
+                            {["GET", "POST", "PUT", "PATCH", "DELETE"].map(m => (
+                              <Select.Item key={m} value={m} className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-[#6366f1]/20">
+                                <Select.ItemText>{m}</Select.ItemText>
+                              </Select.Item>
+                            ))}
+                          </Select.Viewport>
+                        </Select.Content>
+                      </Select.Portal>
+                    </Select.Root>
                     <input type="url" value={httpUrl} onChange={e => setHttpUrl(e.target.value)}
                       placeholder="https://api.example.com/endpoint" className={`${inputCls} flex-1`} />
                   </div>
@@ -405,9 +467,19 @@ export function TaskBuilder() {
             </Field>
 
             <Field label={`Timeout: ${maxDurationMinutes} min`}>
-              <input type="range" min={1} max={360} value={maxDurationMinutes}
-                onChange={e => setMaxDurationMinutes(Number(e.target.value))}
-                className="w-full accent-[#6366f1]" />
+              <Slider.Root
+                min={1}
+                max={360}
+                step={1}
+                value={[maxDurationMinutes]}
+                onValueChange={([v]) => setMaxDurationMinutes(v)}
+                className="relative flex items-center w-full h-5 select-none touch-none"
+              >
+                <Slider.Track className="relative grow h-1 rounded-full bg-[#2a2d3e]">
+                  <Slider.Range className="absolute h-full rounded-full bg-[#6366f1]" />
+                </Slider.Track>
+                <Slider.Thumb className="block w-4 h-4 rounded-full bg-white shadow-md border-2 border-[#6366f1] focus:outline-none focus:ring-2 focus:ring-[#6366f1]/40" />
+              </Slider.Root>
               <div className="flex justify-between text-xs text-[#64748b] mt-1">
                 <span>1 min</span><span>1 hr</span><span>6 hrs</span>
               </div>
@@ -484,14 +556,24 @@ export function TaskBuilder() {
                 <Row label="Name" value={name} />
                 {description && <Row label="Description" value={description} />}
                 <Row label="Type" value={KIND_OPTIONS.find(k => k.id === kind)?.label ?? kind} />
-                {(kind === "shell_command" || kind === "agent_step") && (
+                {kind === "shell_command" && (
                   <Row label="Command" value={command} mono />
+                )}
+                {kind === "agent_step" && (
+                  <Row label="Prompt" value={prompt} />
                 )}
                 {kind === "script_file" && (
                   <Row label="Script" value={scriptPath} mono />
                 )}
                 {kind === "http_request" && (
                   <Row label="Request" value={`${httpMethod} ${httpUrl}`} mono />
+                )}
+                {kind === "agent_loop" && (
+                  <>
+                    <Row label="Goal" value={goal} />
+                    <Row label="Max iterations" value={String(loopMaxIterations)} />
+                    <Row label="Token budget" value={loopMaxTokens.toLocaleString()} />
+                  </>
                 )}
                 <Row label="Agent" value={agents.find(a => a.id === agentId)?.name ?? agentId} />
                 <Row label="Concurrency" value={CONCURRENCY_OPTIONS.find(o => o.value === concurrencyPolicy)?.label ?? concurrencyPolicy ?? "allow"} />

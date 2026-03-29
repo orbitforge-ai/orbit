@@ -24,13 +24,6 @@ export function Sidebar() {
 
   return (
     <aside className="w-[220px] flex-shrink-0 flex flex-col border-r border-[#2a2d3e] bg-[#13151e] h-full">
-      {/* App title */}
-      <div className="px-4 pt-5 pb-4 border-b border-[#2a2d3e]">
-        <h1 className="text-base font-semibold text-white tracking-tight">
-          Orbit
-        </h1>
-        <p className="text-xs text-[#64748b] mt-0.5">Automation Platform</p>
-      </div>
 
       {/* Navigation */}
       <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">

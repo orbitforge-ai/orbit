@@ -19,18 +19,22 @@ function getPersistedScreen(): Screen {
   return "dashboard";
 }
 
+type AgentTab = "overview" | "workspace" | "config";
+
 interface UiStore {
   screen: Screen;
   selectedRunId: string | null;
   selectedTaskId: string | null;
   editingTaskId: string | null;
   logPanelOpen: boolean;
+  agentTab: AgentTab;
 
   navigate: (screen: Screen) => void;
   selectRun: (id: string | null) => void;
   selectTask: (id: string | null) => void;
   editTask: (id: string) => void;
   setLogPanelOpen: (open: boolean) => void;
+  setAgentTab: (tab: AgentTab) => void;
 }
 
 export const useUiStore = create<UiStore>((set) => ({
@@ -39,6 +43,7 @@ export const useUiStore = create<UiStore>((set) => ({
   selectedTaskId: null,
   editingTaskId: null,
   logPanelOpen: false,
+  agentTab: "overview" as AgentTab,
 
   navigate: (screen) => {
     try { localStorage.setItem("orbit:lastScreen", screen); } catch {}
@@ -48,4 +53,5 @@ export const useUiStore = create<UiStore>((set) => ({
   selectTask: (id) => set({ selectedTaskId: id }),
   editTask: (id) => set({ editingTaskId: id, screen: "task-edit" }),
   setLogPanelOpen: (open) => set({ logPanelOpen: open }),
+  setAgentTab: (tab) => set({ agentTab: tab }),
 }));

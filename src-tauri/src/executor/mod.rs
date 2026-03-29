@@ -1,4 +1,11 @@
+pub mod agent_loop;
+pub mod agent_tools;
+pub mod anthropic;
 pub mod engine;
 pub mod http;
+pub mod keychain;
+pub mod llm_provider;
+pub mod minimax;
 pub mod process;
 pub mod state_machine;
+pub mod workspace;

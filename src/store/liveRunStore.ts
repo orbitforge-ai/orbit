@@ -2,25 +2,32 @@ import { create } from "zustand";
 import { LogLine, RunState, RunSummary } from "../types";
 import { info } from "@tauri-apps/plugin-log";
 
+interface AgentLoopState {
+  iteration: number;
+  totalTokens: number;
+  currentAction: string;
+  llmStreamBuffer: string;
+}
+
 interface LiveRun {
   runId: string;
   taskName: string;
   state: RunState;
   startedAt: string | null;
   logs: LogLine[];
+  agentLoopState?: AgentLoopState;
 }
 
 interface LiveRunStore {
   activeRuns: Record<string, LiveRun>;
-  // Called when a run starts or its state changes
   upsertRun: (summary: RunSummary) => void;
-  // Called when a run:state_changed event fires
   updateRunState: (runId: string, newState: RunState) => void;
-  // Called when log chunks arrive
   appendLogChunk: (runId: string, lines: LogLine[]) => void;
-  // Remove a run from active tracking once it reaches a terminal state
   removeRun: (runId: string) => void;
   clearLogs: (runId: string) => void;
+  // Agent loop state tracking
+  updateAgentIteration: (runId: string, iteration: number, action: string, totalTokens: number) => void;
+  appendLlmChunk: (runId: string, delta: string, iteration: number) => void;
 }
 
 const TERMINAL_STATES: RunState[] = [
@@ -107,6 +114,51 @@ export const useLiveRunStore = create<LiveRunStore>((set) => ({
       if (!run) return state;
       return {
         activeRuns: { ...state.activeRuns, [runId]: { ...run, logs: [] } },
+      };
+    }),
+
+  updateAgentIteration: (runId, iteration, action, totalTokens) =>
+    set((state) => {
+      const run = state.activeRuns[runId];
+      if (!run) return state;
+      return {
+        activeRuns: {
+          ...state.activeRuns,
+          [runId]: {
+            ...run,
+            agentLoopState: {
+              ...(run.agentLoopState ?? { llmStreamBuffer: "" }),
+              iteration,
+              currentAction: action,
+              totalTokens,
+            },
+          },
+        },
+      };
+    }),
+
+  appendLlmChunk: (runId, delta, iteration) =>
+    set((state) => {
+      const run = state.activeRuns[runId];
+      if (!run) return state;
+      const prev = run.agentLoopState ?? {
+        iteration: 0,
+        totalTokens: 0,
+        currentAction: "llm_call",
+        llmStreamBuffer: "",
+      };
+      return {
+        activeRuns: {
+          ...state.activeRuns,
+          [runId]: {
+            ...run,
+            agentLoopState: {
+              ...prev,
+              iteration,
+              llmStreamBuffer: prev.llmStreamBuffer + delta,
+            },
+          },
+        },
       };
     }),
 }));

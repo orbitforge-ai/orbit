@@ -1,10 +1,16 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Edit2, Plus, Save, Trash2, X, Activity } from "lucide-react";
+import { Bot, Edit2, Plus, Save, Trash2, X, Activity, Play, FolderOpen, Settings, LayoutDashboard } from "lucide-react";
 import { agentsApi } from "../../api/agents";
 import { StatusBadge } from "../../components/StatusBadge";
 import { Agent, CreateAgent, RunSummary, UpdateAgent } from "../../types";
 import { invoke } from "@tauri-apps/api/core";
+import { useUiStore } from "../../store/uiStore";
+import { WorkspaceTab } from "./WorkspaceTab";
+import { ConfigTab } from "./ConfigTab";
+import { AgentRunDialog } from "./AgentRunDialog";
+import { AgentRunView } from "./AgentRunView";
+import { confirm } from "@tauri-apps/plugin-dialog";
 
 const DEFAULT_AGENT_ID = "01HZDEFAULTDEFAULTDEFAULTDA";
 
@@ -21,7 +27,7 @@ export function AgentInspector() {
   });
 
   async function handleDelete(agent: Agent) {
-    if (!confirm(`Delete agent "${agent.name}"?`)) return;
+    if (!await confirm(`Delete agent "${agent.name}"?`)) return;
     await agentsApi.delete(agent.id);
     queryClient.invalidateQueries({ queryKey: ["agents"] });
     if (selectedAgent === agent.id) setSelectedAgent(null);
@@ -87,7 +93,7 @@ export function AgentInspector() {
       </div>
 
       {/* Right: Agent detail */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-hidden">
         {selectedAgent ? (
           <AgentDetail agentId={selectedAgent} agents={agents} />
         ) : (
@@ -279,7 +285,114 @@ function EditAgentForm({
 
 function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) {
   const agent = agents.find(a => a.id === agentId);
+  const { agentTab, setAgentTab } = useUiStore();
+  const [showRunDialog, setShowRunDialog] = useState(false);
+  const [viewingRunId, setViewingRunId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
+  if (!agent) return null;
+
+  // If viewing a specific agent run, show the run view
+  if (viewingRunId) {
+    return (
+      <AgentRunView
+        runId={viewingRunId}
+        onBack={() => setViewingRunId(null)}
+      />
+    );
+  }
+
+  const tabs = [
+    { id: "overview" as const, label: "Overview", icon: LayoutDashboard },
+    { id: "workspace" as const, label: "Workspace", icon: FolderOpen },
+    { id: "config" as const, label: "Config", icon: Settings },
+  ];
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header with tabs */}
+      <div className="border-b border-[#2a2d3e]">
+        <div className="flex items-center justify-between px-6 pt-4 pb-0">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-[#6366f1]/20 flex items-center justify-center">
+              <Bot size={18} className="text-[#818cf8]" />
+            </div>
+            <div>
+              <h3 className="text-base font-semibold text-white">{agent.name}</h3>
+              <div className="flex items-center gap-2">
+                <StatusBadge state={agent.state} />
+                {agent.description && (
+                  <span className="text-xs text-[#64748b]">{agent.description}</span>
+                )}
+              </div>
+            </div>
+          </div>
+          {agent.id !== DEFAULT_AGENT_ID && (
+            <button
+              onClick={() => setShowRunDialog(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#6366f1] hover:bg-[#818cf8] text-white text-xs font-medium transition-colors"
+            >
+              <Play size={12} /> Run Agent
+            </button>
+          )}
+        </div>
+
+        {/* Tab bar */}
+        <div className="flex gap-1 px-6 mt-3">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setAgentTab(tab.id)}
+              className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-t-lg border-b-2 transition-colors ${
+                agentTab === tab.id
+                  ? "border-[#6366f1] text-white bg-[#6366f1]/10"
+                  : "border-transparent text-[#64748b] hover:text-white"
+              }`}
+            >
+              <tab.icon size={13} />
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Tab content */}
+      <div className="flex-1 overflow-hidden">
+        {agentTab === "overview" && (
+          <OverviewContent
+            agentId={agentId}
+            agent={agent}
+            onViewRun={(runId) => setViewingRunId(runId)}
+          />
+        )}
+        {agentTab === "workspace" && <WorkspaceTab agentId={agentId} />}
+        {agentTab === "config" && <ConfigTab agentId={agentId} />}
+      </div>
+
+      {/* Run dialog */}
+      <AgentRunDialog
+        agentId={agentId}
+        agentName={agent.name}
+        open={showRunDialog}
+        onClose={() => setShowRunDialog(false)}
+        onRunStarted={(runId) => {
+          queryClient.invalidateQueries({ queryKey: ["active-runs"] });
+          setViewingRunId(runId);
+        }}
+      />
+    </div>
+  );
+}
+
+function OverviewContent({
+  agentId,
+  agent,
+  onViewRun,
+}: {
+  agentId: string;
+  agent: Agent;
+  onViewRun: (runId: string) => void;
+}) {
   const { data: recentRuns = [] } = useQuery<RunSummary[]>({
     queryKey: ["runs", "agent", agentId],
     queryFn: () => invoke("list_runs", { limit: 20, offset: 0, stateFilter: null, taskId: null }),
@@ -294,8 +407,6 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
     select: (runs: RunSummary[]) => runs.filter(r => r.agentId === agentId),
   });
 
-  if (!agent) return null;
-
   const successCount = recentRuns.filter(r => r.state === "success").length;
   const failureCount = recentRuns.filter(r => r.state === "failure").length;
   const totalCompleted = successCount + failureCount;
@@ -305,23 +416,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
     : null;
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-4">
-        <div className="w-14 h-14 rounded-full bg-[#6366f1]/20 flex items-center justify-center">
-          <Bot size={24} className="text-[#818cf8]" />
-        </div>
-        <div>
-          <h3 className="text-lg font-semibold text-white">{agent.name}</h3>
-          <div className="flex items-center gap-2 mt-0.5">
-            <StatusBadge state={agent.state} />
-            {agent.description && (
-              <span className="text-xs text-[#64748b]">{agent.description}</span>
-            )}
-          </div>
-        </div>
-      </div>
-
+    <div className="p-6 space-y-6 overflow-y-auto h-full">
       {/* Stats */}
       <div className="grid grid-cols-4 gap-3">
         <StatCard label="Active runs" value={activeRuns.length.toString()} accent />
@@ -336,14 +431,19 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
           <h4 className="text-sm font-semibold text-white mb-3">Currently Running</h4>
           <div className="space-y-2">
             {activeRuns.map(run => (
-              <div key={run.id} className="flex items-center gap-3 px-4 py-3 rounded-lg border border-[#2a2d3e] bg-[#1a1d27]">
+              <div
+                key={run.id}
+                onClick={() => onViewRun(run.id)}
+                className="flex items-center gap-3 px-4 py-3 rounded-lg border border-[#2a2d3e] bg-[#1a1d27] cursor-pointer hover:border-[#4a4d6e]"
+              >
                 <Activity size={14} className="text-blue-400 animate-pulse" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-white truncate">{run.taskName}</p>
                   <p className="text-xs text-[#64748b]">{run.trigger} &middot; started {run.startedAt ? new Date(run.startedAt).toLocaleTimeString() : "..."}</p>
                 </div>
                 <button
-                  onClick={async () => {
+                  onClick={async (e) => {
+                    e.stopPropagation();
                     await agentsApi.cancelRun(run.id);
                   }}
                   className="px-2 py-1 rounded text-xs text-red-400 hover:bg-red-500/10 border border-red-500/30"
@@ -364,7 +464,11 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
         ) : (
           <div className="space-y-1">
             {recentRuns.slice(0, 20).map(run => (
-              <div key={run.id} className="flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-[#1a1d27]">
+              <div
+                key={run.id}
+                onClick={() => onViewRun(run.id)}
+                className="flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-[#1a1d27] cursor-pointer"
+              >
                 <StatusBadge state={run.state} />
                 <p className="text-sm text-white flex-1 truncate">{run.taskName}</p>
                 <p className="text-xs text-[#64748b]">

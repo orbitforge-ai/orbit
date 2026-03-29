@@ -1,6 +1,7 @@
 use ulid::Ulid;
 
 use crate::db::DbPool;
+use crate::executor::workspace;
 use crate::models::agent::{Agent, CreateAgent, UpdateAgent};
 
 #[tauri::command]
@@ -57,7 +58,7 @@ pub async fn create_agent(
         )
         .map_err(|e| e.to_string())?;
 
-        conn.query_row(
+        let agent = conn.query_row(
             "SELECT id, name, description, state, max_concurrent_runs, heartbeat_at, created_at, updated_at
              FROM agents WHERE id = ?1",
             rusqlite::params![id],
@@ -74,7 +75,12 @@ pub async fn create_agent(
                 })
             },
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+        // Initialise workspace directory for the new agent
+        let _ = workspace::init_agent_workspace(&agent.id);
+
+        Ok(agent)
     })
     .await
     .map_err(|e| e.to_string())?

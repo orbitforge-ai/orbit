@@ -83,12 +83,20 @@ pub struct HttpRequestConfig {
     pub expected_status_codes: Option<Vec<u16>>,
 }
 
-/// Agent step config — runs a shell command in the context of a specific agent
+/// Agent step config — sends a prompt to the agent's configured LLM
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentStepConfig {
-    pub command: String,
-    pub working_directory: Option<String>,
-    pub environment: Option<std::collections::HashMap<String, String>>,
-    pub session_id: Option<String>,
+    pub prompt: String,
+}
+
+/// Agent loop config — autonomous multi-step LLM loop
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentLoopConfig {
+    pub goal: String,
+    pub model: Option<String>,
+    pub max_iterations: Option<u32>,
+    pub max_total_tokens: Option<u32>,
+    pub template_vars: Option<std::collections::HashMap<String, String>>,
 }

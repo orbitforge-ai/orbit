@@ -6,10 +6,10 @@ use tracing::{error, info, warn};
 
 use crate::db::DbPool;
 use crate::events::emitter::emit_run_state_changed;
-use crate::executor::{http, process};
+use crate::executor::{agent_loop, http, process};
 use crate::executor::state_machine::{transition, ExecutorEvent};
 use crate::models::run::RunState;
-use crate::models::task::{AgentStepConfig, HttpRequestConfig, ScriptFileConfig, ShellCommandConfig, Task};
+use crate::models::task::{AgentLoopConfig, AgentStepConfig, HttpRequestConfig, ScriptFileConfig, ShellCommandConfig, Task};
 
 const DEFAULT_AGENT_ID: &str = "01HZDEFAULTDEFAULTDEFAULTDA";
 const DEFAULT_MAX_CONCURRENT: usize = 10;
@@ -232,7 +232,7 @@ impl ExecutorEngine {
                                 let (cancel_tx, cancel_rx) = oneshot::channel();
                                 registry.register(&agent_id, &req.run_id, cancel_tx).await;
 
-                                if let Err(e) = run_one(req.clone(), db.clone(), app.clone(), log_dir, cancel_rx).await {
+                                if let Err(e) = run_one(req.clone(), db.clone(), app.clone(), log_dir.clone(), cancel_rx).await {
                                     error!("run failed: {}", e);
                                 }
 
@@ -272,7 +272,7 @@ impl ExecutorEngine {
                         let (cancel_tx, cancel_rx) = oneshot::channel();
                         registry.register(&agent_id, &req.run_id, cancel_tx).await;
 
-                        if let Err(e) = run_one(req.clone(), db.clone(), app.clone(), log_dir, cancel_rx).await {
+                        if let Err(e) = run_one(req.clone(), db.clone(), app.clone(), log_dir.clone(), cancel_rx).await {
                             error!("run failed: {}", e);
                         }
 
@@ -291,7 +291,7 @@ impl ExecutorEngine {
                         let (cancel_tx, cancel_rx) = oneshot::channel();
                         registry.register(&agent_id, &req.run_id, cancel_tx).await;
 
-                        if let Err(e) = run_one(req.clone(), db.clone(), app.clone(), log_dir, cancel_rx).await {
+                        if let Err(e) = run_one(req.clone(), db.clone(), app.clone(), log_dir.clone(), cancel_rx).await {
                             error!("run failed: {}", e);
                         }
 
@@ -354,7 +354,26 @@ async fn run_one(
         "agent_step" => {
             let cfg: AgentStepConfig =
                 serde_json::from_value(task.config.clone()).map_err(|e| e.to_string())?;
-            process::run_agent_step(&run_id, &cfg, &log_path, timeout_secs, &app, cancel).await
+            let agent_id = task
+                .agent_id
+                .clone()
+                .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string());
+            agent_loop::run_agent_prompt(
+                &run_id, &agent_id, &cfg, &log_path, timeout_secs, &app, cancel, &db,
+            )
+            .await
+        }
+        "agent_loop" => {
+            let cfg: AgentLoopConfig =
+                serde_json::from_value(task.config.clone()).map_err(|e| e.to_string())?;
+            let agent_id = task
+                .agent_id
+                .clone()
+                .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string());
+            agent_loop::run_agent_loop(
+                &run_id, &agent_id, &cfg, &log_path, timeout_secs, &app, cancel, &db,
+            )
+            .await
         }
         other => Err(format!("unsupported task kind: {}", other)),
     };

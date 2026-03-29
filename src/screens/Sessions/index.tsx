@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Boxes, Edit2, Plus, Save, Trash2, X, Variable } from "lucide-react";
 import { sessionsApi } from "../../api/sessions";
 import { Session, CreateSession, UpdateSession } from "../../types";
+import { confirm } from "@tauri-apps/plugin-dialog";
 
 export function SessionsScreen() {
   const queryClient = useQueryClient();
@@ -19,7 +20,7 @@ export function SessionsScreen() {
   const selected = sessions.find(s => s.id === selectedId) ?? null;
 
   async function handleDelete(session: Session) {
-    if (!confirm(`Delete session "${session.name}"?`)) return;
+    if (!await confirm(`Delete session "${session.name}"?`)) return;
     await sessionsApi.delete(session.id);
     queryClient.invalidateQueries({ queryKey: ["sessions"] });
     if (selectedId === session.id) setSelectedId(null);

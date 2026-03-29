@@ -15,8 +15,8 @@ export interface Task {
   id: string;
   name: string;
   description: string | null;
-  kind: "shell_command" | "script_file" | "http_request" | "agent_step";
-  config: ShellCommandConfig | ScriptFileConfig | HttpRequestConfig | AgentStepConfig | Record<string, unknown>;
+  kind: "shell_command" | "script_file" | "http_request" | "agent_step" | "agent_loop";
+  config: ShellCommandConfig | ScriptFileConfig | HttpRequestConfig | AgentStepConfig | AgentLoopConfig | Record<string, unknown>;
   maxDurationSeconds: number;
   maxRetries: number;
   retryDelaySeconds: number;
@@ -53,10 +53,15 @@ export interface HttpRequestConfig {
 }
 
 export interface AgentStepConfig {
-  command: string;
-  workingDirectory?: string;
-  environment?: Record<string, string>;
-  sessionId?: string;
+  prompt: string;
+}
+
+export interface AgentLoopConfig {
+  goal: string;
+  model?: string;
+  maxIterations?: number;
+  maxTotalTokens?: number;
+  templateVars?: Record<string, string>;
 }
 
 export type RunState =
@@ -166,7 +171,7 @@ export interface CreateTask {
   name: string;
   description?: string;
   kind: Task["kind"];
-  config: ShellCommandConfig | ScriptFileConfig | HttpRequestConfig | AgentStepConfig | Record<string, unknown>;
+  config: ShellCommandConfig | ScriptFileConfig | HttpRequestConfig | AgentStepConfig | AgentLoopConfig | Record<string, unknown>;
   maxDurationSeconds?: number;
   maxRetries?: number;
   retryDelaySeconds?: number;
@@ -206,4 +211,40 @@ export interface UpdateSession {
   description?: string;
   environment?: Record<string, string>;
   tags?: string[];
+}
+
+// ─── Agent workspace types ───────────────────────────────────────────────────
+
+export interface FileEntry {
+  name: string;
+  isDir: boolean;
+  sizeBytes: number;
+  modifiedAt: string;
+}
+
+export interface AgentWorkspaceConfig {
+  provider: string;
+  model: string;
+  temperature: number;
+  maxIterations: number;
+  maxTotalTokens: number;
+  allowedTools: string[];
+}
+
+// ─── Agent loop event payloads ───────────────────────────────────────────────
+
+export interface AgentLlmChunkPayload {
+  runId: string;
+  delta: string;
+  iteration: number;
+  timestamp: string;
+}
+
+export interface AgentIterationPayload {
+  runId: string;
+  iteration: number;
+  action: "llm_call" | "tool_exec" | "finished";
+  toolName: string | null;
+  totalTokens: number;
+  timestamp: string;
 }
