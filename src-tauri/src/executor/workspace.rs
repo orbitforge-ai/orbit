@@ -118,6 +118,16 @@ const DEFAULT_SYSTEM_PROMPT: &str = r#"You are a helpful autonomous agent. Follo
 When you are done, call the `finish` tool with a summary of what you accomplished.
 "#;
 
+const DEFAULT_PULSE_PROMPT: &str = r#"# Agent Pulse
+
+Describe what this agent should do on each pulse cycle.
+
+For example:
+- Check system status and report anomalies
+- Summarize recent activity
+- Review and prioritize pending items
+"#;
+
 /// Create the workspace directory structure for a new agent.
 pub fn init_agent_workspace(agent_id: &str) -> Result<(), String> {
     let root = agent_dir(agent_id);
@@ -143,6 +153,13 @@ pub fn init_agent_workspace(agent_id: &str) -> Result<(), String> {
             .map_err(|e| format!("failed to serialize config: {}", e))?;
         fs::write(&config_path, json)
             .map_err(|e| format!("failed to write config.json: {}", e))?;
+    }
+
+    // Write default pulse prompt if it doesn't exist
+    let pulse_path = root.join("pulse.md");
+    if !pulse_path.exists() {
+        fs::write(&pulse_path, DEFAULT_PULSE_PROMPT)
+            .map_err(|e| format!("failed to write pulse.md: {}", e))?;
     }
 
     info!(agent_id = agent_id, path = %root.display(), "Initialised agent workspace");

@@ -172,6 +172,36 @@ pub async fn get_active_runs(db: tauri::State<'_, DbPool>) -> Result<Vec<RunSumm
 }
 
 #[tauri::command]
+pub async fn get_agent_conversation(
+    run_id: String,
+    db: tauri::State<'_, DbPool>,
+) -> Result<Option<serde_json::Value>, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let result = conn.query_row(
+            "SELECT messages FROM agent_conversations WHERE run_id = ?1",
+            rusqlite::params![run_id],
+            |row| {
+                let json_str: String = row.get(0)?;
+                Ok(json_str)
+            },
+        );
+        match result {
+            Ok(json_str) => {
+                let parsed: serde_json::Value =
+                    serde_json::from_str(&json_str).map_err(|e| e.to_string())?;
+                Ok(Some(parsed))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn read_run_log(run_id: String, db: tauri::State<'_, DbPool>) -> Result<String, String> {
     let pool = db.0.clone();
     let log_path: String = tokio::task::spawn_blocking(move || {

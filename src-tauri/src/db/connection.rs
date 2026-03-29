@@ -5,6 +5,7 @@ use tracing::info;
 
 const MIGRATION_1: &str = include_str!("migrations/0001_initial.sql");
 const MIGRATION_2: &str = include_str!("migrations/0002_agent_loop.sql");
+const MIGRATION_3: &str = include_str!("migrations/0003_chat_sessions.sql");
 
 /// Newtype wrapper — stored as Tauri managed state.
 /// r2d2::Pool is Arc-based internally: cheap to clone.
@@ -39,6 +40,11 @@ pub fn init(data_dir: PathBuf) -> Result<DbPool, Box<dyn std::error::Error>> {
         conn.execute_batch(MIGRATION_2)?;
         conn.execute_batch("PRAGMA user_version = 2;")?;
         info!("Applied migration 2 (agent_loop)");
+    }
+    if version < 3 {
+        conn.execute_batch(MIGRATION_3)?;
+        conn.execute_batch("PRAGMA user_version = 3;")?;
+        info!("Applied migration 3 (chat_sessions)");
     }
 
     info!("Database initialised at {:?}", db_path);

@@ -2,7 +2,7 @@ use futures::StreamExt;
 use serde_json::json;
 use tracing::debug;
 
-use crate::events::emitter::{emit_agent_llm_chunk, emit_log_chunk};
+use crate::events::emitter::{emit_agent_content_block, emit_agent_llm_chunk, emit_log_chunk};
 use crate::executor::llm_provider::{
     ChatMessage, ContentBlock, LlmConfig, LlmProvider, LlmResponse, StopReason, ToolDefinition,
     Usage,
@@ -57,6 +57,14 @@ impl MiniMaxProvider {
                             "tool_use_id": tool_use_id,
                             "content": content,
                             "is_error": is_error,
+                        }),
+                        ContentBlock::Image { media_type, data } => json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": data,
+                            }
                         }),
                     })
                     .collect();
@@ -197,6 +205,13 @@ impl MiniMaxProvider {
                                             content_blocks.push(ContentBlock::Thinking {
                                                 thinking: current_thinking.clone(),
                                             });
+                                            emit_agent_content_block(
+                                                app,
+                                                run_id,
+                                                iteration,
+                                                "thinking",
+                                                json!({ "type": "thinking", "thinking": current_thinking }),
+                                            );
                                         }
                                     }
                                     "tool_use" => {
@@ -206,8 +221,20 @@ impl MiniMaxProvider {
                                         content_blocks.push(ContentBlock::ToolUse {
                                             id: current_tool_id.clone(),
                                             name: current_tool_name.clone(),
-                                            input,
+                                            input: input.clone(),
                                         });
+                                        emit_agent_content_block(
+                                            app,
+                                            run_id,
+                                            iteration,
+                                            "tool_use",
+                                            json!({
+                                                "type": "tool_use",
+                                                "id": current_tool_id,
+                                                "name": current_tool_name,
+                                                "input": input,
+                                            }),
+                                        );
                                     }
                                     _ => {}
                                 }

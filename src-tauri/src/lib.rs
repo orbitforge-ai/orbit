@@ -125,18 +125,25 @@ pub fn run() {
         commands::runs::get_run,
         commands::runs::get_active_runs,
         commands::runs::read_run_log,
+        commands::runs::get_agent_conversation,
         // Agents
         commands::agents::list_agents,
         commands::agents::create_agent,
         commands::agents::update_agent,
         commands::agents::delete_agent,
         commands::agents::cancel_run,
-        // Sessions
-        commands::sessions::list_sessions,
-        commands::sessions::get_session,
-        commands::sessions::create_session,
-        commands::sessions::update_session,
-        commands::sessions::delete_session,
+        // Pulse
+        commands::pulse::get_pulse_config,
+        commands::pulse::update_pulse,
+        // Chat
+        commands::chat::list_chat_sessions,
+        commands::chat::create_chat_session,
+        commands::chat::rename_chat_session,
+        commands::chat::archive_chat_session,
+        commands::chat::unarchive_chat_session,
+        commands::chat::delete_chat_session,
+        commands::chat::get_chat_messages,
+        commands::chat::send_chat_message,
         // Workspace
         commands::workspace::init_agent_workspace,
         commands::workspace::list_workspace_files,

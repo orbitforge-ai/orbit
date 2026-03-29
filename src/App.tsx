@@ -8,7 +8,7 @@ import { ScheduleBuilderScreen } from "./screens/ScheduleBuilder";
 import { TasksScreen } from "./screens/Tasks";
 import { AgentInspector } from "./screens/AgentInspector";
 import { TaskEdit } from "./screens/TaskEdit";
-import { SessionsScreen } from "./screens/Sessions";
+import { ChatScreen } from "./screens/Chat";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -31,7 +31,7 @@ function AppContent() {
       schedules: <ScheduleBuilderScreen />,
       tasks: <TasksScreen />,
       agents: <AgentInspector />,
-      sessions: <SessionsScreen />,
+      chat: <ChatScreen />,
       "task-edit": <TaskEdit />,
     } as Record<string, React.ReactNode>
   )[screen] ?? <Dashboard />;

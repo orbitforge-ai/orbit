@@ -1,0 +1,28 @@
+import { invoke } from "@tauri-apps/api/core";
+import { ChatSession, ChatMessage, ContentBlock } from "../types";
+
+export const chatApi = {
+  listSessions: (agentId: string, includeArchived?: boolean): Promise<ChatSession[]> =>
+    invoke("list_chat_sessions", { agentId, includeArchived }),
+
+  createSession: (agentId: string, title?: string): Promise<ChatSession> =>
+    invoke("create_chat_session", { agentId, title }),
+
+  renameSession: (sessionId: string, title: string): Promise<void> =>
+    invoke("rename_chat_session", { sessionId, title }),
+
+  archiveSession: (sessionId: string): Promise<void> =>
+    invoke("archive_chat_session", { sessionId }),
+
+  unarchiveSession: (sessionId: string): Promise<void> =>
+    invoke("unarchive_chat_session", { sessionId }),
+
+  deleteSession: (sessionId: string): Promise<void> =>
+    invoke("delete_chat_session", { sessionId }),
+
+  getMessages: (sessionId: string): Promise<ChatMessage[]> =>
+    invoke("get_chat_messages", { sessionId }),
+
+  sendMessage: (sessionId: string, content: ContentBlock[]): Promise<string> =>
+    invoke("send_chat_message", { sessionId, content: JSON.stringify(content) }),
+};

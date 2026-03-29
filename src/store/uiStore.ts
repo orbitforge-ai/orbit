@@ -6,7 +6,7 @@ type Screen =
   | "history"
   | "agents"
   | "schedules"
-  | "sessions"
+  | "chat"
   | "task-builder"
   | "schedule-builder"
   | "task-edit";
@@ -19,7 +19,7 @@ function getPersistedScreen(): Screen {
   return "dashboard";
 }
 
-type AgentTab = "overview" | "workspace" | "config";
+type AgentTab = "overview" | "workspace" | "config" | "schedules";
 
 interface UiStore {
   screen: Screen;

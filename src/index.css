@@ -49,3 +49,111 @@ body,
 ::-webkit-scrollbar-thumb:hover {
   background: #3a3d5e;
 }
+
+/* ─── Typing indicator ───────────────────────────────────────────────────── */
+
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+.typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #6366f1;
+  display: inline-block;
+  animation: typing-bounce 1.2s ease-in-out infinite;
+}
+
+/* ─── Chat markdown ──────────────────────────────────────────────────────── */
+
+.chat-markdown p {
+  margin: 0.4em 0;
+}
+.chat-markdown p:first-child {
+  margin-top: 0;
+}
+.chat-markdown p:last-child {
+  margin-bottom: 0;
+}
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4 {
+  color: #f1f5f9;
+  font-weight: 600;
+  margin: 0.8em 0 0.3em;
+}
+.chat-markdown h1 { font-size: 1.25em; }
+.chat-markdown h2 { font-size: 1.1em; }
+.chat-markdown h3 { font-size: 1em; }
+
+.chat-markdown code {
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+  font-size: 0.85em;
+  background: #0a0c12;
+  border: 1px solid #2a2d3e;
+  border-radius: 4px;
+  padding: 0.15em 0.35em;
+}
+.chat-markdown pre {
+  background: #0a0c12;
+  border: 1px solid #2a2d3e;
+  border-radius: 8px;
+  padding: 0.75em 1em;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.chat-markdown pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.8em;
+  line-height: 1.5;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+  margin: 0.4em 0;
+  padding-left: 1.5em;
+}
+.chat-markdown li {
+  margin: 0.15em 0;
+}
+.chat-markdown ul { list-style-type: disc; }
+.chat-markdown ol { list-style-type: decimal; }
+
+.chat-markdown blockquote {
+  border-left: 3px solid #6366f1;
+  padding-left: 0.75em;
+  margin: 0.5em 0;
+  color: #94a3b8;
+}
+
+.chat-markdown table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.85em;
+}
+.chat-markdown th,
+.chat-markdown td {
+  border: 1px solid #2a2d3e;
+  padding: 0.35em 0.6em;
+}
+.chat-markdown th {
+  background: #1a1d27;
+  font-weight: 600;
+}
+
+.chat-markdown a {
+  color: #818cf8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-markdown hr {
+  border: none;
+  border-top: 1px solid #2a2d3e;
+  margin: 0.75em 0;
+}

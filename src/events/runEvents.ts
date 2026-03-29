@@ -4,6 +4,8 @@ import {
   RunStateChangedPayload,
   AgentLlmChunkPayload,
   AgentIterationPayload,
+  AgentContentBlockPayload,
+  AgentToolResultPayload,
 } from "../types";
 
 export function onRunLogChunk(
@@ -34,6 +36,22 @@ export function onAgentIteration(
   handler: (payload: AgentIterationPayload) => void
 ) {
   return listen<AgentIterationPayload>("agent:iteration", (event) => {
+    handler(event.payload);
+  });
+}
+
+export function onAgentContentBlock(
+  handler: (payload: AgentContentBlockPayload) => void
+) {
+  return listen<AgentContentBlockPayload>("agent:content_block", (event) => {
+    handler(event.payload);
+  });
+}
+
+export function onAgentToolResult(
+  handler: (payload: AgentToolResultPayload) => void
+) {
+  return listen<AgentToolResultPayload>("agent:tool_result", (event) => {
     handler(event.payload);
   });
 }

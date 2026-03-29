@@ -23,7 +23,6 @@ export interface Task {
   concurrencyPolicy: "allow" | "skip" | "queue" | "cancel_previous";
   tags: string[];
   agentId: string | null;
-  sessionId: string | null;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -135,12 +134,13 @@ export interface OneShotConfig {
   timezone: string;
 }
 
-export interface Session {
+// ─── Chat types ─────────────────────────────────────────────────────────────
+
+export interface ChatSession {
   id: string;
-  name: string;
-  description: string | null;
-  environment: Record<string, string>;
-  tags: string[];
+  agentId: string;
+  title: string;
+  archived: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -178,7 +178,6 @@ export interface CreateTask {
   concurrencyPolicy?: Task["concurrencyPolicy"];
   tags?: string[];
   agentId?: string;
-  sessionId?: string;
 }
 
 export interface CreateSchedule {
@@ -199,20 +198,6 @@ export interface UpdateAgent {
   maxConcurrentRuns?: number;
 }
 
-export interface CreateSession {
-  name: string;
-  description?: string;
-  environment?: Record<string, string>;
-  tags?: string[];
-}
-
-export interface UpdateSession {
-  name?: string;
-  description?: string;
-  environment?: Record<string, string>;
-  tags?: string[];
-}
-
 // ─── Agent workspace types ───────────────────────────────────────────────────
 
 export interface FileEntry {
@@ -231,6 +216,20 @@ export interface AgentWorkspaceConfig {
   allowedTools: string[];
 }
 
+// ─── LLM content types ──────────────────────────────────────────────────────
+
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string }
+  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+  | { type: "tool_result"; tool_use_id: string; content: string; is_error: boolean }
+  | { type: "image"; media_type: string; data: string };
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: ContentBlock[];
+}
+
 // ─── Agent loop event payloads ───────────────────────────────────────────────
 
 export interface AgentLlmChunkPayload {
@@ -246,5 +245,22 @@ export interface AgentIterationPayload {
   action: "llm_call" | "tool_exec" | "finished";
   toolName: string | null;
   totalTokens: number;
+  timestamp: string;
+}
+
+export interface AgentContentBlockPayload {
+  runId: string;
+  iteration: number;
+  blockType: string;
+  block: ContentBlock;
+  timestamp: string;
+}
+
+export interface AgentToolResultPayload {
+  runId: string;
+  iteration: number;
+  toolUseId: string;
+  content: string;
+  isError: boolean;
   timestamp: string;
 }

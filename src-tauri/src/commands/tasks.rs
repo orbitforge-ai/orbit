@@ -374,9 +374,9 @@ pub async fn trigger_task(
           run_id: run_id.clone(),
           task,
           schedule_id: None,
-          trigger: "manual".to_string(),
+          _trigger: "manual".to_string(),
           retry_count: 0,
-          parent_run_id: None,
+          _parent_run_id: None,
         })
         .map_err(|e| e.to_string())?;
 

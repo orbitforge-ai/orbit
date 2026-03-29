@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Edit2, Plus, Save, Trash2, X, Activity, Play, FolderOpen, Settings, LayoutDashboard } from "lucide-react";
+import { Bot, Edit2, Plus, Save, Trash2, X, Activity, Play, FolderOpen, Settings, LayoutDashboard, Clock } from "lucide-react";
 import { agentsApi } from "../../api/agents";
 import { StatusBadge } from "../../components/StatusBadge";
 import { Agent, CreateAgent, RunSummary, UpdateAgent } from "../../types";
@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useUiStore } from "../../store/uiStore";
 import { WorkspaceTab } from "./WorkspaceTab";
 import { ConfigTab } from "./ConfigTab";
+import { SchedulesTab } from "./SchedulesTab";
 import { AgentRunDialog } from "./AgentRunDialog";
 import { AgentRunView } from "./AgentRunView";
 import { confirm } from "@tauri-apps/plugin-dialog";
@@ -306,6 +307,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
     { id: "overview" as const, label: "Overview", icon: LayoutDashboard },
     { id: "workspace" as const, label: "Workspace", icon: FolderOpen },
     { id: "config" as const, label: "Config", icon: Settings },
+    { id: "schedules" as const, label: "Schedules", icon: Clock },
   ];
 
   return (
@@ -367,6 +369,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
         )}
         {agentTab === "workspace" && <WorkspaceTab agentId={agentId} />}
         {agentTab === "config" && <ConfigTab agentId={agentId} />}
+        {agentTab === "schedules" && <SchedulesTab agentId={agentId} />}
       </div>
 
       {/* Run dialog */}
