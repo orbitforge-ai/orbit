@@ -88,4 +88,5 @@ pub struct RunSummary {
     pub duration_ms: Option<i64>,
     pub retry_count: i64,
     pub created_at: String,
+    pub chat_session_id: Option<String>,
 }

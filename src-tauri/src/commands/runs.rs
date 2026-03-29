@@ -25,7 +25,8 @@ pub async fn list_runs(
             "SELECT r.id, r.task_id, t.name as task_name, r.schedule_id,
                     r.agent_id, a.name as agent_name,
                     r.state, r.trigger, r.exit_code,
-                    r.started_at, r.finished_at, r.duration_ms, r.retry_count, r.created_at
+                    r.started_at, r.finished_at, r.duration_ms, r.retry_count, r.created_at,
+                    json_extract(r.metadata, '$.chat_session_id') as chat_session_id
              FROM runs r
              LEFT JOIN tasks t ON t.id = r.task_id
              LEFT JOIN agents a ON a.id = r.agent_id
@@ -81,6 +82,7 @@ fn map_row_to_run_summary(row: &rusqlite::Row) -> rusqlite::Result<RunSummary> {
         duration_ms: row.get(11)?,
         retry_count: row.get(12)?,
         created_at: row.get(13)?,
+        chat_session_id: row.get(14)?,
     })
 }
 
@@ -133,7 +135,8 @@ pub async fn get_active_runs(db: tauri::State<'_, DbPool>) -> Result<Vec<RunSumm
                 "SELECT r.id, r.task_id, t.name as task_name, r.schedule_id,
                         r.agent_id, a.name as agent_name,
                         r.state, r.trigger, r.exit_code,
-                        r.started_at, r.finished_at, r.duration_ms, r.retry_count, r.created_at
+                        r.started_at, r.finished_at, r.duration_ms, r.retry_count, r.created_at,
+                        json_extract(r.metadata, '$.chat_session_id') as chat_session_id
                  FROM runs r
                  LEFT JOIN tasks t ON t.id = r.task_id
                  LEFT JOIN agents a ON a.id = r.agent_id
@@ -159,6 +162,7 @@ pub async fn get_active_runs(db: tauri::State<'_, DbPool>) -> Result<Vec<RunSumm
                     duration_ms: row.get(11)?,
                     retry_count: row.get(12)?,
                     created_at: row.get(13)?,
+                    chat_session_id: row.get(14)?,
                 })
             })
             .map_err(|e| e.to_string())?

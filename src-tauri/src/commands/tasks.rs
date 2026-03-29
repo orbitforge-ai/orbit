@@ -109,7 +109,7 @@ pub async fn create_task(
       let max_retries = payload.max_retries.unwrap_or(0);
       let retry_delay = payload.retry_delay_seconds.unwrap_or(60);
       let concurrency = payload.concurrency_policy.unwrap_or_else(|| "allow".to_string());
-      let agent_id = payload.agent_id.unwrap_or_else(|| "01HZDEFAULTDEFAULTDEFAULTDA".to_string());
+      let agent_id = payload.agent_id.unwrap_or_else(|| "default".to_string());
 
       conn
         .execute(

@@ -1,6 +1,11 @@
 use crate::executor::workspace::{self, AgentWorkspaceConfig, FileEntry};
 
 #[tauri::command]
+pub fn get_workspace_path(agent_id: String) -> String {
+    workspace::agent_dir(&agent_id).to_string_lossy().to_string()
+}
+
+#[tauri::command]
 pub async fn init_agent_workspace(agent_id: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || workspace::init_agent_workspace(&agent_id))
         .await

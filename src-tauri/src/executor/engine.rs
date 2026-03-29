@@ -18,7 +18,7 @@ use crate::models::task::{
   Task,
 };
 
-const DEFAULT_AGENT_ID: &str = "01HZDEFAULTDEFAULTDEFAULTDA";
+const DEFAULT_AGENT_ID: &str = "default";
 const DEFAULT_MAX_CONCURRENT: usize = 10;
 /// Retry delay capped at 1 hour
 const MAX_RETRY_DELAY_SECS: u64 = 3600;

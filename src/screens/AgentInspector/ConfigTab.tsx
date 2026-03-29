@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Save, Key, Trash2, Check, ChevronDown } from "lucide-react";
 import * as Select from "@radix-ui/react-select";
 import * as Checkbox from "@radix-ui/react-checkbox";
-import * as Slider from "@radix-ui/react-slider";
+
 import { workspaceApi } from "../../api/workspace";
 import { llmApi } from "../../api/llm";
 import { AgentWorkspaceConfig } from "../../types";
@@ -112,7 +112,7 @@ export function ConfigTab({ agentId }: { agentId: string }) {
   const models = MODEL_OPTIONS[config.provider] ?? [];
 
   return (
-    <div className="p-6 space-y-6 max-w-2xl h-full overflow-y-auto">
+    <div className="p-6 space-y-6 h-full overflow-y-auto">
       
 
       {/* Provider & Model */}
@@ -235,26 +235,53 @@ export function ConfigTab({ agentId }: { agentId: string }) {
         </div>
       </section>
 
-      {/* Temperature */}
+      {/* Temperature Presets */}
       <section className="space-y-3">
-        <h4 className="text-sm font-semibold text-white">Temperature</h4>
-        <div className="flex items-center gap-4">
-          <Slider.Root
-            min={0}
-            max={1}
-            step={0.05}
-            value={[config.temperature]}
-            onValueChange={([v]) => setConfig({ ...config, temperature: v })}
-            className="relative flex items-center flex-1 h-5 select-none touch-none"
-          >
-            <Slider.Track className="relative grow h-1 rounded-full bg-[#2a2d3e]">
-              <Slider.Range className="absolute h-full rounded-full bg-[#6366f1]" />
-            </Slider.Track>
-            <Slider.Thumb className="block w-4 h-4 rounded-full bg-white shadow-md border-2 border-[#6366f1] focus:outline-none focus:ring-2 focus:ring-[#6366f1]/40" />
-          </Slider.Root>
-          <span className="text-sm text-white w-10 text-right font-mono">
-            {config.temperature.toFixed(2)}
-          </span>
+        <div>
+          <h4 className="text-sm font-semibold text-white">Behavior</h4>
+          <p className="text-xs text-[#64748b] mt-1">Controls how predictable or creative the agent's responses are. Lower values stick to the most likely answer, higher values introduce more variety.</p>
+        </div>
+        <div className="flex gap-2">
+          {[
+            { value: 0, label: "Precise", desc: "Consistent, factual, best for analysis" },
+            { value: 0.3, label: "Balanced", desc: "Reliable with slight flexibility" },
+            { value: 0.7, label: "Creative", desc: "Varied, exploratory responses" },
+            { value: 1, label: "Experimental", desc: "Highly creative, less predictable" },
+          ].map((preset) => {
+            const selected = config.temperature === preset.value;
+            return (
+              <button
+                key={preset.value}
+                onClick={() => setConfig({ ...config, temperature: preset.value })}
+                className={`flex-1 flex flex-col items-center px-2 py-2.5 rounded-lg border text-center transition-colors ${
+                  selected
+                    ? "border-[#6366f1] bg-[#6366f1]/10"
+                    : "border-[#2a2d3e] bg-[#1a1d27] hover:border-[#4a4d6e]"
+                }`}
+              >
+                <span className={`text-sm font-medium ${selected ? "text-[#a5b4fc]" : "text-white"}`}>
+                  {preset.label}
+                </span>
+                <span className="text-[11px] text-[#64748b] mt-0.5 leading-tight">{preset.desc}</span>
+              </button>
+            );
+          })}
+          <div className="flex flex-col items-center gap-1">
+            <label className="text-[11px] text-[#64748b]">Custom</label>
+            <input
+              type="number"
+              min={0}
+              max={2}
+              step={0.05}
+              value={config.temperature}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (!isNaN(v) && v >= 0 && v <= 2) setConfig({ ...config, temperature: v });
+              }}
+              className="w-16 px-2 py-1.5 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm font-mono text-center focus:outline-none focus:border-[#6366f1]"
+            />
+            <span className="text-[10px] text-[#64748b]">0 – 2</span>
+          </div>
         </div>
       </section>
 
@@ -282,6 +309,66 @@ export function ConfigTab({ agentId }: { agentId: string }) {
               value={config.maxTotalTokens}
               onChange={(e) => setConfig({ ...config, maxTotalTokens: parseInt(e.target.value) || 200000 })}
               className="w-full px-3 py-2 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]"
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* Context Management */}
+      <section className="space-y-3">
+        <div>
+          <h4 className="text-sm font-semibold text-white">Context Management</h4>
+          <p className="text-xs text-[#64748b] mt-1">Controls automatic conversation compaction when the context window fills up.</p>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className="text-xs text-[#64748b] mb-1 block">Compaction Threshold</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={10}
+                max={95}
+                step={5}
+                value={Math.round((config.compactionThreshold ?? 0.65) * 100)}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value);
+                  if (!isNaN(v) && v >= 10 && v <= 95)
+                    setConfig({ ...config, compactionThreshold: v / 100 });
+                }}
+                className="w-full px-3 py-2 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]"
+              />
+              <span className="text-xs text-[#64748b] shrink-0">%</span>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-[#64748b] mb-1 block">Messages to Retain</label>
+            <input
+              type="number"
+              min={2}
+              max={50}
+              value={config.compactionRetainCount ?? 12}
+              onChange={(e) =>
+                setConfig({ ...config, compactionRetainCount: parseInt(e.target.value) || 12 })
+              }
+              className="w-full px-3 py-2 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1]"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-[#64748b] mb-1 block">Context Window Override</label>
+            <input
+              type="number"
+              min={1000}
+              step={10000}
+              placeholder="Auto"
+              value={config.contextWindowOverride ?? ""}
+              onChange={(e) => {
+                const raw = e.target.value;
+                setConfig({
+                  ...config,
+                  contextWindowOverride: raw ? parseInt(raw) || undefined : undefined,
+                });
+              }}
+              className="w-full px-3 py-2 rounded-lg bg-[#0f1117] border border-[#2a2d3e] text-white text-sm focus:outline-none focus:border-[#6366f1] placeholder:text-[#4a4d6e]"
             />
           </div>
         </div>

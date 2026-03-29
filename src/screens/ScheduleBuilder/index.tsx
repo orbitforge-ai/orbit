@@ -6,7 +6,7 @@ import { schedulesApi } from "../../api/schedules";
 import { tasksApi } from "../../api/tasks";
 import { StatusBadge } from "../../components/StatusBadge";
 import { humanSchedule } from "../../lib/humanSchedule";
-import { RecurringConfig, Schedule } from "../../types";
+import { RecurringConfig, Schedule, Task } from "../../types";
 import { RecurringPicker } from "./RecurringPicker";
 
 export function ScheduleBuilderScreen() {
@@ -19,14 +19,22 @@ export function ScheduleBuilderScreen() {
     missedRunPolicy: "skip",
   });
 
-  const { data: schedules = [], refetch } = useQuery({
-    queryKey: ["schedules"],
-    queryFn: schedulesApi.list,
-  });
-
   const { data: tasks = [] } = useQuery({
     queryKey: ["tasks"],
     queryFn: tasksApi.list,
+    select: (all: Task[]) => all.filter((t) => !t.tags.includes("pulse")),
+  });
+
+  const pulseTaskIds = useQuery({
+    queryKey: ["tasks"],
+    queryFn: tasksApi.list,
+    select: (all: Task[]) => new Set(all.filter((t) => t.tags.includes("pulse")).map((t) => t.id)),
+  }).data ?? new Set<string>();
+
+  const { data: schedules = [], refetch } = useQuery({
+    queryKey: ["schedules"],
+    queryFn: schedulesApi.list,
+    select: (all: Schedule[]) => all.filter((s) => !pulseTaskIds.has(s.taskId)),
   });
 
   async function handleCreate() {

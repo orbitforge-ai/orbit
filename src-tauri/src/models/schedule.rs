@@ -33,6 +33,9 @@ pub struct RecurringConfig {
     pub time_of_day: Option<TimeOfDay>,
     pub timezone: String,
     pub missed_run_policy: String, // "run_once" | "skip"
+    /// Original text/cron input for display in the UI
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub expression: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -3,6 +3,9 @@ export interface DisplayMessage {
   role: "user" | "assistant";
   blocks: DisplayBlock[];
   isStreaming: boolean;
+  timestamp?: string; // ISO 8601
+  isCompacted?: boolean;
+  isSummary?: boolean;
 }
 
 export type DisplayBlock =

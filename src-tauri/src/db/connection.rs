@@ -1,11 +1,13 @@
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use std::path::PathBuf;
-use tracing::info;
+use tracing::{info, warn};
 
 const MIGRATION_1: &str = include_str!("migrations/0001_initial.sql");
 const MIGRATION_2: &str = include_str!("migrations/0002_agent_loop.sql");
 const MIGRATION_3: &str = include_str!("migrations/0003_chat_sessions.sql");
+const MIGRATION_4: &str = include_str!("migrations/0004_agent_slugs.sql");
+const MIGRATION_5: &str = include_str!("migrations/0005_context_management.sql");
 
 /// Newtype wrapper — stored as Tauri managed state.
 /// r2d2::Pool is Arc-based internally: cheap to clone.
@@ -45,6 +47,27 @@ pub fn init(data_dir: PathBuf) -> Result<DbPool, Box<dyn std::error::Error>> {
         conn.execute_batch(MIGRATION_3)?;
         conn.execute_batch("PRAGMA user_version = 3;")?;
         info!("Applied migration 3 (chat_sessions)");
+    }
+    if version < 4 {
+        conn.execute_batch(MIGRATION_4)?;
+        conn.execute_batch("PRAGMA user_version = 4;")?;
+        // Rename workspace directory on disk
+        let agents_dir = data_dir.join("agents");
+        let old_dir = agents_dir.join("01HZDEFAULTDEFAULTDEFAULTDA");
+        let new_dir = agents_dir.join("default");
+        if old_dir.exists() && !new_dir.exists() {
+            if let Err(e) = std::fs::rename(&old_dir, &new_dir) {
+                warn!("Failed to rename default agent workspace: {}", e);
+            } else {
+                info!("Renamed default agent workspace to 'default'");
+            }
+        }
+        info!("Applied migration 4 (agent_slugs)");
+    }
+    if version < 5 {
+        conn.execute_batch(MIGRATION_5)?;
+        conn.execute_batch("PRAGMA user_version = 5;")?;
+        info!("Applied migration 5 (context_management)");
     }
 
     info!("Database initialised at {:?}", db_path);

@@ -106,6 +106,7 @@ export interface RunSummary {
   durationMs: number | null;
   retryCount: number;
   createdAt: string;
+  chatSessionId: string | null;
 }
 
 export interface Schedule {
@@ -127,6 +128,8 @@ export interface RecurringConfig {
   timeOfDay?: { hour: number; minute: number };
   timezone: string;
   missedRunPolicy: "run_once" | "skip";
+  /** Original text/cron input so users can edit what they typed */
+  expression?: string;
 }
 
 export interface OneShotConfig {
@@ -214,6 +217,9 @@ export interface AgentWorkspaceConfig {
   maxIterations: number;
   maxTotalTokens: number;
   allowedTools: string[];
+  compactionThreshold?: number;
+  compactionRetainCount?: number;
+  contextWindowOverride?: number;
 }
 
 // ─── LLM content types ──────────────────────────────────────────────────────
@@ -228,6 +234,8 @@ export type ContentBlock =
 export interface ChatMessage {
   role: "user" | "assistant";
   content: ContentBlock[];
+  created_at?: string;
+  isCompacted?: boolean;
 }
 
 // ─── Agent loop event payloads ───────────────────────────────────────────────
@@ -263,4 +271,21 @@ export interface AgentToolResultPayload {
   content: string;
   isError: boolean;
   timestamp: string;
+}
+
+// ─── Context management types ───────────────────────────────────────────────
+
+export interface ChatContextUpdatePayload {
+  sessionId: string;
+  inputTokens: number;
+  outputTokens: number;
+  contextWindowSize: number;
+  usagePercent: number;
+  timestamp: string;
+}
+
+export interface ContextUsage {
+  inputTokens: number;
+  contextWindowSize: number;
+  usagePercent: number;
 }

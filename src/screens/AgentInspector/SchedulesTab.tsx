@@ -4,12 +4,13 @@ import {
   Zap,
   Save,
   Clock,
-  ToggleLeft,
-  ToggleRight,
   Trash2,
   ExternalLink,
+  Play,
 } from "lucide-react";
+import * as Switch from "@radix-ui/react-switch";
 import { invoke } from "@tauri-apps/api/core";
+import { tasksApi } from "../../api/tasks";
 import { pulseApi, PulseConfig } from "../../api/pulse";
 import { schedulesApi } from "../../api/schedules";
 import { RecurringPicker } from "../ScheduleBuilder/RecurringPicker";
@@ -26,7 +27,7 @@ const DEFAULT_SCHEDULE: RecurringConfig = {
 
 export function SchedulesTab({ agentId }: { agentId: string }) {
   return (
-    <div className="p-6 space-y-8 max-w-2xl h-full overflow-y-auto">
+    <div className="p-6 space-y-8 h-full overflow-y-auto">
       <PulseSection agentId={agentId} />
       <div className="border-t border-[#2a2d3e]" />
       <AgentSchedulesList agentId={agentId} />
@@ -41,6 +42,7 @@ function PulseSection({ agentId }: { agentId: string }) {
   const { navigate } = useUiStore();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [triggering, setTriggering] = useState(false);
   const [content, setContent] = useState("");
   const [schedule, setSchedule] = useState<RecurringConfig>(DEFAULT_SCHEDULE);
   const [enabled, setEnabled] = useState(false);
@@ -85,22 +87,18 @@ function PulseSection({ agentId }: { agentId: string }) {
         </div>
 
         {/* Enable/disable toggle */}
-        <button
-          onClick={() => setEnabled(!enabled)}
-          className="flex items-center gap-2 text-xs"
-        >
-          {enabled ? (
-            <>
-              <ToggleRight size={20} className="text-emerald-400" />
-              <span className="text-emerald-400">Active</span>
-            </>
-          ) : (
-            <>
-              <ToggleLeft size={20} className="text-[#64748b]" />
-              <span className="text-[#64748b]">Inactive</span>
-            </>
-          )}
-        </button>
+        <div className="flex items-center gap-2">
+          <span className={`text-xs ${enabled ? "text-emerald-400" : "text-[#64748b]"}`}>
+            {enabled ? "Active" : "Inactive"}
+          </span>
+          <Switch.Root
+            checked={enabled}
+            onCheckedChange={setEnabled}
+            className="w-9 h-5 rounded-full bg-[#2a2d3e] data-[state=checked]:bg-emerald-500 transition-colors outline-none"
+          >
+            <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
+          </Switch.Root>
+        </div>
       </div>
 
       <p className="text-xs text-[#64748b]">
@@ -156,6 +154,27 @@ function PulseSection({ agentId }: { agentId: string }) {
           <Save size={14} />
           {saving ? "Saving..." : saved ? "Saved" : "Save Pulse"}
         </button>
+
+        {pulseConfig?.taskId && (
+          <button
+            onClick={async () => {
+              if (!pulseConfig?.taskId) return;
+              setTriggering(true);
+              try {
+                await tasksApi.trigger(pulseConfig.taskId);
+                queryClient.invalidateQueries({ queryKey: ["pulse-config", agentId] });
+              } catch (err) {
+                console.error("Failed to trigger pulse:", err);
+              }
+              setTriggering(false);
+            }}
+            disabled={triggering}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#2a2d3e] text-[#94a3b8] hover:text-white hover:border-[#4a4d6e] disabled:opacity-50 text-xs transition-colors"
+          >
+            <Play size={12} />
+            {triggering ? "Running..." : "Run Now"}
+          </button>
+        )}
 
         {pulseConfig?.sessionId && (
           <button
@@ -241,16 +260,13 @@ function AgentSchedulesList({ agentId }: { agentId: string }) {
                   )}
                 </div>
 
-                <button
-                  onClick={() => handleToggle(schedule)}
-                  className="shrink-0"
+                <Switch.Root
+                  checked={schedule.enabled}
+                  onCheckedChange={() => handleToggle(schedule)}
+                  className="w-9 h-5 rounded-full bg-[#2a2d3e] data-[state=checked]:bg-emerald-500 transition-colors outline-none shrink-0"
                 >
-                  {schedule.enabled ? (
-                    <ToggleRight size={20} className="text-emerald-400" />
-                  ) : (
-                    <ToggleLeft size={20} className="text-[#64748b]" />
-                  )}
-                </button>
+                  <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
+                </Switch.Root>
 
                 <button
                   onClick={() => handleDelete(schedule)}

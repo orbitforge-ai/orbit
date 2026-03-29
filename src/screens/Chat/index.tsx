@@ -4,11 +4,14 @@ import { Bot, ChevronDown } from "lucide-react";
 import * as Select from "@radix-ui/react-select";
 import { agentsApi } from "../../api/agents";
 import { chatApi } from "../../api/chat";
+import { useUiStore } from "../../store/uiStore";
+import { ChatSession } from "../../types";
 import { SessionList } from "./SessionList";
 import { ChatPanel } from "./ChatPanel";
 
 export function ChatScreen() {
   const queryClient = useQueryClient();
+  const { pendingChatSessionId, clearPendingChatSession } = useUiStore();
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
@@ -16,6 +19,28 @@ export function ChatScreen() {
     queryKey: ["agents"],
     queryFn: agentsApi.list,
   });
+
+  // Handle pending chat session from external navigation (e.g. clicking a pulse run)
+  useEffect(() => {
+    if (!pendingChatSessionId || agents.length === 0) return;
+
+    // Look up the session to find which agent it belongs to
+    async function resolve() {
+      for (const agent of agents) {
+        const sessions: ChatSession[] = await chatApi.listSessions(agent.id, true);
+        const match = sessions.find((s) => s.id === pendingChatSessionId);
+        if (match) {
+          setSelectedAgentId(agent.id);
+          setActiveSessionId(match.id);
+          clearPendingChatSession();
+          return;
+        }
+      }
+      // Session not found — just clear it
+      clearPendingChatSession();
+    }
+    resolve();
+  }, [pendingChatSessionId, agents]);
 
   // Auto-select first agent
   useEffect(() => {

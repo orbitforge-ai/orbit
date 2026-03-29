@@ -130,11 +130,20 @@ pub async fn update_pulse(
         let task_config = serde_json::json!({ "goal": content });
         let task_config_str = task_config.to_string();
 
+        // Look up agent name for human-readable task naming
+        let agent_name: String = conn
+            .query_row(
+                "SELECT name FROM agents WHERE id = ?1",
+                rusqlite::params![aid],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| aid.chars().take(20).collect());
+
         let task_id = if let Some(tid) = existing_task_id {
-            // Update existing task config
+            // Update existing task config and name
             conn.execute(
-                "UPDATE tasks SET config = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![task_config_str, now, tid],
+                "UPDATE tasks SET config = ?1, name = ?2, updated_at = ?3 WHERE id = ?4",
+                rusqlite::params![task_config_str, format!("[Pulse] {}", agent_name), now, tid],
             )
             .map_err(|e| e.to_string())?;
             tid
@@ -146,7 +155,7 @@ pub async fn update_pulse(
                  VALUES (?1, ?2, 'Automated pulse schedule', 'agent_loop', ?3, 7200, 0, 60, 'skip', '[\"pulse\"]', ?4, 1, ?5, ?5)",
                 rusqlite::params![
                     tid,
-                    format!("[Pulse] {}", aid.chars().take(20).collect::<String>()),
+                    format!("[Pulse] {}", agent_name),
                     task_config_str,
                     aid,
                     now,

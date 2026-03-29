@@ -85,6 +85,17 @@ pub struct AgentToolResultPayload {
   pub timestamp: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatContextUpdatePayload {
+  pub session_id: String,
+  pub input_tokens: u32,
+  pub output_tokens: u32,
+  pub context_window_size: u32,
+  pub usage_percent: f64,
+  pub timestamp: String,
+}
+
 // ─── Emit helpers ────────────────────────────────────────────────────────────
 
 pub fn emit_log_chunk(app: &tauri::AppHandle, run_id: &str, lines: Vec<(String, String)>) {
@@ -188,5 +199,30 @@ pub fn emit_agent_tool_result(
   };
   if let Err(e) = app.emit("agent:tool_result", &payload) {
     warn!("failed to emit agent:tool_result: {}", e);
+  }
+}
+
+pub fn emit_chat_context_update(
+  app: &tauri::AppHandle,
+  session_id: &str,
+  input_tokens: u32,
+  output_tokens: u32,
+  context_window_size: u32,
+) {
+  let usage_percent = if context_window_size > 0 {
+    (input_tokens as f64 / context_window_size as f64) * 100.0
+  } else {
+    0.0
+  };
+  let payload = ChatContextUpdatePayload {
+    session_id: session_id.to_string(),
+    input_tokens,
+    output_tokens,
+    context_window_size,
+    usage_percent,
+    timestamp: chrono::Utc::now().to_rfc3339(),
+  };
+  if let Err(e) = app.emit("chat:context_update", &payload) {
+    warn!("failed to emit chat:context_update: {}", e);
   }
 }

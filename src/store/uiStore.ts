@@ -19,6 +19,13 @@ function getPersistedScreen(): Screen {
   return "dashboard";
 }
 
+function getPersistedAgentId(): string | null {
+  try {
+    return localStorage.getItem("orbit:lastAgentId");
+  } catch {}
+  return null;
+}
+
 type AgentTab = "overview" | "workspace" | "config" | "schedules";
 
 interface UiStore {
@@ -26,6 +33,8 @@ interface UiStore {
   selectedRunId: string | null;
   selectedTaskId: string | null;
   editingTaskId: string | null;
+  selectedAgentId: string | null;
+  pendingChatSessionId: string | null;
   logPanelOpen: boolean;
   agentTab: AgentTab;
 
@@ -33,6 +42,9 @@ interface UiStore {
   selectRun: (id: string | null) => void;
   selectTask: (id: string | null) => void;
   editTask: (id: string) => void;
+  selectAgent: (id: string) => void;
+  openChatSession: (sessionId: string) => void;
+  clearPendingChatSession: () => void;
   setLogPanelOpen: (open: boolean) => void;
   setAgentTab: (tab: AgentTab) => void;
 }
@@ -42,6 +54,8 @@ export const useUiStore = create<UiStore>((set) => ({
   selectedRunId: null,
   selectedTaskId: null,
   editingTaskId: null,
+  selectedAgentId: getPersistedAgentId(),
+  pendingChatSessionId: null,
   logPanelOpen: false,
   agentTab: "overview" as AgentTab,
 
@@ -52,6 +66,18 @@ export const useUiStore = create<UiStore>((set) => ({
   selectRun: (id) => set({ selectedRunId: id, logPanelOpen: id !== null }),
   selectTask: (id) => set({ selectedTaskId: id }),
   editTask: (id) => set({ editingTaskId: id, screen: "task-edit" }),
+  selectAgent: (id) => {
+    try {
+      localStorage.setItem("orbit:lastScreen", "agents");
+      localStorage.setItem("orbit:lastAgentId", id);
+    } catch {}
+    set({ selectedAgentId: id, screen: "agents" });
+  },
+  openChatSession: (sessionId) => {
+    try { localStorage.setItem("orbit:lastScreen", "chat"); } catch {}
+    set({ pendingChatSessionId: sessionId, screen: "chat" });
+  },
+  clearPendingChatSession: () => set({ pendingChatSessionId: null }),
   setLogPanelOpen: (open) => set({ logPanelOpen: open }),
   setAgentTab: (tab) => set({ agentTab: tab }),
 }));

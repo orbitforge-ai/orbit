@@ -1,6 +1,7 @@
 pub mod agent_loop;
 pub mod agent_tools;
 pub mod anthropic;
+pub mod compaction;
 pub mod engine;
 pub mod http;
 pub mod keychain;

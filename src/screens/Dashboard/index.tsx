@@ -8,6 +8,7 @@ import { StatusBadge } from "../../components/StatusBadge";
 import { onRunStateChanged } from "../../events/runEvents";
 import { useLiveRunStore } from "../../store/liveRunStore";
 import { useUiStore } from "../../store/uiStore";
+import { Task } from "../../types";
 import { formatDuration, formatElapsed } from "../../lib/formatDuration";
 import { humanSchedule } from "../../lib/humanSchedule";
 import { RecurringConfig, RunState } from "../../types";
@@ -27,6 +28,7 @@ export function Dashboard() {
     queryKey: ["tasks"],
     queryFn: tasksApi.list,
     refetchInterval: 30_000,
+    select: (all: Task[]) => all.filter((t) => !t.tags.includes("pulse")),
   });
 
   const { data: schedules = [] } = useQuery({

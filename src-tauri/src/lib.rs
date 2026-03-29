@@ -144,7 +144,10 @@ pub fn run() {
         commands::chat::delete_chat_session,
         commands::chat::get_chat_messages,
         commands::chat::send_chat_message,
+        commands::chat::get_context_usage,
+        commands::chat::compact_chat_session,
         // Workspace
+        commands::workspace::get_workspace_path,
         commands::workspace::init_agent_workspace,
         commands::workspace::list_workspace_files,
         commands::workspace::read_workspace_file,

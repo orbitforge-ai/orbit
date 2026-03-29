@@ -6,6 +6,7 @@ import {
   AgentIterationPayload,
   AgentContentBlockPayload,
   AgentToolResultPayload,
+  ChatContextUpdatePayload,
 } from "../types";
 
 export function onRunLogChunk(
@@ -52,6 +53,14 @@ export function onAgentToolResult(
   handler: (payload: AgentToolResultPayload) => void
 ) {
   return listen<AgentToolResultPayload>("agent:tool_result", (event) => {
+    handler(event.payload);
+  });
+}
+
+export function onChatContextUpdate(
+  handler: (payload: ChatContextUpdatePayload) => void
+) {
+  return listen<ChatContextUpdatePayload>("chat:context_update", (event) => {
     handler(event.payload);
   });
 }

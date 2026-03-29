@@ -19,6 +19,20 @@
   box-sizing: border-box;
 }
 
+button, a, [role="button"] {
+  cursor: pointer;
+}
+
+* {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input, textarea, [contenteditable="true"], pre, code, .monaco-editor * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 html,
 body,
 #root {

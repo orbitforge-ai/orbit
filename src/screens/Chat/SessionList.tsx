@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Plus,
@@ -8,6 +8,7 @@ import {
   MoreHorizontal,
   Eye,
   MessageSquare,
+  Zap,
 } from "lucide-react";
 import { chatApi } from "../../api/chat";
 import { ChatSession } from "../../types";
@@ -29,6 +30,18 @@ export function SessionList({
   const queryClient = useQueryClient();
   const [showArchived, setShowArchived] = useState(false);
   const [menuSessionId, setMenuSessionId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuSessionId) return;
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuSessionId(null);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [menuSessionId]);
 
   const { data: sessions = [] } = useQuery({
     queryKey: ["chat-sessions", agentId, showArchived],
@@ -86,7 +99,14 @@ export function SessionList({
           </div>
         )}
 
-        {sessions.map((session) => (
+        {[...sessions].sort((a, b) => {
+          // Pin Pulse sessions to top
+          const aP = a.title === "Pulse" ? 0 : 1;
+          const bP = b.title === "Pulse" ? 0 : 1;
+          return aP - bP;
+        }).map((session) => {
+          const isPulse = session.title === "Pulse";
+          return (
           <div
             key={session.id}
             onClick={() => onSelectSession(session.id)}
@@ -96,7 +116,11 @@ export function SessionList({
                 : "text-[#94a3b8] hover:bg-[#1a1d27] hover:text-white"
             }`}
           >
-            <MessageSquare size={14} className="shrink-0 opacity-50" />
+            {isPulse ? (
+              <Zap size={14} className="shrink-0 text-[#f59e0b]" />
+            ) : (
+              <MessageSquare size={14} className="shrink-0 opacity-50" />
+            )}
             <div className="flex-1 min-w-0">
               <p className="text-sm truncate">{session.title}</p>
               <p className="text-[10px] text-[#64748b]">{formatTime(session.updatedAt)}</p>
@@ -116,6 +140,7 @@ export function SessionList({
             {/* Dropdown menu */}
             {menuSessionId === session.id && (
               <div
+                ref={menuRef}
                 className="absolute right-2 top-full mt-1 z-50 rounded-lg bg-[#1a1d27] border border-[#2a2d3e] shadow-xl py-1 min-w-[140px]"
                 onClick={(e) => e.stopPropagation()}
               >
@@ -142,7 +167,8 @@ export function SessionList({
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Footer: archived toggle */}

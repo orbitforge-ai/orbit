@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { ChatSession, ChatMessage, ContentBlock } from "../types";
+import { ChatSession, ChatMessage, ContentBlock, ContextUsage } from "../types";
 
 export const chatApi = {
   listSessions: (agentId: string, includeArchived?: boolean): Promise<ChatSession[]> =>
@@ -25,4 +25,10 @@ export const chatApi = {
 
   sendMessage: (sessionId: string, content: ContentBlock[]): Promise<string> =>
     invoke("send_chat_message", { sessionId, content: JSON.stringify(content) }),
+
+  getContextUsage: (sessionId: string): Promise<ContextUsage> =>
+    invoke("get_context_usage", { sessionId }),
+
+  compactSession: (sessionId: string): Promise<void> =>
+    invoke("compact_chat_session", { sessionId }),
 };

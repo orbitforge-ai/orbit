@@ -1,5 +1,3 @@
-use ulid::Ulid;
-
 use crate::db::DbPool;
 use crate::executor::workspace;
 use crate::models::agent::{Agent, CreateAgent, UpdateAgent};
@@ -47,7 +45,24 @@ pub async fn create_agent(
     let pool = db.0.clone();
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
-        let id = Ulid::new().to_string();
+        let base_slug = workspace::slugify(&payload.name);
+        let base_slug = if base_slug.is_empty() { "agent".to_string() } else { base_slug };
+
+        // Ensure unique ID by appending a number suffix if needed
+        let id = {
+            let mut candidate = base_slug.clone();
+            let mut suffix = 1;
+            while conn.query_row(
+                "SELECT 1 FROM agents WHERE id = ?1",
+                rusqlite::params![candidate],
+                |_| Ok(()),
+            ).is_ok() {
+                suffix += 1;
+                candidate = format!("{}-{}", base_slug, suffix);
+            }
+            candidate
+        };
+
         let now = chrono::Utc::now().to_rfc3339();
         let max_runs = payload.max_concurrent_runs.unwrap_or(5);
 
@@ -144,7 +159,7 @@ pub async fn update_agent(
 
 #[tauri::command]
 pub async fn delete_agent(id: String, db: tauri::State<'_, DbPool>) -> Result<(), String> {
-    if id == "01HZDEFAULTDEFAULTDEFAULTDA" {
+    if id == "default" {
         return Err("cannot delete the default agent".to_string());
     }
     let pool = db.0.clone();

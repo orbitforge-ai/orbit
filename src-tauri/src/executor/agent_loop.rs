@@ -4,7 +4,8 @@ use tokio::sync::oneshot;
 use tracing::{ error, info, warn };
 
 use crate::db::DbPool;
-use crate::events::emitter::{ emit_agent_iteration, emit_agent_tool_result, emit_log_chunk };
+use crate::events::emitter::{ emit_agent_iteration, emit_agent_tool_result, emit_chat_context_update, emit_log_chunk };
+use crate::executor::compaction;
 use crate::executor::agent_tools::{ self, ToolExecutionContext };
 use crate::executor::keychain;
 use crate::executor::llm_provider::{
@@ -145,6 +146,7 @@ pub async fn run_agent_loop(
   let mut messages: Vec<ChatMessage> = vec![ChatMessage {
     role: "user".to_string(),
     content: vec![ContentBlock::Text { text: goal.clone() }],
+    created_at: None,
   }];
 
   log.log(
@@ -197,6 +199,7 @@ pub async fn run_agent_loop(
         content: vec![ContentBlock::Text {
           text: "You have reached the maximum number of iterations. Please provide a final summary of what you accomplished and what remains to be done.".to_string(),
         }],
+        created_at: None,
       });
       // One more LLM call for the summary
       if
@@ -276,6 +279,7 @@ pub async fn run_agent_loop(
         messages.push(ChatMessage {
           role: "assistant".to_string(),
           content: response.content.clone(),
+          created_at: None,
         });
         log.log(app, run_id, vec![("stdout".to_string(), "\n[Agent ended turn]".to_string())]);
         break;
@@ -285,6 +289,7 @@ pub async fn run_agent_loop(
         messages.push(ChatMessage {
           role: "assistant".to_string(),
           content: response.content.clone(),
+          created_at: None,
         });
 
         let mut tool_results: Vec<ContentBlock> = Vec::new();
@@ -336,6 +341,7 @@ pub async fn run_agent_loop(
         messages.push(ChatMessage {
           role: "user".to_string(),
           content: tool_results,
+          created_at: None,
         });
 
         if should_finish {
@@ -347,12 +353,14 @@ pub async fn run_agent_loop(
         messages.push(ChatMessage {
           role: "assistant".to_string(),
           content: response.content,
+          created_at: None,
         });
         messages.push(ChatMessage {
           role: "user".to_string(),
           content: vec![ContentBlock::Text {
             text: "Your response was cut off due to the token limit. Please continue where you left off.".to_string(),
           }],
+          created_at: None,
         });
         log.log(
           app,
@@ -486,6 +494,7 @@ pub async fn run_agent_prompt(
     content: vec![ContentBlock::Text {
       text: cfg.prompt.clone(),
     }],
+    created_at: None,
   }];
 
   emit_agent_iteration(app, run_id, 1, "llm_call", None, 0);
@@ -549,6 +558,7 @@ pub async fn run_agent_prompt(
   let all_messages = vec![messages[0].clone(), ChatMessage {
     role: "assistant".to_string(),
     content: response.content,
+    created_at: None,
   }];
   let conversation_json = serde_json::to_string_pretty(&all_messages).unwrap_or_default();
   save_conversation_to_db(
@@ -647,11 +657,11 @@ pub async fn run_pulse(
             sid
           });
 
-        // Load existing messages
+        // Load existing messages (exclude compacted ones)
         let mut stmt = conn
           .prepare(
             "SELECT role, content FROM chat_messages
-                     WHERE session_id = ?1 ORDER BY created_at ASC"
+                     WHERE session_id = ?1 AND is_compacted = 0 ORDER BY created_at ASC"
           )
           .map_err(|e| e.to_string())?;
 
@@ -667,7 +677,7 @@ pub async fn run_pulse(
             let content: Vec<ContentBlock> = serde_json
               ::from_str(&content_json)
               .unwrap_or_default();
-            ChatMessage { role, content }
+            ChatMessage { role, content, created_at: None }
           })
           .collect();
 
@@ -694,6 +704,7 @@ pub async fn run_pulse(
         messages.push(ChatMessage {
           role: "user".to_string(),
           content: user_content,
+          created_at: None,
         });
 
         Ok((session_id, messages))
@@ -770,6 +781,54 @@ pub async fn run_pulse(
     }).await
     .map_err(|e| e.to_string())??;
 
+  // ── Context window tracking & compaction ──────────────────────────────
+  let context_window = compaction::effective_context_window(&ws_config);
+  let input_tokens = response.usage.input_tokens;
+  let output_tokens = response.usage.output_tokens;
+
+  // Update last_input_tokens on session
+  if let Ok(conn) = db.get() {
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = conn.execute(
+      "UPDATE chat_sessions SET last_input_tokens = ?1, updated_at = ?2 WHERE id = ?3",
+      rusqlite::params![input_tokens, now, session_id],
+    );
+  }
+
+  // Emit context update for the gauge
+  emit_chat_context_update(app, &session_id, input_tokens, output_tokens, context_window);
+
+  // Check if compaction is needed
+  let threshold = compaction::effective_threshold(&ws_config);
+  if compaction::should_compact(input_tokens, context_window, threshold) {
+    info!(
+      session_id = %session_id,
+      "Pulse context {:.1}% exceeds threshold {:.0}%, triggering compaction",
+      (input_tokens as f64 / context_window as f64) * 100.0,
+      threshold * 100.0
+    );
+
+    let agent_id_c = agent_id.to_string();
+    let session_id_c = session_id.clone();
+    let ws_config_c = ws_config.clone();
+    let app_c = app.clone();
+    let db_c = DbPool(db.0.clone());
+
+    if let Ok(compact_key) = keychain::retrieve_api_key(&ws_config.provider) {
+      if let Ok(compact_provider) = llm_provider::create_provider(&ws_config.provider, compact_key) {
+        tauri::async_runtime::spawn(async move {
+          match compaction::perform_compaction(
+            &agent_id_c, &session_id_c, compact_provider.as_ref(),
+            &ws_config_c, &app_c, &db_c,
+          ).await {
+            Ok(()) => info!(session_id = %session_id_c, "Pulse compaction completed"),
+            Err(e) => warn!(session_id = %session_id_c, "Pulse compaction failed: {}", e),
+          }
+        });
+      }
+    }
+  }
+
   log.log(
     app,
     run_id,
@@ -778,6 +837,23 @@ pub async fn run_pulse(
       ("stdout".to_string(), format!("Tokens: {} | Session: {}", total_tokens, session_id))
     ]
   );
+
+  // Save chat_session_id into run metadata
+  if let Ok(conn) = db.get() {
+    let metadata = serde_json::json!({
+      "chat_session_id": session_id,
+      "agent_loop": {
+        "iteration": 1,
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
+        "total_tokens": total_tokens,
+      }
+    });
+    let _ = conn.execute(
+      "UPDATE runs SET metadata = ?1 WHERE id = ?2",
+      rusqlite::params![metadata.to_string(), run_id],
+    );
+  }
 
   log.flush_to_file(log_path);
 

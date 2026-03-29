@@ -5,6 +5,7 @@ import { ContentBlock } from "../../types";
 interface ChatInputProps {
   onSend: (content: ContentBlock[]) => void;
   disabled?: boolean;
+  contextGauge?: React.ReactNode;
 }
 
 interface Attachment {
@@ -17,7 +18,7 @@ interface Attachment {
 
 let attachId = 0;
 
-export function ChatInput({ onSend, disabled }: ChatInputProps) {
+export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -169,6 +170,10 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           className="flex-1 px-3 py-2 rounded-xl bg-[#0f1117] border border-[#2a2d3e] text-white text-sm resize-none focus:outline-none focus:border-[#6366f1] disabled:opacity-50 placeholder:text-[#4a4d6e]"
           style={{ maxHeight: 200 }}
         />
+
+        {contextGauge && (
+          <div className="shrink-0 mb-0.5">{contextGauge}</div>
+        )}
 
         <button
           onClick={handleSend}

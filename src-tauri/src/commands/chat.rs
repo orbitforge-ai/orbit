@@ -1,8 +1,10 @@
-use tracing::{ info, warn };
+use serde::Serialize;
+use tracing::{ debug, info, warn };
 use ulid::Ulid;
 
 use crate::db::DbPool;
-use crate::events::emitter::emit_agent_iteration;
+use crate::events::emitter::{ emit_agent_iteration, emit_chat_context_update };
+use crate::executor::compaction;
 use crate::executor::keychain;
 use crate::executor::llm_provider::{ self, ChatMessage, ContentBlock, LlmConfig };
 use crate::executor::workspace;
@@ -172,11 +174,22 @@ pub async fn delete_chat_session(
 
 // ─── Messages ───────────────────────────────────────────────────────────────
 
+/// A chat message with compaction metadata for the UI.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatMessageWithMeta {
+  pub role: String,
+  pub content: Vec<ContentBlock>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub created_at: Option<String>,
+  #[serde(rename = "isCompacted")]
+  pub is_compacted: bool,
+}
+
 #[tauri::command]
 pub async fn get_chat_messages(
   session_id: String,
   db: tauri::State<'_, DbPool>
-) -> Result<Vec<ChatMessage>, String> {
+) -> Result<Vec<ChatMessageWithMeta>, String> {
   let pool = db.0.clone();
 
   tokio::task
@@ -184,7 +197,7 @@ pub async fn get_chat_messages(
       let conn = pool.get().map_err(|e| e.to_string())?;
       let mut stmt = conn
         .prepare(
-          "SELECT role, content FROM chat_messages
+          "SELECT role, content, created_at, is_compacted FROM chat_messages
                  WHERE session_id = ?1 ORDER BY created_at ASC"
         )
         .map_err(|e| e.to_string())?;
@@ -193,13 +206,15 @@ pub async fn get_chat_messages(
         .query_map(rusqlite::params![session_id], |row| {
           let role: String = row.get(0)?;
           let content_json: String = row.get(1)?;
-          Ok((role, content_json))
+          let created_at: Option<String> = row.get(2)?;
+          let is_compacted: bool = row.get(3)?;
+          Ok((role, content_json, created_at, is_compacted))
         })
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
-        .map(|(role, content_json)| {
+        .map(|(role, content_json, created_at, is_compacted)| {
           let content: Vec<ContentBlock> = serde_json::from_str(&content_json).unwrap_or_default();
-          ChatMessage { role, content }
+          ChatMessageWithMeta { role, content, created_at, is_compacted }
         })
         .collect();
 
@@ -246,11 +261,11 @@ pub async fn send_chat_message(
             )
             .map_err(|e| format!("session not found: {}", e))?;
 
-          // Load existing messages
+          // Load existing messages (exclude compacted ones — only active context goes to LLM)
           let mut stmt = conn
             .prepare(
               "SELECT role, content FROM chat_messages
-                     WHERE session_id = ?1 ORDER BY created_at ASC"
+                     WHERE session_id = ?1 AND is_compacted = 0 ORDER BY created_at ASC"
             )
             .map_err(|e| e.to_string())?;
 
@@ -266,7 +281,7 @@ pub async fn send_chat_message(
               let content: Vec<ContentBlock> = serde_json
                 ::from_str(&content_json)
                 .unwrap_or_default();
-              ChatMessage { role, content }
+              ChatMessage { role, content, created_at: None }
             })
             .collect();
 
@@ -312,6 +327,7 @@ pub async fn send_chat_message(
           messages.push(ChatMessage {
             role: "user".to_string(),
             content: uc,
+            created_at: None,
           });
 
           Ok((agent_id, messages, title))
@@ -357,6 +373,8 @@ async fn do_llm_chat(
 
   let provider = llm_provider::create_provider(provider_name, api_key)?;
 
+  let context_window = compaction::effective_context_window(&ws_config);
+
   let config = LlmConfig {
     model: ws_config.model.clone(),
     max_tokens: MAX_TOKENS_PER_CALL,
@@ -364,12 +382,38 @@ async fn do_llm_chat(
     system_prompt,
   };
 
+  // Debug logging for context verification
+  debug!(
+    session_id = session_id,
+    message_count = messages.len(),
+    context_window = context_window,
+    "Sending {} messages to LLM (context window: {} tokens)",
+    messages.len(),
+    context_window
+  );
+
   emit_agent_iteration(app, stream_id, 1, "llm_call", None, 0);
 
   let response = provider.chat_streaming(&config, &messages, &[], app, stream_id, 1).await?;
 
-  let total_tokens = response.usage.input_tokens + response.usage.output_tokens;
+  let input_tokens = response.usage.input_tokens;
+  let output_tokens = response.usage.output_tokens;
+  let total_tokens = input_tokens + output_tokens;
   emit_agent_iteration(app, stream_id, 1, "finished", None, total_tokens);
+
+  // Emit context window usage update
+  emit_chat_context_update(app, session_id, input_tokens, output_tokens, context_window);
+
+  debug!(
+    session_id = session_id,
+    input_tokens = input_tokens,
+    output_tokens = output_tokens,
+    context_window = context_window,
+    usage_percent = format!("{:.1}%", (input_tokens as f64 / context_window as f64) * 100.0),
+    "Context usage: {} / {} tokens",
+    input_tokens,
+    context_window
+  );
 
   // Save assistant response to DB
   let content_json = serde_json::to_string(&response.content).map_err(|e| e.to_string())?;
@@ -378,7 +422,10 @@ async fn do_llm_chat(
   let sid = session_id.to_string();
 
   tokio::task
-    ::spawn_blocking(
+    ::spawn_blocking({
+      let pool = pool.clone();
+      let sid = sid.clone();
+      let content_json = content_json.clone();
       move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let msg_id = Ulid::new().to_string();
@@ -394,16 +441,154 @@ async fn do_llm_chat(
 
         conn
           .execute(
-            "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
-            rusqlite::params![now, sid]
+            "UPDATE chat_sessions SET updated_at = ?1, last_input_tokens = ?2 WHERE id = ?3",
+            rusqlite::params![now, input_tokens, sid]
           )
           .map_err(|e| e.to_string())?;
 
         Ok(())
       }
-    ).await
+    }).await
     .map_err(|e| e.to_string())??;
 
   info!(session_id = session_id, "Chat response saved ({} tokens)", total_tokens);
+
+  // Check if compaction is needed
+  let threshold = compaction::effective_threshold(&ws_config);
+  if compaction::should_compact(input_tokens, context_window, threshold) {
+    info!(
+      session_id = session_id,
+      "Context usage {:.1}% exceeds threshold {:.0}%, triggering compaction",
+      (input_tokens as f64 / context_window as f64) * 100.0,
+      threshold * 100.0
+    );
+
+    // Spawn compaction in background so it doesn't block
+    let agent_id = agent_id.to_string();
+    let session_id = session_id.to_string();
+    let ws_config = ws_config.clone();
+    let app = app.clone();
+    let db = DbPool(db.0.clone());
+
+    // Need a new provider instance for the compaction summary call
+    let compact_api_key = keychain::retrieve_api_key(provider_name)
+      .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
+    let compact_provider = llm_provider::create_provider(provider_name, compact_api_key)?;
+
+    tauri::async_runtime::spawn(async move {
+      match compaction::perform_compaction(
+        &agent_id,
+        &session_id,
+        compact_provider.as_ref(),
+        &ws_config,
+        &app,
+        &db,
+      ).await {
+        Ok(()) => info!(session_id = %session_id, "Background compaction completed"),
+        Err(e) => warn!(session_id = %session_id, "Background compaction failed: {}", e),
+      }
+    });
+  }
+
+  Ok(())
+}
+
+// ─── Context Usage Query ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextUsage {
+  pub input_tokens: u32,
+  pub context_window_size: u32,
+  pub usage_percent: f64,
+}
+
+#[tauri::command]
+pub async fn get_context_usage(
+  session_id: String,
+  db: tauri::State<'_, DbPool>
+) -> Result<ContextUsage, String> {
+  let pool = db.0.clone();
+
+  let (last_input_tokens, agent_id) = tokio::task
+    ::spawn_blocking({
+      let pool = pool.clone();
+      let sid = session_id.clone();
+      move || -> Result<(Option<u32>, String), String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let row: (Option<u32>, String) = conn
+          .query_row(
+            "SELECT last_input_tokens, agent_id FROM chat_sessions WHERE id = ?1",
+            rusqlite::params![sid],
+            |row| Ok((row.get(0)?, row.get(1)?))
+          )
+          .map_err(|e| format!("session not found: {}", e))?;
+        Ok(row)
+      }
+    }).await
+    .map_err(|e| e.to_string())??;
+
+  let ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
+  let context_window = compaction::effective_context_window(&ws_config);
+  let input_tokens = last_input_tokens.unwrap_or(0);
+
+  let usage_percent = if context_window > 0 {
+    (input_tokens as f64 / context_window as f64) * 100.0
+  } else {
+    0.0
+  };
+
+  Ok(ContextUsage {
+    input_tokens,
+    context_window_size: context_window,
+    usage_percent,
+  })
+}
+
+// ─── Manual Compaction ──────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn compact_chat_session(
+  session_id: String,
+  app: tauri::AppHandle,
+  db: tauri::State<'_, DbPool>
+) -> Result<(), String> {
+  let pool = db.0.clone();
+
+  // Look up agent_id for this session
+  let agent_id: String = tokio::task::spawn_blocking({
+    let pool = pool.clone();
+    let sid = session_id.clone();
+    move || -> Result<String, String> {
+      let conn = pool.get().map_err(|e| e.to_string())?;
+      conn.query_row(
+        "SELECT agent_id FROM chat_sessions WHERE id = ?1",
+        rusqlite::params![sid],
+        |row| row.get(0),
+      ).map_err(|e| format!("session not found: {}", e))
+    }
+  }).await.map_err(|e| e.to_string())??;
+
+  let ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
+  let provider_name = &ws_config.provider;
+  let api_key = keychain::retrieve_api_key(provider_name)
+    .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
+  let provider = llm_provider::create_provider(provider_name, api_key)?;
+
+  let db_pool = DbPool(pool);
+  compaction::perform_compaction(
+    &agent_id,
+    &session_id,
+    provider.as_ref(),
+    &ws_config,
+    &app,
+    &db_pool,
+  ).await?;
+
+  // Refetch and emit updated context usage
+  let context_window = compaction::effective_context_window(&ws_config);
+  emit_chat_context_update(&app, &session_id, 0, 0, context_window);
+
+  info!(session_id = %session_id, "Manual compaction completed");
   Ok(())
 }

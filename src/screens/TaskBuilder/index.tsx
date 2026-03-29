@@ -75,7 +75,7 @@ export function TaskBuilder() {
   const [httpExpectedCodes, setHttpExpectedCodes] = useState("");
 
   // Step 2 — Who
-  const [agentId, setAgentId] = useState("01HZDEFAULTDEFAULTDEFAULTDA");
+  const [agentId, setAgentId] = useState("default");
   const [concurrencyPolicy, setConcurrencyPolicy] = useState<CreateTask["concurrencyPolicy"]>("allow");
   const [maxDurationMinutes, setMaxDurationMinutes] = useState(60);
   const [maxRetries, setMaxRetries] = useState(0);

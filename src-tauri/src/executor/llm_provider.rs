@@ -19,6 +19,8 @@ pub struct LlmConfig {
 pub struct ChatMessage {
   pub role: String, // "user" | "assistant"
   pub content: Vec<ContentBlock>,
+  #[serde(skip_serializing_if = "Option::is_none", default)]
+  pub created_at: Option<String>,
 }
 
 /// A content block within a message.
@@ -100,6 +102,23 @@ pub trait LlmProvider: Send + Sync {
     run_id: &str,
     iteration: u32
   ) -> Result<LlmResponse, String>;
+}
+
+// ─── Model context window lookup ────────────────────────────────────────────
+
+/// Returns the maximum context window size (in tokens) for a given model.
+pub fn model_context_window(model: &str) -> u32 {
+  match model {
+    // Anthropic models
+    "claude-sonnet-4-20250514" => 200_000,
+    "claude-haiku-4-5-20251001" => 200_000,
+    // MiniMax models
+    "MiniMax-M2.7" | "MiniMax-M2.7-highspeed" => 1_000_000,
+    "MiniMax-M2.5" | "MiniMax-M2.5-highspeed" => 1_000_000,
+    "MiniMax-M2.1" | "MiniMax-M2.1-highspeed" => 1_000_000,
+    "MiniMax-M2" => 1_000_000,
+    _ => 200_000, // conservative default
+  }
 }
 
 // ─── Provider factory ────────────────────────────────────────────────────────

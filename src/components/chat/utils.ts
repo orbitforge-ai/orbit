@@ -48,11 +48,20 @@ export function chatMessagesToDisplay(messages: ChatMessage[]): DisplayMessage[]
       blocks.push(contentBlockToDisplay(block));
     }
 
+    // Detect summary messages by content marker
+    const isSummary =
+      msg.content.length > 0 &&
+      msg.content[0].type === "text" &&
+      msg.content[0].text.startsWith("[Conversation Summary]");
+
     result.push({
       id: nextId(),
       role: msg.role,
       blocks,
       isStreaming: false,
+      timestamp: msg.created_at,
+      isCompacted: msg.isCompacted,
+      isSummary,
     });
   }
 

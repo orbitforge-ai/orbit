@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_enabled ON tasks(enabled);
 -- Seed the default agent
 INSERT OR IGNORE INTO agents (id, name, description, state, max_concurrent_runs, created_at, updated_at)
 VALUES (
-  '01HZDEFAULTDEFAULTDEFAULTDA',
+  'default',
   'Default',
   'Default agent for running tasks',
   'idle',

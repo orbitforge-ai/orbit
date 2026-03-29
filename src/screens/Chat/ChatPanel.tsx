@@ -7,6 +7,7 @@ import { DisplayMessage, DisplayBlock } from "../../components/chat/types";
 import { chatMessagesToDisplay } from "../../components/chat/utils";
 import { MessageBubble } from "../../components/chat/MessageBubble";
 import { ChatInput } from "./ChatInput";
+import { ContextGauge } from "../../components/chat/ContextGauge";
 import {
   onAgentLlmChunk,
   onAgentContentBlock,
@@ -193,6 +194,7 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
           return { kind: "text", text: "[attachment]", isStreaming: false };
         }),
         isStreaming: false,
+        timestamp: new Date().toISOString(),
       };
 
       // Add user message + empty streaming assistant placeholder
@@ -252,7 +254,18 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
       </div>
 
       {/* Input */}
-      <ChatInput onSend={handleSend} disabled={streaming} />
+      <ChatInput
+        onSend={handleSend}
+        disabled={streaming}
+        contextGauge={
+          <ContextGauge
+            sessionId={sessionId}
+            onCompacted={() => {
+              queryClient.invalidateQueries({ queryKey: ["chat-messages", sessionId] });
+            }}
+          />
+        }
+      />
     </div>
   );
 }

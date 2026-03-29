@@ -14,6 +14,7 @@ export function TasksScreen() {
   const { data: tasks = [], isLoading } = useQuery({
     queryKey: ["tasks"],
     queryFn: tasksApi.list,
+    select: (all: Task[]) => all.filter((t) => !t.tags.includes("pulse")),
   });
 
   async function handleTrigger(task: Task) {

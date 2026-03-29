@@ -23,8 +23,8 @@ const UNIT_OPTIONS = [
 
 export function RecurringPicker({ value, onChange }: RecurringPickerProps) {
   const [nextRuns, setNextRuns] = useState<string[]>([]);
-  const [mode, setMode] = useState<InputMode>("text");
-  const [textInput, setTextInput] = useState("");
+  const [mode, setMode] = useState<InputMode>(value.expression ? "text" : "text");
+  const [textInput, setTextInput] = useState(value.expression ?? "");
   const [parseError, setParseError] = useState(false);
 
   useEffect(() => {
@@ -43,7 +43,7 @@ export function RecurringPicker({ value, onChange }: RecurringPickerProps) {
     const result = parseScheduleInput(raw, value.timezone);
     if (result) {
       setParseError(false);
-      onChange(result);
+      onChange({ ...result, expression: raw });
     } else {
       setParseError(raw.trim().length > 0);
     }

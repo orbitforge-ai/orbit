@@ -3,6 +3,30 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
+/// Convert a name to a URL-safe slug (lowercase, hyphens, no special chars).
+pub fn slugify(name: &str) -> String {
+    let slug: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .collect();
+    // Collapse multiple hyphens and trim
+    let mut result = String::new();
+    let mut prev_hyphen = false;
+    for c in slug.chars() {
+        if c == '-' {
+            if !prev_hyphen && !result.is_empty() {
+                result.push('-');
+            }
+            prev_hyphen = true;
+        } else {
+            result.push(c);
+            prev_hyphen = false;
+        }
+    }
+    result.trim_end_matches('-').to_string()
+}
+
 /// Root directory for all agent workspaces.
 pub fn agents_root() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
@@ -24,6 +48,12 @@ pub struct AgentWorkspaceConfig {
     pub max_iterations: u32,
     pub max_total_tokens: u32,
     pub allowed_tools: Vec<String>,
+    #[serde(default)]
+    pub compaction_threshold: Option<f64>,
+    #[serde(default)]
+    pub compaction_retain_count: Option<u32>,
+    #[serde(default)]
+    pub context_window_override: Option<u32>,
 }
 
 impl Default for AgentWorkspaceConfig {
@@ -41,6 +71,9 @@ impl Default for AgentWorkspaceConfig {
                 "list_files".to_string(),
                 "finish".to_string(),
             ],
+            compaction_threshold: None,
+            compaction_retain_count: None,
+            context_window_override: None,
         }
     }
 }
