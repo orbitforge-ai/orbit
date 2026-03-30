@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bot,
@@ -134,6 +134,29 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
   const [viewingRunId, setViewingRunId] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
+  // Dirty state tracking for tabs with save functionality
+  const [dirtyTabs, setDirtyTabs] = useState<Record<string, boolean>>({});
+  const [savingTab, setSavingTab] = useState<string | null>(null);
+
+  // Refs to trigger save in child tabs
+  const configSaveRef = useRef<{ triggerSave: () => void } | null>(null);
+  const schedulesSaveRef = useRef<{ triggerSave: () => void } | null>(null);
+
+  function handleDirtyChange(tab: string, isDirty: boolean) {
+    setDirtyTabs((prev) => ({ ...prev, [tab]: isDirty }));
+  }
+
+  function handleHeaderSave() {
+    if (agentTab === 'config' && configSaveRef.current) {
+      configSaveRef.current.triggerSave();
+    } else if (agentTab === 'schedules' && schedulesSaveRef.current) {
+      schedulesSaveRef.current.triggerSave();
+    }
+  }
+
+  const hasDirtyChanges = dirtyTabs[agentTab] === true;
+  const isSaveableTab = agentTab === 'config' || agentTab === 'schedules';
+
   if (!agent) {
     return (
       <div className="flex items-center justify-center h-full text-muted text-sm">
@@ -173,14 +196,32 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
               </div>
             </div>
           </div>
-          {agent.id !== DEFAULT_AGENT_ID && (
-            <button
-              onClick={() => setShowRunDialog(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-medium transition-colors"
-            >
-              <Play size={12} /> Run Agent
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {isSaveableTab && (
+              <button
+                onClick={handleHeaderSave}
+                disabled={!hasDirtyChanges || savingTab === agentTab}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  hasDirtyChanges
+                    ? 'bg-warning/20 text-warning border border-warning/50 hover:bg-warning/30'
+                    : 'bg-surface text-muted border border-edge'
+                }`}
+                title={agentTab === 'config' ? 'Save Configuration' : 'Save Pulse'}
+              >
+                <Save size={12} />
+                {savingTab === agentTab ? 'Saving...' : 'Save'}
+                {hasDirtyChanges && <span className="w-1.5 h-1.5 rounded-full bg-warning" />}
+              </button>
+            )}
+            {agent.id !== DEFAULT_AGENT_ID && (
+              <button
+                onClick={() => setShowRunDialog(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-medium transition-colors"
+              >
+                <Play size={12} /> Run Agent
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Tab bar */}
@@ -212,8 +253,20 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
           />
         )}
         {agentTab === 'workspace' && <WorkspaceTab agentId={agentId} />}
-        {agentTab === 'config' && <ConfigTab agentId={agentId} />}
-        {agentTab === 'schedules' && <SchedulesTab agentId={agentId} />}
+        {agentTab === 'config' && (
+          <ConfigTab
+            agentId={agentId}
+            onDirtyChange={(dirty) => handleDirtyChange('config', dirty)}
+            ref={configSaveRef}
+          />
+        )}
+        {agentTab === 'schedules' && (
+          <SchedulesTab
+            agentId={agentId}
+            onDirtyChange={(dirty) => handleDirtyChange('schedules', dirty)}
+            ref={schedulesSaveRef}
+          />
+        )}
       </div>
 
       {/* Run dialog */}

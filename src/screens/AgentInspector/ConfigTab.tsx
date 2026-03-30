@@ -1,58 +1,88 @@
-import { useEffect, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Save, Key, Trash2, Check, ChevronDown } from "lucide-react";
-import * as Select from "@radix-ui/react-select";
-import * as Checkbox from "@radix-ui/react-checkbox";
+import { useEffect, useState, useImperativeHandle, forwardRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Key, Trash2, Check, ChevronDown } from 'lucide-react';
+import * as Select from '@radix-ui/react-select';
+import * as Checkbox from '@radix-ui/react-checkbox';
 
-import { workspaceApi } from "../../api/workspace";
-import { llmApi } from "../../api/llm";
-import { AgentWorkspaceConfig } from "../../types";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { workspaceApi } from '../../api/workspace';
+import { llmApi } from '../../api/llm';
+import { AgentWorkspaceConfig } from '../../types';
+import { confirm } from '@tauri-apps/plugin-dialog';
 
 const AVAILABLE_TOOLS = [
-  { id: "shell_command", label: "Shell Commands" },
-  { id: "read_file", label: "Read Files" },
-  { id: "write_file", label: "Write Files" },
-  { id: "list_files", label: "List Files" },
-  { id: "web_search", label: "Web Search" },
-  { id: "finish", label: "Finish (always enabled)" },
+  { id: 'shell_command', label: 'Shell Commands' },
+  { id: 'read_file', label: 'Read Files' },
+  { id: 'write_file', label: 'Write Files' },
+  { id: 'list_files', label: 'List Files' },
+  { id: 'web_search', label: 'Web Search' },
+  { id: 'finish', label: 'Finish (always enabled)' },
 ];
 
 const SEARCH_PROVIDERS = [
-  { value: "brave", label: "Brave Search" },
-  { value: "tavily", label: "Tavily" },
+  { value: 'brave', label: 'Brave Search' },
+  { value: 'tavily', label: 'Tavily' },
 ];
 
 const MODEL_OPTIONS: Record<string, { label: string; value: string }[]> = {
   anthropic: [
-    { label: "Claude Sonnet 4", value: "claude-sonnet-4-20250514" },
-    { label: "Claude Haiku 3.5", value: "claude-haiku-4-5-20251001" },
+    { label: 'Claude Sonnet 4', value: 'claude-sonnet-4-20250514' },
+    { label: 'Claude Haiku 3.5', value: 'claude-haiku-4-5-20251001' },
   ],
   minimax: [
-    { label: "MiniMax M2.7", value: "MiniMax-M2.7" },
-    { label: "MiniMax M2.7 Highspeed", value: "MiniMax-M2.7-highspeed" },
-    { label: "MiniMax M2.5", value: "MiniMax-M2.5" },
-    { label: "MiniMax M2.5 Highspeed", value: "MiniMax-M2.5-highspeed" },
-    { label: "MiniMax M2.1", value: "MiniMax-M2.1" },
-    { label: "MiniMax M2.1 Highspeed", value: "MiniMax-M2.1-highspeed" },
-    { label: "MiniMax M2", value: "MiniMax-M2" },
+    { label: 'MiniMax M2.7', value: 'MiniMax-M2.7' },
+    { label: 'MiniMax M2.7 Highspeed', value: 'MiniMax-M2.7-highspeed' },
+    { label: 'MiniMax M2.5', value: 'MiniMax-M2.5' },
+    { label: 'MiniMax M2.5 Highspeed', value: 'MiniMax-M2.5-highspeed' },
+    { label: 'MiniMax M2.1', value: 'MiniMax-M2.1' },
+    { label: 'MiniMax M2.1 Highspeed', value: 'MiniMax-M2.1-highspeed' },
+    { label: 'MiniMax M2', value: 'MiniMax-M2' },
   ],
 };
 
-export function ConfigTab({ agentId }: { agentId: string }) {
+interface ConfigTabProps {
+  agentId: string;
+  onDirtyChange?: (dirty: boolean) => void;
+}
+
+export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>(function ConfigTab(
+  { agentId, onDirtyChange },
+  ref
+) {
   const queryClient = useQueryClient();
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [config, setConfig] = useState<AgentWorkspaceConfig | null>(null);
+  const [isDirty, setIsDirty] = useState(false);
+
+  // Expose triggerSave via ref
+  useImperativeHandle(ref, () => ({
+    triggerSave: () => handleSave(),
+  }));
+
+  function markDirty() {
+    setIsDirty(true);
+    onDirtyChange?.(true);
+  }
+
+  function markClean() {
+    setIsDirty(false);
+    onDirtyChange?.(false);
+  }
+
+  // Helper to update config and mark dirty
+  function updateConfig(updates: Partial<AgentWorkspaceConfig>) {
+    setConfig((prev) => (prev ? { ...prev, ...updates } : null));
+    markDirty();
+  }
 
   // API key state
   const [hasKey, setHasKey] = useState(false);
-  const [keyInput, setKeyInput] = useState("");
+  const [keyInput, setKeyInput] = useState('');
   const [showKeyInput, setShowKeyInput] = useState(false);
 
   const { data: loadedConfig } = useQuery({
-    queryKey: ["agent-config", agentId],
+    queryKey: ['agent-config', agentId],
     queryFn: () => workspaceApi.getConfig(agentId),
   });
 
@@ -60,7 +90,10 @@ export function ConfigTab({ agentId }: { agentId: string }) {
     if (loadedConfig) {
       setConfig(loadedConfig);
       // Check API key status for the provider
-      llmApi.hasApiKey(loadedConfig.provider).then(setHasKey).catch(() => setHasKey(false));
+      llmApi
+        .hasApiKey(loadedConfig.provider)
+        .then(setHasKey)
+        .catch(() => setHasKey(false));
     }
   }, [loadedConfig]);
 
@@ -71,8 +104,9 @@ export function ConfigTab({ agentId }: { agentId: string }) {
     setSaved(false);
     try {
       await workspaceApi.updateConfig(agentId, config);
-      queryClient.invalidateQueries({ queryKey: ["agent-config", agentId] });
+      queryClient.invalidateQueries({ queryKey: ['agent-config', agentId] });
       setSaved(true);
+      markClean();
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
       setSaveError(String(err));
@@ -85,21 +119,21 @@ export function ConfigTab({ agentId }: { agentId: string }) {
     try {
       await llmApi.setApiKey(config.provider, keyInput.trim());
       setHasKey(true);
-      setKeyInput("");
+      setKeyInput('');
       setShowKeyInput(false);
     } catch (err) {
-      console.error("Failed to set API key:", err);
+      console.error('Failed to set API key:', err);
     }
   }
 
   async function handleDeleteApiKey() {
     if (!config) return;
-    if (!await confirm("Remove API key?")) return;
+    if (!(await confirm('Remove API key?'))) return;
     try {
       await llmApi.deleteApiKey(config.provider);
       setHasKey(false);
     } catch (err) {
-      console.error("Failed to delete API key:", err);
+      console.error('Failed to delete API key:', err);
     }
   }
 
@@ -108,7 +142,7 @@ export function ConfigTab({ agentId }: { agentId: string }) {
     const tools = config.allowedTools.includes(toolId)
       ? config.allowedTools.filter((t) => t !== toolId)
       : [...config.allowedTools, toolId];
-    setConfig({ ...config, allowedTools: tools });
+    updateConfig({ allowedTools: tools });
   }
 
   if (!config) {
@@ -119,8 +153,6 @@ export function ConfigTab({ agentId }: { agentId: string }) {
 
   return (
     <div className="p-6 space-y-6 h-full overflow-y-auto">
-      
-
       {/* Provider & Model */}
       <section className="space-y-3">
         <h4 className="text-sm font-semibold text-white">Model</h4>
@@ -130,21 +162,32 @@ export function ConfigTab({ agentId }: { agentId: string }) {
             <Select.Root
               value={config.provider}
               onValueChange={(value) => {
-                setConfig({ ...config, provider: value });
-                llmApi.hasApiKey(value).then(setHasKey).catch(() => setHasKey(false));
+                updateConfig({ provider: value });
+                llmApi
+                  .hasApiKey(value)
+                  .then(setHasKey)
+                  .catch(() => setHasKey(false));
               }}
             >
               <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent">
                 <Select.Value />
-                <Select.Icon><ChevronDown size={14} className="text-muted" /></Select.Icon>
+                <Select.Icon>
+                  <ChevronDown size={14} className="text-muted" />
+                </Select.Icon>
               </Select.Trigger>
               <Select.Portal>
                 <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
                   <Select.Viewport className="p-1">
-                    <Select.Item value="anthropic" className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20">
+                    <Select.Item
+                      value="anthropic"
+                      className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
+                    >
                       <Select.ItemText>Anthropic</Select.ItemText>
                     </Select.Item>
-                    <Select.Item value="minimax" className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20">
+                    <Select.Item
+                      value="minimax"
+                      className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
+                    >
                       <Select.ItemText>MiniMax</Select.ItemText>
                     </Select.Item>
                   </Select.Viewport>
@@ -156,22 +199,31 @@ export function ConfigTab({ agentId }: { agentId: string }) {
             <label className="text-xs text-muted mb-1 block">Model</label>
             <Select.Root
               value={config.model}
-              onValueChange={(value) => setConfig({ ...config, model: value })}
+              onValueChange={(value) => updateConfig({ model: value })}
             >
               <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent">
                 <Select.Value />
-                <Select.Icon><ChevronDown size={14} className="text-muted" /></Select.Icon>
+                <Select.Icon>
+                  <ChevronDown size={14} className="text-muted" />
+                </Select.Icon>
               </Select.Trigger>
               <Select.Portal>
                 <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
                   <Select.Viewport className="p-1">
                     {models.map((m) => (
-                      <Select.Item key={m.value} value={m.value} className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20">
+                      <Select.Item
+                        key={m.value}
+                        value={m.value}
+                        className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
+                      >
                         <Select.ItemText>{m.label}</Select.ItemText>
                       </Select.Item>
                     ))}
                     {!models.find((m) => m.value === config.model) && (
-                      <Select.Item value={config.model} className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20">
+                      <Select.Item
+                        value={config.model}
+                        className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
+                      >
                         <Select.ItemText>{config.model}</Select.ItemText>
                       </Select.Item>
                     )}
@@ -209,7 +261,7 @@ export function ConfigTab({ agentId }: { agentId: string }) {
                 placeholder={`Enter ${config.provider} API key...`}
                 value={keyInput}
                 onChange={(e) => setKeyInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSetApiKey()}
+                onKeyDown={(e) => e.key === 'Enter' && handleSetApiKey()}
                 autoFocus
                 className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm font-mono focus:outline-none focus:border-accent"
               />
@@ -245,27 +297,32 @@ export function ConfigTab({ agentId }: { agentId: string }) {
       <section className="space-y-3">
         <div>
           <h4 className="text-sm font-semibold text-white">Behavior</h4>
-          <p className="text-xs text-muted mt-1">Controls how predictable or creative the agent's responses are. Lower values stick to the most likely answer, higher values introduce more variety.</p>
+          <p className="text-xs text-muted mt-1">
+            Controls how predictable or creative the agent's responses are. Lower values stick to
+            the most likely answer, higher values introduce more variety.
+          </p>
         </div>
         <div className="flex gap-2">
           {[
-            { value: 0, label: "Precise", desc: "Consistent, factual, best for analysis" },
-            { value: 0.3, label: "Balanced", desc: "Reliable with slight flexibility" },
-            { value: 0.7, label: "Creative", desc: "Varied, exploratory responses" },
-            { value: 1, label: "Experimental", desc: "Highly creative, less predictable" },
+            { value: 0, label: 'Precise', desc: 'Consistent, factual, best for analysis' },
+            { value: 0.3, label: 'Balanced', desc: 'Reliable with slight flexibility' },
+            { value: 0.7, label: 'Creative', desc: 'Varied, exploratory responses' },
+            { value: 1, label: 'Experimental', desc: 'Highly creative, less predictable' },
           ].map((preset) => {
             const selected = config.temperature === preset.value;
             return (
               <button
                 key={preset.value}
-                onClick={() => setConfig({ ...config, temperature: preset.value })}
+                onClick={() => updateConfig({ temperature: preset.value })}
                 className={`flex-1 flex flex-col items-center px-2 py-2.5 rounded-lg border text-center transition-colors ${
                   selected
-                    ? "border-accent bg-accent/10"
-                    : "border-edge bg-surface hover:border-edge-hover"
+                    ? 'border-accent bg-accent/10'
+                    : 'border-edge bg-surface hover:border-edge-hover'
                 }`}
               >
-                <span className={`text-sm font-medium ${selected ? "text-accent-light" : "text-white"}`}>
+                <span
+                  className={`text-sm font-medium ${selected ? 'text-accent-light' : 'text-white'}`}
+                >
                   {preset.label}
                 </span>
                 <span className="text-[11px] text-muted mt-0.5 leading-tight">{preset.desc}</span>
@@ -282,7 +339,7 @@ export function ConfigTab({ agentId }: { agentId: string }) {
               value={config.temperature}
               onChange={(e) => {
                 const v = parseFloat(e.target.value);
-                if (!isNaN(v) && v >= 0 && v <= 2) setConfig({ ...config, temperature: v });
+                if (!isNaN(v) && v >= 0 && v <= 2) updateConfig({ temperature: v });
               }}
               className="w-16 px-2 py-1.5 rounded-lg bg-background border border-edge text-white text-sm font-mono text-center focus:outline-none focus:border-accent"
             />
@@ -302,7 +359,7 @@ export function ConfigTab({ agentId }: { agentId: string }) {
               min={1}
               max={100}
               value={config.maxIterations}
-              onChange={(e) => setConfig({ ...config, maxIterations: parseInt(e.target.value) || 25 })}
+              onChange={(e) => updateConfig({ maxIterations: parseInt(e.target.value) || 25 })}
               className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
             />
           </div>
@@ -313,7 +370,7 @@ export function ConfigTab({ agentId }: { agentId: string }) {
               min={1000}
               step={10000}
               value={config.maxTotalTokens}
-              onChange={(e) => setConfig({ ...config, maxTotalTokens: parseInt(e.target.value) || 200000 })}
+              onChange={(e) => updateConfig({ maxTotalTokens: parseInt(e.target.value) || 200000 })}
               className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
             />
           </div>
@@ -324,7 +381,9 @@ export function ConfigTab({ agentId }: { agentId: string }) {
       <section className="space-y-3">
         <div>
           <h4 className="text-sm font-semibold text-white">Context Management</h4>
-          <p className="text-xs text-muted mt-1">Controls automatic conversation compaction when the context window fills up.</p>
+          <p className="text-xs text-muted mt-1">
+            Controls automatic conversation compaction when the context window fills up.
+          </p>
         </div>
         <div className="grid grid-cols-3 gap-3">
           <div>
@@ -339,7 +398,7 @@ export function ConfigTab({ agentId }: { agentId: string }) {
                 onChange={(e) => {
                   const v = parseInt(e.target.value);
                   if (!isNaN(v) && v >= 10 && v <= 95)
-                    setConfig({ ...config, compactionThreshold: v / 100 });
+                    updateConfig({ compactionThreshold: v / 100 });
                 }}
                 className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
               />
@@ -354,7 +413,7 @@ export function ConfigTab({ agentId }: { agentId: string }) {
               max={50}
               value={config.compactionRetainCount ?? 12}
               onChange={(e) =>
-                setConfig({ ...config, compactionRetainCount: parseInt(e.target.value) || 12 })
+                updateConfig({ compactionRetainCount: parseInt(e.target.value) || 12 })
               }
               className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
             />
@@ -366,11 +425,10 @@ export function ConfigTab({ agentId }: { agentId: string }) {
               min={1000}
               step={10000}
               placeholder="Auto"
-              value={config.contextWindowOverride ?? ""}
+              value={config.contextWindowOverride ?? ''}
               onChange={(e) => {
                 const raw = e.target.value;
-                setConfig({
-                  ...config,
+                updateConfig({
                   contextWindowOverride: raw ? parseInt(raw) || undefined : undefined,
                 });
               }}
@@ -384,24 +442,33 @@ export function ConfigTab({ agentId }: { agentId: string }) {
       <section className="space-y-3">
         <div>
           <h4 className="text-sm font-semibold text-white">Web Search</h4>
-          <p className="text-xs text-muted mt-1">Search provider used by the web_search tool. Requires an API key for the selected provider.</p>
+          <p className="text-xs text-muted mt-1">
+            Search provider used by the web_search tool. Requires an API key for the selected
+            provider.
+          </p>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-xs text-muted mb-1 block">Provider</label>
             <Select.Root
               value={config.webSearchProvider}
-              onValueChange={(value) => setConfig({ ...config, webSearchProvider: value })}
+              onValueChange={(value) => updateConfig({ webSearchProvider: value })}
             >
               <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent">
                 <Select.Value />
-                <Select.Icon><ChevronDown size={14} className="text-muted" /></Select.Icon>
+                <Select.Icon>
+                  <ChevronDown size={14} className="text-muted" />
+                </Select.Icon>
               </Select.Trigger>
               <Select.Portal>
                 <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
                   <Select.Viewport className="p-1">
                     {SEARCH_PROVIDERS.map((p) => (
-                      <Select.Item key={p.value} value={p.value} className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20">
+                      <Select.Item
+                        key={p.value}
+                        value={p.value}
+                        className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
+                      >
                         <Select.ItemText>{p.label}</Select.ItemText>
                       </Select.Item>
                     ))}
@@ -422,17 +489,15 @@ export function ConfigTab({ agentId }: { agentId: string }) {
         <h4 className="text-sm font-semibold text-white">Allowed Tools</h4>
         <div className="space-y-2">
           {AVAILABLE_TOOLS.map((tool) => {
-            const isFinish = tool.id === "finish";
+            const isFinish = tool.id === 'finish';
             const checked = isFinish || config.allowedTools.includes(tool.id);
             return (
               <div
                 key={tool.id}
                 onClick={() => !isFinish && toggleTool(tool.id)}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg border transition-colors cursor-pointer ${
-                  checked
-                    ? "border-accent/30 bg-accent/5"
-                    : "border-edge bg-surface"
-                } ${isFinish ? "opacity-60 cursor-not-allowed" : ""}`}
+                  checked ? 'border-accent/30 bg-accent/5' : 'border-edge bg-surface'
+                } ${isFinish ? 'opacity-60 cursor-not-allowed' : ''}`}
               >
                 <Checkbox.Root
                   checked={checked}
@@ -451,34 +516,20 @@ export function ConfigTab({ agentId }: { agentId: string }) {
           })}
         </div>
       </section>
-
-      {/* Save */}
-      <div className="space-y-2 pb-4">
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-sm font-medium transition-colors"
-        >
-          {saved ? <Check size={14} /> : <Save size={14} />}
-          {saving ? "Saving..." : saved ? "Saved" : "Save Configuration"}
-        </button>
-        {saveError && (
-          <div className="px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-xs">
-            {saveError}
-          </div>
-        )}
-      </div>
     </div>
   );
-}
+});
 
 function SearchKeyStatus({ provider }: { provider: string }) {
   const [hasKey, setHasKey] = useState(false);
-  const [keyInput, setKeyInput] = useState("");
+  const [keyInput, setKeyInput] = useState('');
   const [showInput, setShowInput] = useState(false);
 
   useEffect(() => {
-    llmApi.hasApiKey(provider).then(setHasKey).catch(() => setHasKey(false));
+    llmApi
+      .hasApiKey(provider)
+      .then(setHasKey)
+      .catch(() => setHasKey(false));
   }, [provider]);
 
   async function handleSet() {
@@ -486,10 +537,10 @@ function SearchKeyStatus({ provider }: { provider: string }) {
     try {
       await llmApi.setApiKey(provider, keyInput.trim());
       setHasKey(true);
-      setKeyInput("");
+      setKeyInput('');
       setShowInput(false);
     } catch (err) {
-      console.error("Failed to set search API key:", err);
+      console.error('Failed to set search API key:', err);
     }
   }
 
@@ -519,12 +570,19 @@ function SearchKeyStatus({ provider }: { provider: string }) {
           placeholder={`${provider} API key...`}
           value={keyInput}
           onChange={(e) => setKeyInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSet()}
+          onKeyDown={(e) => e.key === 'Enter' && handleSet()}
           autoFocus
           className="flex-1 px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm font-mono focus:outline-none focus:border-accent"
         />
-        <button onClick={handleSet} className="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium">Save</button>
-        <button onClick={() => setShowInput(false)} className="px-2 py-1.5 text-muted text-xs">Cancel</button>
+        <button
+          onClick={handleSet}
+          className="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium"
+        >
+          Save
+        </button>
+        <button onClick={() => setShowInput(false)} className="px-2 py-1.5 text-muted text-xs">
+          Cancel
+        </button>
       </div>
     );
   }
