@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
@@ -429,6 +429,100 @@ pub fn delete_skill(agent_id: &str, skill_name: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to delete skill: {}", e))?;
 
     Ok(())
+}
+
+// ─── Keyword relevance filtering ────────────────────────────────────────────
+
+/// Stop words excluded from keyword matching (common English words that add noise).
+const STOP_WORDS: &[&str] = &[
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "shall", "can", "need", "must",
+    "i", "me", "my", "we", "our", "you", "your", "he", "she", "it",
+    "they", "them", "this", "that", "these", "those", "what", "which",
+    "who", "whom", "how", "when", "where", "why",
+    "and", "or", "but", "not", "no", "nor", "so", "if", "then",
+    "in", "on", "at", "to", "for", "of", "with", "by", "from", "as",
+    "into", "about", "between", "through", "after", "before", "above",
+    "up", "out", "off", "over", "under", "again", "just", "also",
+    "very", "too", "more", "most", "some", "any", "all", "each", "every",
+    "please", "help", "want", "like", "make", "use", "using", "used",
+    "get", "got", "let", "set",
+];
+
+/// Extract meaningful keywords from text. Lowercase, split on non-alphanumeric,
+/// drop stop words and very short tokens.
+fn extract_keywords(text: &str) -> HashSet<String> {
+    let stop: HashSet<&str> = STOP_WORDS.iter().copied().collect();
+
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 3 && !stop.contains(w))
+        .map(|w| w.to_string())
+        .collect()
+}
+
+/// Score how relevant a skill is to a set of query keywords.
+/// Returns a value between 0.0 and 1.0.
+/// Uses weighted keyword overlap: matches in name count double.
+fn relevance_score(skill: &SkillMetadata, query_keywords: &HashSet<String>) -> f64 {
+    if query_keywords.is_empty() {
+        return 0.0;
+    }
+
+    let name_keywords = extract_keywords(&skill.name);
+    let desc_keywords = extract_keywords(&skill.description);
+
+    // Name matches are high signal (weight 2x)
+    let name_hits = query_keywords.intersection(&name_keywords).count() as f64 * 2.0;
+    // Description matches are normal signal
+    let desc_hits = query_keywords.intersection(&desc_keywords).count() as f64;
+
+    let total_hits = name_hits + desc_hits;
+    let max_possible = query_keywords.len() as f64;
+
+    // Normalize to 0..1, capped at 1.0
+    (total_hits / max_possible).min(1.0)
+}
+
+/// Minimum relevance score for a skill to be included in the catalog.
+const RELEVANCE_THRESHOLD: f64 = 0.15;
+
+/// Filter a catalog to only include skills relevant to the given context text.
+/// Agent-local skills are always included (user explicitly installed them).
+/// Returns the full catalog if context_text is empty or None.
+pub fn filter_relevant_skills(catalog: SkillCatalog, context_text: Option<&str>) -> SkillCatalog {
+    let context_text = match context_text {
+        Some(t) if !t.trim().is_empty() => t,
+        _ => return catalog, // No context to filter on — return all
+    };
+
+    let query_keywords = extract_keywords(context_text);
+    if query_keywords.is_empty() {
+        return catalog;
+    }
+
+    let total_before = catalog.skills.len();
+
+    let filtered: Vec<SkillMetadata> = catalog
+        .skills
+        .into_iter()
+        .filter(|skill| {
+            // Always include agent-local skills
+            if skill.source == SkillSource::AgentLocal {
+                return true;
+            }
+            relevance_score(skill, &query_keywords) >= RELEVANCE_THRESHOLD
+        })
+        .collect();
+
+    debug!(
+        total_before = total_before,
+        total_after = filtered.len(),
+        "Filtered skills by relevance"
+    );
+
+    SkillCatalog { skills: filtered }
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

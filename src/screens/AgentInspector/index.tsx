@@ -27,8 +27,6 @@ import { SkillsTab } from './SkillsTab';
 import { AgentRunDialog } from './AgentRunDialog';
 import { AgentRunView } from './AgentRunView';
 
-const DEFAULT_AGENT_ID = 'default';
-
 export function AgentInspector() {
   const { selectedAgentId } = useUiStore();
 
@@ -219,14 +217,13 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
                 {hasDirtyChanges && <span className="w-1.5 h-1.5 rounded-full bg-warning" />}
               </button>
             )}
-            {agent.id !== DEFAULT_AGENT_ID && (
-              <button
-                onClick={() => setShowRunDialog(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-medium transition-colors"
-              >
-                <Play size={12} /> Run Agent
-              </button>
-            )}
+
+            <button
+              onClick={() => setShowRunDialog(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-medium transition-colors"
+            >
+              <Play size={12} /> Run Agent
+            </button>
           </div>
         </div>
 
@@ -259,20 +256,20 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
           />
         )}
         {agentTab === 'workspace' && <WorkspaceTab agentId={agentId} />}
-        {agentTab === 'config' && (
+        <div className={agentTab === 'config' ? 'h-full' : 'hidden'}>
           <ConfigTab
             agentId={agentId}
             onDirtyChange={(dirty) => handleDirtyChange('config', dirty)}
             ref={configSaveRef}
           />
-        )}
-        {agentTab === 'schedules' && (
+        </div>
+        <div className={agentTab === 'schedules' ? 'h-full' : 'hidden'}>
           <SchedulesTab
             agentId={agentId}
             onDirtyChange={(dirty) => handleDirtyChange('schedules', dirty)}
             ref={schedulesSaveRef}
           />
-        )}
+        </div>
         {agentTab === 'skills' && <SkillsTab agentId={agentId} />}
         {agentTab === 'bus' && <BusTab agentId={agentId} />}
       </div>

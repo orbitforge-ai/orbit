@@ -385,8 +385,10 @@ impl ContextStage for ToolResolutionStage {
 
 // ─── SkillCatalogStage ─────────────────────────────────────────────────────
 
-/// Discovers available skills and appends the catalog to the system prompt.
-/// Only active for AgentLoop and Chat modes.
+/// Discovers available skills and appends a relevance-filtered catalog to the
+/// system prompt. Uses lightweight keyword matching against the user's goal or
+/// latest message to avoid injecting irrelevant skills. Agent-local skills
+/// always pass the filter (user explicitly installed them).
 pub struct SkillCatalogStage;
 
 #[async_trait::async_trait]
@@ -407,6 +409,32 @@ impl ContextStage for SkillCatalogStage {
             &request.agent_id,
             &request.ws_config.disabled_skills,
         );
+
+        if catalog.skills.is_empty() {
+            return Ok(snapshot);
+        }
+
+        // Build context text for relevance filtering:
+        // Use the goal (agent loop) or the last user message (chat).
+        let context_text = request
+            .goal
+            .as_deref()
+            .or_else(|| {
+                // In chat mode, use the latest user message for matching
+                snapshot
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == "user")
+                    .and_then(|m| {
+                        m.content.iter().find_map(|block| match block {
+                            ContentBlock::Text { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                    })
+            });
+
+        let catalog = skills::filter_relevant_skills(catalog, context_text);
 
         if catalog.skills.is_empty() {
             return Ok(snapshot);
