@@ -12,6 +12,7 @@ import {
   Clock,
   Zap,
   Radio,
+  Sparkles,
 } from 'lucide-react';
 import { agentsApi } from '../../api/agents';
 import { StatusBadge } from '../../components/StatusBadge';
@@ -22,6 +23,7 @@ import { WorkspaceTab } from './WorkspaceTab';
 import { ConfigTab } from './ConfigTab';
 import { SchedulesTab } from './SchedulesTab';
 import { BusTab } from './BusTab';
+import { SkillsTab } from './SkillsTab';
 import { AgentRunDialog } from './AgentRunDialog';
 import { AgentRunView } from './AgentRunView';
 
@@ -176,6 +178,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
     { id: 'overview' as const, label: 'Overview', icon: LayoutDashboard },
     { id: 'workspace' as const, label: 'Workspace', icon: FolderOpen },
     { id: 'config' as const, label: 'Config', icon: Settings },
+    { id: 'skills' as const, label: 'Skills', icon: Sparkles },
     { id: 'schedules' as const, label: 'Schedules', icon: Clock },
     { id: 'bus' as const, label: 'Bus', icon: Radio },
   ];
@@ -270,6 +273,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
             ref={schedulesSaveRef}
           />
         )}
+        {agentTab === 'skills' && <SkillsTab agentId={agentId} />}
         {agentTab === 'bus' && <BusTab agentId={agentId} />}
       </div>
 

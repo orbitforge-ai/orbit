@@ -15,6 +15,7 @@ const AVAILABLE_TOOLS = [
   { id: 'write_file', label: 'Write Files' },
   { id: 'list_files', label: 'List Files' },
   { id: 'web_search', label: 'Web Search' },
+  { id: 'activate_skill', label: 'Activate Skill' },
   { id: 'finish', label: 'Finish (always enabled)' },
 ];
 

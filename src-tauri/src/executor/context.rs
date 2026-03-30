@@ -6,6 +6,7 @@ use crate::executor::compaction;
 use crate::executor::llm_provider::{
     model_context_window, ChatMessage, ContentBlock, ToolDefinition,
 };
+use crate::executor::skills;
 use crate::executor::workspace::{self, AgentWorkspaceConfig};
 
 // ─── Core types ─────────────────────────────────────────────────────────────
@@ -144,6 +145,7 @@ impl ContextPipeline {
 pub fn default_pipeline() -> ContextPipeline {
     let mut p = ContextPipeline::new();
     p.add_stage(Box::new(BasePromptStage));
+    p.add_stage(Box::new(SkillCatalogStage));
     p.add_stage(Box::new(MessageHistoryStage));
     p.add_stage(Box::new(ToolResolutionStage));
     p
@@ -378,5 +380,45 @@ impl ContextStage for ToolResolutionStage {
 
     fn name(&self) -> &str {
         "ToolResolution"
+    }
+}
+
+// ─── SkillCatalogStage ─────────────────────────────────────────────────────
+
+/// Discovers available skills and appends the catalog to the system prompt.
+/// Only active for AgentLoop and Chat modes.
+pub struct SkillCatalogStage;
+
+#[async_trait::async_trait]
+impl ContextStage for SkillCatalogStage {
+    async fn process(
+        &self,
+        mut snapshot: ContextSnapshot,
+        request: &ContextRequest,
+        _db: &DbPool,
+    ) -> Result<ContextSnapshot, String> {
+        // Only inject skills catalog for modes that have tools
+        match request.mode {
+            ContextMode::AgentLoop | ContextMode::Chat => {}
+            _ => return Ok(snapshot),
+        }
+
+        let catalog = skills::discover_skills(
+            &request.agent_id,
+            &request.ws_config.disabled_skills,
+        );
+
+        if catalog.skills.is_empty() {
+            return Ok(snapshot);
+        }
+
+        let catalog_xml = skills::build_catalog_xml(&catalog);
+        snapshot.system_prompt.push_str(&catalog_xml);
+
+        Ok(snapshot)
+    }
+
+    fn name(&self) -> &str {
+        "SkillCatalog"
     }
 }

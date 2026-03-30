@@ -56,6 +56,8 @@ pub struct AgentWorkspaceConfig {
     pub context_window_override: Option<u32>,
     #[serde(default = "default_search_provider")]
     pub web_search_provider: String,
+    #[serde(default)]
+    pub disabled_skills: Vec<String>,
 }
 
 fn default_search_provider() -> String {
@@ -76,12 +78,14 @@ impl Default for AgentWorkspaceConfig {
                 "write_file".to_string(),
                 "list_files".to_string(),
                 "web_search".to_string(),
+                "activate_skill".to_string(),
                 "finish".to_string(),
             ],
             compaction_threshold: None,
             compaction_retain_count: None,
             context_window_override: None,
             web_search_provider: default_search_provider(),
+            disabled_skills: Vec::new(),
         }
     }
 }
@@ -174,10 +178,13 @@ pub fn init_agent_workspace(agent_id: &str) -> Result<(), String> {
     let root = agent_dir(agent_id);
     let memory_dir = root.join("memory");
     let workspace_dir = root.join("workspace");
+    let skills_dir = root.join("skills");
 
     fs::create_dir_all(&memory_dir).map_err(|e| format!("failed to create memory dir: {}", e))?;
     fs::create_dir_all(&workspace_dir)
         .map_err(|e| format!("failed to create workspace dir: {}", e))?;
+    fs::create_dir_all(&skills_dir)
+        .map_err(|e| format!("failed to create skills dir: {}", e))?;
 
     // Write default system prompt if it doesn't exist
     let prompt_path = root.join("system_prompt.md");

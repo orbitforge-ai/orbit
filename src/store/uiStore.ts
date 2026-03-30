@@ -26,7 +26,7 @@ function getPersistedAgentId(): string | null {
   return null;
 }
 
-type AgentTab = "overview" | "workspace" | "config" | "schedules" | "bus";
+type AgentTab = "overview" | "workspace" | "config" | "skills" | "schedules" | "bus";
 
 interface UiStore {
   screen: Screen;

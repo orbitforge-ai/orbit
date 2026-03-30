@@ -5,5 +5,6 @@ pub mod llm;
 pub mod pulse;
 pub mod runs;
 pub mod schedules;
+pub mod skills;
 pub mod tasks;
 pub mod workspace;

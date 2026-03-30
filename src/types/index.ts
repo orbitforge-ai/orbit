@@ -221,6 +221,19 @@ export interface AgentWorkspaceConfig {
   compactionRetainCount?: number;
   contextWindowOverride?: number;
   webSearchProvider: string;
+  disabledSkills: string[];
+}
+
+// ─── Agent Skills types ────────────────────────────────────────────────────
+
+export type SkillSource = "agent_local" | "orbit_global" | "standard" | "built_in";
+
+export interface SkillInfo {
+  name: string;
+  description: string;
+  source: SkillSource;
+  enabled: boolean;
+  sourcePath?: string;
 }
 
 // ─── LLM content types ──────────────────────────────────────────────────────

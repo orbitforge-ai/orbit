@@ -7,6 +7,7 @@ use crate::db::DbPool;
 use crate::events::emitter::{ emit_bus_message_sent, emit_log_chunk };
 use crate::executor::engine::RunRequest;
 use crate::executor::llm_provider::ToolDefinition;
+use crate::executor::skills;
 use crate::models::task::{ AgentLoopConfig, Task };
 
 /// Maximum chain depth before agent bus rejects further sends.
@@ -15,12 +16,16 @@ const MAX_CHAIN_DEPTH: i64 = 10;
 /// Context for executing agent tools — provides sandboxed filesystem access
 /// and optional Agent Bus capabilities.
 pub struct ToolExecutionContext {
+  /// The agent's ID (used for skill discovery and other lookups).
+  pub agent_id: String,
   /// The agent's entire root directory (~/.orbit/agents/{agent_id}/).
   pub _agent_root: PathBuf,
   /// The workspace subdirectory for scratch files.
   pub workspace_root: PathBuf,
   /// Which search provider to use for web_search (e.g. "brave", "tavily").
   pub web_search_provider: String,
+  /// Skills explicitly disabled for this agent.
+  pub disabled_skills: Vec<String>,
   // ─── Agent Bus fields ───────────────────────────────────────────────
   pub db: Option<DbPool>,
   pub executor_tx: Option<mpsc::UnboundedSender<RunRequest>>,
@@ -36,9 +41,11 @@ impl ToolExecutionContext {
     let workspace_root = agent_root.join("workspace");
     let ws_config = super::workspace::load_agent_config(agent_id).unwrap_or_default();
     Self {
+      agent_id: agent_id.to_string(),
       _agent_root: agent_root,
       workspace_root,
       web_search_provider: ws_config.web_search_provider,
+      disabled_skills: ws_config.disabled_skills,
       db: None,
       executor_tx: None,
       app: None,
@@ -60,9 +67,11 @@ impl ToolExecutionContext {
     let workspace_root = agent_root.join("workspace");
     let ws_config = super::workspace::load_agent_config(agent_id).unwrap_or_default();
     Self {
+      agent_id: agent_id.to_string(),
       _agent_root: agent_root,
       workspace_root,
       web_search_provider: ws_config.web_search_provider,
+      disabled_skills: ws_config.disabled_skills,
       db: Some(db),
       executor_tx: Some(executor_tx),
       app: Some(app),
@@ -174,6 +183,20 @@ pub fn build_tool_definitions(allowed: &[String]) -> Vec<ToolDefinition> {
                     }
                 },
                 "required": ["target_agent", "message"]
+            }),
+    },
+    ToolDefinition {
+      name: "activate_skill".to_string(),
+      description: "Activate a skill to load its full instructions into context. Use this when a task matches one of the skills listed in <available-skills>. Pass the skill name exactly as shown.".to_string(),
+      input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "skill_name": {
+                        "type": "string",
+                        "description": "The name of the skill to activate (from <available-skills>)"
+                    }
+                },
+                "required": ["skill_name"]
             }),
     },
     ToolDefinition {
@@ -598,6 +621,23 @@ pub async fn execute_tool(
           _ => continue,
         }
       }
+    }
+
+    "activate_skill" => {
+      let skill_name = input["skill_name"].as_str().ok_or("activate_skill: missing 'skill_name' field")?;
+
+      info!(run_id = run_id, skill = skill_name, "agent tool: activate_skill");
+
+      let instructions = skills::load_skill_instructions(
+        &ctx.agent_id,
+        skill_name,
+        &ctx.disabled_skills,
+      )?;
+
+      Ok((
+        format!("<skill-instructions name=\"{}\">\n{}\n</skill-instructions>", skill_name, instructions),
+        false,
+      ))
     }
 
     "finish" => {

@@ -49,6 +49,10 @@ pub fn run() {
       let log_dir = log_dir();
       std::fs::create_dir_all(&log_dir)?;
 
+      // Create global skills directory
+      let skills_dir = data_dir().join("skills");
+      std::fs::create_dir_all(&skills_dir)?;
+
       // Create executor channel
       let (executor_tx, executor_rx) =
         tokio::sync::mpsc::unbounded_channel::<executor::engine::RunRequest>();
@@ -169,7 +173,12 @@ pub fn run() {
         commands::bus::list_bus_subscriptions,
         commands::bus::create_bus_subscription,
         commands::bus::toggle_bus_subscription,
-        commands::bus::delete_bus_subscription
+        commands::bus::delete_bus_subscription,
+        // Skills
+        commands::skills::list_skills,
+        commands::skills::get_skill_content,
+        commands::skills::create_skill,
+        commands::skills::delete_skill
       ]
     )
     .run(tauri::generate_context!())
