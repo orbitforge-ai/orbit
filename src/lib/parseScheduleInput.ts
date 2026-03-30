@@ -1,3 +1,4 @@
+import { RRule } from "rrule";
 import { RecurringConfig } from "../types";
 
 /**
@@ -15,7 +16,7 @@ export function parseScheduleInput(
   const cronResult = parseCron(input, timezone);
   if (cronResult) return cronResult;
 
-  // Natural language
+  // Natural language via rrule
   return parseNatural(input, timezone);
 }
 
@@ -117,112 +118,59 @@ function parseDowField(field: string): number[] | undefined {
   return [...days].sort();
 }
 
-// ─── Natural language ────────────────────────────────────────────────────────
+// ─── Natural language (via rrule) ───────────────────────────────────────────
 
-const DAY_WORDS: Record<string, number> = {
-  sunday: 0, sun: 0,
-  monday: 1, mon: 1,
-  tuesday: 2, tue: 2, tues: 2,
-  wednesday: 3, wed: 3,
-  thursday: 4, thu: 4, thur: 4, thurs: 4,
-  friday: 5, fri: 5,
-  saturday: 6, sat: 6,
-};
-
-const UNIT_WORDS: Record<string, RecurringConfig["intervalUnit"]> = {
-  minute: "minutes", minutes: "minutes", min: "minutes", mins: "minutes",
-  hour: "hours", hours: "hours", hr: "hours", hrs: "hours",
-  day: "days", days: "days",
-  week: "weeks", weeks: "weeks",
-  month: "months", months: "months",
+const FREQ_MAP: Record<number, RecurringConfig["intervalUnit"] | null> = {
+  [RRule.MINUTELY]: "minutes",
+  [RRule.HOURLY]: "hours",
+  [RRule.DAILY]: "days",
+  [RRule.WEEKLY]: "weeks",
+  [RRule.MONTHLY]: "months",
+  [RRule.YEARLY]: null,
 };
 
 function parseNatural(input: string, timezone: string): RecurringConfig | null {
-  // Extract time if present: "at 9am", "at 9:30pm", "at 14:00", "at 9:30 am"
+  // Pre-process phrases rrule NLP doesn't handle
+  let text = input;
+  if (/every\s+weekday/i.test(text)) {
+    text = text.replace(/every\s+weekday(s)?/i, "every week on monday, tuesday, wednesday, thursday and friday");
+  }
+  if (/every\s+weekend/i.test(text)) {
+    text = text.replace(/every\s+weekend(s)?/i, "every week on saturday and sunday");
+  }
+
+  let rule: RRule;
+  try {
+    rule = RRule.fromText(text);
+  } catch {
+    return null;
+  }
+
+  const opts = rule.options;
+  const unit = FREQ_MAP[opts.freq];
+  if (unit == null) return null;
+
+  // Day-of-week mapping: rrule uses MO=0…SU=6, RecurringConfig uses SU=0…SA=6
+  let daysOfWeek: number[] | undefined;
+  if (opts.byweekday && opts.byweekday.length > 0) {
+    daysOfWeek = opts.byweekday.map((wd) => (wd + 1) % 7).sort((a, b) => a - b);
+  }
+
+  // Time mapping — default to 9:00 AM for day/week/month if no explicit time
+  const hasExplicitTime = /\d{1,2}(:\d{2})?\s*(am|pm)|at\s+\d/i.test(input);
   let timeOfDay: { hour: number; minute: number } | undefined;
-  const timeMatch = input.match(
-    /at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i,
-  );
-  if (timeMatch) {
-    let hour = Number(timeMatch[1]);
-    const minute = timeMatch[2] ? Number(timeMatch[2]) : 0;
-    const ampm = timeMatch[3]?.toLowerCase();
-    if (ampm === "pm" && hour < 12) hour += 12;
-    if (ampm === "am" && hour === 12) hour = 0;
-    if (hour > 23 || minute > 59) return null;
+
+  if (hasExplicitTime) {
+    const hour = opts.byhour?.[0] ?? 0;
+    const minute = opts.byminute?.[0] ?? 0;
     timeOfDay = { hour, minute };
+  } else if (["days", "weeks", "months"].includes(unit)) {
+    timeOfDay = { hour: 9, minute: 0 };
   }
 
-  // "hourly" / "daily" / "weekly" / "monthly"
-  if (/^hourly/.test(input)) {
-    return cfg("hours", 1, timezone, undefined, timeOfDay);
-  }
-  if (/^daily/.test(input)) {
-    return cfg("days", 1, timezone, undefined, timeOfDay ?? { hour: 9, minute: 0 });
-  }
-  if (/^weekly/.test(input)) {
-    const days = extractDays(input);
-    return cfg("weeks", 1, timezone, days.length ? days : undefined, timeOfDay ?? { hour: 9, minute: 0 });
-  }
-  if (/^monthly/.test(input)) {
-    return cfg("months", 1, timezone, undefined, timeOfDay ?? { hour: 9, minute: 0 });
-  }
-
-  // "every weekday(s) …"
-  if (/every\s+weekday/.test(input)) {
-    return cfg("weeks", 1, timezone, [1, 2, 3, 4, 5], timeOfDay ?? { hour: 9, minute: 0 });
-  }
-
-  // "every weekend …"
-  if (/every\s+weekend/.test(input)) {
-    return cfg("weeks", 1, timezone, [0, 6], timeOfDay ?? { hour: 9, minute: 0 });
-  }
-
-  // "every monday and wednesday at 3pm"
-  const dayListMatch = input.match(
-    /every\s+((?:(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday|sun|mon|tue|tues|wed|thu|thur|thurs|fri|sat)(?:\s*(?:,|and)\s*)?)+)/i,
-  );
-  if (dayListMatch) {
-    const days = extractDays(dayListMatch[1]);
-    if (days.length > 0) {
-      return cfg("weeks", 1, timezone, days, timeOfDay ?? { hour: 9, minute: 0 });
-    }
-  }
-
-  // "every N <unit>" or "every <unit>"
-  const everyMatch = input.match(
-    /every\s+(?:(\d+)\s+)?(\w+)/,
-  );
-  if (everyMatch) {
-    const n = everyMatch[1] ? Number(everyMatch[1]) : 1;
-    const unit = UNIT_WORDS[everyMatch[2]];
-    if (unit) {
-      const needsTime = ["days", "weeks", "months"].includes(unit);
-      return cfg(unit, n, timezone, undefined, needsTime ? (timeOfDay ?? { hour: 9, minute: 0 }) : timeOfDay);
-    }
-  }
-
-  return null;
-}
-
-function extractDays(text: string): number[] {
-  const days = new Set<number>();
-  for (const [word, num] of Object.entries(DAY_WORDS)) {
-    if (text.includes(word)) days.add(num);
-  }
-  return [...days].sort();
-}
-
-function cfg(
-  intervalUnit: RecurringConfig["intervalUnit"],
-  intervalValue: number,
-  timezone: string,
-  daysOfWeek?: number[],
-  timeOfDay?: { hour: number; minute: number },
-): RecurringConfig {
   return {
-    intervalUnit,
-    intervalValue,
+    intervalUnit: unit,
+    intervalValue: opts.interval ?? 1,
     ...(daysOfWeek && { daysOfWeek }),
     ...(timeOfDay && { timeOfDay }),
     timezone,
