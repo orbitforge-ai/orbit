@@ -9,10 +9,10 @@ export function ThinkingBlock({ thinking }: ThinkingBlockProps) {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="rounded-lg border border-[#2a2d3e] bg-[#0f1117] overflow-hidden">
+    <div className="rounded-lg border border-edge bg-background overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 w-full px-3 py-2 text-xs text-[#64748b] hover:text-[#94a3b8] transition-colors"
+        className="flex items-center gap-2 w-full px-3 py-2 text-xs text-muted hover:text-secondary transition-colors"
       >
         <ChevronRight
           size={12}
@@ -28,7 +28,7 @@ export function ThinkingBlock({ thinking }: ThinkingBlockProps) {
         )}
       </button>
       {expanded && (
-        <div className="px-3 pb-3 text-xs text-[#64748b] whitespace-pre-wrap leading-relaxed border-t border-[#2a2d3e]">
+        <div className="px-3 pb-3 text-xs text-muted whitespace-pre-wrap leading-relaxed border-t border-edge">
           {thinking}
         </div>
       )}

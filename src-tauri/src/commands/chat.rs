@@ -353,7 +353,43 @@ pub async fn send_chat_message(
   Ok(stream_id_ret)
 }
 
-/// Perform the actual LLM streaming call and save the response.
+const MAX_CHAT_TOOL_ITERATIONS: u32 = 10;
+
+/// Save a chat message to the DB.
+async fn save_chat_message(
+  pool: &r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>,
+  session_id: &str,
+  role: &str,
+  content: &[ContentBlock],
+) -> Result<(), String> {
+  let pool = pool.clone();
+  let sid = session_id.to_string();
+  let role = role.to_string();
+  let content_json = serde_json::to_string(content).map_err(|e| e.to_string())?;
+
+  tokio::task::spawn_blocking(move || -> Result<(), String> {
+    let conn = pool.get().map_err(|e| e.to_string())?;
+    let msg_id = Ulid::new().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    conn.execute(
+      "INSERT INTO chat_messages (id, session_id, role, content, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5)",
+      rusqlite::params![msg_id, sid, role, content_json, now],
+    ).map_err(|e| e.to_string())?;
+
+    conn.execute(
+      "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
+      rusqlite::params![now, sid],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+  }).await.map_err(|e| e.to_string())??;
+
+  Ok(())
+}
+
+/// Perform the actual LLM streaming call with tool execution support.
 async fn do_llm_chat(
   agent_id: &str,
   messages: Vec<ChatMessage>,
@@ -384,12 +420,10 @@ async fn do_llm_chat(
     existing_messages: Some(messages),
   };
   let snapshot = pipeline.build(&ctx_request, db).await?;
-  let messages = snapshot.messages;
+  let mut messages = snapshot.messages;
+  let tools = snapshot.tools;
 
   let context_window = snapshot.token_budget.context_window;
-
-  info!("System prompt: {}", snapshot.system_prompt);
-  info!("Context built with {} messages (window: {} tokens)", messages.len(), context_window);
 
   let config = LlmConfig {
     model: ws_config.model.clone(),
@@ -398,111 +432,158 @@ async fn do_llm_chat(
     system_prompt: snapshot.system_prompt,
   };
 
-  // Debug logging for context verification
-  debug!(
-    session_id = session_id,
-    message_count = messages.len(),
-    context_window = context_window,
-    "Sending {} messages to LLM (context window: {} tokens)",
-    messages.len(),
-    context_window
-  );
+  let tool_ctx = ToolExecutionContext::new(agent_id);
+  let pool = db.0.clone();
 
-  emit_agent_iteration(app, stream_id, 1, "llm_call", None, 0);
+  let mut cumulative_input_tokens: u32 = 0;
+  let mut cumulative_output_tokens: u32 = 0;
+  let mut iteration: u32 = 0;
 
-  let response = provider.chat_streaming(&config, &messages, &[], app, stream_id, 1).await?;
+  loop {
+    iteration += 1;
 
-  let input_tokens = response.usage.input_tokens;
-  let output_tokens = response.usage.output_tokens;
-  let total_tokens = input_tokens + output_tokens;
-  emit_agent_iteration(app, stream_id, 1, "finished", None, total_tokens);
+    if iteration > MAX_CHAT_TOOL_ITERATIONS {
+      info!(session_id = session_id, "Chat tool iteration limit reached");
+      break;
+    }
+
+    debug!(
+      session_id = session_id,
+      message_count = messages.len(),
+      iteration = iteration,
+      "Chat LLM call (iteration {})",
+      iteration,
+    );
+
+    emit_agent_iteration(app, stream_id, iteration, "llm_call", None,
+      cumulative_input_tokens + cumulative_output_tokens);
+
+    let response = provider
+      .chat_streaming(&config, &messages, &tools, app, stream_id, iteration)
+      .await?;
+
+    cumulative_input_tokens += response.usage.input_tokens;
+    cumulative_output_tokens += response.usage.output_tokens;
+
+    // Save assistant response to DB
+    save_chat_message(&pool, session_id, "assistant", &response.content).await?;
+
+    match response.stop_reason {
+      llm_provider::StopReason::EndTurn | llm_provider::StopReason::MaxTokens => {
+        // Done — no tool calls, just a normal response
+        messages.push(ChatMessage {
+          role: "assistant".to_string(),
+          content: response.content,
+          created_at: None,
+        });
+        break;
+      }
+
+      llm_provider::StopReason::ToolUse => {
+        // Add assistant message with tool_use blocks to conversation
+        messages.push(ChatMessage {
+          role: "assistant".to_string(),
+          content: response.content.clone(),
+          created_at: None,
+        });
+
+        // Execute each tool and collect results
+        let mut tool_results: Vec<ContentBlock> = Vec::new();
+
+        for block in &response.content {
+          if let ContentBlock::ToolUse { id, name, input } = block {
+            emit_agent_iteration(
+              app, stream_id, iteration, "tool_exec",
+              Some(name),
+              cumulative_input_tokens + cumulative_output_tokens,
+            );
+
+            match agent_tools::execute_tool(&tool_ctx, name, input, app, stream_id).await {
+              Ok((result, _is_finish)) => {
+                tool_results.push(ContentBlock::ToolResult {
+                  tool_use_id: id.clone(),
+                  content: result.clone(),
+                  is_error: false,
+                });
+                emit_agent_tool_result(app, stream_id, iteration, id, &result, false);
+              }
+              Err(err) => {
+                let err_content = format!("Error: {}", err);
+                tool_results.push(ContentBlock::ToolResult {
+                  tool_use_id: id.clone(),
+                  content: err_content.clone(),
+                  is_error: true,
+                });
+                emit_agent_tool_result(app, stream_id, iteration, id, &err_content, true);
+              }
+            }
+          }
+        }
+
+        // Save tool results to DB and add to conversation
+        save_chat_message(&pool, session_id, "user", &tool_results).await?;
+
+        messages.push(ChatMessage {
+          role: "user".to_string(),
+          content: tool_results,
+          created_at: None,
+        });
+
+        // Loop back to call LLM again with tool results
+      }
+    }
+  }
+
+  let total_tokens = cumulative_input_tokens + cumulative_output_tokens;
+  emit_agent_iteration(app, stream_id, iteration, "finished", None, total_tokens);
 
   // Emit context window usage update
-  emit_chat_context_update(app, session_id, input_tokens, output_tokens, context_window);
+  emit_chat_context_update(app, session_id, cumulative_input_tokens, cumulative_output_tokens, context_window);
 
-  debug!(
-    session_id = session_id,
-    input_tokens = input_tokens,
-    output_tokens = output_tokens,
-    context_window = context_window,
-    usage_percent = format!("{:.1}%", ((input_tokens as f64) / (context_window as f64)) * 100.0),
-    "Context usage: {} / {} tokens",
-    input_tokens,
-    context_window
-  );
-
-  // Save assistant response to DB
-  let content_json = serde_json::to_string(&response.content).map_err(|e| e.to_string())?;
-
-  let pool = db.0.clone();
-  let sid = session_id.to_string();
-
-  tokio::task
-    ::spawn_blocking({
-      let pool = pool.clone();
-      let sid = sid.clone();
-      let content_json = content_json.clone();
-      move || -> Result<(), String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let msg_id = Ulid::new().to_string();
+  // Update last_input_tokens on session
+  {
+    let pool = pool.clone();
+    let sid = session_id.to_string();
+    let input_tokens = cumulative_input_tokens;
+    let _ = tokio::task::spawn_blocking(move || {
+      if let Ok(conn) = pool.get() {
         let now = chrono::Utc::now().to_rfc3339();
-
-        conn
-          .execute(
-            "INSERT INTO chat_messages (id, session_id, role, content, created_at)
-             VALUES (?1, ?2, 'assistant', ?3, ?4)",
-            rusqlite::params![msg_id, sid, content_json, now]
-          )
-          .map_err(|e| e.to_string())?;
-
-        conn
-          .execute(
-            "UPDATE chat_sessions SET updated_at = ?1, last_input_tokens = ?2 WHERE id = ?3",
-            rusqlite::params![now, input_tokens, sid]
-          )
-          .map_err(|e| e.to_string())?;
-
-        Ok(())
+        let _ = conn.execute(
+          "UPDATE chat_sessions SET last_input_tokens = ?1, updated_at = ?2 WHERE id = ?3",
+          rusqlite::params![input_tokens, now, sid],
+        );
       }
-    }).await
-    .map_err(|e| e.to_string())??;
+    }).await;
+  }
 
-  info!(session_id = session_id, "Chat response saved ({} tokens)", total_tokens);
+  info!(session_id = session_id, "Chat complete ({} tokens, {} iterations)", total_tokens, iteration);
 
   // Check if compaction is needed
   let threshold = compaction::effective_threshold(&ws_config);
-  if compaction::should_compact(input_tokens, context_window, threshold) {
+  if compaction::should_compact(cumulative_input_tokens, context_window, threshold) {
     info!(
       session_id = session_id,
       "Context usage {:.1}% exceeds threshold {:.0}%, triggering compaction",
-      ((input_tokens as f64) / (context_window as f64)) * 100.0,
+      ((cumulative_input_tokens as f64) / (context_window as f64)) * 100.0,
       threshold * 100.0
     );
 
-    // Spawn compaction in background so it doesn't block
     let agent_id = agent_id.to_string();
     let session_id = session_id.to_string();
     let ws_config = ws_config.clone();
     let app = app.clone();
     let db = DbPool(db.0.clone());
 
-    // Need a new provider instance for the compaction summary call
     let compact_api_key = keychain
       ::retrieve_api_key(provider_name)
       .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
     let compact_provider = llm_provider::create_provider(provider_name, compact_api_key)?;
 
     tauri::async_runtime::spawn(async move {
-      match
-        compaction::perform_compaction(
-          &agent_id,
-          &session_id,
-          compact_provider.as_ref(),
-          &ws_config,
-          &app,
-          &db
-        ).await
-      {
+      match compaction::perform_compaction(
+        &agent_id, &session_id, compact_provider.as_ref(),
+        &ws_config, &app, &db,
+      ).await {
         Ok(()) => info!(session_id = %session_id, "Background compaction completed"),
         Err(e) => warn!(session_id = %session_id, "Background compaction failed: {}", e),
       }

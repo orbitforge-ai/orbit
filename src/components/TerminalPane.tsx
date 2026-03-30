@@ -67,17 +67,17 @@ export function TerminalPane({ lines, className, live = false }: TerminalPanePro
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto bg-[#0a0c12] rounded-lg p-3 font-mono text-xs leading-5 text-[#e2e8f0] select-text"
+        className="flex-1 overflow-y-auto bg-inset rounded-lg p-3 font-mono text-xs leading-5 text-primary select-text"
       >
         {lines.length === 0 ? (
-          <p className="text-[#64748b] italic">No output yet…</p>
+          <p className="text-muted italic">No output yet…</p>
         ) : (
           lines.map((line, i) => (
             <div
               key={i}
               className={cn(
                 "whitespace-pre-wrap break-all",
-                line.stream === "stderr" && "text-[#f87171]"
+                line.stream === "stderr" && "text-failure"
               )}
               dangerouslySetInnerHTML={{ __html: ansiToSpans(line.line) }}
             />
@@ -90,7 +90,7 @@ export function TerminalPane({ lines, className, live = false }: TerminalPanePro
       {!atBottom && (
         <button
           onClick={scrollToBottom}
-          className="absolute bottom-4 right-4 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[#2a2d3e] hover:bg-[#3a3d5e] text-white text-xs transition-colors shadow-lg"
+          className="absolute bottom-4 right-4 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-edge hover:bg-edge-hover text-white text-xs transition-colors shadow-lg"
         >
           <ChevronDown size={12} />
           Latest

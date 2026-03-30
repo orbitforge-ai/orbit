@@ -336,9 +336,9 @@ function OverviewContent({
         </div>
       )}
 
-      {/* Recent runs */}
+      {/* Recent sessions */}
       <div>
-        <h4 className="text-sm font-semibold text-white mb-3">Recent Runs</h4>
+        <h4 className="text-sm font-semibold text-white mb-3">Recent Sessions</h4>
         {recentRuns.length === 0 ? (
           <p className="text-sm text-muted">No runs yet for this agent.</p>
         ) : (
@@ -370,7 +370,9 @@ function StatCard({ label, value, accent }: { label: string; value: string; acce
   return (
     <div className="rounded-xl border border-edge bg-surface p-4">
       <p className="text-xs text-muted mb-1">{label}</p>
-      <p className={`text-xl font-semibold ${accent ? 'text-accent-hover' : 'text-white'}`}>{value}</p>
+      <p className={`text-xl font-semibold ${accent ? 'text-accent-hover' : 'text-white'}`}>
+        {value}
+      </p>
     </div>
   );
 }

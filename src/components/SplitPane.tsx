@@ -56,7 +56,7 @@ export function SplitPane({
         className="h-1.5 flex-shrink-0 cursor-row-resize flex items-center justify-center group"
         onMouseDown={onMouseDown}
       >
-        <div className="w-12 h-0.5 rounded bg-[#2a2d3e] group-hover:bg-[#6366f1] transition-colors" />
+        <div className="w-12 h-0.5 rounded bg-edge group-hover:bg-accent transition-colors" />
       </div>
 
       {/* Bottom pane */}

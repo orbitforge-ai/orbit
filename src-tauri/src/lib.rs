@@ -38,6 +38,10 @@ pub fn run() {
           Target::new(TargetKind::Stdout),
           Target::new(TargetKind::LogDir { file_name: None }),
         ])
+        .level(tauri_plugin_log::log::LevelFilter::Info)
+        .level_for("reqwest", tauri_plugin_log::log::LevelFilter::Debug)
+        .level_for("tungstenite", tauri_plugin_log::log::LevelFilter::Warn)
+        .level_for("hyper", tauri_plugin_log::log::LevelFilter::Warn)
         .build()
     )
     .setup(|app| {

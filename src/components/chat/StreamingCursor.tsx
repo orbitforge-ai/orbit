@@ -1,6 +1,6 @@
 export function StreamingCursor() {
   return (
-    <span className="inline-block w-2 h-4 ml-0.5 bg-[#6366f1] rounded-sm animate-pulse align-text-bottom" />
+    <span className="inline-block w-2 h-4 ml-0.5 bg-accent rounded-sm animate-pulse align-text-bottom" />
   );
 }
 
@@ -12,7 +12,7 @@ export function TypingIndicator() {
         <span className="typing-dot [animation-delay:160ms]" />
         <span className="typing-dot [animation-delay:320ms]" />
       </div>
-      <span className="text-xs text-[#64748b]">Thinking...</span>
+      <span className="text-xs text-muted">Thinking...</span>
     </div>
   );
 }

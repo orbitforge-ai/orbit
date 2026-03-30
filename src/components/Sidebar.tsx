@@ -34,7 +34,7 @@ export function Sidebar() {
   });
 
   return (
-    <aside className="w-[220px] flex-shrink-0 flex flex-col border-r border-[#2a2d3e] bg-[#13151e] h-full">
+    <aside className="w-[220px] flex-shrink-0 flex flex-col border-r border-edge bg-panel h-full">
 
       {/* Navigation */}
       <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
@@ -45,8 +45,8 @@ export function Sidebar() {
             className={cn(
               "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
               screen === id
-                ? "bg-[#6366f1]/15 text-[#818cf8]"
-                : "text-[#94a3b8] hover:bg-[#1a1d27] hover:text-white"
+                ? "bg-accent/15 text-accent-hover"
+                : "text-secondary hover:bg-surface hover:text-white"
             )}
           >
             <Icon size={16} />
@@ -61,8 +61,8 @@ export function Sidebar() {
             className={cn(
               "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
               screen === "agents"
-                ? "bg-[#6366f1]/15 text-[#818cf8]"
-                : "text-[#94a3b8] hover:bg-[#1a1d27] hover:text-white"
+                ? "bg-accent/15 text-accent-hover"
+                : "text-secondary hover:bg-surface hover:text-white"
             )}
           >
             <Bot size={16} />
@@ -70,14 +70,14 @@ export function Sidebar() {
             <ChevronRight
               size={14}
               className={cn(
-                "transition-transform text-[#64748b]",
+                "transition-transform text-muted",
                 agentsOpen && "rotate-90"
               )}
             />
           </button>
 
           {agentsOpen && (
-            <div className="ml-3 mt-0.5 space-y-0.5 border-l border-[#2a2d3e] pl-2">
+            <div className="ml-3 mt-0.5 space-y-0.5 border-l border-edge pl-2">
               {agents.map((agent) => (
                 <button
                   key={agent.id}
@@ -85,14 +85,14 @@ export function Sidebar() {
                   className={cn(
                     "w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors truncate",
                     screen === "agents" && selectedAgentId === agent.id
-                      ? "bg-[#6366f1]/10 text-[#818cf8]"
-                      : "text-[#94a3b8] hover:bg-[#1a1d27] hover:text-white"
+                      ? "bg-accent/10 text-accent-hover"
+                      : "text-secondary hover:bg-surface hover:text-white"
                   )}
                 >
                   <span
                     className={cn(
                       "w-1.5 h-1.5 rounded-full shrink-0",
-                      agent.state === "idle" ? "bg-emerald-400" : "bg-[#64748b]"
+                      agent.state === "idle" ? "bg-emerald-400" : "bg-text-muted"
                     )}
                   />
                   <span className="truncate">{agent.name}</span>
@@ -104,7 +104,7 @@ export function Sidebar() {
                 onClick={() => {
                   selectAgent("__new__");
                 }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium text-[#64748b] hover:text-[#818cf8] hover:bg-[#6366f1]/10 transition-colors"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium text-muted hover:text-accent-hover hover:bg-accent/10 transition-colors"
               >
                 <Plus size={12} />
                 <span>New Agent</span>
@@ -115,10 +115,10 @@ export function Sidebar() {
       </nav>
 
       {/* New Task shortcut */}
-      <div className="p-3 border-t border-[#2a2d3e]">
+      <div className="p-3 border-t border-edge">
         <button
           onClick={() => navigate("task-builder")}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[#6366f1] hover:bg-[#818cf8] text-white text-sm font-medium transition-colors"
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors"
         >
           <Plus size={14} />
           New Task

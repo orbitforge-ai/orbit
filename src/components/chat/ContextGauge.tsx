@@ -9,10 +9,10 @@ interface ContextGaugeProps {
 }
 
 function getColor(percent: number): string {
-  if (percent >= 80) return "#ef4444"; // red
-  if (percent >= 65) return "#f97316"; // orange
-  if (percent >= 50) return "#eab308"; // yellow
-  return "#22c55e"; // green
+  if (percent >= 80) return "var(--color-failure)";
+  if (percent >= 65) return "var(--color-orange)";
+  if (percent >= 50) return "var(--color-yellow)";
+  return "var(--color-success)";
 }
 
 function formatTokens(n: number): string {
@@ -84,7 +84,7 @@ export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
   const circumference = 2 * Math.PI * radius;
   const fillPercent = Math.min(usagePercent, 100);
   const dashOffset = circumference - (fillPercent / 100) * circumference;
-  const color = justCompacted ? "#22c55e" : getColor(usagePercent);
+  const color = justCompacted ? "var(--color-success)" : getColor(usagePercent);
 
   return (
     <button
@@ -109,7 +109,7 @@ export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="#1e2130"
+          stroke="var(--color-surface)"
           strokeWidth={strokeWidth}
         />
         <circle

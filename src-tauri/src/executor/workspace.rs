@@ -54,6 +54,12 @@ pub struct AgentWorkspaceConfig {
     pub compaction_retain_count: Option<u32>,
     #[serde(default)]
     pub context_window_override: Option<u32>,
+    #[serde(default = "default_search_provider")]
+    pub web_search_provider: String,
+}
+
+fn default_search_provider() -> String {
+    "brave".to_string()
 }
 
 impl Default for AgentWorkspaceConfig {
@@ -69,11 +75,13 @@ impl Default for AgentWorkspaceConfig {
                 "read_file".to_string(),
                 "write_file".to_string(),
                 "list_files".to_string(),
+                "web_search".to_string(),
                 "finish".to_string(),
             ],
             compaction_threshold: None,
             compaction_retain_count: None,
             context_window_override: None,
+            web_search_provider: default_search_provider(),
         }
     }
 }

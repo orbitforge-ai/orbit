@@ -9,7 +9,7 @@ interface TextBlockProps {
 
 export function TextBlock({ text, isStreaming }: TextBlockProps) {
   return (
-    <div className="text-sm text-[#e2e8f0] leading-relaxed chat-markdown">
+    <div className="text-sm text-primary leading-relaxed chat-markdown">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
       {isStreaming && <StreamingCursor />}
     </div>

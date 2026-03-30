@@ -116,7 +116,7 @@ export function ChatView({ messages, liveRunId, className = "" }: ChatViewProps)
         className="flex-1 overflow-y-auto p-4 space-y-4"
       >
         {displayMessages.length === 0 && (
-          <div className="text-center text-[#64748b] text-sm py-12">
+          <div className="text-center text-muted text-sm py-12">
             No messages yet.
           </div>
         )}
@@ -134,7 +134,7 @@ export function ChatView({ messages, liveRunId, className = "" }: ChatViewProps)
               setAutoScroll(true);
             }
           }}
-          className="absolute bottom-4 right-4 p-2 rounded-full bg-[#1a1d27] border border-[#2a2d3e] text-[#64748b] hover:text-white hover:border-[#6366f1] shadow-lg transition-colors"
+          className="absolute bottom-4 right-4 p-2 rounded-full bg-surface border border-edge text-muted hover:text-white hover:border-accent shadow-lg transition-colors"
         >
           <ArrowDown size={16} />
         </button>

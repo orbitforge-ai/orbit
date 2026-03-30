@@ -34,7 +34,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       <div className="flex flex-col items-center my-2">
         <button
           onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#1a1d27] border border-[#2a2d3e] text-[#64748b] hover:text-[#94a3b8] hover:border-[#4a4d6e] transition-colors text-xs"
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface border border-edge text-muted hover:text-secondary hover:border-edge-hover transition-colors text-xs"
         >
           <Layers size={12} />
           <span>Earlier conversation summarized</span>
@@ -45,7 +45,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         </button>
         {expanded && (
           <div className="mt-2 w-full max-w-[85%]">
-            <div className="rounded-xl px-4 py-3 bg-[#1a1d27] border border-[#2a2d3e] opacity-75">
+            <div className="rounded-xl px-4 py-3 bg-surface border border-edge opacity-75">
               {message.blocks.map((block, i) => {
                 if (block.kind === "text") {
                   const text = block.text.replace(/^\[Conversation Summary\]\n?/, "");
@@ -67,8 +67,8 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         <div
           className={`shrink-0 w-5 h-5 rounded-full flex items-center justify-center mt-0.5 ${
             isUser
-              ? "bg-[#6366f1]/10 text-[#818cf8]"
-              : "bg-[#1a1d27] text-[#64748b] border border-[#2a2d3e]"
+              ? "bg-accent/10 text-accent-hover"
+              : "bg-surface text-muted border border-edge"
           }`}
         >
           {isUser ? <User size={10} /> : <Bot size={10} />}
@@ -78,11 +78,11 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           className="min-w-0 max-w-[85%] text-left"
         >
           {expanded ? (
-            <div className="rounded-lg px-3 py-2 bg-[#1a1d27]/50 border border-[#2a2d3e]/50 space-y-1">
+            <div className="rounded-lg px-3 py-2 bg-surface/50 border border-edge/50 space-y-1">
               {message.blocks.map((block, i) => {
                 if (block.kind === "text")
                   return (
-                    <p key={i} className="text-xs text-[#64748b] leading-relaxed">
+                    <p key={i} className="text-xs text-muted leading-relaxed">
                       {block.text}
                     </p>
                   );
@@ -90,7 +90,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
               })}
             </div>
           ) : (
-            <span className="text-[11px] text-[#4a4d6e] italic truncate block max-w-[300px]">
+            <span className="text-[11px] text-border-hover italic truncate block max-w-[300px]">
               {message.blocks.find((b) => b.kind === "text")?.kind === "text"
                 ? (message.blocks.find((b) => b.kind === "text") as { kind: "text"; text: string })
                     .text.slice(0, 80) + "..."
@@ -108,8 +108,8 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       <div
         className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center mt-0.5 ${
           isUser
-            ? "bg-[#6366f1]/20 text-[#818cf8]"
-            : "bg-[#1a1d27] text-[#64748b] border border-[#2a2d3e]"
+            ? "bg-accent/20 text-accent-hover"
+            : "bg-surface text-muted border border-edge"
         }`}
       >
         {isUser ? <User size={14} /> : <Bot size={14} />}
@@ -117,10 +117,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
       {/* Bubble */}
       <div
-        className={`min-w-0 max-w-[85%] rounded-xl px-4 py-3 space-y-2 ${
+        className={`min-w-0 max-w-[85%] rounded-xl px-4 py-3 space-y-2 overflow-hidden ${
           isUser
-            ? "bg-[#6366f1]/15 border border-[#6366f1]/30"
-            : "bg-[#1a1d27] border border-[#2a2d3e]"
+            ? "bg-accent/15 border border-accent/30"
+            : "bg-surface border border-edge"
         }`}
       >
         {message.blocks.map((block, i) => {
@@ -157,7 +157,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       {/* Timestamp — shown below the bubble, aligned to the side */}
       {message.timestamp && !message.isStreaming && (
         <div className="self-end mb-0.5 shrink-0">
-          <span className="text-[10px] text-[#4a4d6e] tabular-nums">
+          <span className="text-[10px] text-border-hover tabular-nums">
             {formatTimestamp(message.timestamp)}
           </span>
         </div>

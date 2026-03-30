@@ -220,6 +220,7 @@ export interface AgentWorkspaceConfig {
   compactionThreshold?: number;
   compactionRetainCount?: number;
   contextWindowOverride?: number;
+  webSearchProvider: string;
 }
 
 // ─── LLM content types ──────────────────────────────────────────────────────

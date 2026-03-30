@@ -247,7 +247,7 @@ impl ContextStage for BasePromptStage {
             context_section.push_str(&format!("- Workspace files: {}\n", workspace_files));
         }
 
-        if !tool_names.is_empty() {
+        if !tool_names.is_empty() && (request.mode == ContextMode::AgentLoop || request.mode == ContextMode::Chat) {
             context_section.push_str(&format!("- Available tools: {}\n", tool_names));
         }
 
@@ -363,12 +363,12 @@ impl ContextStage for ToolResolutionStage {
         _db: &DbPool,
     ) -> Result<ContextSnapshot, String> {
         match request.mode {
-            ContextMode::AgentLoop => {
+            ContextMode::AgentLoop | ContextMode::Chat => {
                 snapshot.tools =
                     agent_tools::build_tool_definitions(&request.ws_config.allowed_tools);
             }
-            ContextMode::SingleShot | ContextMode::Pulse | ContextMode::Chat => {
-                // No tools for single-shot, pulse, or chat modes
+            ContextMode::SingleShot | ContextMode::Pulse => {
+                // No tools for single-shot or pulse modes
                 snapshot.tools = Vec::new();
             }
         }
