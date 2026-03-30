@@ -7,6 +7,7 @@ import {
   AgentContentBlockPayload,
   AgentToolResultPayload,
   ChatContextUpdatePayload,
+  BusMessageSentPayload,
 } from "../types";
 
 export function onRunLogChunk(
@@ -61,6 +62,14 @@ export function onChatContextUpdate(
   handler: (payload: ChatContextUpdatePayload) => void
 ) {
   return listen<ChatContextUpdatePayload>("chat:context_update", (event) => {
+    handler(event.payload);
+  });
+}
+
+export function onBusMessageSent(
+  handler: (payload: BusMessageSentPayload) => void
+) {
+  return listen<BusMessageSentPayload>("bus:message_sent", (event) => {
     handler(event.payload);
   });
 }

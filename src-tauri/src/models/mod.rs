@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod bus;
 pub mod chat;
 pub mod run;
 pub mod schedule;

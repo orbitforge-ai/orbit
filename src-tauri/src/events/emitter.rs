@@ -96,6 +96,18 @@ pub struct ChatContextUpdatePayload {
   pub timestamp: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BusMessageSentPayload {
+  pub message_id: String,
+  pub from_agent_id: String,
+  pub to_agent_id: String,
+  pub kind: String,
+  pub payload: serde_json::Value,
+  pub triggered_run_id: String,
+  pub timestamp: String,
+}
+
 // ─── Emit helpers ────────────────────────────────────────────────────────────
 
 pub fn emit_log_chunk(app: &tauri::AppHandle, run_id: &str, lines: Vec<(String, String)>) {
@@ -224,5 +236,28 @@ pub fn emit_chat_context_update(
   };
   if let Err(e) = app.emit("chat:context_update", &payload) {
     warn!("failed to emit chat:context_update: {}", e);
+  }
+}
+
+pub fn emit_bus_message_sent(
+  app: &tauri::AppHandle,
+  message_id: &str,
+  from_agent_id: &str,
+  to_agent_id: &str,
+  kind: &str,
+  payload: serde_json::Value,
+  triggered_run_id: &str,
+) {
+  let event_payload = BusMessageSentPayload {
+    message_id: message_id.to_string(),
+    from_agent_id: from_agent_id.to_string(),
+    to_agent_id: to_agent_id.to_string(),
+    kind: kind.to_string(),
+    payload,
+    triggered_run_id: triggered_run_id.to_string(),
+    timestamp: chrono::Utc::now().to_rfc3339(),
+  };
+  if let Err(e) = app.emit("bus:message_sent", &event_payload) {
+    warn!("failed to emit bus:message_sent: {}", e);
   }
 }

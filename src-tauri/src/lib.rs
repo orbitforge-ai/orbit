@@ -163,7 +163,13 @@ pub fn run() {
         commands::llm::set_api_key,
         commands::llm::has_api_key,
         commands::llm::delete_api_key,
-        commands::llm::trigger_agent_loop
+        commands::llm::trigger_agent_loop,
+        // Bus
+        commands::bus::list_bus_messages,
+        commands::bus::list_bus_subscriptions,
+        commands::bus::create_bus_subscription,
+        commands::bus::toggle_bus_subscription,
+        commands::bus::delete_bus_subscription
       ]
     )
     .run(tauri::generate_context!())

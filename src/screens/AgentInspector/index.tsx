@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   Clock,
   Zap,
+  Radio,
 } from 'lucide-react';
 import { agentsApi } from '../../api/agents';
 import { StatusBadge } from '../../components/StatusBadge';
@@ -20,6 +21,7 @@ import { useUiStore } from '../../store/uiStore';
 import { WorkspaceTab } from './WorkspaceTab';
 import { ConfigTab } from './ConfigTab';
 import { SchedulesTab } from './SchedulesTab';
+import { BusTab } from './BusTab';
 import { AgentRunDialog } from './AgentRunDialog';
 import { AgentRunView } from './AgentRunView';
 
@@ -175,6 +177,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
     { id: 'workspace' as const, label: 'Workspace', icon: FolderOpen },
     { id: 'config' as const, label: 'Config', icon: Settings },
     { id: 'schedules' as const, label: 'Schedules', icon: Clock },
+    { id: 'bus' as const, label: 'Bus', icon: Radio },
   ];
 
   return (
@@ -267,6 +270,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
             ref={schedulesSaveRef}
           />
         )}
+        {agentTab === 'bus' && <BusTab agentId={agentId} />}
       </div>
 
       {/* Run dialog */}

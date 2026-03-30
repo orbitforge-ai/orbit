@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod bus;
 pub mod chat;
 pub mod llm;
 pub mod pulse;

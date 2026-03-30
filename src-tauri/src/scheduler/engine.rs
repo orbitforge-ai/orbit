@@ -108,6 +108,7 @@ impl SchedulerEngine {
         _trigger: "scheduled".to_string(),
         retry_count: 0,
         _parent_run_id: None,
+        chain_depth: 0,
       });
 
       match kind.as_str() {

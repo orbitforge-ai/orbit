@@ -78,7 +78,7 @@ export interface Run {
   scheduleId: string | null;
   agentId: string | null;
   state: RunState;
-  trigger: "scheduled" | "manual" | "channel" | "retry";
+  trigger: "scheduled" | "manual" | "channel" | "retry" | "bus";
   exitCode: number | null;
   pid: number | null;
   logPath: string;
@@ -289,4 +289,51 @@ export interface ContextUsage {
   inputTokens: number;
   contextWindowSize: number;
   usagePercent: number;
+}
+
+// ─── Agent Bus types ───────────────────────────────────────────────────────
+
+export interface BusMessage {
+  id: string;
+  fromAgentId: string;
+  fromRunId: string | null;
+  toAgentId: string;
+  toRunId: string | null;
+  kind: "direct" | "event";
+  eventType: string | null;
+  payload: Record<string, unknown>;
+  status: "delivered" | "failed" | "depth_exceeded";
+  createdAt: string;
+}
+
+export interface BusSubscription {
+  id: string;
+  subscriberAgentId: string;
+  sourceAgentId: string;
+  eventType: "run:completed" | "run:failed" | "run:any_terminal";
+  taskId: string;
+  payloadTemplate: string;
+  enabled: boolean;
+  maxChainDepth: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateBusSubscription {
+  subscriberAgentId: string;
+  sourceAgentId: string;
+  eventType: string;
+  taskId: string;
+  payloadTemplate?: string;
+  maxChainDepth?: number;
+}
+
+export interface BusMessageSentPayload {
+  messageId: string;
+  fromAgentId: string;
+  toAgentId: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  triggeredRunId: string;
+  timestamp: string;
 }

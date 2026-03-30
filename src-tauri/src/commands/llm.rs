@@ -125,6 +125,7 @@ pub async fn trigger_agent_loop(
       _trigger: "manual".to_string(),
       retry_count: 0,
       _parent_run_id: None,
+      chain_depth: 0,
     })
     .map_err(|e| format!("failed to send to executor: {}", e))?;
 

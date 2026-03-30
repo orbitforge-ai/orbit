@@ -1,11 +1,19 @@
 use serde_json::json;
 use std::path::{ Path, PathBuf };
+use tokio::sync::mpsc;
 use tracing::info;
 
-use crate::events::emitter::emit_log_chunk;
+use crate::db::DbPool;
+use crate::events::emitter::{ emit_bus_message_sent, emit_log_chunk };
+use crate::executor::engine::RunRequest;
 use crate::executor::llm_provider::ToolDefinition;
+use crate::models::task::{ AgentLoopConfig, Task };
 
-/// Context for executing agent tools — provides sandboxed filesystem access.
+/// Maximum chain depth before agent bus rejects further sends.
+const MAX_CHAIN_DEPTH: i64 = 10;
+
+/// Context for executing agent tools — provides sandboxed filesystem access
+/// and optional Agent Bus capabilities.
 pub struct ToolExecutionContext {
   /// The agent's entire root directory (~/.orbit/agents/{agent_id}/).
   pub _agent_root: PathBuf,
@@ -13,6 +21,13 @@ pub struct ToolExecutionContext {
   pub workspace_root: PathBuf,
   /// Which search provider to use for web_search (e.g. "brave", "tavily").
   pub web_search_provider: String,
+  // ─── Agent Bus fields ───────────────────────────────────────────────
+  pub db: Option<DbPool>,
+  pub executor_tx: Option<mpsc::UnboundedSender<RunRequest>>,
+  pub app: Option<tauri::AppHandle>,
+  pub current_agent_id: Option<String>,
+  pub current_run_id: Option<String>,
+  pub chain_depth: i64,
 }
 
 impl ToolExecutionContext {
@@ -24,6 +39,36 @@ impl ToolExecutionContext {
       _agent_root: agent_root,
       workspace_root,
       web_search_provider: ws_config.web_search_provider,
+      db: None,
+      executor_tx: None,
+      app: None,
+      current_agent_id: None,
+      current_run_id: None,
+      chain_depth: 0,
+    }
+  }
+
+  pub fn new_with_bus(
+    agent_id: &str,
+    run_id: &str,
+    chain_depth: i64,
+    db: DbPool,
+    executor_tx: mpsc::UnboundedSender<RunRequest>,
+    app: tauri::AppHandle,
+  ) -> Self {
+    let agent_root = super::workspace::agent_dir(agent_id);
+    let workspace_root = agent_root.join("workspace");
+    let ws_config = super::workspace::load_agent_config(agent_id).unwrap_or_default();
+    Self {
+      _agent_root: agent_root,
+      workspace_root,
+      web_search_provider: ws_config.web_search_provider,
+      db: Some(db),
+      executor_tx: Some(executor_tx),
+      app: Some(app),
+      current_agent_id: Some(agent_id.to_string()),
+      current_run_id: Some(run_id.to_string()),
+      chain_depth,
     }
   }
 }
@@ -107,6 +152,28 @@ pub fn build_tool_definitions(allowed: &[String]) -> Vec<ToolDefinition> {
                     }
                 },
                 "required": ["query"]
+            }),
+    },
+    ToolDefinition {
+      name: "send_message".to_string(),
+      description: "Send a message to another agent, triggering it to run with your message as its goal. Use this to delegate work or coordinate with other agents.".to_string(),
+      input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target_agent": {
+                        "type": "string",
+                        "description": "The name or ID of the agent to send the message to"
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "The message/instructions for the target agent"
+                    },
+                    "wait_for_result": {
+                        "type": "boolean",
+                        "description": "If true, wait for the target agent to complete and return its result. Default: false (fire-and-forget)."
+                    }
+                },
+                "required": ["target_agent", "message"]
             }),
     },
     ToolDefinition {
@@ -305,6 +372,232 @@ pub async fn execute_tool(
       let result = execute_web_search(&ctx.web_search_provider, query, count).await?;
 
       Ok((result, false))
+    }
+
+    "send_message" => {
+      let target = input["target_agent"].as_str().ok_or("send_message: missing 'target_agent' field")?;
+      let message = input["message"].as_str().ok_or("send_message: missing 'message' field")?;
+      let wait = input["wait_for_result"].as_bool().unwrap_or(false);
+
+      info!(run_id = run_id, target = target, wait = wait, "agent tool: send_message");
+
+      let db = ctx.db.as_ref().ok_or("send_message: agent bus not available in this context")?;
+      let tx = ctx.executor_tx.as_ref().ok_or("send_message: executor channel not available")?;
+      let bus_app = ctx.app.as_ref().ok_or("send_message: app handle not available")?;
+      let from_agent = ctx.current_agent_id.as_deref().unwrap_or("unknown");
+      let from_run = ctx.current_run_id.as_deref().unwrap_or("unknown");
+
+      // Check chain depth
+      let next_depth = ctx.chain_depth + 1;
+      if next_depth > MAX_CHAIN_DEPTH {
+        return Ok((
+          format!("Error: Maximum chain depth ({}) exceeded. Cannot trigger further agents to prevent infinite loops.", MAX_CHAIN_DEPTH),
+          false,
+        ));
+      }
+
+      // Resolve target agent by name or ID
+      let (to_agent_id, to_agent_name) = {
+        let pool = db.clone();
+        let target_str = target.to_string();
+        tokio::task::spawn_blocking(move || {
+          let conn = pool.get().map_err(|e| e.to_string())?;
+          // Try by ID first, then by name
+          let result: Result<(String, String), String> = conn
+            .query_row(
+              "SELECT id, name FROM agents WHERE id = ?1 OR name = ?1 LIMIT 1",
+              rusqlite::params![target_str],
+              |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .map_err(|_| format!("Agent '{}' not found", target_str));
+          result
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?
+      };
+
+      // Truncate payload to 50KB
+      let payload_str = if message.len() > 50_000 {
+        &message[..50_000]
+      } else {
+        message
+      };
+
+      let msg_id = ulid::Ulid::new().to_string();
+      let new_run_id = ulid::Ulid::new().to_string();
+      let now = chrono::Utc::now().to_rfc3339();
+
+      // Create an ephemeral agent_loop task for the target agent
+      let task_id = ulid::Ulid::new().to_string();
+      let loop_config = AgentLoopConfig {
+        goal: payload_str.to_string(),
+        model: None,
+        max_iterations: None,
+        max_total_tokens: None,
+        template_vars: None,
+      };
+      let config_json = serde_json::to_value(&loop_config).map_err(|e| e.to_string())?;
+
+      {
+        let pool = db.clone();
+        let task_id = task_id.clone();
+        let to_agent_id = to_agent_id.clone();
+        let config_json_str = config_json.to_string();
+        let now = now.clone();
+        tokio::task::spawn_blocking(move || {
+          let conn = pool.get().map_err(|e| e.to_string())?;
+          conn.execute(
+            "INSERT INTO tasks (id, name, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, session_id, enabled, created_at, updated_at)
+             VALUES (?1, ?2, 'agent_loop', ?3, 300, 0, 0, 'allow', '[]', ?4, NULL, 1, ?5, ?5)",
+            rusqlite::params![task_id, format!("bus:{}", task_id), config_json_str, to_agent_id, now],
+          ).map_err(|e| e.to_string())?;
+          Ok::<(), String>(())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+      }
+
+      // Insert bus message and run records
+      {
+        let pool = db.clone();
+        let msg_id = msg_id.clone();
+        let from_agent = from_agent.to_string();
+        let from_run = from_run.to_string();
+        let to_agent_id = to_agent_id.clone();
+        let new_run_id = new_run_id.clone();
+        let payload_str = payload_str.to_string();
+        let task_id = task_id.clone();
+        let now = now.clone();
+        let log_path = format!(
+          "{}/.orbit/logs/{}.log",
+          std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
+          new_run_id
+        );
+
+        tokio::task::spawn_blocking(move || {
+          let conn = pool.get().map_err(|e| e.to_string())?;
+
+          // Insert bus message
+          conn.execute(
+            "INSERT INTO bus_messages (id, from_agent_id, from_run_id, to_agent_id, to_run_id, kind, payload, status, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'direct', ?6, 'delivered', ?7)",
+            rusqlite::params![msg_id, from_agent, from_run, to_agent_id, new_run_id, payload_str, now],
+          ).map_err(|e| e.to_string())?;
+
+          // Insert run record
+          conn.execute(
+            "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, parent_run_id, metadata, chain_depth, source_bus_message_id, created_at)
+             VALUES (?1, ?2, NULL, ?3, 'pending', 'bus', ?4, 0, NULL, '{}', ?5, ?6, ?7)",
+            rusqlite::params![new_run_id, task_id, to_agent_id, log_path, next_depth, msg_id, now],
+          ).map_err(|e| e.to_string())?;
+
+          Ok::<(), String>(())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+      }
+
+      // Build a Task struct for the RunRequest
+      let task = Task {
+        id: task_id,
+        name: format!("bus-message-{}", msg_id),
+        description: Some(format!("Bus message from agent '{}'", from_agent)),
+        kind: "agent_loop".to_string(),
+        config: config_json,
+        max_duration_seconds: 300,
+        max_retries: 0,
+        retry_delay_seconds: 0,
+        concurrency_policy: "allow".to_string(),
+        tags: vec![],
+        agent_id: Some(to_agent_id.clone()),
+        session_id: None,
+        enabled: true,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+      };
+
+      // Send RunRequest to executor
+      let req = RunRequest {
+        run_id: new_run_id.clone(),
+        task,
+        schedule_id: None,
+        _trigger: "bus".to_string(),
+        retry_count: 0,
+        _parent_run_id: None,
+        chain_depth: next_depth,
+      };
+      tx.send(req).map_err(|e| format!("failed to enqueue run: {}", e))?;
+
+      // Emit bus event
+      emit_bus_message_sent(
+        bus_app,
+        &msg_id,
+        from_agent,
+        &to_agent_id,
+        "direct",
+        json!({ "message": payload_str }),
+        &new_run_id,
+      );
+
+      if !wait {
+        return Ok((
+          format!("Message sent to agent '{}'. Triggered run ID: {}. The agent will process your message asynchronously.", to_agent_name, new_run_id),
+          false,
+        ));
+      }
+
+      // Wait mode: poll run state until terminal
+      let timeout = tokio::time::Duration::from_secs(120);
+      let start = tokio::time::Instant::now();
+      loop {
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        if start.elapsed() > timeout {
+          return Ok((
+            format!("Timed out waiting for agent '{}' (run {}). The agent may still be running.", to_agent_name, new_run_id),
+            false,
+          ));
+        }
+
+        let pool = db.clone();
+        let rid = new_run_id.clone();
+        let state: Option<String> = tokio::task::spawn_blocking(move || {
+          let conn = pool.get().ok()?;
+          conn.query_row("SELECT state FROM runs WHERE id = ?1", rusqlite::params![rid], |row| row.get(0)).ok()
+        })
+        .await
+        .ok()
+        .flatten();
+
+        match state.as_deref() {
+          Some("success") | Some("failure") | Some("cancelled") | Some("timed_out") => {
+            let terminal_state = state.unwrap();
+            // Try to get the finish summary from the run's metadata or logs
+            let pool = db.clone();
+            let rid = new_run_id.clone();
+            let summary = tokio::task::spawn_blocking(move || -> Option<String> {
+              let conn = pool.get().ok()?;
+              let meta: String = conn.query_row(
+                "SELECT metadata FROM runs WHERE id = ?1",
+                rusqlite::params![rid],
+                |row| row.get(0),
+              ).ok()?;
+              let meta_val: serde_json::Value = serde_json::from_str(&meta).ok()?;
+              meta_val.get("finish_summary").and_then(|s| s.as_str()).map(|s| s.to_string())
+            })
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| format!("Agent '{}' finished with state: {}", to_agent_name, terminal_state));
+
+            return Ok((summary, false));
+          }
+          _ => continue,
+        }
+      }
     }
 
     "finish" => {

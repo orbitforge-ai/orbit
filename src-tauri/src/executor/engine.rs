@@ -5,7 +5,7 @@ use tokio::sync::{ mpsc, oneshot, Mutex, Semaphore };
 use tracing::{ error, info, warn };
 
 use crate::db::DbPool;
-use crate::events::emitter::emit_run_state_changed;
+use crate::events::emitter::{ emit_bus_message_sent, emit_run_state_changed };
 use crate::executor::{ agent_loop, http, process };
 use crate::executor::state_machine::{ transition, ExecutorEvent };
 use crate::models::run::RunState;
@@ -17,6 +17,7 @@ use crate::models::task::{
   ShellCommandConfig,
   Task,
 };
+use serde_json;
 
 const DEFAULT_AGENT_ID: &str = "default";
 const DEFAULT_MAX_CONCURRENT: usize = 10;
@@ -34,6 +35,8 @@ pub struct RunRequest {
   pub retry_count: i64,
   /// Parent run id if this is a retry
   pub _parent_run_id: Option<String>,
+  /// Depth of agent-to-agent chain (0 for top-level runs)
+  pub chain_depth: i64,
 }
 
 /// Newtype wrapping the sender half — stored as Tauri managed state.
@@ -234,7 +237,8 @@ impl ExecutorEngine {
                     db.clone(),
                     app.clone(),
                     log_dir.clone(),
-                    cancel_rx
+                    cancel_rx,
+                    tx.clone(),
                   ).await
                 {
                   error!("run failed: {}", e);
@@ -244,6 +248,8 @@ impl ExecutorEngine {
                 update_agent_heartbeat(&db, &agent_id);
                 drop(permit);
 
+                // Evaluate bus subscriptions
+                evaluate_bus_subscriptions(&db, &req.run_id, &agent_id, req.chain_depth, &tx, &app).await;
                 // Schedule retry if needed
                 schedule_retry_if_needed(req, &db, &tx, &app).await;
               });
@@ -287,7 +293,8 @@ impl ExecutorEngine {
                 db.clone(),
                 app.clone(),
                 log_dir.clone(),
-                cancel_rx
+                cancel_rx,
+                tx.clone(),
               ).await
             {
               error!("run failed: {}", e);
@@ -297,6 +304,7 @@ impl ExecutorEngine {
             update_agent_heartbeat(&db, &agent_id);
             drop(permit);
 
+            evaluate_bus_subscriptions(&db, &req.run_id, &agent_id, req.chain_depth, &tx, &app).await;
             schedule_retry_if_needed(req, &db, &tx, &app).await;
           });
         }
@@ -314,7 +322,8 @@ impl ExecutorEngine {
                 db.clone(),
                 app.clone(),
                 log_dir.clone(),
-                cancel_rx
+                cancel_rx,
+                tx.clone(),
               ).await
             {
               error!("run failed: {}", e);
@@ -324,6 +333,7 @@ impl ExecutorEngine {
             update_agent_heartbeat(&db, &agent_id);
             drop(permit);
 
+            evaluate_bus_subscriptions(&db, &req.run_id, &agent_id, req.chain_depth, &tx, &app).await;
             schedule_retry_if_needed(req, &db, &tx, &app).await;
           });
         }
@@ -339,7 +349,8 @@ async fn run_one(
   db: DbPool,
   app: tauri::AppHandle,
   log_dir: PathBuf,
-  cancel: oneshot::Receiver<()>
+  cancel: oneshot::Receiver<()>,
+  executor_tx: mpsc::UnboundedSender<RunRequest>,
 ) -> Result<(), String> {
   let run_id = req.run_id.clone();
   let task = req.task;
@@ -387,7 +398,9 @@ async fn run_one(
         timeout_secs,
         &app,
         cancel,
-        &db
+        &db,
+        &executor_tx,
+        req.chain_depth,
       ).await
     }
     "agent_loop" => {
@@ -407,7 +420,9 @@ async fn run_one(
           timeout_secs,
           &app,
           cancel,
-          &db
+          &db,
+          &executor_tx,
+          req.chain_depth,
         ).await
       } else {
         agent_loop::run_agent_loop(
@@ -418,7 +433,9 @@ async fn run_one(
           timeout_secs,
           &app,
           cancel,
-          &db
+          &db,
+          &executor_tx,
+          req.chain_depth,
         ).await
       }
     }
@@ -553,6 +570,7 @@ async fn schedule_retry_if_needed(
     _trigger: "retry".to_string(),
     retry_count: req.retry_count + 1,
     _parent_run_id: Some(req.run_id),
+    chain_depth: req.chain_depth,
   };
 
   let tx_clone = tx.clone();
@@ -646,5 +664,211 @@ fn update_agent_heartbeat(db: &DbPool, agent_id: &str) {
       "UPDATE agents SET heartbeat_at = ?1, updated_at = ?1 WHERE id = ?2",
       rusqlite::params![now, agent_id]
     );
+  }
+}
+
+/// After a run completes, check for bus subscriptions that should trigger.
+async fn evaluate_bus_subscriptions(
+  db: &DbPool,
+  run_id: &str,
+  agent_id: &str,
+  chain_depth: i64,
+  tx: &mpsc::UnboundedSender<RunRequest>,
+  app: &tauri::AppHandle,
+) {
+  // Load the run's final state
+  let final_state = {
+    let pool = db.clone();
+    let rid = run_id.to_string();
+    match tokio::task::spawn_blocking(move || {
+      let conn = pool.get().ok()?;
+      conn.query_row("SELECT state FROM runs WHERE id = ?1", rusqlite::params![rid], |row| row.get::<_, String>(0)).ok()
+    }).await {
+      Ok(Some(s)) => s,
+      _ => return,
+    }
+  };
+
+  // Only evaluate on terminal states
+  if !matches!(final_state.as_str(), "success" | "failure" | "timed_out" | "cancelled") {
+    return;
+  }
+
+  // Query matching subscriptions
+  let pool = db.clone();
+  let aid = agent_id.to_string();
+  let state = final_state.clone();
+  let subscriptions = match tokio::task::spawn_blocking(move || -> Result<Vec<(String, String, String, String, i64)>, String> {
+    let conn = pool.get().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(
+      "SELECT id, subscriber_agent_id, event_type, task_id, max_chain_depth
+       FROM bus_subscriptions
+       WHERE source_agent_id = ?1 AND enabled = 1"
+    ).map_err(|e| e.to_string())?;
+
+    let rows = stmt.query_map(rusqlite::params![aid], |row| {
+      Ok((
+        row.get::<_, String>(0)?,
+        row.get::<_, String>(1)?,
+        row.get::<_, String>(2)?,
+        row.get::<_, String>(3)?,
+        row.get::<_, i64>(4)?,
+      ))
+    }).map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for row in rows {
+      if let Ok(r) = row {
+        // Match event type against final state
+        let matches = match r.2.as_str() {
+          "run:completed" => state == "success",
+          "run:failed" => state == "failure",
+          "run:any_terminal" => true,
+          _ => false,
+        };
+        if matches {
+          result.push(r);
+        }
+      }
+    }
+    Ok(result)
+  }).await {
+    Ok(Ok(subs)) => subs,
+    _ => return,
+  };
+
+  for (sub_id, subscriber_agent_id, event_type, task_id, max_chain_depth) in subscriptions {
+    let next_depth = chain_depth + 1;
+    if next_depth > max_chain_depth {
+      info!(
+        sub_id = sub_id,
+        "bus subscription skipped — chain depth {} exceeds max {}",
+        next_depth, max_chain_depth
+      );
+      continue;
+    }
+
+    // Load the target task
+    let pool = db.clone();
+    let tid = task_id.clone();
+    let task = match tokio::task::spawn_blocking(move || -> Result<Task, String> {
+      let conn = pool.get().map_err(|e| e.to_string())?;
+      let row = conn.query_row(
+        "SELECT id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, session_id, enabled, created_at, updated_at
+         FROM tasks WHERE id = ?1",
+        rusqlite::params![tid],
+        |row| {
+          let tags_str: String = row.get(9)?;
+          let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
+          let config_str: String = row.get(4)?;
+          let config: serde_json::Value = serde_json::from_str(&config_str).unwrap_or_default();
+          Ok(Task {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            description: row.get(2)?,
+            kind: row.get(3)?,
+            config,
+            max_duration_seconds: row.get(5)?,
+            max_retries: row.get(6)?,
+            retry_delay_seconds: row.get(7)?,
+            concurrency_policy: row.get(8)?,
+            tags,
+            agent_id: row.get(10)?,
+            session_id: row.get(11)?,
+            enabled: row.get(12)?,
+            created_at: row.get(13)?,
+            updated_at: row.get(14)?,
+          })
+        },
+      ).map_err(|e| format!("task {} not found: {}", tid, e))?;
+      Ok(row)
+    }).await {
+      Ok(Ok(t)) => t,
+      Ok(Err(e)) => {
+        error!("bus subscription {}: {}", sub_id, e);
+        continue;
+      }
+      Err(e) => {
+        error!("bus subscription {}: {}", sub_id, e);
+        continue;
+      }
+    };
+
+    let msg_id = ulid::Ulid::new().to_string();
+    let new_run_id = ulid::Ulid::new().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let log_path = format!(
+      "{}/.orbit/logs/{}.log",
+      std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
+      new_run_id
+    );
+
+    // Insert bus message and run
+    let pool = db.clone();
+    let msg_id_c = msg_id.clone();
+    let new_run_id_c = new_run_id.clone();
+    let now_c = now.clone();
+    let agent_id_str = agent_id.to_string();
+    let subscriber_id = subscriber_agent_id.clone();
+    let event_type_c = event_type.clone();
+    let run_id_str = run_id.to_string();
+    let task_id_c = task_id.clone();
+
+    let insert_ok = tokio::task::spawn_blocking(move || -> Result<(), String> {
+      let conn = pool.get().map_err(|e| e.to_string())?;
+
+      conn.execute(
+        "INSERT INTO bus_messages (id, from_agent_id, from_run_id, to_agent_id, to_run_id, kind, event_type, payload, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'event', ?6, '{}', 'delivered', ?7)",
+        rusqlite::params![msg_id_c, agent_id_str, run_id_str, subscriber_id, new_run_id_c, event_type_c, now_c],
+      ).map_err(|e| e.to_string())?;
+
+      conn.execute(
+        "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, parent_run_id, metadata, chain_depth, source_bus_message_id, created_at)
+         VALUES (?1, ?2, NULL, ?3, 'pending', 'bus', ?4, 0, NULL, '{}', ?5, ?6, ?7)",
+        rusqlite::params![new_run_id_c, task_id_c, subscriber_id, log_path, next_depth, msg_id_c, now_c],
+      ).map_err(|e| e.to_string())?;
+
+      Ok(())
+    }).await;
+
+    if let Err(e) = insert_ok.as_ref().map_err(|e| e.to_string()).and_then(|r| r.as_ref().map_err(|e| e.clone())) {
+      error!("bus subscription {} failed to create records: {}", sub_id, e);
+      continue;
+    }
+
+    // Emit event
+    emit_bus_message_sent(
+      app,
+      &msg_id,
+      agent_id,
+      &subscriber_agent_id,
+      "event",
+      serde_json::json!({ "event_type": event_type, "source_run_id": run_id }),
+      &new_run_id,
+    );
+
+    // Send to executor
+    let req = RunRequest {
+      run_id: new_run_id.clone(),
+      task,
+      schedule_id: None,
+      _trigger: "bus".to_string(),
+      retry_count: 0,
+      _parent_run_id: None,
+      chain_depth: next_depth,
+    };
+
+    if let Err(e) = tx.send(req) {
+      error!("bus subscription {}: failed to enqueue run: {}", sub_id, e);
+    } else {
+      info!(
+        sub_id = sub_id,
+        from_agent = agent_id,
+        to_agent = subscriber_agent_id.as_str(),
+        run_id = new_run_id.as_str(),
+        "bus subscription triggered"
+      );
+    }
   }
 }

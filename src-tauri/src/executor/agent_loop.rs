@@ -80,7 +80,9 @@ pub async fn run_agent_loop(
   _timeout_secs: u64,
   app: &tauri::AppHandle,
   mut cancel: oneshot::Receiver<()>,
-  db: &DbPool
+  db: &DbPool,
+  executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
+  chain_depth: i64,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -152,7 +154,14 @@ pub async fn run_agent_loop(
   };
 
   let tools: Vec<ToolDefinition> = snapshot.tools;
-  let tool_ctx = ToolExecutionContext::new(agent_id);
+  let tool_ctx = ToolExecutionContext::new_with_bus(
+    agent_id,
+    run_id,
+    chain_depth,
+    db.clone(),
+    executor_tx.clone(),
+    app.clone(),
+  );
 
   // ── Init conversation ────────────────────────────────────────────────
   let mut messages: Vec<ChatMessage> = vec![ChatMessage {
@@ -447,7 +456,9 @@ pub async fn run_agent_prompt(
   _timeout_secs: u64,
   app: &tauri::AppHandle,
   mut cancel: oneshot::Receiver<()>,
-  db: &DbPool
+  db: &DbPool,
+  _executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
+  _chain_depth: i64,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -621,7 +632,9 @@ pub async fn run_pulse(
   _timeout_secs: u64,
   app: &tauri::AppHandle,
   _cancel: oneshot::Receiver<()>,
-  db: &DbPool
+  db: &DbPool,
+  _executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
+  _chain_depth: i64,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
