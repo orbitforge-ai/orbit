@@ -14,6 +14,10 @@ export function ToolUseBlock({ name, input, result }: ToolUseBlockProps) {
   const [expanded, setExpanded] = useState(false);
   const inputStr = JSON.stringify(input, null, 2);
   const isSubAgentTool = name === 'spawn_sub_agents';
+  const isWaitingSendMessage =
+    name === 'send_message' &&
+    input.wait_for_result === true &&
+    !result;
 
   return (
     <div className="rounded-lg border border-warning/30 bg-warning/5 overflow-hidden">
@@ -35,7 +39,7 @@ export function ToolUseBlock({ name, input, result }: ToolUseBlockProps) {
         {result && result.isError && (
           <XCircle size={11} className="text-red-400 ml-auto shrink-0" />
         )}
-        {!result && isSubAgentTool && (
+        {!result && (isSubAgentTool || isWaitingSendMessage) && (
           <Loader2 size={11} className="text-accent-hover ml-auto shrink-0 animate-spin" />
         )}
       </button>
@@ -43,6 +47,9 @@ export function ToolUseBlock({ name, input, result }: ToolUseBlockProps) {
       {/* Sub-agent live tracker — shown while waiting for result */}
       {isSubAgentTool && !result && (
         <SubAgentTracker tasks={input.tasks as SubAgentTask[] | undefined} />
+      )}
+      {isWaitingSendMessage && (
+        <SendMessagePending targetAgent={typeof input.target_agent === 'string' ? input.target_agent : undefined} />
       )}
 
       {/* Expanded details */}
@@ -79,6 +86,34 @@ export function ToolUseBlock({ name, input, result }: ToolUseBlockProps) {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+function SendMessagePending({ targetAgent }: { targetAgent?: string }) {
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setElapsedSeconds((seconds) => seconds + 1);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="border-t border-warning/10 px-3 py-2">
+      <div className="flex items-center gap-2 text-xs text-secondary">
+        <Loader2 size={12} className="text-accent-hover animate-spin shrink-0" />
+        <span>
+          Waiting for {targetAgent ? `"${targetAgent}"` : "target agent"} to finish and return a result
+        </span>
+      </div>
+      <div className="mt-1 pl-5 text-[11px] text-muted">
+        {elapsedSeconds < 60
+          ? `${elapsedSeconds}s elapsed`
+          : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s elapsed`}
+      </div>
     </div>
   );
 }

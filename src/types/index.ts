@@ -153,6 +153,8 @@ export interface ChatSession {
   executionState: "queued" | "running" | "success" | "failure" | "cancelled" | "timed_out" | null;
   finishSummary: string | null;
   terminalError: string | null;
+  sourceAgentId?: string | null;
+  sourceAgentName?: string | null;
   createdAt: string;
   updatedAt: string;
 }

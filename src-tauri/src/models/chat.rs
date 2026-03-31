@@ -14,6 +14,8 @@ pub struct ChatSession {
     pub execution_state: Option<String>,
     pub finish_summary: Option<String>,
     pub terminal_error: Option<String>,
+    pub source_agent_id: Option<String>,
+    pub source_agent_name: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

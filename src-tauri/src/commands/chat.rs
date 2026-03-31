@@ -33,13 +33,18 @@ pub async fn list_chat_sessions(
     ::spawn_blocking(move || {
       let conn = pool.get().map_err(|e| e.to_string())?;
       let mut sql = String::from(
-        "SELECT id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
-                chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at
-             FROM chat_sessions WHERE agent_id = ?1"
+        "SELECT cs.id, cs.agent_id, cs.title, cs.archived, cs.session_type, cs.parent_session_id, cs.source_bus_message_id,
+                cs.chain_depth, cs.execution_state, cs.finish_summary, cs.terminal_error,
+                bm.from_agent_id, a.name,
+                cs.created_at, cs.updated_at
+             FROM chat_sessions cs
+             LEFT JOIN bus_messages bm ON bm.id = cs.source_bus_message_id
+             LEFT JOIN agents a ON a.id = bm.from_agent_id
+             WHERE cs.agent_id = ?1"
       );
       let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(agent_id)];
       if !show_archived {
-        sql.push_str(" AND archived = 0");
+        sql.push_str(" AND cs.archived = 0");
       }
       if !session_types.is_empty() {
         let start_idx = params.len() + 1;
@@ -47,12 +52,12 @@ pub async fn list_chat_sessions(
           .map(|i| format!("?{}", start_idx + i))
           .collect::<Vec<_>>()
           .join(", ");
-        sql.push_str(&format!(" AND session_type IN ({})", placeholders));
+        sql.push_str(&format!(" AND cs.session_type IN ({})", placeholders));
         for session_type in session_types {
           params.push(Box::new(session_type));
         }
       }
-      sql.push_str(" ORDER BY updated_at DESC");
+      sql.push_str(" ORDER BY cs.updated_at DESC");
 
       let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
       let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
@@ -70,8 +75,10 @@ pub async fn list_chat_sessions(
             execution_state: row.get(8)?,
             finish_summary: row.get(9)?,
             terminal_error: row.get(10)?,
-            created_at: row.get(11)?,
-            updated_at: row.get(12)?,
+            source_agent_id: row.get(11)?,
+            source_agent_name: row.get(12)?,
+            created_at: row.get(13)?,
+            updated_at: row.get(14)?,
           })
         })
         .map_err(|e| e.to_string())?
@@ -122,6 +129,8 @@ pub async fn create_chat_session(
         execution_state: None,
         finish_summary: None,
         terminal_error: None,
+        source_agent_id: None,
+        source_agent_name: None,
         created_at: now.clone(),
         updated_at: now,
       })
