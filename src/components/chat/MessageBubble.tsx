@@ -1,11 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
-import { Bot, User, ChevronRight, Layers } from "lucide-react";
+import { Bot, User, ChevronRight, Layers, ExternalLink } from "lucide-react";
 import TurndownService from "turndown";
 import { DisplayMessage } from "./types";
 import { TextBlock } from "./TextBlock";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolUseBlock } from "./ToolUseBlock";
 import { TypingIndicator } from "./StreamingCursor";
+import { useUiStore } from "../../store/uiStore";
 
 function formatTimestamp(iso: string): string {
   const d = new Date(iso);
@@ -124,26 +125,43 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     );
   }
 
+  const isBusSender = isUser && !!message.senderLabel;
+  const navigate = useUiStore((s) => s.navigate);
+  const selectRun = useUiStore((s) => s.selectRun);
+
   return (
-    <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
+    <div className={`flex gap-3 ${isUser && !isBusSender ? "flex-row-reverse" : ""}`}>
       {/* Avatar */}
-      <div
-        className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center mt-0.5 ${
-          isUser
-            ? "bg-accent/20 text-accent-hover"
-            : "bg-surface text-muted border border-edge"
-        }`}
-      >
-        {isUser ? <User size={14} /> : <Bot size={14} />}
-      </div>
+      {isBusSender ? (
+        <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
+          <div className="w-7 h-7 rounded-full flex items-center justify-center bg-blue-500/20 text-blue-400 border border-blue-500/30">
+            <Bot size={14} />
+          </div>
+          <span className="text-[10px] text-blue-400 font-medium max-w-[100px] truncate">
+            {message.senderLabel}
+          </span>
+        </div>
+      ) : (
+        <div
+          className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center mt-0.5 ${
+            isUser
+              ? "bg-accent/20 text-accent-hover"
+              : "bg-surface text-muted border border-edge"
+          }`}
+        >
+          {isUser ? <User size={14} /> : <Bot size={14} />}
+        </div>
+      )}
 
       {/* Bubble */}
       <div
         onCopy={handleCopy}
         className={`min-w-0 max-w-[85%] rounded-xl px-4 py-3 space-y-2 overflow-hidden select-text ${
-          isUser
-            ? "bg-accent/15 border border-accent/30"
-            : "bg-surface border border-edge"
+          isBusSender
+            ? "bg-blue-500/10 border border-blue-500/20"
+            : isUser
+              ? "bg-accent/15 border border-accent/30"
+              : "bg-surface border border-edge"
         }`}
       >
         {message.blocks.map((block, i) => {
@@ -174,6 +192,18 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         })}
         {message.blocks.length === 0 && message.isStreaming && (
           <TypingIndicator />
+        )}
+        {message.linkedRunId && !message.isStreaming && (
+          <button
+            onClick={() => {
+              selectRun(message.linkedRunId!);
+              navigate("history");
+            }}
+            className="flex items-center gap-1 text-[10px] text-accent-hover hover:text-white transition-colors mt-1"
+          >
+            <ExternalLink size={10} />
+            View Run
+          </button>
         )}
       </div>
 

@@ -6,6 +6,8 @@ export interface DisplayMessage {
   timestamp?: string; // ISO 8601
   isCompacted?: boolean;
   isSummary?: boolean;
+  senderLabel?: string;   // agent name for bus messages (shown instead of "User" icon)
+  linkedRunId?: string;    // run ID to link to from assistant bus responses
 }
 
 export type DisplayBlock =

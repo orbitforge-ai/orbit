@@ -11,6 +11,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { chatApi } from '../../api/chat';
+import { busApi } from '../../api/bus';
 import { ChatSession } from '../../types';
 import { confirm } from '@tauri-apps/plugin-dialog';
 
@@ -48,6 +49,13 @@ export function SessionList({
     queryFn: () => chatApi.listSessions(agentId, showArchived),
     refetchInterval: 5_000,
   });
+
+  const { data: busThread } = useQuery({
+    queryKey: ['bus-thread-count', agentId],
+    queryFn: () => busApi.getBusThread(agentId, 1, 0),
+    refetchInterval: 10_000,
+  });
+  const busMessageCount = busThread?.totalCount ?? 0;
 
   async function handleArchive(session: ChatSession) {
     if (session.archived) {
@@ -93,7 +101,25 @@ export function SessionList({
 
       {/* Session list */}
       <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
-        {sessions.length === 0 && (
+        {/* Pinned: Agent Messages */}
+        {busMessageCount > 0 && (
+          <div
+            onClick={() => onSelectSession('__bus__')}
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${
+              activeSessionId === '__bus__'
+                ? 'bg-blue-500/15 text-white'
+                : 'text-secondary hover:bg-surface hover:text-white'
+            }`}
+          >
+            <MessageSquare size={14} className="shrink-0 text-blue-400" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm truncate">Agent Messages</p>
+              <p className="text-[10px] text-muted">{busMessageCount} message{busMessageCount !== 1 ? 's' : ''}</p>
+            </div>
+          </div>
+        )}
+
+        {sessions.length === 0 && busMessageCount === 0 && (
           <div className="text-center py-12 text-muted text-xs">
             {showArchived ? 'No archived chats.' : 'No chats yet. Start a new one!'}
           </div>

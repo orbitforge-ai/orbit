@@ -355,6 +355,26 @@ export interface SubAgentsSpawnedPayload {
   timestamp: string;
 }
 
+export interface BusThreadMessage {
+  id: string;
+  fromAgentId: string;
+  fromAgentName: string;
+  toAgentId: string;
+  kind: "direct" | "event";
+  payload: Record<string, unknown>;
+  status: string;
+  createdAt: string;
+  triggeredRunId: string | null;
+  triggeredRunState: string | null;
+  triggeredRunSummary: string | null;
+}
+
+export interface PaginatedBusThread {
+  messages: BusThreadMessage[];
+  totalCount: number;
+  hasMore: boolean;
+}
+
 export interface BusMessageSentPayload {
   messageId: string;
   fromAgentId: string;

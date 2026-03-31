@@ -8,6 +8,7 @@ import { useUiStore } from "../../store/uiStore";
 import { ChatSession } from "../../types";
 import { SessionList } from "./SessionList";
 import { ChatPanel } from "./ChatPanel";
+import { BusMessagePanel } from "./BusMessagePanel";
 
 export function ChatScreen() {
   const queryClient = useQueryClient();
@@ -119,7 +120,9 @@ export function ChatScreen() {
 
       {/* Right panel: conversation */}
       <div className="flex-1 min-h-0">
-        {activeSessionId ? (
+        {activeSessionId === '__bus__' && selectedAgentId ? (
+          <BusMessagePanel agentId={selectedAgentId} />
+        ) : activeSessionId ? (
           <ChatPanel sessionId={activeSessionId} />
         ) : (
           <div className="flex items-center justify-center h-full text-muted text-sm">

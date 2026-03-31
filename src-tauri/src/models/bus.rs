@@ -50,3 +50,27 @@ fn default_payload_template() -> String {
 fn default_max_chain_depth() -> i64 {
     10
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BusThreadMessage {
+    pub id: String,
+    pub from_agent_id: String,
+    pub from_agent_name: String,
+    pub to_agent_id: String,
+    pub kind: String,
+    pub payload: serde_json::Value,
+    pub status: String,
+    pub created_at: String,
+    pub triggered_run_id: Option<String>,
+    pub triggered_run_state: Option<String>,
+    pub triggered_run_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaginatedBusThread {
+    pub messages: Vec<BusThreadMessage>,
+    pub total_count: i64,
+    pub has_more: bool,
+}

@@ -1,7 +1,7 @@
 use ulid::Ulid;
 
 use crate::db::DbPool;
-use crate::models::bus::{BusMessage, BusSubscription, CreateBusSubscription};
+use crate::models::bus::{BusMessage, BusSubscription, BusThreadMessage, CreateBusSubscription, PaginatedBusThread};
 
 #[tauri::command]
 pub async fn list_bus_messages(
@@ -55,6 +55,74 @@ pub async fn list_bus_messages(
             .collect();
 
         Ok(messages)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_bus_thread(
+    agent_id: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    db: tauri::State<'_, DbPool>,
+) -> Result<PaginatedBusThread, String> {
+    let pool = db.0.clone();
+    let limit = limit.unwrap_or(50);
+    let offset = offset.unwrap_or(0);
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+
+        let total_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM bus_messages WHERE to_agent_id = ?1",
+                rusqlite::params![agent_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT bm.id, bm.from_agent_id, COALESCE(a.name, bm.from_agent_id), bm.to_agent_id, bm.kind,
+                        bm.payload, bm.status, bm.created_at,
+                        bm.to_run_id, r.state, json_extract(r.metadata, '$.finish_summary')
+                 FROM bus_messages bm
+                 LEFT JOIN agents a ON a.id = bm.from_agent_id
+                 LEFT JOIN runs r ON r.id = bm.to_run_id
+                 WHERE bm.to_agent_id = ?1
+                 ORDER BY bm.created_at DESC
+                 LIMIT ?2 OFFSET ?3",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let messages: Vec<BusThreadMessage> = stmt
+            .query_map(rusqlite::params![agent_id, limit, offset], |row| {
+                let payload_str: String = row.get(5)?;
+                Ok(BusThreadMessage {
+                    id: row.get(0)?,
+                    from_agent_id: row.get(1)?,
+                    from_agent_name: row.get(2)?,
+                    to_agent_id: row.get(3)?,
+                    kind: row.get(4)?,
+                    payload: serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null),
+                    status: row.get(6)?,
+                    created_at: row.get(7)?,
+                    triggered_run_id: row.get(8)?,
+                    triggered_run_state: row.get(9)?,
+                    triggered_run_summary: row.get(10)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let has_more = (offset + limit) < total_count;
+
+        Ok(PaginatedBusThread {
+            messages,
+            total_count,
+            has_more,
+        })
     })
     .await
     .map_err(|e| e.to_string())?

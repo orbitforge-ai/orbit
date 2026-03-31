@@ -171,6 +171,7 @@ pub fn run() {
         commands::llm::trigger_agent_loop,
         // Bus
         commands::bus::list_bus_messages,
+        commands::bus::get_bus_thread,
         commands::bus::list_bus_subscriptions,
         commands::bus::create_bus_subscription,
         commands::bus::toggle_bus_subscription,

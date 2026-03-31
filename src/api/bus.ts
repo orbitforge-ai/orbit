@@ -1,9 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
-import { BusMessage, BusSubscription, CreateBusSubscription } from "../types";
+import { BusMessage, BusSubscription, CreateBusSubscription, PaginatedBusThread } from "../types";
 
 export const busApi = {
   listMessages: (agentId?: string, limit = 50, offset = 0): Promise<BusMessage[]> =>
     invoke("list_bus_messages", { agentId, limit, offset }),
+
+  getBusThread: (agentId: string, limit = 50, offset = 0): Promise<PaginatedBusThread> =>
+    invoke("get_bus_thread", { agentId, limit, offset }),
 
   listSubscriptions: (agentId?: string): Promise<BusSubscription[]> =>
     invoke("list_bus_subscriptions", { agentId }),

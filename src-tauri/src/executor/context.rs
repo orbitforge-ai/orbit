@@ -262,10 +262,15 @@ impl ContextStage for BasePromptStage {
 
             // Add tool usage guidance
             let has_spawn = !request.is_sub_agent && tool_names.contains("spawn_sub_agents");
+            let has_send_message = tool_names.contains("send_message");
+
+            if has_spawn || has_send_message {
+                context_section.push_str("\n### Tool guidance\n");
+            }
+
             if has_spawn {
                 context_section.push_str(
-                    "\n### Tool guidance\n\
-                     - **spawn_sub_agents**: Use this to break work into parallel sub-tasks. \
+                    "- **spawn_sub_agents**: Use this to break work into parallel sub-tasks. \
                      Each sub-task runs as an independent agent with its own context. \
                      Use it when the user asks you to do multiple independent things at once, \
                      or when work can be parallelized for speed. You MUST use this tool when the user \
@@ -274,6 +279,45 @@ impl ContextStage for BasePromptStage {
                      to retrieve results afterward. Sub-agents are ephemeral and not addressable as \
                      separate agents. Simply read the results from the tool response and present them.\n"
                 );
+            }
+
+            // Inject available agents roster so the LLM can resolve natural language references
+            if has_send_message {
+                let pool = db.0.clone();
+                let current_agent_id = request.agent_id.clone();
+                let agents_roster = tokio::task::spawn_blocking(move || -> Vec<(String, String, Option<String>)> {
+                    let conn = match pool.get() {
+                        Ok(c) => c,
+                        Err(_) => return Vec::new(),
+                    };
+                    let mut stmt = match conn.prepare(
+                        "SELECT id, name, description FROM agents WHERE id != ?1 ORDER BY name ASC",
+                    ) {
+                        Ok(s) => s,
+                        Err(_) => return Vec::new(),
+                    };
+                    stmt.query_map(rusqlite::params![current_agent_id], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                    })
+                    .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                    .unwrap_or_default()
+                })
+                .await
+                .unwrap_or_default();
+
+                if !agents_roster.is_empty() {
+                    context_section.push_str(
+                        "- **send_message**: When using this tool, you MUST use one of the agent names \
+                         or IDs listed below. Match the user's natural language reference to the closest \
+                         agent from this list.\n\n### Available agents\n"
+                    );
+                    for (id, name, desc) in &agents_roster {
+                        let desc_str = desc.as_deref().unwrap_or("No description");
+                        context_section.push_str(&format!(
+                            "- **{}** (id: `{}`): {}\n", name, id, desc_str
+                        ));
+                    }
+                }
             }
         }
 

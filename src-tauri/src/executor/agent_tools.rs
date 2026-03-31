@@ -465,7 +465,11 @@ pub async fn execute_tool(
       let tx = ctx.executor_tx.as_ref().ok_or("send_message: executor channel not available")?;
       let bus_app = ctx.app.as_ref().ok_or("send_message: app handle not available")?;
       let from_agent = ctx.current_agent_id.as_deref().unwrap_or("unknown");
-      let from_run = ctx.current_run_id.as_deref().unwrap_or("unknown");
+      // from_run_id must be a valid run ID or NULL; in chat mode,
+      // current_run_id is "chat:{sessionId}" which isn't in the runs table.
+      let from_run: Option<String> = ctx.current_run_id.as_ref().and_then(|rid| {
+        if rid.starts_with("chat:") { None } else { Some(rid.clone()) }
+      });
 
       // Check chain depth
       let next_depth = ctx.chain_depth + 1;
@@ -544,7 +548,7 @@ pub async fn execute_tool(
         let pool = db.clone();
         let msg_id = msg_id.clone();
         let from_agent = from_agent.to_string();
-        let from_run = from_run.to_string();
+        let from_run = from_run.clone();
         let to_agent_id = to_agent_id.clone();
         let new_run_id = new_run_id.clone();
         let payload_str = payload_str.to_string();
@@ -559,18 +563,24 @@ pub async fn execute_tool(
         tokio::task::spawn_blocking(move || {
           let conn = pool.get().map_err(|e| e.to_string())?;
 
-          // Insert bus message
+          // Insert run first (without source_bus_message_id to avoid circular FK)
+          conn.execute(
+            "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, parent_run_id, metadata, chain_depth, source_bus_message_id, created_at)
+             VALUES (?1, ?2, NULL, ?3, 'pending', 'bus', ?4, 0, NULL, '{}', ?5, NULL, ?6)",
+            rusqlite::params![new_run_id, task_id, to_agent_id, log_path, next_depth, now],
+          ).map_err(|e| e.to_string())?;
+
+          // Insert bus message (run exists now, so to_run_id FK is satisfied)
           conn.execute(
             "INSERT INTO bus_messages (id, from_agent_id, from_run_id, to_agent_id, to_run_id, kind, payload, status, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, 'direct', ?6, 'delivered', ?7)",
             rusqlite::params![msg_id, from_agent, from_run, to_agent_id, new_run_id, payload_str, now],
           ).map_err(|e| e.to_string())?;
 
-          // Insert run record
+          // Back-fill the source_bus_message_id on the run
           conn.execute(
-            "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, parent_run_id, metadata, chain_depth, source_bus_message_id, created_at)
-             VALUES (?1, ?2, NULL, ?3, 'pending', 'bus', ?4, 0, NULL, '{}', ?5, ?6, ?7)",
-            rusqlite::params![new_run_id, task_id, to_agent_id, log_path, next_depth, msg_id, now],
+            "UPDATE runs SET source_bus_message_id = ?1 WHERE id = ?2",
+            rusqlite::params![msg_id, new_run_id],
           ).map_err(|e| e.to_string())?;
 
           Ok::<(), String>(())
