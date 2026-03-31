@@ -155,6 +155,8 @@ export interface ChatSession {
   terminalError: string | null;
   sourceAgentId?: string | null;
   sourceAgentName?: string | null;
+  sourceSessionId?: string | null;
+  sourceSessionTitle?: string | null;
   createdAt: string;
   updatedAt: string;
 }

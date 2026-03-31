@@ -15,16 +15,33 @@ import {
   XCircle,
   ChevronDown,
   Bot,
+  ArrowUpRight,
 } from 'lucide-react';
 import { chatApi } from '../../api/chat';
 import { ChatSession } from '../../types';
 import { confirm } from '@tauri-apps/plugin-dialog';
+import { useUiStore } from '../../store/uiStore';
 
 interface SessionListProps {
   agentId: string;
   activeSessionId: string | null;
-  onSelectSession: (id: string) => void;
+  onSelectSession: (id: string | null) => void;
   onNewSession: () => void;
+}
+
+interface SourceSessionGroup {
+  key: string;
+  sourceSessionId: string;
+  sourceSessionTitle: string;
+  sessions: ChatSession[];
+}
+
+interface SenderGroup {
+  key: string;
+  senderId: string;
+  senderName: string;
+  ungroupedSessions: ChatSession[];
+  sourceGroups: SourceSessionGroup[];
 }
 
 export function SessionList({
@@ -34,9 +51,11 @@ export function SessionList({
   onNewSession,
 }: SessionListProps) {
   const queryClient = useQueryClient();
+  const { openChatSession } = useUiStore();
   const [showArchived, setShowArchived] = useState(false);
   const [menuSessionId, setMenuSessionId] = useState<string | null>(null);
   const [collapsedSenderGroups, setCollapsedSenderGroups] = useState<Record<string, boolean>>({});
+  const [collapsedSourceGroups, setCollapsedSourceGroups] = useState<Record<string, boolean>>({});
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -98,47 +117,130 @@ export function SessionList({
     return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
   }
 
+  function latestSessionTimestamp(groupSessions: ChatSession[]) {
+    return Math.max(...groupSessions.map((session) => new Date(session.updatedAt).getTime()));
+  }
+
   const visibleSessions = [...sessions]
     .sort(compareSessions)
-    .filter((session) => session.sessionType !== 'sub_agent' || session.executionState === 'queued' || session.executionState === 'running');
+    .filter(
+      (session) =>
+        session.sessionType !== 'sub_agent' ||
+        session.executionState === 'queued' ||
+        session.executionState === 'running'
+    );
 
   const pulseSessions = visibleSessions.filter((session) => session.sessionType === 'pulse');
   const busSessions = visibleSessions.filter((session) => session.sessionType === 'bus_message');
   const otherAgenticSessions = visibleSessions.filter(
-    (session) => session.sessionType !== 'pulse' && session.sessionType !== 'bus_message' && session.sessionType !== 'user_chat'
+    (session) =>
+      session.sessionType !== 'pulse' &&
+      session.sessionType !== 'bus_message' &&
+      session.sessionType !== 'user_chat'
   );
   const userChats = visibleSessions.filter((session) => session.sessionType === 'user_chat');
 
-  const senderGroups = busSessions.reduce((groups, session) => {
-    const senderName = session.sourceAgentName?.trim() || 'Unknown sender';
-    const senderId = session.sourceAgentId?.trim() || `unknown:${senderName}`;
-    const key = `${senderId}:${senderName}`;
-    const existing = groups.get(key);
-    if (existing) {
-      existing.sessions.push(session);
-    } else {
-      groups.set(key, {
-        key,
-        senderId,
-        senderName,
-        sessions: [session],
-      });
-    }
-    return groups;
-  }, new Map<string, { key: string; senderId: string; senderName: string; sessions: ChatSession[] }>());
+  const senderGroups = busSessions.reduce(
+    (groups, session) => {
+      const senderName = session.sourceAgentName?.trim() || 'Unknown sender';
+      const senderId = session.sourceAgentId?.trim() || `unknown:${senderName}`;
+      const key = `${senderId}:${senderName}`;
+      const existing = groups.get(key);
+      if (existing) {
+        const sourceSessionId = session.sourceSessionId?.trim();
+        const sourceSessionTitle = session.sourceSessionTitle?.trim();
+        if (sourceSessionId && sourceSessionTitle) {
+          const sourceKey = `${key}:${sourceSessionId}`;
+          const sourceGroup = existing.sourceGroups.get(sourceKey);
+          if (sourceGroup) {
+            sourceGroup.sessions.push(session);
+          } else {
+            existing.sourceGroups.set(sourceKey, {
+              key: sourceKey,
+              sourceSessionId,
+              sourceSessionTitle,
+              sessions: [session],
+            });
+          }
+        } else {
+          existing.ungroupedSessions.push(session);
+        }
+      } else {
+        const sourceGroups = new Map<string, SourceSessionGroup>();
+        const ungroupedSessions: ChatSession[] = [];
+        const sourceSessionId = session.sourceSessionId?.trim();
+        const sourceSessionTitle = session.sourceSessionTitle?.trim();
 
-  const orderedSenderGroups = Array.from(senderGroups.values()).sort((a, b) => {
-    const aLatest = Math.max(...a.sessions.map((session) => new Date(session.updatedAt).getTime()));
-    const bLatest = Math.max(...b.sessions.map((session) => new Date(session.updatedAt).getTime()));
-    return bLatest - aLatest;
-  });
+        if (sourceSessionId && sourceSessionTitle) {
+          sourceGroups.set(`${key}:${sourceSessionId}`, {
+            key: `${key}:${sourceSessionId}`,
+            sourceSessionId,
+            sourceSessionTitle,
+            sessions: [session],
+          });
+        } else {
+          ungroupedSessions.push(session);
+        }
+
+        groups.set(key, {
+          key,
+          senderId,
+          senderName,
+          ungroupedSessions,
+          sourceGroups,
+        });
+      }
+      return groups;
+    },
+    new Map<
+      string,
+      {
+        key: string;
+        senderId: string;
+        senderName: string;
+        ungroupedSessions: ChatSession[];
+        sourceGroups: Map<string, SourceSessionGroup>;
+      }
+    >()
+  );
+
+  const orderedSenderGroups: SenderGroup[] = Array.from(senderGroups.values())
+    .map((group) => ({
+      key: group.key,
+      senderId: group.senderId,
+      senderName: group.senderName,
+      ungroupedSessions: [...group.ungroupedSessions].sort(compareSessions),
+      sourceGroups: Array.from(group.sourceGroups.values())
+        .sort((a, b) => latestSessionTimestamp(b.sessions) - latestSessionTimestamp(a.sessions))
+        .map((sourceGroup) => ({
+          ...sourceGroup,
+          sessions: [...sourceGroup.sessions].sort(compareSessions),
+        })),
+    }))
+    .sort((a, b) => {
+      const aLatest = latestSessionTimestamp([
+        ...a.ungroupedSessions,
+        ...a.sourceGroups.flatMap((group) => group.sessions),
+      ]);
+      const bLatest = latestSessionTimestamp([
+        ...b.ungroupedSessions,
+        ...b.sourceGroups.flatMap((group) => group.sessions),
+      ]);
+      return bLatest - aLatest;
+    });
 
   useEffect(() => {
     setCollapsedSenderGroups((prev) => {
       const next: Record<string, boolean> = {};
       for (const group of orderedSenderGroups) {
-        const hasActiveSession = group.sessions.some((session) => session.id === activeSessionId);
-        const hasRunningSession = group.sessions.some((session) => session.executionState === 'queued' || session.executionState === 'running');
+        const groupSessions = [
+          ...group.ungroupedSessions,
+          ...group.sourceGroups.flatMap((sourceGroup) => sourceGroup.sessions),
+        ];
+        const hasActiveSession = groupSessions.some((session) => session.id === activeSessionId);
+        const hasRunningSession = groupSessions.some(
+          (session) => session.executionState === 'queued' || session.executionState === 'running'
+        );
         const defaultCollapsed = orderedSenderGroups.length > 1;
         next[group.key] = prev[group.key] ?? defaultCollapsed;
         if (hasActiveSession || hasRunningSession) {
@@ -149,30 +251,90 @@ export function SessionList({
     });
   }, [activeSessionId, orderedSenderGroups]);
 
+  useEffect(() => {
+    setCollapsedSourceGroups((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const senderGroup of orderedSenderGroups) {
+        for (const sourceGroup of senderGroup.sourceGroups) {
+          const hasActiveSession = sourceGroup.sessions.some(
+            (session) => session.id === activeSessionId
+          );
+          const hasRunningSession = sourceGroup.sessions.some(
+            (session) => session.executionState === 'queued' || session.executionState === 'running'
+          );
+          const defaultCollapsed =
+            senderGroup.sourceGroups.length > 1 || senderGroup.ungroupedSessions.length > 0;
+          next[sourceGroup.key] = prev[sourceGroup.key] ?? defaultCollapsed;
+          if (hasActiveSession || hasRunningSession) {
+            next[sourceGroup.key] = false;
+          }
+        }
+      }
+      return next;
+    });
+  }, [activeSessionId, orderedSenderGroups]);
+
   function toggleSenderGroup(key: string) {
+    const group = orderedSenderGroups.find((candidate) => candidate.key === key);
+    const isCollapsed = collapsedSenderGroups[key] ?? false;
+    const containsActiveSession = group
+      ? [
+          ...group.ungroupedSessions,
+          ...group.sourceGroups.flatMap((sourceGroup) => sourceGroup.sessions),
+        ].some((session) => session.id === activeSessionId)
+      : false;
+    const nextCollapsed = !isCollapsed || containsActiveSession;
+
     setCollapsedSenderGroups((prev) => ({
       ...prev,
-      [key]: !prev[key],
+      [key]: nextCollapsed,
     }));
+
+    if (containsActiveSession) {
+      onSelectSession(null);
+    }
+  }
+
+  function toggleSourceGroup(key: string) {
+    const sourceGroup = orderedSenderGroups
+      .flatMap((senderGroup) => senderGroup.sourceGroups)
+      .find((candidate) => candidate.key === key);
+    const isCollapsed = collapsedSourceGroups[key] ?? false;
+    const containsActiveSession = sourceGroup
+      ? sourceGroup.sessions.some((session) => session.id === activeSessionId)
+      : false;
+    const nextCollapsed = !isCollapsed || containsActiveSession;
+
+    setCollapsedSourceGroups((prev) => ({
+      ...prev,
+      [key]: nextCollapsed,
+    }));
+
+    if (containsActiveSession) {
+      onSelectSession(null);
+    }
   }
 
   function renderSessionRow(session: ChatSession) {
     const isPulse = session.sessionType === 'pulse';
-    const icon = isPulse
-      ? <Zap size={14} className="shrink-0 text-warning" />
-      : session.sessionType === 'sub_agent'
-        ? <GitBranch size={14} className="shrink-0 text-emerald-400" />
-        : session.sessionType === 'bus_message'
-          ? <MessageSquare size={14} className="shrink-0 text-blue-400" />
-          : <MessageSquare size={14} className="shrink-0 opacity-50" />;
+    const icon = isPulse ? (
+      <Zap size={14} className="shrink-0 text-warning" />
+    ) : session.sessionType === 'sub_agent' ? (
+      <GitBranch size={14} className="shrink-0 text-emerald-400" />
+    ) : session.sessionType === 'bus_message' ? (
+      <MessageSquare size={14} className="shrink-0 text-blue-400" />
+    ) : (
+      <MessageSquare size={14} className="shrink-0 opacity-50" />
+    );
 
-    const stateIcon = session.executionState === 'queued' || session.executionState === 'running'
-      ? <Loader2 size={12} className="animate-spin text-accent-hover" />
-      : session.executionState === 'success'
-        ? <CheckCircle2 size={12} className="text-emerald-400" />
-        : session.executionState
-          ? <XCircle size={12} className="text-red-400" />
-          : null;
+    const stateIcon =
+      session.executionState === 'queued' || session.executionState === 'running' ? (
+        <Loader2 size={12} className="animate-spin text-accent-hover" />
+      ) : session.executionState === 'success' ? (
+        <CheckCircle2 size={12} className="text-emerald-400" />
+      ) : session.executionState ? (
+        <XCircle size={12} className="text-red-400" />
+      ) : null;
 
     return (
       <div
@@ -262,6 +424,12 @@ export function SessionList({
 
         {orderedSenderGroups.map((group) => {
           const isCollapsed = collapsedSenderGroups[group.key] ?? false;
+          const totalSessions =
+            group.ungroupedSessions.length +
+            group.sourceGroups.reduce(
+              (count, sourceGroup) => count + sourceGroup.sessions.length,
+              0
+            );
           return (
             <div key={group.key} className="mt-2">
               <button
@@ -274,13 +442,52 @@ export function SessionList({
                 />
                 <Bot size={12} className="text-blue-400" />
                 <span className="font-medium truncate">{group.senderName}</span>
-                <span className="ml-auto text-[10px] text-border-hover">
-                  {group.sessions.length}
-                </span>
+                <span className="ml-auto text-[10px] text-border-hover">{totalSessions}</span>
               </button>
               {!isCollapsed && (
                 <div className="mt-1 ml-2 space-y-0.5 border-l border-edge pl-2">
-                  {group.sessions.map(renderSessionRow)}
+                  {group.sourceGroups.map((sourceGroup) => {
+                    const isSourceCollapsed = collapsedSourceGroups[sourceGroup.key] ?? false;
+                    return (
+                      <div key={sourceGroup.key} className="space-y-0.5">
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => toggleSourceGroup(sourceGroup.key)}
+                            className="flex items-center gap-2 flex-1 min-w-0 px-3 py-1.5 text-left rounded-lg text-[11px] text-muted hover:text-white hover:bg-surface transition-colors"
+                          >
+                            <ChevronDown
+                              size={11}
+                              className={`transition-transform ${isSourceCollapsed ? '-rotate-90' : ''}`}
+                            />
+                            <MessageSquare size={11} className="text-blue-300" />
+                            <span className="font-medium truncate">
+                              {sourceGroup.sourceSessionTitle}
+                            </span>
+                            <span className="ml-auto text-[10px] text-border-hover">
+                              {sourceGroup.sessions.length}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              openChatSession(sourceGroup.sourceSessionId);
+                            }}
+                            className="rounded p-1 text-muted hover:text-white hover:bg-surface-hover transition-colors"
+                            title="Open source chat"
+                            aria-label={`Open source chat ${sourceGroup.sourceSessionTitle}`}
+                          >
+                            <ArrowUpRight size={11} />
+                          </button>
+                        </div>
+                        {!isSourceCollapsed && (
+                          <div className="ml-2 space-y-0.5 border-l border-edge/70 pl-2">
+                            {sourceGroup.sessions.map(renderSessionRow)}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {group.ungroupedSessions.map(renderSessionRow)}
                 </div>
               )}
             </div>

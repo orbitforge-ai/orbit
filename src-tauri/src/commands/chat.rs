@@ -36,10 +36,12 @@ pub async fn list_chat_sessions(
         "SELECT cs.id, cs.agent_id, cs.title, cs.archived, cs.session_type, cs.parent_session_id, cs.source_bus_message_id,
                 cs.chain_depth, cs.execution_state, cs.finish_summary, cs.terminal_error,
                 bm.from_agent_id, a.name,
+                src.id, src.title,
                 cs.created_at, cs.updated_at
              FROM chat_sessions cs
              LEFT JOIN bus_messages bm ON bm.id = cs.source_bus_message_id
              LEFT JOIN agents a ON a.id = bm.from_agent_id
+             LEFT JOIN chat_sessions src ON src.id = bm.from_session_id
              WHERE cs.agent_id = ?1"
       );
       let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(agent_id)];
@@ -77,8 +79,10 @@ pub async fn list_chat_sessions(
             terminal_error: row.get(10)?,
             source_agent_id: row.get(11)?,
             source_agent_name: row.get(12)?,
-            created_at: row.get(13)?,
-            updated_at: row.get(14)?,
+            source_session_id: row.get(13)?,
+            source_session_title: row.get(14)?,
+            created_at: row.get(15)?,
+            updated_at: row.get(16)?,
           })
         })
         .map_err(|e| e.to_string())?
@@ -131,6 +135,8 @@ pub async fn create_chat_session(
         terminal_error: None,
         source_agent_id: None,
         source_agent_name: None,
+        source_session_id: None,
+        source_session_title: None,
         created_at: now.clone(),
         updated_at: now,
       })
