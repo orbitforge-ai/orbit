@@ -153,6 +153,33 @@ pub fn default_pipeline() -> ContextPipeline {
     p
 }
 
+fn compose_system_prompt(
+    base_prompt: &str,
+    identity_summary: Option<&str>,
+    context_section: &str,
+) -> String {
+    let mut parts = Vec::new();
+
+    let trimmed_base = base_prompt.trim();
+    if !trimmed_base.is_empty() {
+        parts.push(trimmed_base.to_string());
+    }
+
+    if let Some(summary) = identity_summary {
+        let trimmed_summary = summary.trim();
+        if !trimmed_summary.is_empty() {
+            parts.push(trimmed_summary.to_string());
+        }
+    }
+
+    let trimmed_context = context_section.trim();
+    if !trimmed_context.is_empty() {
+        parts.push(trimmed_context.to_string());
+    }
+
+    parts.join("\n\n")
+}
+
 // ─── BasePromptStage ────────────────────────────────────────────────────────
 
 /// Loads the system prompt from disk and appends runtime context metadata.
@@ -242,12 +269,13 @@ impl ContextStage for BasePromptStage {
             tools.iter().map(|t| t.name.clone()).collect::<Vec<_>>().join(", ")
         };
 
+        let identity_summary =
+            workspace::build_identity_prompt_summary(&agent_name, &request.ws_config.identity);
+
         // Build the runtime context section
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        let mut context_section = format!(
-            "\n\n## Current Context\n- Agent: {}\n- Mode: {}\n",
-            agent_name, request.mode
-        );
+        let mut context_section =
+            format!("## Current Context\n- Agent: {}\n- Mode: {}\n", agent_name, request.mode);
 
         if let Some((title, count)) = session_info {
             context_section.push_str(&format!("- Session: {} ({} messages)\n", title, count));
@@ -323,12 +351,30 @@ impl ContextStage for BasePromptStage {
 
         context_section.push_str(&format!("- Date: {}\n", today));
 
-        snapshot.system_prompt = format!("{}{}", base_prompt, context_section);
+        snapshot.system_prompt =
+            compose_system_prompt(&base_prompt, Some(&identity_summary), &context_section);
         Ok(snapshot)
     }
 
     fn name(&self) -> &str {
         "BasePrompt"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compose_system_prompt;
+
+    #[test]
+    fn compose_system_prompt_inserts_identity_once_before_current_context() {
+        let prompt = compose_system_prompt(
+            "Base prompt",
+            Some("Identity summary"),
+            "## Current Context\n- Agent: Default",
+        );
+
+        assert!(prompt.contains("Base prompt\n\nIdentity summary\n\n## Current Context"));
+        assert_eq!(prompt.matches("Identity summary").count(), 1);
     }
 }
 

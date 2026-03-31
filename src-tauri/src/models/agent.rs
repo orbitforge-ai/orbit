@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::executor::workspace::AgentIdentityConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,6 +20,7 @@ pub struct CreateAgent {
     pub name: String,
     pub description: Option<String>,
     pub max_concurrent_runs: Option<i64>,
+    pub identity: Option<AgentIdentityConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

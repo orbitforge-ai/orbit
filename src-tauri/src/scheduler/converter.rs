@@ -110,6 +110,7 @@ mod tests {
             time_of_day: None,
             timezone: "UTC".to_string(),
             missed_run_policy: "skip".to_string(),
+            expression: None,
         };
         assert_eq!(to_cron(&cfg).unwrap(), "0 */30 * * * *");
     }
@@ -123,6 +124,7 @@ mod tests {
             time_of_day: Some(TimeOfDay { hour: 9, minute: 0 }),
             timezone: "UTC".to_string(),
             missed_run_policy: "skip".to_string(),
+            expression: None,
         };
         assert_eq!(to_cron(&cfg).unwrap(), "0 0 9 * * 1,3");
     }

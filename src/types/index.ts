@@ -11,6 +11,17 @@ export interface Agent {
   updatedAt: string;
 }
 
+export interface AgentIdentityConfig {
+  presetId: string;
+  identityName: string;
+  voice: string;
+  vibe: string;
+  warmth: number;
+  directness: number;
+  humor: number;
+  customNote?: string;
+}
+
 export interface Task {
   id: string;
   name: string;
@@ -206,6 +217,7 @@ export interface CreateAgent {
   name: string;
   description?: string;
   maxConcurrentRuns?: number;
+  identity?: AgentIdentityConfig;
 }
 
 export interface UpdateAgent {
@@ -235,6 +247,7 @@ export interface AgentWorkspaceConfig {
   contextWindowOverride?: number;
   webSearchProvider: string;
   disabledSkills: string[];
+  identity: AgentIdentityConfig;
 }
 
 // ─── Agent Skills types ────────────────────────────────────────────────────

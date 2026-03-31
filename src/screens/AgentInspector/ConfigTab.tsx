@@ -9,6 +9,7 @@ import { llmApi } from '../../api/llm';
 import { AgentWorkspaceConfig } from '../../types';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { CollapsibleSection } from '../../components/CollapsibleSection';
+import { AgentIdentitySection } from './AgentIdentitySection';
 
 const TOOL_CATEGORIES = [
   {
@@ -62,11 +63,12 @@ const MODEL_OPTIONS: Record<string, { label: string; value: string }[]> = {
 
 interface ConfigTabProps {
   agentId: string;
+  agentName: string;
   onDirtyChange?: (dirty: boolean) => void;
 }
 
 export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>(function ConfigTab(
-  { agentId, onDirtyChange },
+  { agentId, agentName, onDirtyChange },
   ref
 ) {
   const queryClient = useQueryClient();
@@ -334,6 +336,13 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
           )}
         </div>
       </section>
+
+      <AgentIdentitySection
+        identity={config.identity}
+        onChange={(identity) => updateConfig({ identity })}
+        agentName={agentName}
+        showPreview
+      />
 
       {/* Behavior / Temperature */}
       <section className="space-y-3">

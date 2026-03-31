@@ -27,6 +27,8 @@ import { SkillsTab } from './SkillsTab';
 import { AgentRunDialog } from './AgentRunDialog';
 import { AgentRunView } from './AgentRunView';
 import { InlineEdit } from '../../components/InlineEdit';
+import { AgentIdentitySection } from './AgentIdentitySection';
+import { getDefaultAgentIdentity } from '../../lib/agentIdentity';
 
 export function AgentInspector() {
   const { selectedAgentId } = useUiStore();
@@ -61,6 +63,7 @@ function NewAgentView() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [maxConcurrent, setMaxConcurrent] = useState(5);
+  const [identity, setIdentity] = useState(getDefaultAgentIdentity());
   const [saving, setSaving] = useState(false);
 
   async function handleSave() {
@@ -71,6 +74,7 @@ function NewAgentView() {
         name: name.trim(),
         description: description.trim() || undefined,
         maxConcurrentRuns: maxConcurrent,
+        identity,
       };
       const created = await agentsApi.create(payload);
       queryClient.invalidateQueries({ queryKey: ['agents'] });
@@ -110,6 +114,11 @@ function NewAgentView() {
             className="w-20 px-2 py-1.5 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
           />
         </div>
+        <AgentIdentitySection
+          identity={identity}
+          onChange={setIdentity}
+          agentName={name.trim() || 'this agent'}
+        />
         <div className="flex gap-2 pt-1">
           <button
             onClick={handleSave}
@@ -275,6 +284,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
         <div className={agentTab === 'config' ? 'h-full' : 'hidden'}>
           <ConfigTab
             agentId={agentId}
+            agentName={agent.name}
             onDirtyChange={(dirty) => handleDirtyChange('config', dirty)}
             ref={configSaveRef}
           />

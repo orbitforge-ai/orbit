@@ -41,6 +41,27 @@ pub fn agent_dir(agent_id: &str) -> PathBuf {
 /// Agent workspace configuration stored in config.json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentIdentityConfig {
+    #[serde(default = "default_identity_preset_id")]
+    pub preset_id: String,
+    #[serde(default = "default_identity_name")]
+    pub identity_name: String,
+    #[serde(default = "default_identity_voice")]
+    pub voice: String,
+    #[serde(default = "default_identity_vibe")]
+    pub vibe: String,
+    #[serde(default = "default_identity_warmth")]
+    pub warmth: u8,
+    #[serde(default = "default_identity_directness")]
+    pub directness: u8,
+    #[serde(default = "default_identity_humor")]
+    pub humor: u8,
+    #[serde(default)]
+    pub custom_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentWorkspaceConfig {
     pub provider: String,
     pub model: String,
@@ -58,10 +79,44 @@ pub struct AgentWorkspaceConfig {
     pub web_search_provider: String,
     #[serde(default)]
     pub disabled_skills: Vec<String>,
+    #[serde(default = "default_agent_identity")]
+    pub identity: AgentIdentityConfig,
 }
 
 fn default_search_provider() -> String {
     "brave".to_string()
+}
+
+fn default_identity_preset_id() -> String {
+    "balanced_assistant".to_string()
+}
+
+fn default_identity_name() -> String {
+    "Balanced Assistant".to_string()
+}
+
+fn default_identity_voice() -> String {
+    "neutral".to_string()
+}
+
+fn default_identity_vibe() -> String {
+    "balanced, clear, and approachable".to_string()
+}
+
+fn default_identity_warmth() -> u8 {
+    55
+}
+
+fn default_identity_directness() -> u8 {
+    55
+}
+
+fn default_identity_humor() -> u8 {
+    20
+}
+
+pub fn default_agent_identity() -> AgentIdentityConfig {
+    builtin_identity_preset("balanced_assistant")
 }
 
 impl Default for AgentWorkspaceConfig {
@@ -86,8 +141,150 @@ impl Default for AgentWorkspaceConfig {
             context_window_override: None,
             web_search_provider: default_search_provider(),
             disabled_skills: Vec::new(),
+            identity: default_agent_identity(),
         }
     }
+}
+
+pub fn builtin_identity_preset(preset_id: &str) -> AgentIdentityConfig {
+    match preset_id {
+        "warm_guide" => AgentIdentityConfig {
+            preset_id: "warm_guide".to_string(),
+            identity_name: "Warm Guide".to_string(),
+            voice: "warm".to_string(),
+            vibe: "encouraging and supportive".to_string(),
+            warmth: 80,
+            directness: 40,
+            humor: 25,
+            custom_note: None,
+        },
+        "crisp_operator" => AgentIdentityConfig {
+            preset_id: "crisp_operator".to_string(),
+            identity_name: "Crisp Operator".to_string(),
+            voice: "crisp".to_string(),
+            vibe: "efficient, composed, and no-nonsense".to_string(),
+            warmth: 25,
+            directness: 85,
+            humor: 5,
+            custom_note: None,
+        },
+        "calm_analyst" => AgentIdentityConfig {
+            preset_id: "calm_analyst".to_string(),
+            identity_name: "Calm Analyst".to_string(),
+            voice: "calm".to_string(),
+            vibe: "measured, thoughtful, and analytical".to_string(),
+            warmth: 40,
+            directness: 70,
+            humor: 10,
+            custom_note: None,
+        },
+        "playful_creative" => AgentIdentityConfig {
+            preset_id: "playful_creative".to_string(),
+            identity_name: "Playful Creative".to_string(),
+            voice: "bright".to_string(),
+            vibe: "inventive, lively, and imaginative".to_string(),
+            warmth: 70,
+            directness: 45,
+            humor: 60,
+            custom_note: None,
+        },
+        "steady_coach" => AgentIdentityConfig {
+            preset_id: "steady_coach".to_string(),
+            identity_name: "Steady Coach".to_string(),
+            voice: "steady".to_string(),
+            vibe: "confident, motivating, and grounded".to_string(),
+            warmth: 65,
+            directness: 65,
+            humor: 15,
+            custom_note: None,
+        },
+        _ => AgentIdentityConfig {
+            preset_id: "balanced_assistant".to_string(),
+            identity_name: "Balanced Assistant".to_string(),
+            voice: "neutral".to_string(),
+            vibe: "balanced, clear, and approachable".to_string(),
+            warmth: 55,
+            directness: 55,
+            humor: 20,
+            custom_note: None,
+        },
+    }
+}
+
+pub fn normalize_agent_identity(identity: &AgentIdentityConfig) -> AgentIdentityConfig {
+    if identity.preset_id != "custom" {
+        return builtin_identity_preset(&identity.preset_id);
+    }
+
+    let base = default_agent_identity();
+    AgentIdentityConfig {
+        preset_id: "custom".to_string(),
+        identity_name: sanitize_text(&identity.identity_name, 60)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "Custom Identity".to_string()),
+        voice: sanitize_text(&identity.voice, 40)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(base.voice),
+        vibe: sanitize_text(&identity.vibe, 80)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(base.vibe),
+        warmth: identity.warmth.min(100),
+        directness: identity.directness.min(100),
+        humor: identity.humor.min(100),
+        custom_note: sanitize_text_option(identity.custom_note.as_deref(), 240),
+    }
+}
+
+pub fn normalize_agent_config(config: AgentWorkspaceConfig) -> AgentWorkspaceConfig {
+    AgentWorkspaceConfig {
+        identity: normalize_agent_identity(&config.identity),
+        ..config
+    }
+}
+
+pub fn identity_score_descriptor(value: u8) -> &'static str {
+    match value {
+        0..=33 => "low",
+        34..=66 => "medium",
+        _ => "high",
+    }
+}
+
+pub fn build_identity_prompt_summary(agent_name: &str, identity: &AgentIdentityConfig) -> String {
+    let resolved = normalize_agent_identity(identity);
+    let mut summary = format!(
+        "You are {}. Use the '{}' identity: {}. Speak with a {} voice style, {} warmth, {} directness, and {} humor.",
+        sanitize_text(agent_name, 80)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "this agent".to_string()),
+        resolved.identity_name,
+        resolved.vibe,
+        resolved.voice,
+        identity_score_descriptor(resolved.warmth),
+        identity_score_descriptor(resolved.directness),
+        identity_score_descriptor(resolved.humor)
+    );
+
+    if let Some(custom_note) = resolved.custom_note.as_deref() {
+        if !custom_note.is_empty() {
+            summary.push_str(&format!(" Additional identity note: {}.", custom_note));
+        }
+    }
+
+    summary
+}
+
+fn sanitize_text(value: &str, max_len: usize) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(trimmed.chars().take(max_len).collect())
+}
+
+fn sanitize_text_option(value: Option<&str>, max_len: usize) -> Option<String> {
+    value.and_then(|text| sanitize_text(text, max_len))
 }
 
 /// File entry returned by list operations.
@@ -309,7 +506,9 @@ pub fn load_agent_config(agent_id: &str) -> Result<AgentWorkspaceConfig, String>
     }
     let content =
         fs::read_to_string(&config_path).map_err(|e| format!("failed to read config: {}", e))?;
-    serde_json::from_str(&content).map_err(|e| format!("failed to parse config: {}", e))
+    let config: AgentWorkspaceConfig =
+        serde_json::from_str(&content).map_err(|e| format!("failed to parse config: {}", e))?;
+    Ok(normalize_agent_config(config))
 }
 
 /// Save the agent's workspace configuration to config.json.
@@ -317,7 +516,92 @@ pub fn save_agent_config(agent_id: &str, config: &AgentWorkspaceConfig) -> Resul
     let dir = agent_dir(agent_id);
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create agent directory: {}", e))?;
     let config_path = dir.join("config.json");
-    let json = serde_json::to_string_pretty(config)
+    let normalized = normalize_agent_config(config.clone());
+    let json = serde_json::to_string_pretty(&normalized)
         .map_err(|e| format!("failed to serialize config: {}", e))?;
     fs::write(&config_path, json).map_err(|e| format!("failed to write config: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_identity_prompt_summary, builtin_identity_preset, default_agent_identity,
+        identity_score_descriptor, normalize_agent_identity, AgentIdentityConfig,
+        AgentWorkspaceConfig,
+    };
+
+    #[test]
+    fn missing_identity_defaults_to_balanced_assistant() {
+        let parsed: AgentWorkspaceConfig = serde_json::from_str(
+            r#"{
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-20250514",
+                "temperature": 0.7,
+                "maxIterations": 25,
+                "maxTotalTokens": 200000,
+                "allowedTools": ["finish"],
+                "webSearchProvider": "brave",
+                "disabledSkills": []
+            }"#,
+        )
+        .expect("config should deserialize");
+
+        assert_eq!(parsed.identity.preset_id, "balanced_assistant");
+        assert_eq!(parsed.identity.identity_name, "Balanced Assistant");
+    }
+
+    #[test]
+    fn built_in_preset_resolution_returns_exact_values() {
+        let preset = normalize_agent_identity(&AgentIdentityConfig {
+            preset_id: "warm_guide".to_string(),
+            ..default_agent_identity()
+        });
+
+        assert_eq!(preset.identity_name, "Warm Guide");
+        assert_eq!(preset.voice, "warm");
+        assert_eq!(preset.warmth, 80);
+        assert_eq!(preset.directness, 40);
+        assert_eq!(preset.humor, 25);
+    }
+
+    #[test]
+    fn score_descriptor_uses_expected_buckets() {
+        assert_eq!(identity_score_descriptor(0), "low");
+        assert_eq!(identity_score_descriptor(33), "low");
+        assert_eq!(identity_score_descriptor(34), "medium");
+        assert_eq!(identity_score_descriptor(66), "medium");
+        assert_eq!(identity_score_descriptor(67), "high");
+        assert_eq!(identity_score_descriptor(100), "high");
+    }
+
+    #[test]
+    fn identity_prompt_summary_includes_custom_note() {
+        let summary = build_identity_prompt_summary(
+            "Orbit",
+            &AgentIdentityConfig {
+                preset_id: "custom".to_string(),
+                identity_name: "Studio Host".to_string(),
+                voice: "bright".to_string(),
+                vibe: "inventive and welcoming".to_string(),
+                warmth: 70,
+                directness: 45,
+                humor: 60,
+                custom_note: Some("Keep the energy grounded.".to_string()),
+            },
+        );
+
+        assert!(summary.contains("You are Orbit."));
+        assert!(summary.contains("Use the 'Studio Host' identity"));
+        assert!(summary.contains("high warmth"));
+        assert!(summary.contains("medium directness"));
+        assert!(summary.contains("Additional identity note: Keep the energy grounded."));
+    }
+
+    #[test]
+    fn unknown_preset_falls_back_to_balanced_assistant() {
+        let preset = builtin_identity_preset("does_not_exist");
+
+        assert_eq!(preset.preset_id, "balanced_assistant");
+        assert_eq!(preset.identity_name, "Balanced Assistant");
+    }
 }

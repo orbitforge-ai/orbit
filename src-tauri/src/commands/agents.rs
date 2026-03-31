@@ -44,6 +44,7 @@ pub async fn create_agent(
 ) -> Result<Agent, String> {
     let pool = db.0.clone();
     tokio::task::spawn_blocking(move || {
+        let initial_identity = payload.identity.clone();
         let conn = pool.get().map_err(|e| e.to_string())?;
         let base_slug = workspace::slugify(&payload.name);
         let base_slug = if base_slug.is_empty() { "agent".to_string() } else { base_slug };
@@ -93,7 +94,12 @@ pub async fn create_agent(
         .map_err(|e| e.to_string())?;
 
         // Initialise workspace directory for the new agent
-        let _ = workspace::init_agent_workspace(&agent.id);
+        workspace::init_agent_workspace(&agent.id)?;
+        if let Some(identity) = initial_identity {
+            let mut config = workspace::load_agent_config(&agent.id)?;
+            config.identity = workspace::normalize_agent_identity(&identity);
+            workspace::save_agent_config(&agent.id, &config)?;
+        }
 
         Ok(agent)
     })
