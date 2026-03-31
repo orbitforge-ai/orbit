@@ -2,24 +2,44 @@ import { useEffect, useState, useImperativeHandle, forwardRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Key, Trash2, Check, ChevronDown } from 'lucide-react';
 import * as Select from '@radix-ui/react-select';
-import * as Checkbox from '@radix-ui/react-checkbox';
+import * as Switch from '@radix-ui/react-switch';
 
 import { workspaceApi } from '../../api/workspace';
 import { llmApi } from '../../api/llm';
 import { AgentWorkspaceConfig } from '../../types';
 import { confirm } from '@tauri-apps/plugin-dialog';
+import { CollapsibleSection } from '../../components/CollapsibleSection';
 
-const AVAILABLE_TOOLS = [
-  { id: 'shell_command', label: 'Shell Commands' },
-  { id: 'read_file', label: 'Read Files' },
-  { id: 'write_file', label: 'Write Files' },
-  { id: 'list_files', label: 'List Files' },
-  { id: 'web_search', label: 'Web Search' },
-  { id: 'send_message', label: 'Send Message (Agent Bus)' },
-  { id: 'spawn_sub_agents', label: 'Spawn Sub-Agents' },
-  { id: 'activate_skill', label: 'Activate Skill' },
-  { id: 'finish', label: 'Finish (always enabled)' },
+const TOOL_CATEGORIES = [
+  {
+    label: 'File System',
+    tools: [
+      { id: 'read_file', label: 'Read Files' },
+      { id: 'write_file', label: 'Write Files' },
+      { id: 'list_files', label: 'List Files' },
+    ],
+  },
+  {
+    label: 'Execution',
+    tools: [{ id: 'shell_command', label: 'Shell Commands' }],
+  },
+  {
+    label: 'Communication',
+    tools: [
+      { id: 'send_message', label: 'Send Message' },
+      { id: 'web_search', label: 'Web Search' },
+    ],
+  },
+  {
+    label: 'Agent Control',
+    tools: [
+      { id: 'spawn_sub_agents', label: 'Sub-Agents' },
+      { id: 'activate_skill', label: 'Activate Skill' },
+    ],
+  },
 ];
+
+const ALL_TOOL_IDS = TOOL_CATEGORIES.flatMap((c) => c.tools.map((t) => t.id));
 
 const SEARCH_PROVIDERS = [
   { value: 'brave', label: 'Brave Search' },
@@ -140,19 +160,34 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
 
   function toggleTool(toolId: string) {
     if (!config) return;
-    const nonFinishTools = AVAILABLE_TOOLS.filter((t) => t.id !== 'finish');
     // If allowedTools is empty (meaning "all"), expand to explicit list first
     const currentTools = config.allowedTools.length === 0
-      ? nonFinishTools.map((t) => t.id)
+      ? [...ALL_TOOL_IDS]
       : config.allowedTools;
     let tools = currentTools.includes(toolId)
       ? currentTools.filter((t) => t !== toolId)
       : [...currentTools, toolId];
     // When all non-finish tools are enabled, normalize back to empty (means "all")
-    if (nonFinishTools.every((t) => tools.includes(t.id))) {
+    if (ALL_TOOL_IDS.every((id) => tools.includes(id))) {
       tools = [];
     }
     updateConfig({ allowedTools: tools });
+  }
+
+  function isToolEnabled(toolId: string): boolean {
+    if (!config) return false;
+    return config.allowedTools.length === 0 || config.allowedTools.includes(toolId);
+  }
+
+  const allToolsEnabled = config ? config.allowedTools.length === 0 : false;
+
+  function toggleAllTools(enableAll: boolean) {
+    if (enableAll) {
+      updateConfig({ allowedTools: [] });
+    } else {
+      // Disable all except finish (which is always on)
+      updateConfig({ allowedTools: ['finish'] });
+    }
   }
 
   if (!config) {
@@ -163,7 +198,7 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
 
   return (
     <div className="p-6 space-y-6 h-full overflow-y-auto">
-      {/* Provider & Model */}
+      {/* Provider, Model & API Key — merged */}
       <section className="space-y-3">
         <h4 className="text-sm font-semibold text-white">Model</h4>
         <div className="grid grid-cols-2 gap-3">
@@ -243,12 +278,9 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
             </Select.Root>
           </div>
         </div>
-      </section>
 
-      {/* API Key */}
-      <section className="space-y-3">
-        <h4 className="text-sm font-semibold text-white">API Key</h4>
-        <div className="rounded-xl border border-edge bg-surface p-4">
+        {/* Inline API key status */}
+        <div className="rounded-lg border border-edge bg-background px-3 py-2">
           {hasKey ? (
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -294,7 +326,7 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
           ) : (
             <button
               onClick={() => setShowKeyInput(true)}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-edge-hover text-secondary hover:text-white hover:border-accent text-sm w-full transition-colors"
+              className="flex items-center gap-2 text-secondary hover:text-white text-sm transition-colors"
             >
               <Key size={14} />
               Set {config.provider} API key
@@ -303,7 +335,7 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
         </div>
       </section>
 
-      {/* Temperature Presets */}
+      {/* Behavior / Temperature */}
       <section className="space-y-3">
         <div>
           <h4 className="text-sm font-semibold text-white">Behavior</h4>
@@ -358,174 +390,189 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
         </div>
       </section>
 
-      {/* Limits */}
-      <section className="space-y-3">
-        <h4 className="text-sm font-semibold text-white">Limits</h4>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-xs text-muted mb-1 block">Max Iterations</label>
-            <input
-              type="number"
-              min={1}
-              max={100}
-              value={config.maxIterations}
-              onChange={(e) => updateConfig({ maxIterations: parseInt(e.target.value) || 25 })}
-              className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-muted mb-1 block">Max Total Tokens</label>
-            <input
-              type="number"
-              min={1000}
-              step={10000}
-              value={config.maxTotalTokens}
-              onChange={(e) => updateConfig({ maxTotalTokens: parseInt(e.target.value) || 200000 })}
-              className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
-            />
-          </div>
-        </div>
-      </section>
-
-      {/* Context Management */}
-      <section className="space-y-3">
-        <div>
-          <h4 className="text-sm font-semibold text-white">Context Management</h4>
-          <p className="text-xs text-muted mt-1">
-            Controls automatic conversation compaction when the context window fills up.
-          </p>
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          <div>
-            <label className="text-xs text-muted mb-1 block">Compaction Threshold</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={10}
-                max={95}
-                step={5}
-                value={Math.round((config.compactionThreshold ?? 0.65) * 100)}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value);
-                  if (!isNaN(v) && v >= 10 && v <= 95)
-                    updateConfig({ compactionThreshold: v / 100 });
-                }}
-                className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
-              />
-              <span className="text-xs text-muted shrink-0">%</span>
+      {/* Advanced Settings — collapsed by default */}
+      <CollapsibleSection
+        title="Advanced Settings"
+        description="Limits, context, web search, and tool permissions"
+      >
+        <div className="space-y-6">
+          {/* Limits & Context */}
+          <div className="space-y-3">
+            <h5 className="text-xs font-semibold text-secondary uppercase tracking-wide">
+              Limits & Context
+            </h5>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-muted mb-1 block">Max Iterations</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={config.maxIterations}
+                  onChange={(e) => updateConfig({ maxIterations: parseInt(e.target.value) || 25 })}
+                  className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+                />
+                <span className="text-[10px] text-muted mt-0.5 block">Default 25</span>
+              </div>
+              <div>
+                <label className="text-xs text-muted mb-1 block">Max Total Tokens</label>
+                <input
+                  type="number"
+                  min={1000}
+                  step={10000}
+                  value={config.maxTotalTokens}
+                  onChange={(e) => updateConfig({ maxTotalTokens: parseInt(e.target.value) || 200000 })}
+                  className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+                />
+                <span className="text-[10px] text-muted mt-0.5 block">Default 200k</span>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="text-xs text-muted mb-1 block">Compaction Threshold</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={10}
+                    max={95}
+                    step={5}
+                    value={Math.round((config.compactionThreshold ?? 0.65) * 100)}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value);
+                      if (!isNaN(v) && v >= 10 && v <= 95)
+                        updateConfig({ compactionThreshold: v / 100 });
+                    }}
+                    className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+                  />
+                  <span className="text-xs text-muted shrink-0">%</span>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-muted mb-1 block">Messages to Retain</label>
+                <input
+                  type="number"
+                  min={2}
+                  max={50}
+                  value={config.compactionRetainCount ?? 12}
+                  onChange={(e) =>
+                    updateConfig({ compactionRetainCount: parseInt(e.target.value) || 12 })
+                  }
+                  className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted mb-1 block">Context Window Override</label>
+                <input
+                  type="number"
+                  min={1000}
+                  step={10000}
+                  placeholder="Auto"
+                  value={config.contextWindowOverride ?? ''}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    updateConfig({
+                      contextWindowOverride: raw ? parseInt(raw) || undefined : undefined,
+                    });
+                  }}
+                  className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent placeholder:text-border-hover"
+                />
+              </div>
             </div>
           </div>
-          <div>
-            <label className="text-xs text-muted mb-1 block">Messages to Retain</label>
-            <input
-              type="number"
-              min={2}
-              max={50}
-              value={config.compactionRetainCount ?? 12}
-              onChange={(e) =>
-                updateConfig({ compactionRetainCount: parseInt(e.target.value) || 12 })
-              }
-              className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-muted mb-1 block">Context Window Override</label>
-            <input
-              type="number"
-              min={1000}
-              step={10000}
-              placeholder="Auto"
-              value={config.contextWindowOverride ?? ''}
-              onChange={(e) => {
-                const raw = e.target.value;
-                updateConfig({
-                  contextWindowOverride: raw ? parseInt(raw) || undefined : undefined,
-                });
-              }}
-              className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent placeholder:text-border-hover"
-            />
-          </div>
-        </div>
-      </section>
 
-      {/* Web Search Provider */}
-      <section className="space-y-3">
-        <div>
-          <h4 className="text-sm font-semibold text-white">Web Search</h4>
-          <p className="text-xs text-muted mt-1">
-            Search provider used by the web_search tool. Requires an API key for the selected
-            provider.
-          </p>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-xs text-muted mb-1 block">Provider</label>
-            <Select.Root
-              value={config.webSearchProvider}
-              onValueChange={(value) => updateConfig({ webSearchProvider: value })}
-            >
-              <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent">
-                <Select.Value />
-                <Select.Icon>
-                  <ChevronDown size={14} className="text-muted" />
-                </Select.Icon>
-              </Select.Trigger>
-              <Select.Portal>
-                <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
-                  <Select.Viewport className="p-1">
-                    {SEARCH_PROVIDERS.map((p) => (
-                      <Select.Item
-                        key={p.value}
-                        value={p.value}
-                        className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
-                      >
-                        <Select.ItemText>{p.label}</Select.ItemText>
-                      </Select.Item>
-                    ))}
-                  </Select.Viewport>
-                </Select.Content>
-              </Select.Portal>
-            </Select.Root>
-          </div>
-          <div>
-            <label className="text-xs text-muted mb-1 block">API Key</label>
-            <SearchKeyStatus provider={config.webSearchProvider} />
-          </div>
-        </div>
-      </section>
-
-      {/* Tools */}
-      <section className="space-y-3">
-        <h4 className="text-sm font-semibold text-white">Allowed Tools</h4>
-        <div className="space-y-2">
-          {AVAILABLE_TOOLS.map((tool) => {
-            const isFinish = tool.id === 'finish';
-            const checked = isFinish || config.allowedTools.length === 0 || config.allowedTools.includes(tool.id);
-            return (
-              <div
-                key={tool.id}
-                onClick={() => !isFinish && toggleTool(tool.id)}
-                className={`flex items-center gap-3 px-3 py-2 rounded-lg border transition-colors cursor-pointer ${
-                  checked ? 'border-accent/30 bg-accent/5' : 'border-edge bg-surface'
-                } ${isFinish ? 'opacity-60 cursor-not-allowed' : ''}`}
-              >
-                <Checkbox.Root
-                  checked={checked}
-                  disabled={isFinish}
-                  onCheckedChange={() => !isFinish && toggleTool(tool.id)}
-                  className="flex items-center justify-center w-4 h-4 rounded border border-edge-hover bg-background data-[state=checked]:bg-accent data-[state=checked]:border-accent"
+          {/* Web Search */}
+          <div className="space-y-3">
+            <h5 className="text-xs font-semibold text-secondary uppercase tracking-wide">
+              Web Search
+            </h5>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-muted mb-1 block">Provider</label>
+                <Select.Root
+                  value={config.webSearchProvider}
+                  onValueChange={(value) => updateConfig({ webSearchProvider: value })}
                 >
-                  <Checkbox.Indicator>
-                    <Check size={10} className="text-white" />
-                  </Checkbox.Indicator>
-                </Checkbox.Root>
-                <span className="text-sm text-white">{tool.label}</span>
-                <span className="text-xs text-muted font-mono">{tool.id}</span>
+                  <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent">
+                    <Select.Value />
+                    <Select.Icon>
+                      <ChevronDown size={14} className="text-muted" />
+                    </Select.Icon>
+                  </Select.Trigger>
+                  <Select.Portal>
+                    <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
+                      <Select.Viewport className="p-1">
+                        {SEARCH_PROVIDERS.map((p) => (
+                          <Select.Item
+                            key={p.value}
+                            value={p.value}
+                            className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
+                          >
+                            <Select.ItemText>{p.label}</Select.ItemText>
+                          </Select.Item>
+                        ))}
+                      </Select.Viewport>
+                    </Select.Content>
+                  </Select.Portal>
+                </Select.Root>
               </div>
-            );
-          })}
+              <div>
+                <label className="text-xs text-muted mb-1 block">API Key</label>
+                <SearchKeyStatus provider={config.webSearchProvider} />
+              </div>
+            </div>
+          </div>
+
+          {/* Allowed Tools */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h5 className="text-xs font-semibold text-secondary uppercase tracking-wide">
+                Allowed Tools
+              </h5>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted">All</span>
+                <Switch.Root
+                  checked={allToolsEnabled}
+                  onCheckedChange={toggleAllTools}
+                  className="w-9 h-5 rounded-full bg-edge data-[state=checked]:bg-emerald-500 transition-colors outline-none"
+                >
+                  <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
+                </Switch.Root>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              {TOOL_CATEGORIES.flatMap((category) =>
+                category.tools.map((tool) => {
+                  const enabled = isToolEnabled(tool.id);
+                  return (
+                    <button
+                      key={tool.id}
+                      onClick={() => toggleTool(tool.id)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium transition-colors ${
+                        enabled
+                          ? 'border-accent/40 bg-accent/10 text-accent-light hover:bg-accent/15'
+                          : 'border-edge bg-surface text-muted hover:border-edge-hover hover:text-white'
+                      }`}
+                    >
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                          enabled ? 'bg-emerald-400' : 'bg-edge-hover'
+                        }`}
+                      />
+                      {tool.label}
+                    </button>
+                  );
+                })
+              )}
+              {/* Finish — always on */}
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-edge bg-surface text-xs text-muted opacity-50">
+                <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-400" />
+                Finish
+              </span>
+            </div>
+          </div>
         </div>
-      </section>
+      </CollapsibleSection>
     </div>
   );
 });
