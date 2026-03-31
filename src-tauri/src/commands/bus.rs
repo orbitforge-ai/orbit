@@ -104,7 +104,8 @@ pub async fn get_bus_thread(
                     from_agent_name: row.get(2)?,
                     to_agent_id: row.get(3)?,
                     kind: row.get(4)?,
-                    payload: serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null),
+                    payload: serde_json::from_str(&payload_str)
+                        .unwrap_or_else(|_| serde_json::Value::String(payload_str.clone())),
                     status: row.get(6)?,
                     created_at: row.get(7)?,
                     triggered_run_id: row.get(8)?,

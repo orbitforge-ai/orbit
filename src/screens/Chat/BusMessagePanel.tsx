@@ -20,10 +20,15 @@ function busMessagesToDisplay(messages: BusThreadMessage[]): DisplayMessage[] {
   let id = 0;
 
   for (const msg of messages) {
-    const payloadText =
-      typeof msg.payload === 'object' && msg.payload !== null && 'message' in msg.payload
-        ? String(msg.payload.message)
-        : JSON.stringify(msg.payload, null, 2);
+    const payloadText = (() => {
+      const p = msg.payload as unknown;
+      if (typeof p === 'string') return p;
+      if (typeof p === 'object' && p !== null && 'message' in p) {
+        const m = (p as Record<string, unknown>).message;
+        if (m != null) return String(m);
+      }
+      return JSON.stringify(p, null, 2);
+    })();
 
     // Incoming message from sender agent
     result.push({
