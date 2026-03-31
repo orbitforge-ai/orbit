@@ -98,6 +98,14 @@ pub struct ChatContextUpdatePayload {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SubAgentsSpawnedPayload {
+  pub parent_run_id: String,
+  pub sub_agent_run_ids: Vec<String>,
+  pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BusMessageSentPayload {
   pub message_id: String,
   pub from_agent_id: String,
@@ -236,6 +244,21 @@ pub fn emit_chat_context_update(
   };
   if let Err(e) = app.emit("chat:context_update", &payload) {
     warn!("failed to emit chat:context_update: {}", e);
+  }
+}
+
+pub fn emit_sub_agents_spawned(
+  app: &tauri::AppHandle,
+  parent_run_id: &str,
+  sub_agent_run_ids: Vec<String>,
+) {
+  let payload = SubAgentsSpawnedPayload {
+    parent_run_id: parent_run_id.to_string(),
+    sub_agent_run_ids,
+    timestamp: chrono::Utc::now().to_rfc3339(),
+  };
+  if let Err(e) = app.emit("agent:sub_agents_spawned", &payload) {
+    warn!("failed to emit agent:sub_agents_spawned: {}", e);
   }
 }
 

@@ -1,10 +1,10 @@
 use serde_json::json;
 use std::path::{ Path, PathBuf };
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{ info, warn };
 
 use crate::db::DbPool;
-use crate::events::emitter::{ emit_bus_message_sent, emit_log_chunk };
+use crate::events::emitter::{ emit_bus_message_sent, emit_log_chunk, emit_sub_agents_spawned };
 use crate::executor::engine::RunRequest;
 use crate::executor::llm_provider::ToolDefinition;
 use crate::executor::skills;
@@ -12,6 +12,12 @@ use crate::models::task::{ AgentLoopConfig, Task };
 
 /// Maximum chain depth before agent bus rejects further sends.
 const MAX_CHAIN_DEPTH: i64 = 10;
+/// Maximum number of sub-agents per spawn call.
+const MAX_SUB_AGENTS: usize = 10;
+/// Default timeout for sub-agent execution in seconds.
+const DEFAULT_SUB_AGENT_TIMEOUT_SECS: u64 = 300;
+/// Maximum timeout for sub-agent execution in seconds.
+const MAX_SUB_AGENT_TIMEOUT_SECS: u64 = 600;
 
 /// Context for executing agent tools — provides sandboxed filesystem access
 /// and optional Agent Bus capabilities.
@@ -33,6 +39,8 @@ pub struct ToolExecutionContext {
   pub current_agent_id: Option<String>,
   pub current_run_id: Option<String>,
   pub chain_depth: i64,
+  /// Whether this context is for a sub-agent (prevents nesting).
+  pub is_sub_agent: bool,
 }
 
 impl ToolExecutionContext {
@@ -52,6 +60,7 @@ impl ToolExecutionContext {
       current_agent_id: None,
       current_run_id: None,
       chain_depth: 0,
+      is_sub_agent: false,
     }
   }
 
@@ -78,7 +87,21 @@ impl ToolExecutionContext {
       current_agent_id: Some(agent_id.to_string()),
       current_run_id: Some(run_id.to_string()),
       chain_depth,
+      is_sub_agent: false,
     }
+  }
+
+  pub fn new_for_sub_agent(
+    agent_id: &str,
+    run_id: &str,
+    chain_depth: i64,
+    db: DbPool,
+    executor_tx: mpsc::UnboundedSender<RunRequest>,
+    app: tauri::AppHandle,
+  ) -> Self {
+    let mut ctx = Self::new_with_bus(agent_id, run_id, chain_depth, db, executor_tx, app);
+    ctx.is_sub_agent = true;
+    ctx
   }
 }
 
@@ -197,6 +220,40 @@ pub fn build_tool_definitions(allowed: &[String]) -> Vec<ToolDefinition> {
                     }
                 },
                 "required": ["skill_name"]
+            }),
+    },
+    ToolDefinition {
+      name: "spawn_sub_agents".to_string(),
+      description: "Break down work into parallel sub-tasks. Each sub-task runs as an independent agent loop with its own context. All sub-tasks execute concurrently and their results are returned together. Sub-agents have access to all your tools and the shared workspace, but cannot spawn further sub-agents.".to_string(),
+      input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array",
+                        "description": "Array of sub-tasks to execute concurrently",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {
+                                    "type": "string",
+                                    "description": "A short identifier for this sub-task (e.g., 'research', 'write-tests')"
+                                },
+                                "goal": {
+                                    "type": "string",
+                                    "description": "The goal/instructions for this sub-agent"
+                                }
+                            },
+                            "required": ["id", "goal"]
+                        },
+                        "minItems": 1,
+                        "maxItems": 10
+                    },
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "description": "Per-sub-agent timeout in seconds (default: 300, max: 600). If a sub-agent exceeds this, it is cancelled."
+                    }
+                },
+                "required": ["tasks"]
             }),
     },
     ToolDefinition {
@@ -621,6 +678,257 @@ pub async fn execute_tool(
           _ => continue,
         }
       }
+    }
+
+    "spawn_sub_agents" => {
+      // Belt-and-suspenders: reject if this is already a sub-agent
+      if ctx.is_sub_agent {
+        return Ok(("Error: Sub-agents cannot spawn further sub-agents.".to_string(), false));
+      }
+
+      let tasks = input["tasks"].as_array().ok_or("spawn_sub_agents: missing 'tasks' array")?;
+      if tasks.is_empty() {
+        return Ok(("Error: 'tasks' array must not be empty.".to_string(), false));
+      }
+      if tasks.len() > MAX_SUB_AGENTS {
+        return Ok((
+          format!("Error: Maximum {} sub-agents allowed, got {}.", MAX_SUB_AGENTS, tasks.len()),
+          false,
+        ));
+      }
+
+      let timeout_secs = input["timeout_seconds"]
+        .as_u64()
+        .unwrap_or(DEFAULT_SUB_AGENT_TIMEOUT_SECS)
+        .min(MAX_SUB_AGENT_TIMEOUT_SECS);
+
+      let db = ctx.db.as_ref().ok_or("spawn_sub_agents: database not available")?;
+      let bus_app = ctx.app.as_ref().ok_or("spawn_sub_agents: app handle not available")?;
+      let executor_tx = ctx.executor_tx.as_ref().ok_or("spawn_sub_agents: executor channel not available")?;
+      let parent_run_id = ctx.current_run_id.as_deref().unwrap_or("unknown");
+      let agent_id = ctx.current_agent_id.as_deref().unwrap_or(&ctx.agent_id);
+      let next_depth = ctx.chain_depth + 1;
+
+      info!(run_id = run_id, count = tasks.len(), "agent tool: spawn_sub_agents");
+
+      // Parse and validate sub-tasks
+      struct SubTask {
+        id: String,
+        goal: String,
+        run_id: String,
+        task_id: String,
+        log_path: PathBuf,
+      }
+
+      let mut sub_tasks: Vec<SubTask> = Vec::new();
+      for item in tasks {
+        let id = item["id"].as_str().ok_or("spawn_sub_agents: each task needs an 'id' field")?;
+        let goal = item["goal"].as_str().ok_or("spawn_sub_agents: each task needs a 'goal' field")?;
+        let sub_run_id = ulid::Ulid::new().to_string();
+        let sub_task_id = ulid::Ulid::new().to_string();
+        let log_path = PathBuf::from(format!(
+          "{}/.orbit/logs/{}.log",
+          std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
+          sub_run_id
+        ));
+
+        sub_tasks.push(SubTask {
+          id: id.to_string(),
+          goal: goal.to_string(),
+          run_id: sub_run_id,
+          task_id: sub_task_id,
+          log_path,
+        });
+      }
+
+      // Insert ephemeral task and run records for each sub-agent
+      let now = chrono::Utc::now().to_rfc3339();
+      for st in &sub_tasks {
+        let loop_config = AgentLoopConfig {
+          goal: st.goal.clone(),
+          model: None,
+          max_iterations: None,
+          max_total_tokens: None,
+          template_vars: None,
+        };
+        let config_json = serde_json::to_string(&serde_json::to_value(&loop_config).map_err(|e| e.to_string())?)
+          .map_err(|e| e.to_string())?;
+
+        let pool = db.clone();
+        let task_id = st.task_id.clone();
+        let sub_run_id = st.run_id.clone();
+        let agent_id = agent_id.to_string();
+        let parent_run_id = parent_run_id.to_string();
+        let log_path = st.log_path.to_string_lossy().to_string();
+        let now = now.clone();
+        let st_id = st.id.clone();
+
+        tokio::task::spawn_blocking(move || {
+          let conn = pool.get().map_err(|e| e.to_string())?;
+          conn.execute(
+            "INSERT INTO tasks (id, name, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, session_id, enabled, created_at, updated_at)
+             VALUES (?1, ?2, 'agent_loop', ?3, ?4, 0, 0, 'allow', '[]', ?5, NULL, 1, ?6, ?6)",
+            rusqlite::params![task_id, format!("sub-agent:{}", st_id), config_json, timeout_secs as i64, agent_id, now],
+          ).map_err(|e| e.to_string())?;
+          conn.execute(
+            "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, parent_run_id, metadata, chain_depth, is_sub_agent, created_at)
+             VALUES (?1, ?2, NULL, ?3, 'pending', 'sub_agent', ?4, 0, ?5, ?6, ?7, 1, ?8)",
+            rusqlite::params![sub_run_id, task_id, agent_id, log_path, parent_run_id, json!({"sub_task_id": st_id}).to_string(), next_depth, now],
+          ).map_err(|e| e.to_string())?;
+          Ok::<(), String>(())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+      }
+
+      // Emit event so UI can track sub-agents
+      let sub_run_ids: Vec<String> = sub_tasks.iter().map(|s| s.run_id.clone()).collect();
+      emit_sub_agents_spawned(bus_app, parent_run_id, sub_run_ids);
+
+      // Enqueue all sub-agents to the executor engine
+      for st in &sub_tasks {
+        let loop_config = AgentLoopConfig {
+          goal: st.goal.clone(),
+          model: None,
+          max_iterations: None,
+          max_total_tokens: None,
+          template_vars: None,
+        };
+        let config_json = serde_json::to_value(&loop_config).map_err(|e| e.to_string())?;
+
+        let task = Task {
+          id: st.task_id.clone(),
+          name: format!("sub-agent:{}", st.id),
+          description: Some(format!("Sub-agent task '{}'", st.id)),
+          kind: "agent_loop".to_string(),
+          config: config_json,
+          max_duration_seconds: timeout_secs as i64,
+          max_retries: 0,
+          retry_delay_seconds: 0,
+          concurrency_policy: "allow".to_string(),
+          tags: vec!["sub_agent".to_string()],
+          agent_id: Some(agent_id.to_string()),
+          session_id: None,
+          enabled: true,
+          created_at: now.clone(),
+          updated_at: now.clone(),
+        };
+
+        let req = RunRequest {
+          run_id: st.run_id.clone(),
+          task,
+          schedule_id: None,
+          _trigger: "sub_agent".to_string(),
+          retry_count: 0,
+          _parent_run_id: Some(parent_run_id.to_string()),
+          chain_depth: next_depth,
+        };
+        executor_tx.send(req).map_err(|e| format!("failed to enqueue sub-agent: {}", e))?;
+      }
+
+      // Poll all sub-agent runs until they reach terminal state
+      let timeout = tokio::time::Duration::from_secs(timeout_secs + 30); // extra grace period
+      let start = tokio::time::Instant::now();
+      let sub_run_ids: Vec<(String, String)> = sub_tasks.iter().map(|s| (s.id.clone(), s.run_id.clone())).collect();
+
+      loop {
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        let all_done = {
+          let pool = db.clone();
+          let ids: Vec<String> = sub_run_ids.iter().map(|(_, rid)| rid.clone()).collect();
+          tokio::task::spawn_blocking(move || -> bool {
+            let conn = match pool.get() {
+              Ok(c) => c,
+              Err(_) => return false,
+            };
+            for rid in &ids {
+              let state: Option<String> = conn.query_row(
+                "SELECT state FROM runs WHERE id = ?1",
+                rusqlite::params![rid],
+                |row| row.get(0),
+              ).ok();
+              match state.as_deref() {
+                Some("success") | Some("failure") | Some("cancelled") | Some("timed_out") => {}
+                _ => return false,
+              }
+            }
+            true
+          })
+          .await
+          .unwrap_or(false)
+        };
+
+        if all_done {
+          break;
+        }
+
+        if start.elapsed() > timeout {
+          warn!(run_id = run_id, "spawn_sub_agents: timed out waiting for sub-agents");
+          break;
+        }
+      }
+
+      // Collect results from all sub-agents
+      let mut results = Vec::new();
+      for (task_id, sub_run_id) in &sub_run_ids {
+        let pool = db.clone();
+        let rid = sub_run_id.clone();
+        let result = tokio::task::spawn_blocking(move || -> (String, Option<String>) {
+          let conn = match pool.get() {
+            Ok(c) => c,
+            Err(_) => return ("failure".to_string(), None),
+          };
+          let state: String = conn.query_row(
+            "SELECT state FROM runs WHERE id = ?1",
+            rusqlite::params![rid],
+            |row| row.get(0),
+          ).unwrap_or_else(|_| "failure".to_string());
+
+          let meta: Option<String> = conn.query_row(
+            "SELECT metadata FROM runs WHERE id = ?1",
+            rusqlite::params![rid],
+            |row| row.get(0),
+          ).ok();
+          let summary = meta.and_then(|m| {
+            let val: serde_json::Value = serde_json::from_str(&m).ok()?;
+            val.get("finish_summary").and_then(|s| s.as_str()).map(|s| s.to_string())
+          });
+
+          (state, summary)
+        })
+        .await
+        .unwrap_or(("failure".to_string(), None));
+
+        let (state, summary) = result;
+        match state.as_str() {
+          "success" => {
+            results.push(json!({
+              "id": task_id,
+              "status": "success",
+              "summary": summary.unwrap_or_else(|| "Sub-agent completed successfully.".to_string()),
+            }));
+          }
+          "timed_out" => {
+            results.push(json!({
+              "id": task_id,
+              "status": "timed_out",
+              "error": format!("Sub-agent timed out after {}s.", timeout_secs),
+            }));
+          }
+          _ => {
+            results.push(json!({
+              "id": task_id,
+              "status": state,
+              "error": summary.unwrap_or_else(|| format!("Sub-agent finished with state: {}", state)),
+            }));
+          }
+        }
+      }
+
+      let response = json!({ "results": results });
+      Ok((serde_json::to_string_pretty(&response).unwrap_or_else(|_| response.to_string()), false))
     }
 
     "activate_skill" => {

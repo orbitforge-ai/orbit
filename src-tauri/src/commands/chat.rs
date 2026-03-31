@@ -187,40 +187,99 @@ pub struct ChatMessageWithMeta {
   pub is_compacted: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaginatedChatMessages {
+  pub messages: Vec<ChatMessageWithMeta>,
+  pub total_count: i64,
+  pub has_more: bool,
+}
+
 #[tauri::command]
 pub async fn get_chat_messages(
   session_id: String,
+  limit: Option<i64>,
+  offset: Option<i64>,
   db: tauri::State<'_, DbPool>
-) -> Result<Vec<ChatMessageWithMeta>, String> {
+) -> Result<PaginatedChatMessages, String> {
   let pool = db.0.clone();
 
   tokio::task
     ::spawn_blocking(move || {
       let conn = pool.get().map_err(|e| e.to_string())?;
-      let mut stmt = conn
-        .prepare(
-          "SELECT role, content, created_at, is_compacted FROM chat_messages
-                 WHERE session_id = ?1 ORDER BY created_at ASC"
+
+      let total_count: i64 = conn
+        .query_row(
+          "SELECT COUNT(*) FROM chat_messages WHERE session_id = ?1",
+          rusqlite::params![session_id],
+          |row| row.get(0),
         )
         .map_err(|e| e.to_string())?;
 
-      let messages = stmt
-        .query_map(rusqlite::params![session_id], |row| {
-          let role: String = row.get(0)?;
-          let content_json: String = row.get(1)?;
-          let created_at: Option<String> = row.get(2)?;
-          let is_compacted: bool = row.get(3)?;
-          Ok((role, content_json, created_at, is_compacted))
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .map(|(role, content_json, created_at, is_compacted)| {
-          let content: Vec<ContentBlock> = serde_json::from_str(&content_json).unwrap_or_default();
-          ChatMessageWithMeta { role, content, created_at, is_compacted }
-        })
-        .collect();
+      let limit_val = limit.unwrap_or(0);
+      let offset_val = offset.unwrap_or(0);
 
-      Ok(messages)
+      let messages: Vec<ChatMessageWithMeta> = if limit_val > 0 {
+        let mut stmt = conn
+          .prepare(
+            "SELECT role, content, created_at, is_compacted FROM (
+               SELECT role, content, created_at, is_compacted
+               FROM chat_messages WHERE session_id = ?1
+               ORDER BY created_at DESC
+               LIMIT ?2 OFFSET ?3
+             ) sub ORDER BY created_at ASC"
+          )
+          .map_err(|e| e.to_string())?;
+
+        let rows: Vec<ChatMessageWithMeta> = stmt
+          .query_map(rusqlite::params![session_id, limit_val, offset_val], |row| {
+            let role: String = row.get(0)?;
+            let content_json: String = row.get(1)?;
+            let created_at: Option<String> = row.get(2)?;
+            let is_compacted: bool = row.get(3)?;
+            Ok((role, content_json, created_at, is_compacted))
+          })
+          .map_err(|e| e.to_string())?
+          .filter_map(|r| r.ok())
+          .map(|(role, content_json, created_at, is_compacted)| {
+            let content: Vec<ContentBlock> = serde_json::from_str(&content_json).unwrap_or_default();
+            ChatMessageWithMeta { role, content, created_at, is_compacted }
+          })
+          .collect();
+        rows
+      } else {
+        let mut stmt = conn
+          .prepare(
+            "SELECT role, content, created_at, is_compacted FROM chat_messages
+                   WHERE session_id = ?1 ORDER BY created_at ASC"
+          )
+          .map_err(|e| e.to_string())?;
+
+        let rows: Vec<ChatMessageWithMeta> = stmt
+          .query_map(rusqlite::params![session_id], |row| {
+            let role: String = row.get(0)?;
+            let content_json: String = row.get(1)?;
+            let created_at: Option<String> = row.get(2)?;
+            let is_compacted: bool = row.get(3)?;
+            Ok((role, content_json, created_at, is_compacted))
+          })
+          .map_err(|e| e.to_string())?
+          .filter_map(|r| r.ok())
+          .map(|(role, content_json, created_at, is_compacted)| {
+            let content: Vec<ContentBlock> = serde_json::from_str(&content_json).unwrap_or_default();
+            ChatMessageWithMeta { role, content, created_at, is_compacted }
+          })
+          .collect();
+        rows
+      };
+
+      let has_more = if limit_val > 0 {
+        (offset_val + limit_val) < total_count
+      } else {
+        false
+      };
+
+      Ok(PaginatedChatMessages { messages, total_count, has_more })
     }).await
     .map_err(|e| e.to_string())?
 }
@@ -418,6 +477,7 @@ async fn do_llm_chat(
     goal: None,
     ws_config: ws_config.clone(),
     existing_messages: Some(messages),
+    is_sub_agent: false,
   };
   let snapshot = pipeline.build(&ctx_request, db).await?;
   let mut messages = snapshot.messages;

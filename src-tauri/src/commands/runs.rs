@@ -25,7 +25,8 @@ pub async fn list_runs(
             "SELECT r.id, r.task_id, t.name as task_name, r.schedule_id,
                     r.agent_id, a.name as agent_name,
                     r.state, r.trigger, r.exit_code,
-                    r.started_at, r.finished_at, r.duration_ms, r.retry_count, r.created_at,
+                    r.started_at, r.finished_at, r.duration_ms, r.retry_count, r.is_sub_agent,
+                    r.created_at,
                     json_extract(r.metadata, '$.chat_session_id') as chat_session_id
              FROM runs r
              LEFT JOIN tasks t ON t.id = r.task_id
@@ -81,8 +82,9 @@ fn map_row_to_run_summary(row: &rusqlite::Row) -> rusqlite::Result<RunSummary> {
         finished_at: row.get(10)?,
         duration_ms: row.get(11)?,
         retry_count: row.get(12)?,
-        created_at: row.get(13)?,
-        chat_session_id: row.get(14)?,
+        is_sub_agent: row.get::<_, i64>(13)? != 0,
+        created_at: row.get(14)?,
+        chat_session_id: row.get(15)?,
     })
 }
 
@@ -94,7 +96,7 @@ pub async fn get_run(id: String, db: tauri::State<'_, DbPool>) -> Result<Run, St
         conn.query_row(
             "SELECT id, task_id, schedule_id, agent_id, state, trigger, exit_code, pid,
                     log_path, started_at, finished_at, duration_ms, retry_count,
-                    parent_run_id, metadata, created_at
+                    parent_run_id, metadata, is_sub_agent, created_at
              FROM runs WHERE id = ?1",
             rusqlite::params![id],
             |row| {
@@ -115,7 +117,8 @@ pub async fn get_run(id: String, db: tauri::State<'_, DbPool>) -> Result<Run, St
                     retry_count: row.get(12)?,
                     parent_run_id: row.get(13)?,
                     metadata: serde_json::from_str(&meta_str).unwrap_or(serde_json::Value::Null),
-                    created_at: row.get(15)?,
+                    is_sub_agent: row.get::<_, i64>(15)? != 0,
+                    created_at: row.get(16)?,
                 })
             },
         )
@@ -135,7 +138,8 @@ pub async fn get_active_runs(db: tauri::State<'_, DbPool>) -> Result<Vec<RunSumm
                 "SELECT r.id, r.task_id, t.name as task_name, r.schedule_id,
                         r.agent_id, a.name as agent_name,
                         r.state, r.trigger, r.exit_code,
-                        r.started_at, r.finished_at, r.duration_ms, r.retry_count, r.created_at,
+                        r.started_at, r.finished_at, r.duration_ms, r.retry_count, r.is_sub_agent,
+                        r.created_at,
                         json_extract(r.metadata, '$.chat_session_id') as chat_session_id
                  FROM runs r
                  LEFT JOIN tasks t ON t.id = r.task_id
@@ -146,25 +150,7 @@ pub async fn get_active_runs(db: tauri::State<'_, DbPool>) -> Result<Vec<RunSumm
             .map_err(|e| e.to_string())?;
 
         let runs = stmt
-            .query_map([], |row| {
-                Ok(RunSummary {
-                    id: row.get(0)?,
-                    task_id: row.get(1)?,
-                    task_name: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                    schedule_id: row.get(3)?,
-                    agent_id: row.get(4)?,
-                    agent_name: row.get(5)?,
-                    state: row.get(6)?,
-                    trigger: row.get(7)?,
-                    exit_code: row.get(8)?,
-                    started_at: row.get(9)?,
-                    finished_at: row.get(10)?,
-                    duration_ms: row.get(11)?,
-                    retry_count: row.get(12)?,
-                    created_at: row.get(13)?,
-                    chat_session_id: row.get(14)?,
-                })
-            })
+            .query_map([], map_row_to_run_summary)
             .map_err(|e| e.to_string())?
             .filter_map(|r| r.ok())
             .collect();
@@ -200,6 +186,42 @@ pub async fn get_agent_conversation(
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.to_string()),
         }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_sub_agent_runs(
+    parent_run_id: String,
+    db: tauri::State<'_, DbPool>,
+) -> Result<Vec<RunSummary>, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT r.id, r.task_id, t.name as task_name, r.schedule_id,
+                        r.agent_id, a.name as agent_name,
+                        r.state, r.trigger, r.exit_code,
+                        r.started_at, r.finished_at, r.duration_ms, r.retry_count, r.is_sub_agent,
+                        r.created_at,
+                        json_extract(r.metadata, '$.chat_session_id') as chat_session_id
+                 FROM runs r
+                 LEFT JOIN tasks t ON t.id = r.task_id
+                 LEFT JOIN agents a ON a.id = r.agent_id
+                 WHERE r.parent_run_id = ?1 AND r.is_sub_agent = 1
+                 ORDER BY r.created_at ASC",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let runs = stmt
+            .query_map(rusqlite::params![parent_run_id], map_row_to_run_summary)
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(runs)
     })
     .await
     .map_err(|e| e.to_string())?

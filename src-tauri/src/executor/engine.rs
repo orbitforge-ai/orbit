@@ -411,6 +411,7 @@ async fn run_one(
 
       // Pulse tasks route to run_pulse (chat-session-based)
       let is_pulse = task.tags.iter().any(|t| t == "pulse");
+      let is_sub_agent = task.tags.iter().any(|t| t == "sub_agent");
       if is_pulse {
         agent_loop::run_pulse(
           &run_id,
@@ -436,6 +437,7 @@ async fn run_one(
           &db,
           &executor_tx,
           req.chain_depth,
+          is_sub_agent,
         ).await
       }
     }

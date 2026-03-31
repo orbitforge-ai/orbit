@@ -23,7 +23,7 @@ use crate::models::task::{ AgentLoopConfig, AgentStepConfig };
 
 const DEFAULT_MAX_ITERATIONS: u32 = 25;
 const DEFAULT_MAX_TOTAL_TOKENS: u32 = 200_000;
-const DEFAULT_MAX_TOKENS_PER_CALL: u32 = 4096;
+const DEFAULT_MAX_TOKENS_PER_CALL: u32 = 16384;
 const LLM_RETRY_ATTEMPTS: u32 = 3;
 const LLM_RETRY_BASE_DELAY_MS: u64 = 2000;
 
@@ -83,6 +83,7 @@ pub async fn run_agent_loop(
   db: &DbPool,
   executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
   chain_depth: i64,
+  is_sub_agent: bool,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -139,6 +140,7 @@ pub async fn run_agent_loop(
     goal: Some(goal.clone()),
     ws_config: ws_config.clone(),
     existing_messages: None,
+    is_sub_agent,
   };
   let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
     log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
@@ -154,14 +156,25 @@ pub async fn run_agent_loop(
   };
 
   let tools: Vec<ToolDefinition> = snapshot.tools;
-  let tool_ctx = ToolExecutionContext::new_with_bus(
-    agent_id,
-    run_id,
-    chain_depth,
-    db.clone(),
-    executor_tx.clone(),
-    app.clone(),
-  );
+  let tool_ctx = if is_sub_agent {
+    ToolExecutionContext::new_for_sub_agent(
+      agent_id,
+      run_id,
+      chain_depth,
+      db.clone(),
+      executor_tx.clone(),
+      app.clone(),
+    )
+  } else {
+    ToolExecutionContext::new_with_bus(
+      agent_id,
+      run_id,
+      chain_depth,
+      db.clone(),
+      executor_tx.clone(),
+      app.clone(),
+    )
+  };
 
   // ── Init conversation ────────────────────────────────────────────────
   let mut messages: Vec<ChatMessage> = vec![ChatMessage {
@@ -196,11 +209,19 @@ pub async fn run_agent_loop(
 
   // ── Main loop ────────────────────────────────────────────────────────
   loop {
-    // Check cancellation
-    if cancel.try_recv().is_ok() {
-      info!(run_id = run_id, "agent loop cancelled");
-      log.flush_to_file(log_path);
-      return Err("cancelled".to_string());
+    // Check cancellation (Ok = explicit cancel, Closed = sender dropped)
+    match cancel.try_recv() {
+      Ok(()) => {
+        info!(run_id = run_id, "agent loop cancelled");
+        log.flush_to_file(log_path);
+        return Err("cancelled".to_string());
+      }
+      Err(oneshot::error::TryRecvError::Closed) => {
+        info!(run_id = run_id, "agent loop cancel channel closed");
+        log.flush_to_file(log_path);
+        return Err("cancelled".to_string());
+      }
+      Err(oneshot::error::TryRecvError::Empty) => { /* not cancelled, continue */ }
     }
 
     // Check iteration limit
@@ -371,15 +392,39 @@ pub async fn run_agent_loop(
       }
 
       llm_provider::StopReason::MaxTokens => {
+        // When max_tokens truncates mid-tool-use, the tool input JSON is
+        // incomplete. We must still provide tool_result blocks so the next
+        // API call doesn't fail with a missing-tool-result 400 error.
+        let mut tool_error_results: Vec<ContentBlock> = Vec::new();
+        for block in &response.content {
+          if let ContentBlock::ToolUse { id, name, .. } = block {
+            warn!(run_id = run_id, tool = %name, "tool_use truncated by max_tokens");
+            tool_error_results.push(ContentBlock::ToolResult {
+              tool_use_id: id.clone(),
+              content: "Error: your previous tool call was truncated because the response exceeded the token limit. Please retry with a shorter input, or break the work into smaller steps.".to_string(),
+              is_error: true,
+            });
+          }
+        }
+
         messages.push(ChatMessage {
           role: "assistant".to_string(),
           content: response.content,
           created_at: None,
         });
+
+        if !tool_error_results.is_empty() {
+          messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: tool_error_results,
+            created_at: None,
+          });
+        }
+
         messages.push(ChatMessage {
           role: "user".to_string(),
           content: vec![ContentBlock::Text {
-            text: "Your response was cut off due to the token limit. Please continue where you left off.".to_string(),
+            text: "Your response was cut off due to the token limit. Please continue where you left off. If you were writing a file, try breaking the content into smaller pieces.".to_string(),
           }],
           created_at: None,
         });
@@ -493,6 +538,7 @@ pub async fn run_agent_prompt(
     goal: Some(cfg.prompt.clone()),
     ws_config: ws_config.clone(),
     existing_messages: None,
+    is_sub_agent: false,
   };
   let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
     log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
@@ -723,6 +769,7 @@ pub async fn run_pulse(
     goal: Some(goal.to_string()),
     ws_config: ws_config.clone(),
     existing_messages: None,
+    is_sub_agent: false,
   };
   let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
     log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);

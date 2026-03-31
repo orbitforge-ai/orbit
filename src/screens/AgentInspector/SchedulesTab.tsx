@@ -46,13 +46,13 @@ const PulseSection = forwardRef<{ triggerSave: () => void }, PulseSectionProps>(
   function PulseSection({ agentId, onDirtyChange }, ref) {
     const queryClient = useQueryClient();
     const { navigate } = useUiStore();
-    const [saving, setSaving] = useState(false);
-    const [saved, setSaved] = useState(false);
+    const [, setSaving] = useState(false);
+    const [, setSaved] = useState(false);
     const [triggering, setTriggering] = useState(false);
     const [content, setContent] = useState('');
     const [schedule, setSchedule] = useState<RecurringConfig>(DEFAULT_SCHEDULE);
     const [enabled, setEnabled] = useState(false);
-    const [isDirty, setIsDirty] = useState(false);
+    const [, setIsDirty] = useState(false);
 
     // Expose triggerSave via ref
     useImperativeHandle(ref, () => ({

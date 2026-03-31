@@ -1,12 +1,14 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Square, Cpu, Wrench, CheckCircle } from "lucide-react";
+import { ArrowLeft, Square, Cpu, Wrench, CheckCircle, GitBranch, ChevronDown, ChevronRight } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { agentsApi } from "../../api/agents";
+import { runsApi } from "../../api/runs";
 import { useLiveRunStore } from "../../store/liveRunStore";
-import { onRunLogChunk, onRunStateChanged } from "../../events/runEvents";
-import { Run, ChatMessage } from "../../types";
+import { onRunLogChunk, onRunStateChanged, onSubAgentsSpawned } from "../../events/runEvents";
+import { Run, RunSummary, ChatMessage } from "../../types";
 import { ChatView } from "../../components/chat";
+import { StatusBadge } from "../../components/StatusBadge";
 
 interface AgentRunViewProps {
   runId: string;
@@ -18,6 +20,7 @@ const TERMINAL_STATES = ["success", "failure", "cancelled", "timed_out"];
 export function AgentRunView({ runId, onBack }: AgentRunViewProps) {
   const store = useLiveRunStore();
   const liveRun = store.activeRuns[runId];
+  const [subAgentsExpanded, setSubAgentsExpanded] = useState(true);
 
   const { data: run } = useQuery<Run>({
     queryKey: ["run", runId],
@@ -32,6 +35,13 @@ export function AgentRunView({ runId, onBack }: AgentRunViewProps) {
     queryKey: ["agent-conversation", runId],
     queryFn: () => invoke("get_agent_conversation", { runId }),
     enabled: !isActive,
+  });
+
+  // Fetch sub-agent runs
+  const { data: subAgentRuns = [], refetch: refetchSubAgents } = useQuery<RunSummary[]>({
+    queryKey: ["sub-agent-runs", runId],
+    queryFn: () => runsApi.listSubAgentRuns(runId),
+    refetchInterval: isActive ? 3_000 : false,
   });
 
   // Subscribe to run state & log events (still needed for state tracking)
@@ -50,6 +60,14 @@ export function AgentRunView({ runId, onBack }: AgentRunViewProps) {
       onRunStateChanged((payload) => {
         if (payload.runId === runId) {
           store.updateRunState(runId, payload.newState);
+        }
+      })
+    );
+
+    unsubs.push(
+      onSubAgentsSpawned((payload) => {
+        if (payload.parentRunId === runId) {
+          refetchSubAgents();
         }
       })
     );
@@ -119,6 +137,42 @@ export function AgentRunView({ runId, onBack }: AgentRunViewProps) {
           </button>
         )}
       </div>
+
+      {/* Sub-agents section */}
+      {subAgentRuns.length > 0 && (
+        <div className="border-b border-edge">
+          <button
+            onClick={() => setSubAgentsExpanded((v) => !v)}
+            className="flex items-center gap-2 w-full px-4 py-2 text-xs font-medium text-muted hover:text-white"
+          >
+            {subAgentsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <GitBranch size={12} />
+            Sub-agents ({subAgentRuns.length})
+          </button>
+          {subAgentsExpanded && (
+            <div className="px-4 pb-2 space-y-1">
+              {subAgentRuns.map((sub) => {
+                const meta = sub.taskName.replace("sub-agent:", "");
+                return (
+                  <div
+                    key={sub.id}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface text-xs"
+                  >
+                    <StatusBadge state={sub.state} />
+                    <span className="text-white font-medium">{meta}</span>
+                    <span className="text-muted flex-1 truncate">{sub.id.slice(0, 8)}</span>
+                    {sub.durationMs && (
+                      <span className="text-muted">
+                        {(sub.durationMs / 1000).toFixed(1)}s
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Chat view */}
       <ChatView

@@ -50,11 +50,11 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
   ref
 ) {
   const queryClient = useQueryClient();
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [, setSaving] = useState(false);
+  const [, setSaveError] = useState<string | null>(null);
+  const [, setSaved] = useState(false);
   const [config, setConfig] = useState<AgentWorkspaceConfig | null>(null);
-  const [isDirty, setIsDirty] = useState(false);
+  const [, setIsDirty] = useState(false);
 
   // Expose triggerSave via ref
   useImperativeHandle(ref, () => ({

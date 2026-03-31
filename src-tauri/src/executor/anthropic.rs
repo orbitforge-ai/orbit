@@ -222,8 +222,18 @@ impl AnthropicProvider {
                                     }
                                     "tool_use" => {
                                         let input: serde_json::Value =
-                                            serde_json::from_str(&current_tool_input_json)
-                                                .unwrap_or(json!({}));
+                                            match serde_json::from_str(&current_tool_input_json) {
+                                                Ok(v) => v,
+                                                Err(e) => {
+                                                    debug!(
+                                                        tool = %current_tool_name,
+                                                        json_len = current_tool_input_json.len(),
+                                                        "failed to parse tool input JSON: {} — input may have been truncated by max_tokens",
+                                                        e
+                                                    );
+                                                    json!({})
+                                                }
+                                            };
                                         content_blocks.push(ContentBlock::ToolUse {
                                             id: current_tool_id.clone(),
                                             name: current_tool_name.clone(),
@@ -284,6 +294,40 @@ impl AnthropicProvider {
                             return Err(format!("Anthropic API error: {}", err_msg));
                         }
                         _ => {}
+                    }
+                }
+            }
+        }
+
+        // Process any remaining data in the buffer after stream ends
+        let remaining = buffer.trim().to_string();
+        if !remaining.is_empty() {
+            if let Some(data) = remaining.strip_prefix("data: ") {
+                if data != "[DONE]" {
+                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
+                        let event_type = event["type"].as_str().unwrap_or("");
+                        if event_type == "content_block_stop" {
+                            if let Some(ref bt) = current_block_type {
+                                match bt.as_str() {
+                                    "text" => {
+                                        content_blocks.push(ContentBlock::Text {
+                                            text: current_text.clone(),
+                                        });
+                                    }
+                                    "tool_use" => {
+                                        let input: serde_json::Value =
+                                            serde_json::from_str(&current_tool_input_json)
+                                                .unwrap_or(json!({}));
+                                        content_blocks.push(ContentBlock::ToolUse {
+                                            id: current_tool_id.clone(),
+                                            name: current_tool_name.clone(),
+                                            input,
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
                     }
                 }
             }

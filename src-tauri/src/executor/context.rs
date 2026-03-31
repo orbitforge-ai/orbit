@@ -59,6 +59,8 @@ pub struct ContextRequest {
     pub ws_config: AgentWorkspaceConfig,
     /// For agent_loop: messages managed in-memory during the loop.
     pub existing_messages: Option<Vec<ChatMessage>>,
+    /// Whether this context is for a sub-agent (prevents nesting spawn_sub_agents).
+    pub is_sub_agent: bool,
 }
 
 /// What kind of LLM interaction is being built.
@@ -366,8 +368,12 @@ impl ContextStage for ToolResolutionStage {
     ) -> Result<ContextSnapshot, String> {
         match request.mode {
             ContextMode::AgentLoop | ContextMode::Chat => {
-                snapshot.tools =
+                let mut tools =
                     agent_tools::build_tool_definitions(&request.ws_config.allowed_tools);
+                if request.is_sub_agent {
+                    tools.retain(|t| t.name != "spawn_sub_agents");
+                }
+                snapshot.tools = tools;
             }
             ContextMode::SingleShot | ContextMode::Pulse => {
                 // No tools for single-shot or pulse modes

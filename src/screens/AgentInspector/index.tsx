@@ -26,6 +26,7 @@ import { BusTab } from './BusTab';
 import { SkillsTab } from './SkillsTab';
 import { AgentRunDialog } from './AgentRunDialog';
 import { AgentRunView } from './AgentRunView';
+import { InlineEdit } from '../../components/InlineEdit';
 
 export function AgentInspector() {
   const { selectedAgentId } = useUiStore();
@@ -138,11 +139,16 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
 
   // Dirty state tracking for tabs with save functionality
   const [dirtyTabs, setDirtyTabs] = useState<Record<string, boolean>>({});
-  const [savingTab, setSavingTab] = useState<string | null>(null);
+  const [savingTab] = useState<string | null>(null);
 
   // Refs to trigger save in child tabs
   const configSaveRef = useRef<{ triggerSave: () => void } | null>(null);
   const schedulesSaveRef = useRef<{ triggerSave: () => void } | null>(null);
+
+  async function handleInlineSave(field: 'name' | 'description', value: string) {
+    await agentsApi.update(agentId, { [field]: value || undefined });
+    queryClient.invalidateQueries({ queryKey: ['agents'] });
+  }
 
   function handleDirtyChange(tab: string, isDirty: boolean) {
     setDirtyTabs((prev) => ({ ...prev, [tab]: isDirty }));
@@ -191,12 +197,22 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
               <Bot size={18} className="text-accent-hover" />
             </div>
             <div>
-              <h3 className="text-base font-semibold text-white">{agent.name}</h3>
+              <InlineEdit
+                value={agent.name}
+                onSave={(v) => handleInlineSave('name', v)}
+                as="h3"
+                className="text-base font-semibold text-white"
+                inputClassName="text-base font-semibold text-white"
+              />
               <div className="flex items-center gap-2">
                 <StatusBadge state={agent.state} />
-                {agent.description && (
-                  <span className="text-xs text-muted">{agent.description}</span>
-                )}
+                <InlineEdit
+                  value={agent.description ?? ''}
+                  placeholder="Add description"
+                  onSave={(v) => handleInlineSave('description', v)}
+                  className="text-xs text-muted"
+                  inputClassName="text-xs text-muted"
+                />
               </div>
             </div>
           </div>
@@ -325,14 +341,14 @@ function OverviewContent({
     queryKey: ['runs', 'agent', agentId],
     queryFn: () => invoke('list_runs', { limit: 20, offset: 0, stateFilter: null, taskId: null }),
     refetchInterval: 5_000,
-    select: (runs: RunSummary[]) => runs.filter((r) => r.agentId === agentId),
+    select: (runs: RunSummary[]) => runs.filter((r) => r.agentId === agentId && !r.isSubAgent),
   });
 
   const { data: activeRuns = [] } = useQuery<RunSummary[]>({
     queryKey: ['active-runs'],
     queryFn: () => invoke('get_active_runs'),
     refetchInterval: 3_000,
-    select: (runs: RunSummary[]) => runs.filter((r) => r.agentId === agentId),
+    select: (runs: RunSummary[]) => runs.filter((r) => r.agentId === agentId && !r.isSubAgent),
   });
 
   const successCount = recentRuns.filter((r) => r.state === 'success').length;

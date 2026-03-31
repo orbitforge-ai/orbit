@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Terminal, ChevronRight, CheckCircle, XCircle, Hammer } from 'lucide-react';
+import { ChevronRight, CheckCircle, XCircle, Hammer } from 'lucide-react';
 
 interface ToolUseBlockProps {
   name: string;
@@ -38,9 +38,7 @@ export function ToolUseBlock({ name, input, result }: ToolUseBlockProps) {
         <>
           {/* Input */}
           <div className="border-t border-warning/10">
-            <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted">
-              Input
-            </div>
+            <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted">Input</div>
             <pre className="px-3 pb-2 text-xs font-mono text-secondary whitespace-pre-wrap break-all overflow-x-auto">
               {inputStr}
             </pre>

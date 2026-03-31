@@ -134,6 +134,7 @@ pub fn run() {
         commands::runs::get_active_runs,
         commands::runs::read_run_log,
         commands::runs::get_agent_conversation,
+        commands::runs::list_sub_agent_runs,
         // Agents
         commands::agents::list_agents,
         commands::agents::create_agent,

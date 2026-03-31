@@ -25,4 +25,7 @@ export const runsApi = {
 
   readLog: (runId: string): Promise<string> =>
     invoke("read_run_log", { runId }),
+
+  listSubAgentRuns: (parentRunId: string): Promise<RunSummary[]> =>
+    invoke("list_sub_agent_runs", { parentRunId }),
 };

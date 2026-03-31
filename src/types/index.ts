@@ -78,7 +78,7 @@ export interface Run {
   scheduleId: string | null;
   agentId: string | null;
   state: RunState;
-  trigger: "scheduled" | "manual" | "channel" | "retry" | "bus";
+  trigger: "scheduled" | "manual" | "channel" | "retry" | "bus" | "sub_agent";
   exitCode: number | null;
   pid: number | null;
   logPath: string;
@@ -88,6 +88,7 @@ export interface Run {
   retryCount: number;
   parentRunId: string | null;
   metadata: Record<string, unknown>;
+  isSubAgent: boolean;
   createdAt: string;
 }
 
@@ -105,6 +106,7 @@ export interface RunSummary {
   finishedAt: string | null;
   durationMs: number | null;
   retryCount: number;
+  isSubAgent: boolean;
   createdAt: string;
   chatSessionId: string | null;
 }
@@ -252,6 +254,12 @@ export interface ChatMessage {
   isCompacted?: boolean;
 }
 
+export interface PaginatedChatMessages {
+  messages: ChatMessage[];
+  totalCount: number;
+  hasMore: boolean;
+}
+
 // ─── Agent loop event payloads ───────────────────────────────────────────────
 
 export interface AgentLlmChunkPayload {
@@ -339,6 +347,12 @@ export interface CreateBusSubscription {
   taskId: string;
   payloadTemplate?: string;
   maxChainDepth?: number;
+}
+
+export interface SubAgentsSpawnedPayload {
+  parentRunId: string;
+  subAgentRunIds: string[];
+  timestamp: string;
 }
 
 export interface BusMessageSentPayload {

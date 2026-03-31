@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { ChatSession, ChatMessage, ContentBlock, ContextUsage } from "../types";
+import { ChatSession, ChatMessage, ContentBlock, ContextUsage, PaginatedChatMessages } from "../types";
 
 export const chatApi = {
   listSessions: (agentId: string, includeArchived?: boolean): Promise<ChatSession[]> =>
@@ -21,7 +21,11 @@ export const chatApi = {
     invoke("delete_chat_session", { sessionId }),
 
   getMessages: (sessionId: string): Promise<ChatMessage[]> =>
-    invoke("get_chat_messages", { sessionId }),
+    invoke<PaginatedChatMessages>("get_chat_messages", { sessionId })
+      .then(res => res.messages),
+
+  getMessagesPaginated: (sessionId: string, limit: number, offset: number): Promise<PaginatedChatMessages> =>
+    invoke("get_chat_messages", { sessionId, limit, offset }),
 
   sendMessage: (sessionId: string, content: ContentBlock[]): Promise<string> =>
     invoke("send_chat_message", { sessionId, content: JSON.stringify(content) }),

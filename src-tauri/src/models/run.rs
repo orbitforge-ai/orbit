@@ -18,6 +18,7 @@ pub struct Run {
     pub retry_count: i64,
     pub parent_run_id: Option<String>,
     pub metadata: serde_json::Value,
+    pub is_sub_agent: bool,
     pub created_at: String,
 }
 
@@ -87,6 +88,7 @@ pub struct RunSummary {
     pub finished_at: Option<String>,
     pub duration_ms: Option<i64>,
     pub retry_count: i64,
+    pub is_sub_agent: bool,
     pub created_at: String,
     pub chat_session_id: Option<String>,
 }
