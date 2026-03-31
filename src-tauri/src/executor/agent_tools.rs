@@ -5,10 +5,10 @@ use tracing::{ info, warn };
 
 use crate::db::DbPool;
 use crate::events::emitter::{ emit_bus_message_sent, emit_log_chunk, emit_sub_agents_spawned };
-use crate::executor::engine::RunRequest;
+use crate::executor::engine::{ AgentSemaphores, RunRequest, SessionExecutionRegistry };
 use crate::executor::llm_provider::ToolDefinition;
+use crate::executor::session_agent;
 use crate::executor::skills;
-use crate::models::task::{ AgentLoopConfig, Task };
 
 /// Maximum chain depth before agent bus rejects further sends.
 const MAX_CHAIN_DEPTH: i64 = 10;
@@ -38,7 +38,10 @@ pub struct ToolExecutionContext {
   pub app: Option<tauri::AppHandle>,
   pub current_agent_id: Option<String>,
   pub current_run_id: Option<String>,
+  pub current_session_id: Option<String>,
   pub chain_depth: i64,
+  pub agent_semaphores: Option<AgentSemaphores>,
+  pub session_registry: Option<SessionExecutionRegistry>,
   /// Whether this context is for a sub-agent (prevents nesting).
   pub is_sub_agent: bool,
 }
@@ -59,7 +62,10 @@ impl ToolExecutionContext {
       app: None,
       current_agent_id: None,
       current_run_id: None,
+      current_session_id: None,
       chain_depth: 0,
+      agent_semaphores: None,
+      session_registry: None,
       is_sub_agent: false,
     }
   }
@@ -67,10 +73,13 @@ impl ToolExecutionContext {
   pub fn new_with_bus(
     agent_id: &str,
     run_id: &str,
+    session_id: Option<&str>,
     chain_depth: i64,
     db: DbPool,
     executor_tx: mpsc::UnboundedSender<RunRequest>,
     app: tauri::AppHandle,
+    agent_semaphores: AgentSemaphores,
+    session_registry: SessionExecutionRegistry,
   ) -> Self {
     let agent_root = super::workspace::agent_dir(agent_id);
     let workspace_root = agent_root.join("workspace");
@@ -86,7 +95,10 @@ impl ToolExecutionContext {
       app: Some(app),
       current_agent_id: Some(agent_id.to_string()),
       current_run_id: Some(run_id.to_string()),
+      current_session_id: session_id.map(|s| s.to_string()),
       chain_depth,
+      agent_semaphores: Some(agent_semaphores),
+      session_registry: Some(session_registry),
       is_sub_agent: false,
     }
   }
@@ -94,12 +106,25 @@ impl ToolExecutionContext {
   pub fn new_for_sub_agent(
     agent_id: &str,
     run_id: &str,
+    session_id: Option<&str>,
     chain_depth: i64,
     db: DbPool,
     executor_tx: mpsc::UnboundedSender<RunRequest>,
     app: tauri::AppHandle,
+    agent_semaphores: AgentSemaphores,
+    session_registry: SessionExecutionRegistry,
   ) -> Self {
-    let mut ctx = Self::new_with_bus(agent_id, run_id, chain_depth, db, executor_tx, app);
+    let mut ctx = Self::new_with_bus(
+      agent_id,
+      run_id,
+      session_id,
+      chain_depth,
+      db,
+      executor_tx,
+      app,
+      agent_semaphores,
+      session_registry,
+    );
     ctx.is_sub_agent = true;
     ctx
   }
@@ -462,14 +487,14 @@ pub async fn execute_tool(
       info!(run_id = run_id, target = target, wait = wait, "agent tool: send_message");
 
       let db = ctx.db.as_ref().ok_or("send_message: agent bus not available in this context")?;
-      let tx = ctx.executor_tx.as_ref().ok_or("send_message: executor channel not available")?;
       let bus_app = ctx.app.as_ref().ok_or("send_message: app handle not available")?;
+      let agent_semaphores = ctx.agent_semaphores.as_ref().ok_or("send_message: agent semaphores not available")?;
+      let session_registry = ctx.session_registry.as_ref().ok_or("send_message: session registry not available")?;
       let from_agent = ctx.current_agent_id.as_deref().unwrap_or("unknown");
-      // from_run_id must be a valid run ID or NULL; in chat mode,
-      // current_run_id is "chat:{sessionId}" which isn't in the runs table.
       let from_run: Option<String> = ctx.current_run_id.as_ref().and_then(|rid| {
         if rid.starts_with("chat:") { None } else { Some(rid.clone()) }
       });
+      let from_session = ctx.current_session_id.clone();
 
       // Check chain depth
       let next_depth = ctx.chain_depth + 1;
@@ -509,78 +534,51 @@ pub async fn execute_tool(
       };
 
       let msg_id = ulid::Ulid::new().to_string();
-      let new_run_id = ulid::Ulid::new().to_string();
+      let new_session_id = ulid::Ulid::new().to_string();
       let now = chrono::Utc::now().to_rfc3339();
-
-      // Create an ephemeral agent_loop task for the target agent
-      let task_id = ulid::Ulid::new().to_string();
-      let loop_config = AgentLoopConfig {
-        goal: payload_str.to_string(),
-        model: None,
-        max_iterations: None,
-        max_total_tokens: None,
-        template_vars: None,
-      };
-      let config_json = serde_json::to_value(&loop_config).map_err(|e| e.to_string())?;
-
-      {
-        let pool = db.clone();
-        let task_id = task_id.clone();
-        let to_agent_id = to_agent_id.clone();
-        let config_json_str = config_json.to_string();
-        let now = now.clone();
-        tokio::task::spawn_blocking(move || {
-          let conn = pool.get().map_err(|e| e.to_string())?;
-          conn.execute(
-            "INSERT INTO tasks (id, name, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, session_id, enabled, created_at, updated_at)
-             VALUES (?1, ?2, 'agent_loop', ?3, 300, 0, 0, 'allow', '[]', ?4, NULL, 1, ?5, ?5)",
-            rusqlite::params![task_id, format!("bus:{}", task_id), config_json_str, to_agent_id, now],
-          ).map_err(|e| e.to_string())?;
-          Ok::<(), String>(())
-        })
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
-      }
-
-      // Insert bus message and run records
       {
         let pool = db.clone();
         let msg_id = msg_id.clone();
+        let new_session_id = new_session_id.clone();
         let from_agent = from_agent.to_string();
         let from_run = from_run.clone();
+        let from_session = from_session.clone();
         let to_agent_id = to_agent_id.clone();
-        let new_run_id = new_run_id.clone();
         let payload_str = payload_str.to_string();
-        let task_id = task_id.clone();
         let now = now.clone();
-        let log_path = format!(
-          "{}/.orbit/logs/{}.log",
-          std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
-          new_run_id
-        );
+        let title = payload_str.chars().take(60).collect::<String>();
 
         tokio::task::spawn_blocking(move || {
           let conn = pool.get().map_err(|e| e.to_string())?;
-
-          // Insert run first (without source_bus_message_id to avoid circular FK)
           conn.execute(
-            "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, parent_run_id, metadata, chain_depth, source_bus_message_id, created_at)
-             VALUES (?1, ?2, NULL, ?3, 'pending', 'bus', ?4, 0, NULL, '{}', ?5, NULL, ?6)",
-            rusqlite::params![new_run_id, task_id, to_agent_id, log_path, next_depth, now],
+            "INSERT INTO chat_sessions (
+               id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
+               chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, 0, 'bus_message', NULL, NULL, ?4, 'queued', NULL, NULL, ?5, ?5)",
+            rusqlite::params![new_session_id, to_agent_id, title, next_depth, now],
           ).map_err(|e| e.to_string())?;
 
-          // Insert bus message (run exists now, so to_run_id FK is satisfied)
+          let user_content = serde_json::to_string(&vec![serde_json::json!({
+            "type": "text",
+            "text": payload_str.clone(),
+          })]).map_err(|e| e.to_string())?;
           conn.execute(
-            "INSERT INTO bus_messages (id, from_agent_id, from_run_id, to_agent_id, to_run_id, kind, payload, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'direct', ?6, 'delivered', ?7)",
-            rusqlite::params![msg_id, from_agent, from_run, to_agent_id, new_run_id, payload_str, now],
+            "INSERT INTO chat_messages (id, session_id, role, content, created_at)
+             VALUES (?1, ?2, 'user', ?3, ?4)",
+            rusqlite::params![ulid::Ulid::new().to_string(), new_session_id, user_content, now],
           ).map_err(|e| e.to_string())?;
 
-          // Back-fill the source_bus_message_id on the run
           conn.execute(
-            "UPDATE runs SET source_bus_message_id = ?1 WHERE id = ?2",
-            rusqlite::params![msg_id, new_run_id],
+            "INSERT INTO bus_messages (
+               id, from_agent_id, from_run_id, from_session_id, to_agent_id, to_run_id, to_session_id,
+               kind, payload, status, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, 'direct', ?7, 'delivered', ?8)",
+            rusqlite::params![msg_id, from_agent, from_run, from_session, to_agent_id, new_session_id, payload_str, now],
+          ).map_err(|e| e.to_string())?;
+
+          conn.execute(
+            "UPDATE chat_sessions SET source_bus_message_id = ?1 WHERE id = ?2",
+            rusqlite::params![msg_id, new_session_id],
           ).map_err(|e| e.to_string())?;
 
           Ok::<(), String>(())
@@ -590,36 +588,30 @@ pub async fn execute_tool(
         .map_err(|e| e.to_string())?;
       }
 
-      // Build a Task struct for the RunRequest
-      let task = Task {
-        id: task_id,
-        name: format!("bus-message-{}", msg_id),
-        description: Some(format!("Bus message from agent '{}'", from_agent)),
-        kind: "agent_loop".to_string(),
-        config: config_json,
-        max_duration_seconds: 300,
-        max_retries: 0,
-        retry_delay_seconds: 0,
-        concurrency_policy: "allow".to_string(),
-        tags: vec![],
-        agent_id: Some(to_agent_id.clone()),
-        session_id: None,
-        enabled: true,
-        created_at: now.clone(),
-        updated_at: now.clone(),
-      };
-
-      // Send RunRequest to executor
-      let req = RunRequest {
-        run_id: new_run_id.clone(),
-        task,
-        schedule_id: None,
-        _trigger: "bus".to_string(),
-        retry_count: 0,
-        _parent_run_id: None,
-        chain_depth: next_depth,
-      };
-      tx.send(req).map_err(|e| format!("failed to enqueue run: {}", e))?;
+      let db_clone = db.clone();
+      let app_clone = bus_app.clone();
+      let tx_clone = ctx.executor_tx.as_ref().ok_or("send_message: executor channel not available")?.clone();
+      let semaphores = agent_semaphores.clone();
+      let registry = session_registry.clone();
+      let target_agent_id = to_agent_id.clone();
+      let target_session_id = new_session_id.clone();
+      tokio::task::spawn_blocking(move || {
+        tauri::async_runtime::block_on(async move {
+          if let Err(e) = session_agent::run_agent_session(
+            &target_agent_id,
+            &target_session_id,
+            next_depth,
+            false,
+            &db_clone,
+            &app_clone,
+            &tx_clone,
+            &semaphores,
+            &registry,
+          ).await {
+            warn!(session_id = %target_session_id, "send_message session failed: {}", e);
+          }
+        })
+      });
 
       // Emit bus event
       emit_bus_message_sent(
@@ -629,17 +621,18 @@ pub async fn execute_tool(
         &to_agent_id,
         "direct",
         json!({ "message": payload_str }),
-        &new_run_id,
+        Some(&new_session_id),
+        None,
       );
 
       if !wait {
         return Ok((
-          format!("Message sent to agent '{}'. Triggered run ID: {}. The agent will process your message asynchronously.", to_agent_name, new_run_id),
+          format!("Message sent to agent '{}'. Session ID: {}. The agent will process your message asynchronously.", to_agent_name, new_session_id),
           false,
         ));
       }
 
-      // Wait mode: poll run state until terminal
+      // Wait mode: poll session state until terminal
       let timeout = tokio::time::Duration::from_secs(120);
       let start = tokio::time::Instant::now();
       loop {
@@ -647,45 +640,35 @@ pub async fn execute_tool(
 
         if start.elapsed() > timeout {
           return Ok((
-            format!("Timed out waiting for agent '{}' (run {}). The agent may still be running.", to_agent_name, new_run_id),
+            format!("Timed out waiting for agent '{}' (session {}). The agent may still be running.", to_agent_name, new_session_id),
             false,
           ));
         }
 
         let pool = db.clone();
-        let rid = new_run_id.clone();
-        let state: Option<String> = tokio::task::spawn_blocking(move || {
+        let sid = new_session_id.clone();
+        let result: Option<(Option<String>, Option<String>, Option<String>)> = tokio::task::spawn_blocking(move || {
           let conn = pool.get().ok()?;
-          conn.query_row("SELECT state FROM runs WHERE id = ?1", rusqlite::params![rid], |row| row.get(0)).ok()
+          conn.query_row(
+            "SELECT execution_state, finish_summary, terminal_error FROM chat_sessions WHERE id = ?1",
+            rusqlite::params![sid],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+          ).ok()
         })
         .await
         .ok()
         .flatten();
 
-        match state.as_deref() {
-          Some("success") | Some("failure") | Some("cancelled") | Some("timed_out") => {
-            let terminal_state = state.unwrap();
-            // Try to get the finish summary from the run's metadata or logs
-            let pool = db.clone();
-            let rid = new_run_id.clone();
-            let summary = tokio::task::spawn_blocking(move || -> Option<String> {
-              let conn = pool.get().ok()?;
-              let meta: String = conn.query_row(
-                "SELECT metadata FROM runs WHERE id = ?1",
-                rusqlite::params![rid],
-                |row| row.get(0),
-              ).ok()?;
-              let meta_val: serde_json::Value = serde_json::from_str(&meta).ok()?;
-              meta_val.get("finish_summary").and_then(|s| s.as_str()).map(|s| s.to_string())
-            })
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| format!("Agent '{}' finished with state: {}", to_agent_name, terminal_state));
-
+        match result {
+          Some((Some(state), finish_summary, terminal_error))
+            if matches!(state.as_str(), "success" | "failure" | "cancelled" | "timed_out") =>
+          {
+            let summary = finish_summary
+              .or(terminal_error)
+              .unwrap_or_else(|| format!("Agent '{}' finished with state: {}", to_agent_name, state));
             return Ok((summary, false));
           }
-          _ => continue,
+          _ => {}
         }
       }
     }
@@ -715,12 +698,10 @@ pub async fn execute_tool(
       let db = ctx.db.as_ref().ok_or("spawn_sub_agents: database not available")?;
       let bus_app = ctx.app.as_ref().ok_or("spawn_sub_agents: app handle not available")?;
       let executor_tx = ctx.executor_tx.as_ref().ok_or("spawn_sub_agents: executor channel not available")?;
+      let agent_semaphores = ctx.agent_semaphores.as_ref().ok_or("spawn_sub_agents: agent semaphores not available")?;
+      let session_registry = ctx.session_registry.as_ref().ok_or("spawn_sub_agents: session registry not available")?;
       let agent_id = ctx.current_agent_id.as_deref().unwrap_or(&ctx.agent_id);
-      // parent_run_id must be a valid run ID or NULL; in chat mode,
-      // current_run_id is "chat:{sessionId}" which isn't in the runs table.
-      let parent_run_id: Option<String> = ctx.current_run_id.as_ref().and_then(|rid| {
-        if rid.starts_with("chat:") { None } else { Some(rid.clone()) }
-      });
+      let parent_session_id = ctx.current_session_id.clone();
       let next_depth = ctx.chain_depth + 1;
 
       info!(run_id = run_id, count = tasks.len(), "agent tool: spawn_sub_agents");
@@ -729,65 +710,49 @@ pub async fn execute_tool(
       struct SubTask {
         id: String,
         goal: String,
-        run_id: String,
-        task_id: String,
-        log_path: PathBuf,
+        session_id: String,
       }
 
       let mut sub_tasks: Vec<SubTask> = Vec::new();
       for item in tasks {
         let id = item["id"].as_str().ok_or("spawn_sub_agents: each task needs an 'id' field")?;
         let goal = item["goal"].as_str().ok_or("spawn_sub_agents: each task needs a 'goal' field")?;
-        let sub_run_id = ulid::Ulid::new().to_string();
-        let sub_task_id = ulid::Ulid::new().to_string();
-        let log_path = PathBuf::from(format!(
-          "{}/.orbit/logs/{}.log",
-          std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
-          sub_run_id
-        ));
-
         sub_tasks.push(SubTask {
           id: id.to_string(),
           goal: goal.to_string(),
-          run_id: sub_run_id,
-          task_id: sub_task_id,
-          log_path,
+          session_id: ulid::Ulid::new().to_string(),
         });
       }
 
-      // Insert ephemeral task and run records for each sub-agent
+      // Create session records for each sub-agent
       let now = chrono::Utc::now().to_rfc3339();
       for st in &sub_tasks {
-        let loop_config = AgentLoopConfig {
-          goal: st.goal.clone(),
-          model: None,
-          max_iterations: None,
-          max_total_tokens: None,
-          template_vars: None,
-        };
-        let config_json = serde_json::to_string(&serde_json::to_value(&loop_config).map_err(|e| e.to_string())?)
-          .map_err(|e| e.to_string())?;
-
         let pool = db.clone();
-        let task_id = st.task_id.clone();
-        let sub_run_id = st.run_id.clone();
+        let session_id = st.session_id.clone();
+        let title = st.id.clone();
+        let goal = st.goal.clone();
         let agent_id = agent_id.to_string();
-        let parent_rid = parent_run_id.clone();
-        let log_path = st.log_path.to_string_lossy().to_string();
+        let parent_session_id = parent_session_id.clone();
         let now = now.clone();
-        let st_id = st.id.clone();
 
         tokio::task::spawn_blocking(move || {
           let conn = pool.get().map_err(|e| e.to_string())?;
           conn.execute(
-            "INSERT INTO tasks (id, name, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, session_id, enabled, created_at, updated_at)
-             VALUES (?1, ?2, 'agent_loop', ?3, ?4, 0, 0, 'allow', '[\"sub_agent\"]', ?5, NULL, 1, ?6, ?6)",
-            rusqlite::params![task_id, format!("sub-agent:{}", st_id), config_json, timeout_secs as i64, agent_id, now],
+            "INSERT INTO chat_sessions (
+               id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
+               chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, 0, 'sub_agent', ?4, NULL, ?5, 'queued', NULL, NULL, ?6, ?6)",
+            rusqlite::params![session_id, agent_id, title, parent_session_id, next_depth, now],
           ).map_err(|e| e.to_string())?;
+
+          let user_content = serde_json::to_string(&vec![serde_json::json!({
+            "type": "text",
+            "text": goal,
+          })]).map_err(|e| e.to_string())?;
           conn.execute(
-            "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, parent_run_id, metadata, chain_depth, is_sub_agent, created_at)
-             VALUES (?1, ?2, NULL, ?3, 'pending', 'sub_agent', ?4, 0, ?5, ?6, ?7, 1, ?8)",
-            rusqlite::params![sub_run_id, task_id, agent_id, log_path, parent_rid, json!({"sub_task_id": st_id}).to_string(), next_depth, now],
+            "INSERT INTO chat_messages (id, session_id, role, content, created_at)
+             VALUES (?1, ?2, 'user', ?3, ?4)",
+            rusqlite::params![ulid::Ulid::new().to_string(), session_id, user_content, now],
           ).map_err(|e| e.to_string())?;
           Ok::<(), String>(())
         })
@@ -797,70 +762,62 @@ pub async fn execute_tool(
       }
 
       // Emit event so UI can track sub-agents
-      let sub_run_ids: Vec<String> = sub_tasks.iter().map(|s| s.run_id.clone()).collect();
-      emit_sub_agents_spawned(bus_app, parent_run_id.as_deref().unwrap_or(run_id), sub_run_ids);
+      let sub_session_ids: Vec<String> = sub_tasks.iter().map(|s| s.session_id.clone()).collect();
+      emit_sub_agents_spawned(
+        bus_app,
+        parent_session_id.as_deref(),
+        ctx.current_run_id.as_deref(),
+        sub_session_ids.clone(),
+      );
 
-      // Enqueue all sub-agents to the executor engine
+      // Spawn all sub-agents
       for st in &sub_tasks {
-        let loop_config = AgentLoopConfig {
-          goal: st.goal.clone(),
-          model: None,
-          max_iterations: None,
-          max_total_tokens: None,
-          template_vars: None,
-        };
-        let config_json = serde_json::to_value(&loop_config).map_err(|e| e.to_string())?;
-
-        let task = Task {
-          id: st.task_id.clone(),
-          name: format!("sub-agent:{}", st.id),
-          description: Some(format!("Sub-agent task '{}'", st.id)),
-          kind: "agent_loop".to_string(),
-          config: config_json,
-          max_duration_seconds: timeout_secs as i64,
-          max_retries: 0,
-          retry_delay_seconds: 0,
-          concurrency_policy: "allow".to_string(),
-          tags: vec!["sub_agent".to_string()],
-          agent_id: Some(agent_id.to_string()),
-          session_id: None,
-          enabled: true,
-          created_at: now.clone(),
-          updated_at: now.clone(),
-        };
-
-        let req = RunRequest {
-          run_id: st.run_id.clone(),
-          task,
-          schedule_id: None,
-          _trigger: "sub_agent".to_string(),
-          retry_count: 0,
-          _parent_run_id: parent_run_id.clone(),
-          chain_depth: next_depth,
-        };
-        executor_tx.send(req).map_err(|e| format!("failed to enqueue sub-agent: {}", e))?;
+        let db_clone = db.clone();
+        let app_clone = bus_app.clone();
+        let tx_clone = executor_tx.clone();
+        let semaphores = agent_semaphores.clone();
+        let registry = session_registry.clone();
+        let sub_agent_id = agent_id.to_string();
+        let sub_session_id = st.session_id.clone();
+        tokio::task::spawn_blocking(move || {
+          tauri::async_runtime::block_on(async move {
+            if let Err(e) = session_agent::run_agent_session(
+              &sub_agent_id,
+              &sub_session_id,
+              next_depth,
+              true,
+              &db_clone,
+              &app_clone,
+              &tx_clone,
+              &semaphores,
+              &registry,
+            ).await {
+              warn!(session_id = %sub_session_id, "sub-agent session failed: {}", e);
+            }
+          })
+        });
       }
 
-      // Poll all sub-agent runs until they reach terminal state
+      // Poll all sub-agent sessions until they reach terminal state
       let timeout = tokio::time::Duration::from_secs(timeout_secs + 30); // extra grace period
       let start = tokio::time::Instant::now();
-      let sub_run_ids: Vec<(String, String)> = sub_tasks.iter().map(|s| (s.id.clone(), s.run_id.clone())).collect();
+      let sub_session_refs: Vec<(String, String)> = sub_tasks.iter().map(|s| (s.id.clone(), s.session_id.clone())).collect();
 
       loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
         let all_done = {
           let pool = db.clone();
-          let ids: Vec<String> = sub_run_ids.iter().map(|(_, rid)| rid.clone()).collect();
+          let ids: Vec<String> = sub_session_refs.iter().map(|(_, sid)| sid.clone()).collect();
           tokio::task::spawn_blocking(move || -> bool {
             let conn = match pool.get() {
               Ok(c) => c,
               Err(_) => return false,
             };
-            for rid in &ids {
+            for sid in &ids {
               let state: Option<String> = conn.query_row(
-                "SELECT state FROM runs WHERE id = ?1",
-                rusqlite::params![rid],
+                "SELECT execution_state FROM chat_sessions WHERE id = ?1",
+                rusqlite::params![sid],
                 |row| row.get(0),
               ).ok();
               match state.as_deref() {
@@ -880,42 +837,40 @@ pub async fn execute_tool(
 
         if start.elapsed() > timeout {
           warn!(run_id = run_id, "spawn_sub_agents: timed out waiting for sub-agents");
+          for (_, session_id) in &sub_session_refs {
+            session_registry.cancel(session_id).await;
+            let _ = session_agent::update_session_execution_state(
+              db,
+              session_id,
+              "timed_out",
+              None,
+              Some(format!("Sub-agent timed out after {}s.", timeout_secs)),
+            ).await;
+          }
           break;
         }
       }
 
       // Collect results from all sub-agents
       let mut results = Vec::new();
-      for (task_id, sub_run_id) in &sub_run_ids {
+      for (task_id, sub_session_id) in &sub_session_refs {
         let pool = db.clone();
-        let rid = sub_run_id.clone();
-        let result = tokio::task::spawn_blocking(move || -> (String, Option<String>) {
+        let sid = sub_session_id.clone();
+        let result = tokio::task::spawn_blocking(move || -> (String, Option<String>, Option<String>) {
           let conn = match pool.get() {
             Ok(c) => c,
-            Err(_) => return ("failure".to_string(), None),
+            Err(_) => return ("failure".to_string(), None, Some("Database unavailable".to_string())),
           };
-          let state: String = conn.query_row(
-            "SELECT state FROM runs WHERE id = ?1",
-            rusqlite::params![rid],
-            |row| row.get(0),
-          ).unwrap_or_else(|_| "failure".to_string());
-
-          let meta: Option<String> = conn.query_row(
-            "SELECT metadata FROM runs WHERE id = ?1",
-            rusqlite::params![rid],
-            |row| row.get(0),
-          ).ok();
-          let summary = meta.and_then(|m| {
-            let val: serde_json::Value = serde_json::from_str(&m).ok()?;
-            val.get("finish_summary").and_then(|s| s.as_str()).map(|s| s.to_string())
-          });
-
-          (state, summary)
+          conn.query_row(
+            "SELECT COALESCE(execution_state, 'failure'), finish_summary, terminal_error FROM chat_sessions WHERE id = ?1",
+            rusqlite::params![sid],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+          ).unwrap_or_else(|_| ("failure".to_string(), None, Some("Session not found".to_string())))
         })
         .await
-        .unwrap_or(("failure".to_string(), None));
+        .unwrap_or(("failure".to_string(), None, Some("Join error".to_string())));
 
-        let (state, summary) = result;
+        let (state, summary, terminal_error) = result;
         match state.as_str() {
           "success" => {
             results.push(json!({
@@ -928,14 +883,14 @@ pub async fn execute_tool(
             results.push(json!({
               "id": task_id,
               "status": "timed_out",
-              "error": format!("Sub-agent timed out after {}s.", timeout_secs),
+              "error": terminal_error.unwrap_or_else(|| format!("Sub-agent timed out after {}s.", timeout_secs)),
             }));
           }
           _ => {
             results.push(json!({
               "id": task_id,
               "status": state,
-              "error": summary.unwrap_or_else(|| format!("Sub-agent finished with state: {}", state)),
+              "error": terminal_error.or(summary).unwrap_or_else(|| format!("Sub-agent finished with state: {}", state)),
             }));
           }
         }

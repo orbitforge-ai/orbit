@@ -12,7 +12,7 @@ use tauri::menu::{ Menu, MenuItem };
 use tauri::tray::TrayIconBuilder;
 
 use db::connection::init as init_db;
-use executor::engine::{ ExecutorEngine, ExecutorTx };
+use executor::engine::{ AgentSemaphores, ExecutorEngine, ExecutorTx, SessionExecutionRegistry };
 use scheduler::SchedulerEngine;
 use tauri_plugin_log::{ Builder, Target, TargetKind };
 use tracing::info;
@@ -57,10 +57,14 @@ pub fn run() {
       let (executor_tx, executor_rx) =
         tokio::sync::mpsc::unbounded_channel::<executor::engine::RunRequest>();
       let executor_tx_state = ExecutorTx(executor_tx.clone());
+      let agent_semaphores = AgentSemaphores::new();
+      let session_registry = SessionExecutionRegistry::new();
 
       // Register managed state
       app.manage(db_pool.clone());
       app.manage(executor_tx_state);
+      app.manage(agent_semaphores.clone());
+      app.manage(session_registry.clone());
 
       // Start execution engine (now takes tx clone for retry scheduling)
       let engine = ExecutorEngine::new(
@@ -68,6 +72,8 @@ pub fn run() {
         executor_rx,
         executor_tx.clone(),
         app.handle().clone(),
+        agent_semaphores,
+        session_registry.clone(),
         log_dir.clone()
       );
       tauri::async_runtime::spawn(async move { engine.run().await });
@@ -153,6 +159,8 @@ pub fn run() {
         commands::chat::delete_chat_session,
         commands::chat::get_chat_messages,
         commands::chat::send_chat_message,
+        commands::chat::get_session_execution,
+        commands::chat::cancel_agent_session,
         commands::chat::get_context_usage,
         commands::chat::compact_chat_session,
         // Workspace

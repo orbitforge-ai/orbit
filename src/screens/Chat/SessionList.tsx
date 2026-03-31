@@ -9,9 +9,12 @@ import {
   Eye,
   MessageSquare,
   Zap,
+  GitBranch,
+  Loader2,
+  CheckCircle2,
+  XCircle,
 } from 'lucide-react';
 import { chatApi } from '../../api/chat';
-import { busApi } from '../../api/bus';
 import { ChatSession } from '../../types';
 import { confirm } from '@tauri-apps/plugin-dialog';
 
@@ -49,13 +52,6 @@ export function SessionList({
     queryFn: () => chatApi.listSessions(agentId, showArchived),
     refetchInterval: 5_000,
   });
-
-  const { data: busThread } = useQuery({
-    queryKey: ['bus-thread-count', agentId],
-    queryFn: () => busApi.getBusThread(agentId, 1, 0),
-    refetchInterval: 10_000,
-  });
-  const busMessageCount = busThread?.totalCount ?? 0;
 
   async function handleArchive(session: ChatSession) {
     if (session.archived) {
@@ -101,25 +97,7 @@ export function SessionList({
 
       {/* Session list */}
       <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
-        {/* Pinned: Agent Messages */}
-        {busMessageCount > 0 && (
-          <div
-            onClick={() => onSelectSession('__bus__')}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${
-              activeSessionId === '__bus__'
-                ? 'bg-blue-500/15 text-white'
-                : 'text-secondary hover:bg-surface hover:text-white'
-            }`}
-          >
-            <MessageSquare size={14} className="shrink-0 text-blue-400" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm truncate">Agent Messages</p>
-              <p className="text-[10px] text-muted">{busMessageCount} message{busMessageCount !== 1 ? 's' : ''}</p>
-            </div>
-          </div>
-        )}
-
-        {sessions.length === 0 && busMessageCount === 0 && (
+        {sessions.length === 0 && (
           <div className="text-center py-12 text-muted text-xs">
             {showArchived ? 'No archived chats.' : 'No chats yet. Start a new one!'}
           </div>
@@ -127,13 +105,35 @@ export function SessionList({
 
         {[...sessions]
           .sort((a, b) => {
-            // Pin Pulse sessions to top
-            const aP = a.title === 'Pulse' ? 0 : 1;
-            const bP = b.title === 'Pulse' ? 0 : 1;
-            return aP - bP;
+            const rank = (session: ChatSession) => {
+              if (session.sessionType === 'pulse') return 0;
+              if (session.executionState === 'queued' || session.executionState === 'running') return 1;
+              if (session.sessionType === 'user_chat') return 3;
+              return 2;
+            };
+            const rankDiff = rank(a) - rank(b);
+            if (rankDiff !== 0) return rankDiff;
+            return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
           })
+          .filter((session) => session.sessionType !== 'sub_agent' || session.executionState === 'queued' || session.executionState === 'running')
           .map((session) => {
-            const isPulse = session.title === 'Pulse';
+            const isPulse = session.sessionType === 'pulse';
+            const icon = isPulse
+              ? <Zap size={14} className="shrink-0 text-warning" />
+              : session.sessionType === 'sub_agent'
+                ? <GitBranch size={14} className="shrink-0 text-emerald-400" />
+                : session.sessionType === 'bus_message'
+                  ? <MessageSquare size={14} className="shrink-0 text-blue-400" />
+                  : <MessageSquare size={14} className="shrink-0 opacity-50" />;
+
+            const stateIcon = session.executionState === 'queued' || session.executionState === 'running'
+              ? <Loader2 size={12} className="animate-spin text-accent-hover" />
+              : session.executionState === 'success'
+                ? <CheckCircle2 size={12} className="text-emerald-400" />
+                : session.executionState
+                  ? <XCircle size={12} className="text-red-400" />
+                  : null;
+
             return (
               <div
                 id={session.id}
@@ -145,15 +145,15 @@ export function SessionList({
                     : 'text-secondary hover:bg-surface hover:text-white'
                 }`}
               >
-                {isPulse ? (
-                  <Zap size={14} className="shrink-0 text-warning" />
-                ) : (
-                  <MessageSquare size={14} className="shrink-0 opacity-50" />
-                )}
+                {icon}
                 <div className="flex-1 min-w-0">
                   <p className="text-sm truncate">{session.title}</p>
-                  <p className="text-[10px] text-muted">{formatTime(session.updatedAt)}</p>
+                  <p className="text-[10px] text-muted">
+                    {session.executionState ? `${session.executionState} · ` : ''}
+                    {formatTime(session.updatedAt)}
+                  </p>
                 </div>
+                {stateIcon}
 
                 {/* Context menu trigger */}
                 <button

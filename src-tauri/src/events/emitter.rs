@@ -99,8 +99,9 @@ pub struct ChatContextUpdatePayload {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubAgentsSpawnedPayload {
-  pub parent_run_id: String,
-  pub sub_agent_run_ids: Vec<String>,
+  pub parent_session_id: Option<String>,
+  pub parent_run_id: Option<String>,
+  pub sub_agent_session_ids: Vec<String>,
   pub timestamp: String,
 }
 
@@ -112,7 +113,8 @@ pub struct BusMessageSentPayload {
   pub to_agent_id: String,
   pub kind: String,
   pub payload: serde_json::Value,
-  pub triggered_run_id: String,
+  pub triggered_session_id: Option<String>,
+  pub triggered_run_id: Option<String>,
   pub timestamp: String,
 }
 
@@ -249,12 +251,14 @@ pub fn emit_chat_context_update(
 
 pub fn emit_sub_agents_spawned(
   app: &tauri::AppHandle,
-  parent_run_id: &str,
-  sub_agent_run_ids: Vec<String>,
+  parent_session_id: Option<&str>,
+  parent_run_id: Option<&str>,
+  sub_agent_session_ids: Vec<String>,
 ) {
   let payload = SubAgentsSpawnedPayload {
-    parent_run_id: parent_run_id.to_string(),
-    sub_agent_run_ids,
+    parent_session_id: parent_session_id.map(|s| s.to_string()),
+    parent_run_id: parent_run_id.map(|s| s.to_string()),
+    sub_agent_session_ids,
     timestamp: chrono::Utc::now().to_rfc3339(),
   };
   if let Err(e) = app.emit("agent:sub_agents_spawned", &payload) {
@@ -269,7 +273,8 @@ pub fn emit_bus_message_sent(
   to_agent_id: &str,
   kind: &str,
   payload: serde_json::Value,
-  triggered_run_id: &str,
+  triggered_session_id: Option<&str>,
+  triggered_run_id: Option<&str>,
 ) {
   let event_payload = BusMessageSentPayload {
     message_id: message_id.to_string(),
@@ -277,7 +282,8 @@ pub fn emit_bus_message_sent(
     to_agent_id: to_agent_id.to_string(),
     kind: kind.to_string(),
     payload,
-    triggered_run_id: triggered_run_id.to_string(),
+    triggered_session_id: triggered_session_id.map(|s| s.to_string()),
+    triggered_run_id: triggered_run_id.map(|s| s.to_string()),
     timestamp: chrono::Utc::now().to_rfc3339(),
   };
   if let Err(e) = app.emit("bus:message_sent", &event_payload) {

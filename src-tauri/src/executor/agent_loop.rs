@@ -8,6 +8,7 @@ use crate::events::emitter::{ emit_agent_iteration, emit_agent_tool_result, emit
 use crate::executor::compaction;
 use crate::executor::agent_tools::{ self, ToolExecutionContext };
 use crate::executor::context::{ self, ContextMode, ContextRequest };
+use crate::executor::engine::{ AgentSemaphores, SessionExecutionRegistry };
 use crate::executor::keychain;
 use crate::executor::llm_provider::{
   self,
@@ -84,6 +85,8 @@ pub async fn run_agent_loop(
   executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
   chain_depth: i64,
   is_sub_agent: bool,
+  agent_semaphores: &AgentSemaphores,
+  session_registry: &SessionExecutionRegistry,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -160,19 +163,25 @@ pub async fn run_agent_loop(
     ToolExecutionContext::new_for_sub_agent(
       agent_id,
       run_id,
+      None,
       chain_depth,
       db.clone(),
       executor_tx.clone(),
       app.clone(),
+      agent_semaphores.clone(),
+      session_registry.clone(),
     )
   } else {
     ToolExecutionContext::new_with_bus(
       agent_id,
       run_id,
+      None,
       chain_depth,
       db.clone(),
       executor_tx.clone(),
       app.clone(),
+      agent_semaphores.clone(),
+      session_registry.clone(),
     )
   };
 
@@ -522,6 +531,8 @@ pub async fn run_agent_prompt(
   db: &DbPool,
   _executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
   _chain_depth: i64,
+  _agent_semaphores: &AgentSemaphores,
+  _session_registry: &SessionExecutionRegistry,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -699,6 +710,8 @@ pub async fn run_pulse(
   db: &DbPool,
   _executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
   _chain_depth: i64,
+  _agent_semaphores: &AgentSemaphores,
+  _session_registry: &SessionExecutionRegistry,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -738,15 +751,17 @@ pub async fn run_pulse(
         // Find or create session
         let session_id: String = conn
           .query_row(
-            "SELECT id FROM chat_sessions WHERE agent_id = ?1 AND title = 'Pulse'",
+            "SELECT id FROM chat_sessions WHERE agent_id = ?1 AND session_type = 'pulse'",
             rusqlite::params![aid],
             |row| row.get(0)
           )
           .unwrap_or_else(|_| {
             let sid = ulid::Ulid::new().to_string();
             let _ = conn.execute(
-              "INSERT INTO chat_sessions (id, agent_id, title, archived, created_at, updated_at)
-                         VALUES (?1, ?2, 'Pulse', 0, ?3, ?3)",
+              "INSERT INTO chat_sessions (
+                 id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
+                 chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at
+               ) VALUES (?1, ?2, 'Pulse', 0, 'pulse', NULL, NULL, 0, 'running', NULL, NULL, ?3, ?3)",
               rusqlite::params![sid, aid, now]
             );
             sid
@@ -767,7 +782,7 @@ pub async fn run_pulse(
 
         conn
           .execute(
-            "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
+            "UPDATE chat_sessions SET updated_at = ?1, session_type = 'pulse', execution_state = 'running' WHERE id = ?2",
             rusqlite::params![now, session_id]
           )
           .map_err(|e| e.to_string())?;
@@ -862,7 +877,7 @@ pub async fn run_pulse(
 
         conn
           .execute(
-            "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
+            "UPDATE chat_sessions SET updated_at = ?1, execution_state = 'success' WHERE id = ?2",
             rusqlite::params![now, sid]
           )
           .map_err(|e| e.to_string())?;

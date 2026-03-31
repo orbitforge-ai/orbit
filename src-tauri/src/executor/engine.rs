@@ -112,78 +112,53 @@ impl ActiveRunRegistry {
   }
 }
 
-/// The background execution engine.
-pub struct ExecutorEngine {
-  db: DbPool,
-  rx: mpsc::UnboundedReceiver<RunRequest>,
-  /// Clone of the sender so the engine can enqueue retry runs.
-  tx: mpsc::UnboundedSender<RunRequest>,
-  app: tauri::AppHandle,
-  /// Per-agent semaphores: agent_id → Semaphore(max_concurrent_runs)
-  agent_semaphores: Arc<Mutex<HashMap<String, Arc<Semaphore>>>>,
-  /// Shared active run registry for concurrency policy enforcement
-  registry: ActiveRunRegistry,
-  log_dir: PathBuf,
+/// Shared per-agent semaphore pool used by both executor-backed runs and
+/// session-backed agent executions.
+#[derive(Clone)]
+pub struct AgentSemaphores {
+  inner: Arc<Mutex<HashMap<String, Arc<Semaphore>>>>,
 }
 
-impl ExecutorEngine {
-  pub fn new(
-    db: DbPool,
-    rx: mpsc::UnboundedReceiver<RunRequest>,
-    tx: mpsc::UnboundedSender<RunRequest>,
-    app: tauri::AppHandle,
-    log_dir: PathBuf
-  ) -> Self {
+impl AgentSemaphores {
+  pub fn new() -> Self {
     Self {
-      db,
-      rx,
-      tx,
-      app,
-      agent_semaphores: Arc::new(Mutex::new(HashMap::new())),
-      registry: ActiveRunRegistry::new(),
-      log_dir,
+      inner: Arc::new(Mutex::new(HashMap::new())),
     }
   }
 
-  /// Pre-load semaphores for all existing agents.
-  async fn init_semaphores(&self) {
-    let pool = self.db.clone();
+  pub async fn init(&self, db: &DbPool) {
+    let pool = db.clone();
     let result: Vec<(String, usize)> = tokio::task
-      ::spawn_blocking(
-        move || -> Option<Vec<(String, usize)>> {
-          let conn = pool.get().ok()?;
-          let mut stmt = conn.prepare("SELECT id, max_concurrent_runs FROM agents").ok()?;
-          let rows = stmt
-            .query_map([], |row| { Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)) })
-            .ok()?
-            .filter_map(|r| r.ok())
-            .map(|(id, n)| (id, n.max(1) as usize))
-            .collect();
-          Some(rows)
-        }
-      ).await
+      ::spawn_blocking(move || -> Option<Vec<(String, usize)>> {
+        let conn = pool.get().ok()?;
+        let mut stmt = conn.prepare("SELECT id, max_concurrent_runs FROM agents").ok()?;
+        let rows = stmt
+          .query_map([], |row| { Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)) })
+          .ok()?
+          .filter_map(|r| r.ok())
+          .map(|(id, n)| (id, n.max(1) as usize))
+          .collect();
+        Some(rows)
+      }).await
       .ok()
       .flatten()
       .unwrap_or_default();
 
-    let mut semaphores = self.agent_semaphores.lock().await;
+    let mut semaphores = self.inner.lock().await;
     for (agent_id, capacity) in result {
       semaphores.entry(agent_id).or_insert_with(|| Arc::new(Semaphore::new(capacity)));
     }
-    // Ensure default agent semaphore always exists
     semaphores
       .entry(DEFAULT_AGENT_ID.to_string())
       .or_insert_with(|| Arc::new(Semaphore::new(DEFAULT_MAX_CONCURRENT)));
   }
 
-  /// Get the semaphore for an agent, creating one if needed.
-  async fn get_semaphore(&self, agent_id: &str, db: &DbPool) -> Arc<Semaphore> {
-    let mut semaphores = self.agent_semaphores.lock().await;
+  pub async fn get_or_create(&self, agent_id: &str, db: &DbPool) -> Arc<Semaphore> {
+    let mut semaphores = self.inner.lock().await;
     if let Some(s) = semaphores.get(agent_id) {
       return s.clone();
     }
 
-    // Load capacity from DB
     let id = agent_id.to_string();
     let pool = db.clone();
     let capacity = tokio::task
@@ -206,20 +181,88 @@ impl ExecutorEngine {
     semaphores.insert(agent_id.to_string(), sem.clone());
     sem
   }
+}
+
+/// Tracks session cancellation requests for session-backed agent executions.
+#[derive(Clone)]
+pub struct SessionExecutionRegistry {
+  cancelled_sessions: Arc<Mutex<HashSet<String>>>,
+}
+
+impl SessionExecutionRegistry {
+  pub fn new() -> Self {
+    Self {
+      cancelled_sessions: Arc::new(Mutex::new(HashSet::new())),
+    }
+  }
+
+  pub async fn cancel(&self, session_id: &str) {
+    let mut cancelled = self.cancelled_sessions.lock().await;
+    cancelled.insert(session_id.to_string());
+  }
+
+  pub async fn clear_cancelled(&self, session_id: &str) {
+    let mut cancelled = self.cancelled_sessions.lock().await;
+    cancelled.remove(session_id);
+  }
+
+  pub async fn is_cancelled(&self, session_id: &str) -> bool {
+    let cancelled = self.cancelled_sessions.lock().await;
+    cancelled.contains(session_id)
+  }
+}
+
+/// The background execution engine.
+pub struct ExecutorEngine {
+  db: DbPool,
+  rx: mpsc::UnboundedReceiver<RunRequest>,
+  /// Clone of the sender so the engine can enqueue retry runs.
+  tx: mpsc::UnboundedSender<RunRequest>,
+  app: tauri::AppHandle,
+  agent_semaphores: AgentSemaphores,
+  session_registry: SessionExecutionRegistry,
+  /// Shared active run registry for concurrency policy enforcement
+  registry: ActiveRunRegistry,
+  log_dir: PathBuf,
+}
+
+impl ExecutorEngine {
+  pub fn new(
+    db: DbPool,
+    rx: mpsc::UnboundedReceiver<RunRequest>,
+    tx: mpsc::UnboundedSender<RunRequest>,
+    app: tauri::AppHandle,
+    agent_semaphores: AgentSemaphores,
+    session_registry: SessionExecutionRegistry,
+    log_dir: PathBuf
+  ) -> Self {
+    Self {
+      db,
+      rx,
+      tx,
+      app,
+      agent_semaphores,
+      session_registry,
+      registry: ActiveRunRegistry::new(),
+      log_dir,
+    }
+  }
 
   pub async fn run(mut self) {
     info!("ExecutorEngine started");
-    self.init_semaphores().await;
+    self.agent_semaphores.init(&self.db).await;
 
     while let Some(req) = self.rx.recv().await {
       let agent_id = req.task.agent_id.clone().unwrap_or_else(|| DEFAULT_AGENT_ID.to_string());
       let policy = req.task.concurrency_policy.clone();
 
-      let semaphore = self.get_semaphore(&agent_id, &self.db).await;
+      let semaphore = self.agent_semaphores.get_or_create(&agent_id, &self.db).await;
       let db = self.db.clone();
       let app = self.app.clone();
       let log_dir = self.log_dir.clone();
       let registry = self.registry.clone();
+      let agent_semaphores = self.agent_semaphores.clone();
+      let session_registry = self.session_registry.clone();
       let tx = self.tx.clone();
 
       match policy.as_str() {
@@ -239,6 +282,8 @@ impl ExecutorEngine {
                     log_dir.clone(),
                     cancel_rx,
                     tx.clone(),
+                    agent_semaphores.clone(),
+                    session_registry.clone(),
                   ).await
                 {
                   error!("run failed: {}", e);
@@ -295,6 +340,8 @@ impl ExecutorEngine {
                 log_dir.clone(),
                 cancel_rx,
                 tx.clone(),
+                agent_semaphores.clone(),
+                session_registry.clone(),
               ).await
             {
               error!("run failed: {}", e);
@@ -324,6 +371,8 @@ impl ExecutorEngine {
                 log_dir.clone(),
                 cancel_rx,
                 tx.clone(),
+                agent_semaphores.clone(),
+                session_registry.clone(),
               ).await
             {
               error!("run failed: {}", e);
@@ -351,6 +400,8 @@ async fn run_one(
   log_dir: PathBuf,
   cancel: oneshot::Receiver<()>,
   executor_tx: mpsc::UnboundedSender<RunRequest>,
+  agent_semaphores: AgentSemaphores,
+  session_registry: SessionExecutionRegistry,
 ) -> Result<(), String> {
   let run_id = req.run_id.clone();
   let task = req.task;
@@ -401,6 +452,8 @@ async fn run_one(
         &db,
         &executor_tx,
         req.chain_depth,
+        &agent_semaphores,
+        &session_registry,
       ).await
     }
     "agent_loop" => {
@@ -424,6 +477,8 @@ async fn run_one(
           &db,
           &executor_tx,
           req.chain_depth,
+          &agent_semaphores,
+          &session_registry,
         ).await
       } else {
         agent_loop::run_agent_loop(
@@ -438,6 +493,8 @@ async fn run_one(
           &executor_tx,
           req.chain_depth,
           is_sub_agent,
+          &agent_semaphores,
+          &session_registry,
         ).await
       }
     }
@@ -847,7 +904,8 @@ async fn evaluate_bus_subscriptions(
       &subscriber_agent_id,
       "event",
       serde_json::json!({ "event_type": event_type, "source_run_id": run_id }),
-      &new_run_id,
+      None,
+      Some(&new_run_id),
     );
 
     // Send to executor

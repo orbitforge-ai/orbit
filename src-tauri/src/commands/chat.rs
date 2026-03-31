@@ -7,9 +7,10 @@ use crate::events::emitter::{ emit_agent_iteration, emit_agent_tool_result, emit
 use crate::executor::agent_tools::{ self, ToolExecutionContext };
 use crate::executor::compaction;
 use crate::executor::context::{ self, ContextMode, ContextRequest };
-use crate::executor::engine::ExecutorTx;
+use crate::executor::engine::{ AgentSemaphores, ExecutorTx, SessionExecutionRegistry };
 use crate::executor::keychain;
 use crate::executor::llm_provider::{ self, ChatMessage, ContentBlock, LlmConfig };
+use crate::executor::session_agent;
 use crate::executor::workspace;
 use crate::models::chat::ChatSession;
 
@@ -21,33 +22,56 @@ const MAX_TOKENS_PER_CALL: u32 = 4096;
 pub async fn list_chat_sessions(
   agent_id: String,
   include_archived: Option<bool>,
+  session_types: Option<Vec<String>>,
   db: tauri::State<'_, DbPool>
 ) -> Result<Vec<ChatSession>, String> {
   let pool = db.0.clone();
   let show_archived = include_archived.unwrap_or(false);
+  let session_types = session_types.unwrap_or_default();
 
   tokio::task
     ::spawn_blocking(move || {
       let conn = pool.get().map_err(|e| e.to_string())?;
       let mut sql = String::from(
-        "SELECT id, agent_id, title, archived, created_at, updated_at
+        "SELECT id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
+                chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at
              FROM chat_sessions WHERE agent_id = ?1"
       );
+      let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(agent_id)];
       if !show_archived {
         sql.push_str(" AND archived = 0");
+      }
+      if !session_types.is_empty() {
+        let start_idx = params.len() + 1;
+        let placeholders = (0..session_types.len())
+          .map(|i| format!("?{}", start_idx + i))
+          .collect::<Vec<_>>()
+          .join(", ");
+        sql.push_str(&format!(" AND session_type IN ({})", placeholders));
+        for session_type in session_types {
+          params.push(Box::new(session_type));
+        }
       }
       sql.push_str(" ORDER BY updated_at DESC");
 
       let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+      let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
       let sessions = stmt
-        .query_map(rusqlite::params![agent_id], |row| {
+        .query_map(params_refs.as_slice(), |row| {
           Ok(ChatSession {
             id: row.get(0)?,
             agent_id: row.get(1)?,
             title: row.get(2)?,
             archived: row.get::<_, bool>(3)?,
-            created_at: row.get(4)?,
-            updated_at: row.get(5)?,
+            session_type: row.get(4)?,
+            parent_session_id: row.get(5)?,
+            source_bus_message_id: row.get(6)?,
+            chain_depth: row.get(7)?,
+            execution_state: row.get(8)?,
+            finish_summary: row.get(9)?,
+            terminal_error: row.get(10)?,
+            created_at: row.get(11)?,
+            updated_at: row.get(12)?,
           })
         })
         .map_err(|e| e.to_string())?
@@ -63,6 +87,7 @@ pub async fn list_chat_sessions(
 pub async fn create_chat_session(
   agent_id: String,
   title: Option<String>,
+  session_type: Option<String>,
   db: tauri::State<'_, DbPool>
 ) -> Result<ChatSession, String> {
   let pool = db.0.clone();
@@ -73,12 +98,15 @@ pub async fn create_chat_session(
       let id = Ulid::new().to_string();
       let now = chrono::Utc::now().to_rfc3339();
       let title = title.unwrap_or_else(|| "New Chat".to_string());
+      let session_type = session_type.unwrap_or_else(|| "user_chat".to_string());
 
       conn
         .execute(
-          "INSERT INTO chat_sessions (id, agent_id, title, archived, created_at, updated_at)
-             VALUES (?1, ?2, ?3, 0, ?4, ?4)",
-          rusqlite::params![id, agent_id, title, now]
+          "INSERT INTO chat_sessions (
+             id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
+             chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at
+           ) VALUES (?1, ?2, ?3, 0, ?4, NULL, NULL, 0, NULL, NULL, NULL, ?5, ?5)",
+          rusqlite::params![id, agent_id, title, session_type, now]
         )
         .map_err(|e| e.to_string())?;
 
@@ -87,6 +115,13 @@ pub async fn create_chat_session(
         agent_id,
         title,
         archived: false,
+        session_type,
+        parent_session_id: None,
+        source_bus_message_id: None,
+        chain_depth: 0,
+        execution_state: None,
+        finish_summary: None,
+        terminal_error: None,
         created_at: now.clone(),
         updated_at: now,
       })
@@ -125,6 +160,14 @@ pub async fn archive_chat_session(
   tokio::task
     ::spawn_blocking(move || {
       let conn = pool.get().map_err(|e| e.to_string())?;
+      let active_execution: Option<String> = conn.query_row(
+        "SELECT execution_state FROM chat_sessions WHERE id = ?1",
+        rusqlite::params![session_id],
+        |row| row.get(0)
+      ).ok();
+      if matches!(active_execution.as_deref(), Some("queued") | Some("running")) {
+        return Err("cannot archive an active agent session".to_string());
+      }
       let now = chrono::Utc::now().to_rfc3339();
       conn
         .execute(
@@ -167,6 +210,14 @@ pub async fn delete_chat_session(
   tokio::task
     ::spawn_blocking(move || {
       let conn = pool.get().map_err(|e| e.to_string())?;
+      let active_execution: Option<String> = conn.query_row(
+        "SELECT execution_state FROM chat_sessions WHERE id = ?1",
+        rusqlite::params![session_id],
+        |row| row.get(0)
+      ).ok();
+      if matches!(active_execution.as_deref(), Some("queued") | Some("running")) {
+        return Err("cannot delete an active agent session".to_string());
+      }
       conn
         .execute("DELETE FROM chat_sessions WHERE id = ?1", rusqlite::params![session_id])
         .map_err(|e| e.to_string())?;
@@ -293,7 +344,9 @@ pub async fn send_chat_message(
   content: String, // JSON-serialized Vec<ContentBlock>
   app: tauri::AppHandle,
   db: tauri::State<'_, DbPool>,
-  executor_tx: tauri::State<'_, ExecutorTx>
+  executor_tx: tauri::State<'_, ExecutorTx>,
+  agent_semaphores: tauri::State<'_, AgentSemaphores>,
+  session_registry: tauri::State<'_, SessionExecutionRegistry>,
 ) -> Result<String, String> {
   let pool = db.0.clone();
   let stream_id = format!("chat:{}", session_id);
@@ -305,22 +358,22 @@ pub async fn send_chat_message(
     .map_err(|e| format!("invalid content: {}", e))?;
 
   // Load session + history in blocking task
-  let (agent_id, history, _session_title) = {
+  let (agent_id, history, _session_title, chain_depth) = {
     let pool = pool.clone();
     let sid = session_id.clone();
     let uc = user_content.clone();
 
     tokio::task
       ::spawn_blocking(
-        move || -> Result<(String, Vec<ChatMessage>, String), String> {
+        move || -> Result<(String, Vec<ChatMessage>, String, i64), String> {
           let conn = pool.get().map_err(|e| e.to_string())?;
 
           // Get session
-          let (agent_id, title): (String, String) = conn
+          let (agent_id, title, chain_depth): (String, String, i64) = conn
             .query_row(
-              "SELECT agent_id, title FROM chat_sessions WHERE id = ?1",
+              "SELECT agent_id, title, chain_depth FROM chat_sessions WHERE id = ?1",
               rusqlite::params![sid],
-              |row| Ok((row.get(0)?, row.get(1)?))
+              |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             )
             .map_err(|e| format!("session not found: {}", e))?;
 
@@ -393,7 +446,7 @@ pub async fn send_chat_message(
             created_at: None,
           });
 
-          Ok((agent_id, messages, title))
+          Ok((agent_id, messages, title, chain_depth))
         }
       ).await
       .map_err(|e| e.to_string())??
@@ -403,9 +456,22 @@ pub async fn send_chat_message(
   let db_bg = DbPool(pool.clone());
   let sid_bg = session_id.clone();
   let etx = executor_tx.0.clone();
+  let semaphores = agent_semaphores.inner().clone();
+  let registry = session_registry.inner().clone();
 
   tauri::async_runtime::spawn(async move {
-    if let Err(e) = do_llm_chat(&agent_id, history, &stream_id, &app, &db_bg, &sid_bg, &etx).await {
+    if let Err(e) = do_llm_chat(
+      &agent_id,
+      history,
+      &stream_id,
+      &app,
+      &db_bg,
+      &sid_bg,
+      &etx,
+      chain_depth,
+      semaphores,
+      registry,
+    ).await {
       warn!("Chat LLM error: {}", e);
       // Emit finished with error info
       emit_agent_iteration(&app, &stream_id, 1, "finished", None, 0);
@@ -460,6 +526,9 @@ async fn do_llm_chat(
   db: &DbPool,
   session_id: &str,
   executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
+  chain_depth: i64,
+  agent_semaphores: AgentSemaphores,
+  session_registry: SessionExecutionRegistry,
 ) -> Result<(), String> {
   // Load agent config
   let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
@@ -499,10 +568,13 @@ async fn do_llm_chat(
   let tool_ctx = ToolExecutionContext::new_with_bus(
     agent_id,
     stream_id,
-    0, // chat is always top-level
+    Some(session_id),
+    chain_depth,
     db.clone(),
     executor_tx.clone(),
     app.clone(),
+    agent_semaphores,
+    session_registry,
   );
   let pool = db.0.clone();
 
@@ -662,6 +734,71 @@ async fn do_llm_chat(
   }
 
   Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionExecutionStatus {
+  pub session_id: String,
+  pub execution_state: Option<String>,
+  pub finish_summary: Option<String>,
+  pub terminal_error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_session_execution(
+  session_id: String,
+  db: tauri::State<'_, DbPool>
+) -> Result<SessionExecutionStatus, String> {
+  let pool = db.0.clone();
+  tokio::task::spawn_blocking(move || {
+    let conn = pool.get().map_err(|e| e.to_string())?;
+    let sid = session_id.clone();
+    conn.query_row(
+      "SELECT execution_state, finish_summary, terminal_error FROM chat_sessions WHERE id = ?1",
+      rusqlite::params![session_id],
+      |row| {
+        Ok(SessionExecutionStatus {
+          session_id: sid.clone(),
+          execution_state: row.get(0)?,
+          finish_summary: row.get(1)?,
+          terminal_error: row.get(2)?,
+        })
+      },
+    ).map_err(|e| e.to_string())
+  }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn cancel_agent_session(
+  session_id: String,
+  db: tauri::State<'_, DbPool>,
+  session_registry: tauri::State<'_, SessionExecutionRegistry>,
+) -> Result<(), String> {
+  let pool = db.0.clone();
+  let sid = session_id.clone();
+  let session_type: String = tokio::task::spawn_blocking(move || {
+    let conn = pool.get().map_err(|e| e.to_string())?;
+    conn.query_row(
+      "SELECT session_type FROM chat_sessions WHERE id = ?1",
+      rusqlite::params![sid],
+      |row| row.get(0),
+    ).map_err(|e| e.to_string())
+  }).await.map_err(|e| e.to_string())??;
+
+  if !matches!(session_type.as_str(), "bus_message" | "sub_agent" | "pulse") {
+    return Err("only bus_message, sub_agent, and pulse sessions can be cancelled".to_string());
+  }
+
+  session_registry.cancel(&session_id).await;
+  let db_pool = DbPool(db.0.clone());
+  session_agent::update_session_execution_state(
+    &db_pool,
+    &session_id,
+    "cancelled",
+    None,
+    Some("Cancelled".to_string()),
+  ).await
 }
 
 // ─── Context Usage Query ────────────────────────────────────────────────────

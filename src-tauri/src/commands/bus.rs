@@ -18,14 +18,14 @@ pub async fn list_bus_messages(
 
         let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match agent_id {
             Some(ref aid) => (
-                "SELECT id, from_agent_id, from_run_id, to_agent_id, to_run_id, kind, event_type, payload, status, created_at
+                "SELECT id, from_agent_id, from_run_id, from_session_id, to_agent_id, to_run_id, to_session_id, kind, event_type, payload, status, created_at
                  FROM bus_messages
                  WHERE from_agent_id = ?1 OR to_agent_id = ?1
                  ORDER BY created_at DESC LIMIT ?2 OFFSET ?3".to_string(),
                 vec![Box::new(aid.clone()), Box::new(limit), Box::new(offset)],
             ),
             None => (
-                "SELECT id, from_agent_id, from_run_id, to_agent_id, to_run_id, kind, event_type, payload, status, created_at
+                "SELECT id, from_agent_id, from_run_id, from_session_id, to_agent_id, to_run_id, to_session_id, kind, event_type, payload, status, created_at
                  FROM bus_messages
                  ORDER BY created_at DESC LIMIT ?1 OFFSET ?2".to_string(),
                 vec![Box::new(limit), Box::new(offset)],
@@ -36,18 +36,20 @@ pub async fn list_bus_messages(
         let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let messages = stmt
             .query_map(params_refs.as_slice(), |row| {
-                let payload_str: String = row.get(7)?;
+                let payload_str: String = row.get(9)?;
                 Ok(BusMessage {
                     id: row.get(0)?,
                     from_agent_id: row.get(1)?,
                     from_run_id: row.get(2)?,
-                    to_agent_id: row.get(3)?,
-                    to_run_id: row.get(4)?,
-                    kind: row.get(5)?,
-                    event_type: row.get(6)?,
+                    from_session_id: row.get(3)?,
+                    to_agent_id: row.get(4)?,
+                    to_run_id: row.get(5)?,
+                    to_session_id: row.get(6)?,
+                    kind: row.get(7)?,
+                    event_type: row.get(8)?,
                     payload: serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null),
-                    status: row.get(8)?,
-                    created_at: row.get(9)?,
+                    status: row.get(10)?,
+                    created_at: row.get(11)?,
                 })
             })
             .map_err(|e| e.to_string())?
@@ -85,10 +87,12 @@ pub async fn get_bus_thread(
             .prepare(
                 "SELECT bm.id, bm.from_agent_id, COALESCE(a.name, bm.from_agent_id), bm.to_agent_id, bm.kind,
                         bm.payload, bm.status, bm.created_at,
-                        bm.to_run_id, r.state, json_extract(r.metadata, '$.finish_summary')
+                        bm.to_run_id, r.state, json_extract(r.metadata, '$.finish_summary'),
+                        bm.to_session_id, cs.execution_state, cs.finish_summary
                  FROM bus_messages bm
                  LEFT JOIN agents a ON a.id = bm.from_agent_id
                  LEFT JOIN runs r ON r.id = bm.to_run_id
+                 LEFT JOIN chat_sessions cs ON cs.id = bm.to_session_id
                  WHERE bm.to_agent_id = ?1
                  ORDER BY bm.created_at DESC
                  LIMIT ?2 OFFSET ?3",
@@ -111,6 +115,9 @@ pub async fn get_bus_thread(
                     triggered_run_id: row.get(8)?,
                     triggered_run_state: row.get(9)?,
                     triggered_run_summary: row.get(10)?,
+                    triggered_session_id: row.get(11)?,
+                    triggered_session_state: row.get(12)?,
+                    triggered_session_summary: row.get(13)?,
                 })
             })
             .map_err(|e| e.to_string())?

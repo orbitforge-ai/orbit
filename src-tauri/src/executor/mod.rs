@@ -9,6 +9,7 @@ pub mod keychain;
 pub mod llm_provider;
 pub mod minimax;
 pub mod process;
+pub mod session_agent;
 pub mod skills;
 pub mod state_machine;
 pub mod workspace;

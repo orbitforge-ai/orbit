@@ -78,7 +78,7 @@ pub async fn get_pulse_config(
         // Find pulse chat session
         let session_id: Option<String> = conn
             .query_row(
-                "SELECT id FROM chat_sessions WHERE agent_id = ?1 AND title = 'Pulse'",
+                "SELECT id FROM chat_sessions WHERE agent_id = ?1 AND session_type = 'pulse'",
                 rusqlite::params![aid],
                 |row| row.get(0),
             )
@@ -210,15 +210,17 @@ pub async fn update_pulse(
         // ── Ensure Pulse chat session exists ─────────────────────────────
         let session_id: String = conn
             .query_row(
-                "SELECT id FROM chat_sessions WHERE agent_id = ?1 AND title = 'Pulse'",
+                "SELECT id FROM chat_sessions WHERE agent_id = ?1 AND session_type = 'pulse'",
                 rusqlite::params![aid],
                 |row| row.get(0),
             )
             .unwrap_or_else(|_| {
                 let sid = Ulid::new().to_string();
                 let _ = conn.execute(
-                    "INSERT INTO chat_sessions (id, agent_id, title, archived, created_at, updated_at)
-                     VALUES (?1, ?2, 'Pulse', 0, ?3, ?3)",
+                    "INSERT INTO chat_sessions (
+                       id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
+                       chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at
+                     ) VALUES (?1, ?2, 'Pulse', 0, 'pulse', NULL, NULL, 0, NULL, NULL, NULL, ?3, ?3)",
                     rusqlite::params![sid, aid, now],
                 );
                 sid

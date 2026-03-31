@@ -1,12 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
-import { ChatSession, ChatMessage, ContentBlock, ContextUsage, PaginatedChatMessages } from "../types";
+import { ChatSession, ChatMessage, ContentBlock, ContextUsage, PaginatedChatMessages, SessionExecutionStatus } from "../types";
 
 export const chatApi = {
-  listSessions: (agentId: string, includeArchived?: boolean): Promise<ChatSession[]> =>
-    invoke("list_chat_sessions", { agentId, includeArchived }),
+  listSessions: (agentId: string, includeArchived?: boolean, sessionTypes?: string[]): Promise<ChatSession[]> =>
+    invoke("list_chat_sessions", { agentId, includeArchived, sessionTypes }),
 
-  createSession: (agentId: string, title?: string): Promise<ChatSession> =>
-    invoke("create_chat_session", { agentId, title }),
+  createSession: (agentId: string, title?: string, sessionType?: string): Promise<ChatSession> =>
+    invoke("create_chat_session", { agentId, title, sessionType }),
 
   renameSession: (sessionId: string, title: string): Promise<void> =>
     invoke("rename_chat_session", { sessionId, title }),
@@ -29,6 +29,12 @@ export const chatApi = {
 
   sendMessage: (sessionId: string, content: ContentBlock[]): Promise<string> =>
     invoke("send_chat_message", { sessionId, content: JSON.stringify(content) }),
+
+  getSessionExecution: (sessionId: string): Promise<SessionExecutionStatus> =>
+    invoke("get_session_execution", { sessionId }),
+
+  cancelAgentSession: (sessionId: string): Promise<void> =>
+    invoke("cancel_agent_session", { sessionId }),
 
   getContextUsage: (sessionId: string): Promise<ContextUsage> =>
     invoke("get_context_usage", { sessionId }),

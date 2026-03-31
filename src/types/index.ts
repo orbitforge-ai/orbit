@@ -146,6 +146,13 @@ export interface ChatSession {
   agentId: string;
   title: string;
   archived: boolean;
+  sessionType: "user_chat" | "bus_message" | "sub_agent" | "pulse";
+  parentSessionId: string | null;
+  sourceBusMessageId: string | null;
+  chainDepth: number;
+  executionState: "queued" | "running" | "success" | "failure" | "cancelled" | "timed_out" | null;
+  finishSummary: string | null;
+  terminalError: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -318,8 +325,10 @@ export interface BusMessage {
   id: string;
   fromAgentId: string;
   fromRunId: string | null;
+  fromSessionId: string | null;
   toAgentId: string;
   toRunId: string | null;
+  toSessionId: string | null;
   kind: "direct" | "event";
   eventType: string | null;
   payload: Record<string, unknown>;
@@ -350,8 +359,9 @@ export interface CreateBusSubscription {
 }
 
 export interface SubAgentsSpawnedPayload {
-  parentRunId: string;
-  subAgentRunIds: string[];
+  parentSessionId: string | null;
+  parentRunId: string | null;
+  subAgentSessionIds: string[];
   timestamp: string;
 }
 
@@ -367,6 +377,9 @@ export interface BusThreadMessage {
   triggeredRunId: string | null;
   triggeredRunState: string | null;
   triggeredRunSummary: string | null;
+  triggeredSessionId: string | null;
+  triggeredSessionState: string | null;
+  triggeredSessionSummary: string | null;
 }
 
 export interface PaginatedBusThread {
@@ -381,6 +394,14 @@ export interface BusMessageSentPayload {
   toAgentId: string;
   kind: string;
   payload: Record<string, unknown>;
-  triggeredRunId: string;
+  triggeredSessionId: string | null;
+  triggeredRunId: string | null;
   timestamp: string;
+}
+
+export interface SessionExecutionStatus {
+  sessionId: string;
+  executionState: ChatSession["executionState"];
+  finishSummary: string | null;
+  terminalError: string | null;
 }

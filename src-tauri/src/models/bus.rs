@@ -6,8 +6,10 @@ pub struct BusMessage {
     pub id: String,
     pub from_agent_id: String,
     pub from_run_id: Option<String>,
+    pub from_session_id: Option<String>,
     pub to_agent_id: String,
     pub to_run_id: Option<String>,
+    pub to_session_id: Option<String>,
     pub kind: String,               // "direct" | "event"
     pub event_type: Option<String>,
     pub payload: serde_json::Value,
@@ -65,6 +67,9 @@ pub struct BusThreadMessage {
     pub triggered_run_id: Option<String>,
     pub triggered_run_state: Option<String>,
     pub triggered_run_summary: Option<String>,
+    pub triggered_session_id: Option<String>,
+    pub triggered_session_state: Option<String>,
+    pub triggered_session_summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

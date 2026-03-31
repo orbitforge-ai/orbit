@@ -1,0 +1,543 @@
+use tracing::warn;
+
+use crate::db::DbPool;
+use crate::events::emitter::{ emit_agent_iteration, emit_agent_tool_result, emit_chat_context_update };
+use crate::executor::agent_tools::{ self, ToolExecutionContext };
+use crate::executor::compaction;
+use crate::executor::context::{ self, ContextMode, ContextRequest };
+use crate::executor::engine::{ AgentSemaphores, RunRequest, SessionExecutionRegistry };
+use crate::executor::keychain;
+use crate::executor::llm_provider::{
+  self,
+  ChatMessage,
+  ContentBlock,
+  LlmConfig,
+  LlmProvider,
+  ToolDefinition,
+};
+use crate::executor::workspace;
+
+const DEFAULT_MAX_ITERATIONS: u32 = 25;
+const DEFAULT_MAX_TOTAL_TOKENS: u32 = 200_000;
+const DEFAULT_MAX_TOKENS_PER_CALL: u32 = 16384;
+const LLM_RETRY_ATTEMPTS: u32 = 3;
+const LLM_RETRY_BASE_DELAY_MS: u64 = 2000;
+
+pub async fn run_agent_session(
+  agent_id: &str,
+  session_id: &str,
+  chain_depth: i64,
+  is_sub_agent: bool,
+  db: &DbPool,
+  app: &tauri::AppHandle,
+  executor_tx: &tokio::sync::mpsc::UnboundedSender<RunRequest>,
+  agent_semaphores: &AgentSemaphores,
+  session_registry: &SessionExecutionRegistry,
+) -> Result<String, String> {
+  let stream_id = format!("chat:{}", session_id);
+  let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
+  let max_iterations = if ws_config.max_iterations > 0 {
+    ws_config.max_iterations
+  } else {
+    DEFAULT_MAX_ITERATIONS
+  };
+  let max_total_tokens = if ws_config.max_total_tokens > 0 {
+    ws_config.max_total_tokens
+  } else {
+    DEFAULT_MAX_TOTAL_TOKENS
+  };
+
+  let semaphore = agent_semaphores.get_or_create(agent_id, db).await;
+  let _permit = semaphore.acquire_owned().await.map_err(|e| e.to_string())?;
+
+  if is_session_cancelled(session_id, db, session_registry).await {
+    return Err(finalize_cancelled_session(db, session_id).await);
+  }
+
+  update_session_execution_state(db, session_id, "running", None, None).await?;
+
+  let provider_name = &ws_config.provider;
+  let api_key = keychain
+    ::retrieve_api_key(provider_name)
+    .map_err(|_| format!("No API key configured for provider '{}'. Set it in the Agent Config tab.", provider_name))?;
+  let provider = llm_provider::create_provider(provider_name, api_key)?;
+
+  let history = load_session_messages(db, session_id).await?;
+  let pipeline = context::default_pipeline();
+  let ctx_request = ContextRequest {
+    agent_id: agent_id.to_string(),
+    mode: ContextMode::Chat,
+    session_id: Some(session_id.to_string()),
+    run_id: stream_id.clone(),
+    goal: None,
+    ws_config: ws_config.clone(),
+    existing_messages: Some(history),
+    is_sub_agent,
+  };
+  let snapshot = pipeline.build(&ctx_request, db).await?;
+  let tools = snapshot.tools;
+  let context_window = snapshot.token_budget.context_window;
+
+  let llm_config = LlmConfig {
+    model: ws_config.model.clone(),
+    max_tokens: DEFAULT_MAX_TOKENS_PER_CALL,
+    temperature: Some(ws_config.temperature),
+    system_prompt: snapshot.system_prompt,
+  };
+
+  let tool_ctx = if is_sub_agent {
+    ToolExecutionContext::new_for_sub_agent(
+      agent_id,
+      &stream_id,
+      Some(session_id),
+      chain_depth,
+      db.clone(),
+      executor_tx.clone(),
+      app.clone(),
+      agent_semaphores.clone(),
+      session_registry.clone(),
+    )
+  } else {
+    ToolExecutionContext::new_with_bus(
+      agent_id,
+      &stream_id,
+      Some(session_id),
+      chain_depth,
+      db.clone(),
+      executor_tx.clone(),
+      app.clone(),
+      agent_semaphores.clone(),
+      session_registry.clone(),
+    )
+  };
+
+  let result = run_session_loop(
+    &provider,
+    &llm_config,
+    snapshot.messages,
+    &tools,
+    &tool_ctx,
+    &stream_id,
+    session_id,
+    max_iterations,
+    max_total_tokens,
+    context_window,
+    &ws_config,
+    app,
+    db,
+    session_registry,
+  ).await;
+
+  match result {
+    Ok(summary) => Ok(summary),
+    Err(reason) if reason == "cancelled" => Err(finalize_cancelled_session(db, session_id).await),
+    Err(reason) => {
+      finalize_failed_session(db, session_id, &reason).await?;
+      Err(reason)
+    }
+  }
+}
+
+async fn run_session_loop(
+  provider: &Box<dyn LlmProvider>,
+  llm_config: &LlmConfig,
+  mut messages: Vec<ChatMessage>,
+  tools: &[ToolDefinition],
+  tool_ctx: &ToolExecutionContext,
+  stream_id: &str,
+  session_id: &str,
+  max_iterations: u32,
+  max_total_tokens: u32,
+  context_window: u32,
+  ws_config: &workspace::AgentWorkspaceConfig,
+  app: &tauri::AppHandle,
+  db: &DbPool,
+  session_registry: &SessionExecutionRegistry,
+) -> Result<String, String> {
+  let mut cumulative_input_tokens: u32 = 0;
+  let mut cumulative_output_tokens: u32 = 0;
+  let mut iteration: u32 = 0;
+  let mut finish_summary: Option<String> = None;
+
+  loop {
+    if is_session_cancelled(session_id, db, session_registry).await {
+      return Err("cancelled".to_string());
+    }
+
+    if iteration >= max_iterations {
+      messages.push(ChatMessage {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+          text: "You have reached the maximum number of iterations. Please provide a final summary of what you accomplished and what remains to be done.".to_string(),
+        }],
+        created_at: None,
+      });
+      let response = call_llm_with_retry(provider.as_ref(), llm_config, &messages, &[], app, stream_id, iteration).await?;
+      cumulative_input_tokens += response.usage.input_tokens;
+      cumulative_output_tokens += response.usage.output_tokens;
+      if let Some(summary) = extract_text_summary(&response.content) {
+        finish_summary = Some(summary);
+      }
+      save_chat_message(&db.0, session_id, "assistant", &response.content).await?;
+      break;
+    }
+
+    if cumulative_input_tokens + cumulative_output_tokens >= max_total_tokens {
+      finish_summary = Some(format!("Stopped after exceeding token budget ({} tokens).", max_total_tokens));
+      break;
+    }
+
+    iteration += 1;
+    emit_agent_iteration(app, stream_id, iteration, "llm_call", None, cumulative_input_tokens + cumulative_output_tokens);
+
+    let response = call_llm_with_retry(provider.as_ref(), llm_config, &messages, tools, app, stream_id, iteration).await?;
+    cumulative_input_tokens += response.usage.input_tokens;
+    cumulative_output_tokens += response.usage.output_tokens;
+
+    if is_session_cancelled(session_id, db, session_registry).await {
+      return Err("cancelled".to_string());
+    }
+
+    save_chat_message(&db.0, session_id, "assistant", &response.content).await?;
+
+    match response.stop_reason {
+      llm_provider::StopReason::EndTurn => {
+        if finish_summary.is_none() {
+          finish_summary = extract_text_summary(&response.content);
+        }
+        messages.push(ChatMessage {
+          role: "assistant".to_string(),
+          content: response.content,
+          created_at: None,
+        });
+        break;
+      }
+
+      llm_provider::StopReason::ToolUse => {
+        messages.push(ChatMessage {
+          role: "assistant".to_string(),
+          content: response.content.clone(),
+          created_at: None,
+        });
+
+        let mut tool_results: Vec<ContentBlock> = Vec::new();
+        let mut should_finish = false;
+
+        for block in &response.content {
+          if let ContentBlock::ToolUse { id, name, input } = block {
+            emit_agent_iteration(
+              app,
+              stream_id,
+              iteration,
+              "tool_exec",
+              Some(name),
+              cumulative_input_tokens + cumulative_output_tokens,
+            );
+
+            match agent_tools::execute_tool(tool_ctx, name, input, app, stream_id).await {
+              Ok((result, is_finish)) => {
+                tool_results.push(ContentBlock::ToolResult {
+                  tool_use_id: id.clone(),
+                  content: result.clone(),
+                  is_error: false,
+                });
+                emit_agent_tool_result(app, stream_id, iteration, id, &result, false);
+                if is_finish {
+                  finish_summary = Some(result);
+                  should_finish = true;
+                }
+              }
+              Err(err) => {
+                let err_content = format!("Error: {}", err);
+                tool_results.push(ContentBlock::ToolResult {
+                  tool_use_id: id.clone(),
+                  content: err_content.clone(),
+                  is_error: true,
+                });
+                emit_agent_tool_result(app, stream_id, iteration, id, &err_content, true);
+              }
+            }
+          }
+        }
+
+        if !tool_results.is_empty() {
+          save_chat_message(&db.0, session_id, "user", &tool_results).await?;
+          messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: tool_results,
+            created_at: None,
+          });
+        }
+
+        if should_finish {
+          break;
+        }
+      }
+
+      llm_provider::StopReason::MaxTokens => {
+        let mut tool_error_results: Vec<ContentBlock> = Vec::new();
+        for block in &response.content {
+          if let ContentBlock::ToolUse { id, .. } = block {
+            tool_error_results.push(ContentBlock::ToolResult {
+              tool_use_id: id.clone(),
+              content: "Error: your previous tool call was truncated because the response exceeded the token limit. Please retry with a shorter input, or break the work into smaller steps.".to_string(),
+              is_error: true,
+            });
+          }
+        }
+
+        if !tool_error_results.is_empty() {
+          save_chat_message(&db.0, session_id, "user", &tool_error_results).await?;
+          messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: tool_error_results,
+            created_at: None,
+          });
+        }
+
+        messages.push(ChatMessage {
+          role: "user".to_string(),
+          content: vec![ContentBlock::Text {
+            text: "Your response was cut off due to the token limit. Please continue where you left off. If you were writing a file, try breaking the content into smaller pieces.".to_string(),
+          }],
+          created_at: None,
+        });
+      }
+    }
+  }
+
+  let total_tokens = cumulative_input_tokens + cumulative_output_tokens;
+  emit_agent_iteration(app, stream_id, iteration, "finished", None, total_tokens);
+  emit_chat_context_update(app, session_id, cumulative_input_tokens, cumulative_output_tokens, context_window);
+  update_session_execution_state(
+    db,
+    session_id,
+    "success",
+    finish_summary.clone(),
+    None,
+  ).await?;
+  update_last_input_tokens(db, session_id, cumulative_input_tokens).await;
+
+  let threshold = compaction::effective_threshold(ws_config);
+  if compaction::should_compact(cumulative_input_tokens, context_window, threshold) {
+    let agent_id = tool_ctx.agent_id.clone();
+    let session_id = session_id.to_string();
+    let ws_config = ws_config.clone();
+    let app = app.clone();
+    let db = DbPool(db.0.clone());
+    if let Ok(api_key) = keychain::retrieve_api_key(&ws_config.provider) {
+      if let Ok(provider) = llm_provider::create_provider(&ws_config.provider, api_key) {
+        tauri::async_runtime::spawn(async move {
+          if let Err(e) = compaction::perform_compaction(
+            &agent_id,
+            &session_id,
+            provider.as_ref(),
+            &ws_config,
+            &app,
+            &db,
+          ).await {
+            warn!(session_id = %session_id, "Session compaction failed: {}", e);
+          }
+        });
+      }
+    }
+  }
+
+  Ok(finish_summary.unwrap_or_else(|| "Agent session completed.".to_string()))
+}
+
+pub async fn save_chat_message(
+  pool: &r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>,
+  session_id: &str,
+  role: &str,
+  content: &[ContentBlock],
+) -> Result<(), String> {
+  let pool = pool.clone();
+  let sid = session_id.to_string();
+  let role = role.to_string();
+  let content_json = serde_json::to_string(content).map_err(|e| e.to_string())?;
+
+  tokio::task::spawn_blocking(move || -> Result<(), String> {
+    let conn = pool.get().map_err(|e| e.to_string())?;
+    let msg_id = ulid::Ulid::new().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    conn.execute(
+      "INSERT INTO chat_messages (id, session_id, role, content, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5)",
+      rusqlite::params![msg_id, sid, role, content_json, now],
+    ).map_err(|e| e.to_string())?;
+
+    conn.execute(
+      "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
+      rusqlite::params![now, sid],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+  }).await.map_err(|e| e.to_string())??;
+
+  Ok(())
+}
+
+pub async fn update_session_execution_state(
+  db: &DbPool,
+  session_id: &str,
+  execution_state: &str,
+  finish_summary: Option<String>,
+  terminal_error: Option<String>,
+) -> Result<(), String> {
+  let pool = db.0.clone();
+  let session_id = session_id.to_string();
+  let execution_state = execution_state.to_string();
+  tokio::task::spawn_blocking(move || -> Result<(), String> {
+    let conn = pool.get().map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+      "UPDATE chat_sessions
+       SET execution_state = ?1,
+           finish_summary = COALESCE(?2, finish_summary),
+           terminal_error = CASE WHEN ?3 IS NULL THEN terminal_error ELSE ?3 END,
+           updated_at = ?4
+       WHERE id = ?5 AND COALESCE(execution_state, '') != 'cancelled'",
+      rusqlite::params![execution_state, finish_summary, terminal_error, now, session_id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+  }).await.map_err(|e| e.to_string())??;
+
+  Ok(())
+}
+
+async fn finalize_failed_session(db: &DbPool, session_id: &str, reason: &str) -> Result<(), String> {
+  update_session_execution_state(
+    db,
+    session_id,
+    if reason == "timed out" { "timed_out" } else { "failure" },
+    None,
+    Some(reason.to_string()),
+  ).await
+}
+
+async fn finalize_cancelled_session(db: &DbPool, session_id: &str) -> String {
+  let _ = update_session_execution_state(db, session_id, "cancelled", None, Some("Cancelled".to_string())).await;
+  "cancelled".to_string()
+}
+
+async fn update_last_input_tokens(db: &DbPool, session_id: &str, input_tokens: u32) {
+  let pool = db.0.clone();
+  let session_id = session_id.to_string();
+  let _ = tokio::task::spawn_blocking(move || {
+    if let Ok(conn) = pool.get() {
+      let now = chrono::Utc::now().to_rfc3339();
+      let _ = conn.execute(
+        "UPDATE chat_sessions SET last_input_tokens = ?1, updated_at = ?2 WHERE id = ?3",
+        rusqlite::params![input_tokens, now, session_id],
+      );
+    }
+  }).await;
+}
+
+async fn load_session_messages(db: &DbPool, session_id: &str) -> Result<Vec<ChatMessage>, String> {
+  let pool = db.0.clone();
+  let session_id = session_id.to_string();
+  tokio::task::spawn_blocking(move || -> Result<Vec<ChatMessage>, String> {
+    let conn = pool.get().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(
+      "SELECT role, content
+       FROM chat_messages
+       WHERE session_id = ?1 AND is_compacted = 0
+       ORDER BY created_at ASC"
+    ).map_err(|e| e.to_string())?;
+
+    let messages = stmt
+      .query_map(rusqlite::params![session_id], |row| {
+        let role: String = row.get(0)?;
+        let content_json: String = row.get(1)?;
+        Ok((role, content_json))
+      })
+      .map_err(|e| e.to_string())?
+      .filter_map(|r| r.ok())
+      .map(|(role, content_json)| {
+        let content: Vec<ContentBlock> = serde_json::from_str(&content_json).unwrap_or_default();
+        ChatMessage {
+          role,
+          content,
+          created_at: None,
+        }
+      })
+      .collect();
+
+    Ok(messages)
+  }).await.map_err(|e| e.to_string())?
+}
+
+async fn is_session_cancelled(
+  session_id: &str,
+  db: &DbPool,
+  session_registry: &SessionExecutionRegistry,
+) -> bool {
+  if session_registry.is_cancelled(session_id).await {
+    return true;
+  }
+
+  let pool = db.0.clone();
+  let session_id = session_id.to_string();
+  tokio::task::spawn_blocking(move || -> bool {
+    let conn = match pool.get() {
+      Ok(conn) => conn,
+      Err(_) => return false,
+    };
+    let state: Option<String> = conn
+      .query_row(
+        "SELECT execution_state FROM chat_sessions WHERE id = ?1",
+        rusqlite::params![session_id],
+        |row| row.get(0)
+      )
+      .ok();
+    matches!(state.as_deref(), Some("cancelled"))
+  }).await.unwrap_or(false)
+}
+
+fn extract_text_summary(content: &[ContentBlock]) -> Option<String> {
+  for block in content.iter().rev() {
+    if let ContentBlock::Text { text } = block {
+      if !text.trim().is_empty() {
+        return Some(text.clone());
+      }
+    }
+  }
+  None
+}
+
+async fn call_llm_with_retry(
+  provider: &dyn LlmProvider,
+  config: &LlmConfig,
+  messages: &[ChatMessage],
+  tools: &[ToolDefinition],
+  app: &tauri::AppHandle,
+  stream_id: &str,
+  iteration: u32,
+) -> Result<llm_provider::LlmResponse, String> {
+  let mut last_error = String::new();
+
+  for attempt in 0..LLM_RETRY_ATTEMPTS {
+    match provider.chat_streaming(config, messages, tools, app, stream_id, iteration).await {
+      Ok(response) => return Ok(response),
+      Err(e) => {
+        last_error = e.clone();
+        if attempt < LLM_RETRY_ATTEMPTS - 1 {
+          let delay = LLM_RETRY_BASE_DELAY_MS * (1 << attempt);
+          warn!(
+            stream_id = stream_id,
+            attempt = attempt + 1,
+            error = %e,
+            delay_ms = delay,
+            "Session LLM call failed, retrying"
+          );
+          tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+        }
+      }
+    }
+  }
+
+  Err(format!("LLM call failed after {} attempts: {}", LLM_RETRY_ATTEMPTS, last_error))
+}

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ChevronRight, CheckCircle, XCircle, Hammer, Loader2, GitBranch, ChevronDown } from 'lucide-react';
 import { onRunStateChanged } from '../../events/runEvents';
 import { runsApi } from '../../api/runs';
-import { ChatMessage, RunSummary } from '../../types';
+import { RunSummary } from '../../types';
 
 interface ToolUseBlockProps {
   name: string;
