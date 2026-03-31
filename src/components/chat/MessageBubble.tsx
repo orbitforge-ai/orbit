@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Bot, User, ChevronRight, Layers } from "lucide-react";
+import TurndownService from "turndown";
 import { DisplayMessage } from "./types";
 import { TextBlock } from "./TextBlock";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -27,6 +28,27 @@ interface MessageBubbleProps {
 export function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === "user";
   const [expanded, setExpanded] = useState(false);
+
+  const turndown = useMemo(() => {
+    const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });
+    td.keep(["del"]);
+    return td;
+  }, []);
+
+  const handleCopy = useCallback((e: React.ClipboardEvent) => {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed) return;
+
+    const fragment = selection.getRangeAt(0).cloneContents();
+    const wrapper = document.createElement("div");
+    wrapper.appendChild(fragment);
+
+    const markdown = turndown.turndown(wrapper.innerHTML).trim();
+    if (!markdown) return;
+
+    e.preventDefault();
+    e.clipboardData.setData("text/plain", markdown);
+  }, [turndown]);
 
   // Summary message — collapsed by default, expandable
   if (message.isSummary) {
@@ -117,7 +139,8 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
       {/* Bubble */}
       <div
-        className={`min-w-0 max-w-[85%] rounded-xl px-4 py-3 space-y-2 overflow-hidden ${
+        onCopy={handleCopy}
+        className={`min-w-0 max-w-[85%] rounded-xl px-4 py-3 space-y-2 overflow-hidden select-text ${
           isUser
             ? "bg-accent/15 border border-accent/30"
             : "bg-surface border border-edge"

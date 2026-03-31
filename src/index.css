@@ -46,7 +46,7 @@ button, a, [role="button"] {
   user-select: none;
 }
 
-input, textarea, [contenteditable="true"], pre, code, .monaco-editor * {
+input, textarea, [contenteditable="true"], pre, code, .monaco-editor *, .select-text, .select-text * {
   -webkit-user-select: text;
   user-select: text;
 }

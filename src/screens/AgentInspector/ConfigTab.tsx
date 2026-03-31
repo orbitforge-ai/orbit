@@ -26,7 +26,8 @@ const SEARCH_PROVIDERS = [
 
 const MODEL_OPTIONS: Record<string, { label: string; value: string }[]> = {
   anthropic: [
-    { label: 'Claude Sonnet 4', value: 'claude-sonnet-4-20250514' },
+    { label: 'Claude Opus 4.6', value: 'claude-opus-4-20250415' },
+    { label: 'Claude Sonnet 4.6', value: 'claude-sonnet-4-20250514' },
     { label: 'Claude Haiku 3.5', value: 'claude-haiku-4-5-20251001' },
   ],
   minimax: [
@@ -34,9 +35,6 @@ const MODEL_OPTIONS: Record<string, { label: string; value: string }[]> = {
     { label: 'MiniMax M2.7 Highspeed', value: 'MiniMax-M2.7-highspeed' },
     { label: 'MiniMax M2.5', value: 'MiniMax-M2.5' },
     { label: 'MiniMax M2.5 Highspeed', value: 'MiniMax-M2.5-highspeed' },
-    { label: 'MiniMax M2.1', value: 'MiniMax-M2.1' },
-    { label: 'MiniMax M2.1 Highspeed', value: 'MiniMax-M2.1-highspeed' },
-    { label: 'MiniMax M2', value: 'MiniMax-M2' },
   ],
 };
 

@@ -7,6 +7,7 @@ use crate::events::emitter::{ emit_agent_iteration, emit_agent_tool_result, emit
 use crate::executor::agent_tools::{ self, ToolExecutionContext };
 use crate::executor::compaction;
 use crate::executor::context::{ self, ContextMode, ContextRequest };
+use crate::executor::engine::ExecutorTx;
 use crate::executor::keychain;
 use crate::executor::llm_provider::{ self, ChatMessage, ContentBlock, LlmConfig };
 use crate::executor::workspace;
@@ -291,7 +292,8 @@ pub async fn send_chat_message(
   session_id: String,
   content: String, // JSON-serialized Vec<ContentBlock>
   app: tauri::AppHandle,
-  db: tauri::State<'_, DbPool>
+  db: tauri::State<'_, DbPool>,
+  executor_tx: tauri::State<'_, ExecutorTx>
 ) -> Result<String, String> {
   let pool = db.0.clone();
   let stream_id = format!("chat:{}", session_id);
@@ -400,9 +402,10 @@ pub async fn send_chat_message(
   // Spawn the LLM call on a background task so the command returns immediately
   let db_bg = DbPool(pool.clone());
   let sid_bg = session_id.clone();
+  let etx = executor_tx.0.clone();
 
   tauri::async_runtime::spawn(async move {
-    if let Err(e) = do_llm_chat(&agent_id, history, &stream_id, &app, &db_bg, &sid_bg).await {
+    if let Err(e) = do_llm_chat(&agent_id, history, &stream_id, &app, &db_bg, &sid_bg, &etx).await {
       warn!("Chat LLM error: {}", e);
       // Emit finished with error info
       emit_agent_iteration(&app, &stream_id, 1, "finished", None, 0);
@@ -455,7 +458,8 @@ async fn do_llm_chat(
   stream_id: &str,
   app: &tauri::AppHandle,
   db: &DbPool,
-  session_id: &str
+  session_id: &str,
+  executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
 ) -> Result<(), String> {
   // Load agent config
   let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
@@ -492,7 +496,14 @@ async fn do_llm_chat(
     system_prompt: snapshot.system_prompt,
   };
 
-  let tool_ctx = ToolExecutionContext::new(agent_id);
+  let tool_ctx = ToolExecutionContext::new_with_bus(
+    agent_id,
+    stream_id,
+    0, // chat is always top-level
+    db.clone(),
+    executor_tx.clone(),
+    app.clone(),
+  );
   let pool = db.0.clone();
 
   let mut cumulative_input_tokens: u32 = 0;
