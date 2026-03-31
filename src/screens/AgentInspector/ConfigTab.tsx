@@ -15,6 +15,8 @@ const AVAILABLE_TOOLS = [
   { id: 'write_file', label: 'Write Files' },
   { id: 'list_files', label: 'List Files' },
   { id: 'web_search', label: 'Web Search' },
+  { id: 'send_message', label: 'Send Message (Agent Bus)' },
+  { id: 'spawn_sub_agents', label: 'Spawn Sub-Agents' },
   { id: 'activate_skill', label: 'Activate Skill' },
   { id: 'finish', label: 'Finish (always enabled)' },
 ];
@@ -138,9 +140,18 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
 
   function toggleTool(toolId: string) {
     if (!config) return;
-    const tools = config.allowedTools.includes(toolId)
-      ? config.allowedTools.filter((t) => t !== toolId)
-      : [...config.allowedTools, toolId];
+    const nonFinishTools = AVAILABLE_TOOLS.filter((t) => t.id !== 'finish');
+    // If allowedTools is empty (meaning "all"), expand to explicit list first
+    const currentTools = config.allowedTools.length === 0
+      ? nonFinishTools.map((t) => t.id)
+      : config.allowedTools;
+    let tools = currentTools.includes(toolId)
+      ? currentTools.filter((t) => t !== toolId)
+      : [...currentTools, toolId];
+    // When all non-finish tools are enabled, normalize back to empty (means "all")
+    if (nonFinishTools.every((t) => tools.includes(t.id))) {
+      tools = [];
+    }
     updateConfig({ allowedTools: tools });
   }
 
@@ -489,7 +500,7 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
         <div className="space-y-2">
           {AVAILABLE_TOOLS.map((tool) => {
             const isFinish = tool.id === 'finish';
-            const checked = isFinish || config.allowedTools.includes(tool.id);
+            const checked = isFinish || config.allowedTools.length === 0 || config.allowedTools.includes(tool.id);
             return (
               <div
                 key={tool.id}

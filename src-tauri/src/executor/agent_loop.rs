@@ -318,6 +318,17 @@ pub async fn run_agent_loop(
     // ── Handle response ─────────────────────────────────────────
     match response.stop_reason {
       llm_provider::StopReason::EndTurn => {
+        // Capture last text as finish_summary if finish tool wasn't called
+        if finish_summary.is_none() {
+          for block in response.content.iter().rev() {
+            if let ContentBlock::Text { text } = block {
+              if !text.trim().is_empty() {
+                finish_summary = Some(text.clone());
+                break;
+              }
+            }
+          }
+        }
         messages.push(ChatMessage {
           role: "assistant".to_string(),
           content: response.content.clone(),
@@ -462,6 +473,13 @@ pub async fn run_agent_loop(
 
   if let Some(ref summary) = finish_summary {
     log.log(app, run_id, vec![("stdout".to_string(), format!("Summary: {}", summary))]);
+    // Persist finish_summary into run metadata so callers (e.g. spawn_sub_agents) can read it
+    if let Ok(conn) = db.get() {
+      let _ = conn.execute(
+        "UPDATE runs SET metadata = json_set(COALESCE(metadata, '{}'), '$.finish_summary', ?1) WHERE id = ?2",
+        rusqlite::params![summary, run_id],
+      );
+    }
   }
 
   // Persist conversation history

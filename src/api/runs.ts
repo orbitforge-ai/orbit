@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Run, RunSummary } from "../types";
+import { ChatMessage, Run, RunSummary } from "../types";
 
 export interface ListRunsParams {
   limit?: number;
@@ -28,4 +28,7 @@ export const runsApi = {
 
   listSubAgentRuns: (parentRunId: string): Promise<RunSummary[]> =>
     invoke("list_sub_agent_runs", { parentRunId }),
+
+  getConversation: (runId: string): Promise<ChatMessage[] | null> =>
+    invoke("get_agent_conversation", { runId }),
 };

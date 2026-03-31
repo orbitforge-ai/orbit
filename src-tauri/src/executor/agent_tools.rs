@@ -705,8 +705,12 @@ pub async fn execute_tool(
       let db = ctx.db.as_ref().ok_or("spawn_sub_agents: database not available")?;
       let bus_app = ctx.app.as_ref().ok_or("spawn_sub_agents: app handle not available")?;
       let executor_tx = ctx.executor_tx.as_ref().ok_or("spawn_sub_agents: executor channel not available")?;
-      let parent_run_id = ctx.current_run_id.as_deref().unwrap_or("unknown");
       let agent_id = ctx.current_agent_id.as_deref().unwrap_or(&ctx.agent_id);
+      // parent_run_id must be a valid run ID or NULL; in chat mode,
+      // current_run_id is "chat:{sessionId}" which isn't in the runs table.
+      let parent_run_id: Option<String> = ctx.current_run_id.as_ref().and_then(|rid| {
+        if rid.starts_with("chat:") { None } else { Some(rid.clone()) }
+      });
       let next_depth = ctx.chain_depth + 1;
 
       info!(run_id = run_id, count = tasks.len(), "agent tool: spawn_sub_agents");
@@ -758,7 +762,7 @@ pub async fn execute_tool(
         let task_id = st.task_id.clone();
         let sub_run_id = st.run_id.clone();
         let agent_id = agent_id.to_string();
-        let parent_run_id = parent_run_id.to_string();
+        let parent_rid = parent_run_id.clone();
         let log_path = st.log_path.to_string_lossy().to_string();
         let now = now.clone();
         let st_id = st.id.clone();
@@ -767,13 +771,13 @@ pub async fn execute_tool(
           let conn = pool.get().map_err(|e| e.to_string())?;
           conn.execute(
             "INSERT INTO tasks (id, name, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, session_id, enabled, created_at, updated_at)
-             VALUES (?1, ?2, 'agent_loop', ?3, ?4, 0, 0, 'allow', '[]', ?5, NULL, 1, ?6, ?6)",
+             VALUES (?1, ?2, 'agent_loop', ?3, ?4, 0, 0, 'allow', '[\"sub_agent\"]', ?5, NULL, 1, ?6, ?6)",
             rusqlite::params![task_id, format!("sub-agent:{}", st_id), config_json, timeout_secs as i64, agent_id, now],
           ).map_err(|e| e.to_string())?;
           conn.execute(
             "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, parent_run_id, metadata, chain_depth, is_sub_agent, created_at)
              VALUES (?1, ?2, NULL, ?3, 'pending', 'sub_agent', ?4, 0, ?5, ?6, ?7, 1, ?8)",
-            rusqlite::params![sub_run_id, task_id, agent_id, log_path, parent_run_id, json!({"sub_task_id": st_id}).to_string(), next_depth, now],
+            rusqlite::params![sub_run_id, task_id, agent_id, log_path, parent_rid, json!({"sub_task_id": st_id}).to_string(), next_depth, now],
           ).map_err(|e| e.to_string())?;
           Ok::<(), String>(())
         })
@@ -784,7 +788,7 @@ pub async fn execute_tool(
 
       // Emit event so UI can track sub-agents
       let sub_run_ids: Vec<String> = sub_tasks.iter().map(|s| s.run_id.clone()).collect();
-      emit_sub_agents_spawned(bus_app, parent_run_id, sub_run_ids);
+      emit_sub_agents_spawned(bus_app, parent_run_id.as_deref().unwrap_or(run_id), sub_run_ids);
 
       // Enqueue all sub-agents to the executor engine
       for st in &sub_tasks {
@@ -821,7 +825,7 @@ pub async fn execute_tool(
           schedule_id: None,
           _trigger: "sub_agent".to_string(),
           retry_count: 0,
-          _parent_run_id: Some(parent_run_id.to_string()),
+          _parent_run_id: parent_run_id.clone(),
           chain_depth: next_depth,
         };
         executor_tx.send(req).map_err(|e| format!("failed to enqueue sub-agent: {}", e))?;

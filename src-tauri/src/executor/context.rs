@@ -233,8 +233,14 @@ impl ContextStage for BasePromptStage {
             .collect::<Vec<_>>()
             .join(", ");
 
-        // Tool names from config
-        let tool_names = request.ws_config.allowed_tools.join(", ");
+        // Tool names from actual resolved definitions (matches what the LLM receives)
+        let tool_names = {
+            let mut tools = agent_tools::build_tool_definitions(&request.ws_config.allowed_tools);
+            if request.is_sub_agent {
+                tools.retain(|t| t.name != "spawn_sub_agents");
+            }
+            tools.iter().map(|t| t.name.clone()).collect::<Vec<_>>().join(", ")
+        };
 
         // Build the runtime context section
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
@@ -253,6 +259,22 @@ impl ContextStage for BasePromptStage {
 
         if !tool_names.is_empty() && (request.mode == ContextMode::AgentLoop || request.mode == ContextMode::Chat) {
             context_section.push_str(&format!("- Available tools: {}\n", tool_names));
+
+            // Add tool usage guidance
+            let has_spawn = !request.is_sub_agent && tool_names.contains("spawn_sub_agents");
+            if has_spawn {
+                context_section.push_str(
+                    "\n### Tool guidance\n\
+                     - **spawn_sub_agents**: Use this to break work into parallel sub-tasks. \
+                     Each sub-task runs as an independent agent with its own context. \
+                     Use it when the user asks you to do multiple independent things at once, \
+                     or when work can be parallelized for speed. You MUST use this tool when the user \
+                     explicitly asks to spawn sub-agents. \
+                     The tool result contains ALL sub-agent results directly — do NOT use send_message \
+                     to retrieve results afterward. Sub-agents are ephemeral and not addressable as \
+                     separate agents. Simply read the results from the tool response and present them.\n"
+                );
+            }
         }
 
         context_section.push_str(&format!("- Date: {}\n", today));
