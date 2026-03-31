@@ -190,6 +190,21 @@ pub async fn archive_chat_session(
           rusqlite::params![now, session_id]
         )
         .map_err(|e| e.to_string())?;
+      // Cascade: archive direct children (sub_agent sessions)
+      conn
+        .execute(
+          "UPDATE chat_sessions SET archived = 1, updated_at = ?1 WHERE parent_session_id = ?2",
+          rusqlite::params![now, session_id]
+        )
+        .map_err(|e| e.to_string())?;
+      // Cascade: archive bus_message child sessions
+      conn
+        .execute(
+          "UPDATE chat_sessions SET archived = 1, updated_at = ?1 \
+           WHERE id IN (SELECT bm.to_session_id FROM bus_messages bm WHERE bm.from_session_id = ?2 AND bm.to_session_id IS NOT NULL)",
+          rusqlite::params![now, session_id]
+        )
+        .map_err(|e| e.to_string())?;
       Ok(())
     }).await
     .map_err(|e| e.to_string())?
@@ -208,6 +223,21 @@ pub async fn unarchive_chat_session(
       conn
         .execute(
           "UPDATE chat_sessions SET archived = 0, updated_at = ?1 WHERE id = ?2",
+          rusqlite::params![now, session_id]
+        )
+        .map_err(|e| e.to_string())?;
+      // Cascade: unarchive direct children (sub_agent sessions)
+      conn
+        .execute(
+          "UPDATE chat_sessions SET archived = 0, updated_at = ?1 WHERE parent_session_id = ?2",
+          rusqlite::params![now, session_id]
+        )
+        .map_err(|e| e.to_string())?;
+      // Cascade: unarchive bus_message child sessions
+      conn
+        .execute(
+          "UPDATE chat_sessions SET archived = 0, updated_at = ?1 \
+           WHERE id IN (SELECT bm.to_session_id FROM bus_messages bm WHERE bm.from_session_id = ?2 AND bm.to_session_id IS NOT NULL)",
           rusqlite::params![now, session_id]
         )
         .map_err(|e| e.to_string())?;
