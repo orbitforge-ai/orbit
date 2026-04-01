@@ -7,6 +7,7 @@ use crate::executor::compaction;
 use crate::executor::context::{ self, ContextMode, ContextRequest };
 use crate::executor::engine::{ AgentSemaphores, RunRequest, SessionExecutionRegistry };
 use crate::executor::keychain;
+use crate::executor::memory::MemoryClient;
 use crate::executor::permissions::{ self, PermissionRegistry };
 use crate::executor::llm_provider::{
   self,
@@ -35,6 +36,7 @@ pub async fn run_agent_session(
   agent_semaphores: &AgentSemaphores,
   session_registry: &SessionExecutionRegistry,
   permission_registry: &PermissionRegistry,
+  memory_client: Option<&MemoryClient>,
 ) -> Result<String, String> {
   let stream_id = format!("chat:{}", session_id);
   let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
@@ -65,7 +67,7 @@ pub async fn run_agent_session(
   let provider = llm_provider::create_provider(provider_name, api_key)?;
 
   let history = load_session_messages(db, session_id).await?;
-  let pipeline = context::default_pipeline();
+  let pipeline = context::default_pipeline(memory_client.cloned());
   let ctx_request = ContextRequest {
     agent_id: agent_id.to_string(),
     mode: ContextMode::Chat,
@@ -76,6 +78,7 @@ pub async fn run_agent_session(
     existing_messages: Some(history),
     is_sub_agent,
     chain_depth,
+    user_id: "default_user".to_string(),
   };
   let snapshot = pipeline.build(&ctx_request, db).await?;
   let tools = snapshot.tools;
@@ -100,6 +103,7 @@ pub async fn run_agent_session(
       agent_semaphores.clone(),
       session_registry.clone(),
     ).with_permission_registry(permission_registry.clone())
+     .with_memory_client(memory_client.cloned())
   } else {
     ToolExecutionContext::new_with_bus(
       agent_id,
@@ -112,6 +116,7 @@ pub async fn run_agent_session(
       agent_semaphores.clone(),
       session_registry.clone(),
     ).with_permission_registry(permission_registry.clone())
+     .with_memory_client(memory_client.cloned())
   };
 
   let result = run_session_loop(

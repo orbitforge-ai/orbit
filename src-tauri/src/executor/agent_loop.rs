@@ -9,6 +9,7 @@ use crate::executor::agent_tools::{ ToolExecutionContext };
 use crate::executor::context::{ self, ContextMode, ContextRequest };
 use crate::executor::engine::{ AgentSemaphores, SessionExecutionRegistry };
 use crate::executor::keychain;
+use crate::executor::memory::MemoryClient;
 use crate::executor::permissions::{ self, PermissionRegistry };
 use crate::executor::llm_provider::{
   self,
@@ -89,6 +90,7 @@ pub async fn run_agent_loop(
   agent_semaphores: &AgentSemaphores,
   session_registry: &SessionExecutionRegistry,
   permission_registry: &PermissionRegistry,
+  memory_client: Option<&MemoryClient>,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -136,7 +138,7 @@ pub async fn run_agent_loop(
   }
 
   // ── Build context via pipeline ──────────────────────────────────────
-  let pipeline = context::default_pipeline();
+  let pipeline = context::default_pipeline(memory_client.cloned());
   let ctx_request = ContextRequest {
     agent_id: agent_id.to_string(),
     mode: ContextMode::AgentLoop,
@@ -147,6 +149,7 @@ pub async fn run_agent_loop(
     existing_messages: None,
     is_sub_agent,
     chain_depth,
+    user_id: "default_user".to_string(),
   };
   let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
     log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
@@ -174,6 +177,7 @@ pub async fn run_agent_loop(
       agent_semaphores.clone(),
       session_registry.clone(),
     ).with_permission_registry(permission_registry.clone())
+     .with_memory_client(memory_client.cloned())
   } else {
     ToolExecutionContext::new_with_bus(
       agent_id,
@@ -186,6 +190,7 @@ pub async fn run_agent_loop(
       agent_semaphores.clone(),
       session_registry.clone(),
     ).with_permission_registry(permission_registry.clone())
+     .with_memory_client(memory_client.cloned())
   };
 
   // ── Init conversation ────────────────────────────────────────────────
@@ -542,6 +547,7 @@ pub async fn run_agent_prompt(
   _chain_depth: i64,
   _agent_semaphores: &AgentSemaphores,
   _session_registry: &SessionExecutionRegistry,
+  memory_client: Option<&MemoryClient>,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -567,7 +573,7 @@ pub async fn run_agent_prompt(
   })?;
 
   // ── Build context via pipeline ──────────────────────────────────────
-  let pipeline = context::default_pipeline();
+  let pipeline = context::default_pipeline(memory_client.cloned());
   let ctx_request = ContextRequest {
     agent_id: agent_id.to_string(),
     mode: ContextMode::SingleShot,
@@ -578,6 +584,7 @@ pub async fn run_agent_prompt(
     existing_messages: None,
     is_sub_agent: false,
     chain_depth: 0,
+    user_id: "default_user".to_string(),
   };
   let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
     log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
@@ -725,6 +732,7 @@ pub async fn run_pulse(
   agent_semaphores: &AgentSemaphores,
   session_registry: &SessionExecutionRegistry,
   permission_registry: &PermissionRegistry,
+  memory_client: Option<&MemoryClient>,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -816,7 +824,7 @@ pub async fn run_pulse(
     .map_err(|e| e.to_string())??;
 
   // ── Build context via pipeline ──────────────────────────────────────
-  let pipeline = context::default_pipeline();
+  let pipeline = context::default_pipeline(memory_client.cloned());
   let ctx_request = ContextRequest {
     agent_id: agent_id.to_string(),
     mode: ContextMode::Pulse,
@@ -827,6 +835,7 @@ pub async fn run_pulse(
     existing_messages: None,
     is_sub_agent: false,
     chain_depth,
+    user_id: "default_user".to_string(),
   };
   let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
     log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
@@ -865,7 +874,8 @@ pub async fn run_pulse(
     app.clone(),
     agent_semaphores.clone(),
     session_registry.clone(),
-  ).with_permission_registry(permission_registry.clone());
+  ).with_permission_registry(permission_registry.clone())
+   .with_memory_client(memory_client.cloned());
 
   // ── Run session loop (LLM + tool execution) ─────────────────────────
   let result = session_agent::run_session_loop(

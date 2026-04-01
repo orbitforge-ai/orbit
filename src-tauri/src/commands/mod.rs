@@ -8,4 +8,5 @@ pub mod runs;
 pub mod schedules;
 pub mod skills;
 pub mod tasks;
+pub mod users;
 pub mod workspace;

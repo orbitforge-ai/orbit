@@ -7,6 +7,7 @@ use tracing::{ error, info, warn };
 use crate::db::DbPool;
 use crate::events::emitter::{ emit_bus_message_sent, emit_run_state_changed };
 use crate::executor::{ agent_loop, http, process };
+use crate::executor::memory::MemoryClient;
 use crate::executor::permissions::PermissionRegistry;
 use crate::executor::state_machine::{ transition, ExecutorEvent };
 use crate::models::run::RunState;
@@ -226,6 +227,8 @@ pub struct ExecutorEngine {
   /// Shared active run registry for concurrency policy enforcement
   registry: ActiveRunRegistry,
   log_dir: PathBuf,
+  /// Optional memory client for long-term memory integration.
+  memory_client: Option<MemoryClient>,
 }
 
 impl ExecutorEngine {
@@ -237,7 +240,8 @@ impl ExecutorEngine {
     agent_semaphores: AgentSemaphores,
     session_registry: SessionExecutionRegistry,
     permission_registry: PermissionRegistry,
-    log_dir: PathBuf
+    log_dir: PathBuf,
+    memory_client: Option<MemoryClient>,
   ) -> Self {
     Self {
       db,
@@ -249,6 +253,7 @@ impl ExecutorEngine {
       permission_registry,
       registry: ActiveRunRegistry::new(),
       log_dir,
+      memory_client,
     }
   }
 
@@ -269,6 +274,7 @@ impl ExecutorEngine {
       let session_registry = self.session_registry.clone();
       let permission_registry = self.permission_registry.clone();
       let tx = self.tx.clone();
+      let memory_client = self.memory_client.clone();
 
       match policy.as_str() {
         "skip" => {
@@ -290,6 +296,7 @@ impl ExecutorEngine {
                     agent_semaphores.clone(),
                     session_registry.clone(),
                     permission_registry.clone(),
+                    memory_client.clone(),
                   ).await
                 {
                   error!("run failed: {}", e);
@@ -349,6 +356,7 @@ impl ExecutorEngine {
                 agent_semaphores.clone(),
                 session_registry.clone(),
                 permission_registry.clone(),
+                memory_client.clone(),
               ).await
             {
               error!("run failed: {}", e);
@@ -381,6 +389,7 @@ impl ExecutorEngine {
                 agent_semaphores.clone(),
                 session_registry.clone(),
                 permission_registry.clone(),
+                memory_client.clone(),
               ).await
             {
               error!("run failed: {}", e);
@@ -411,6 +420,7 @@ async fn run_one(
   agent_semaphores: AgentSemaphores,
   session_registry: SessionExecutionRegistry,
   permission_registry: PermissionRegistry,
+  memory_client: Option<MemoryClient>,
 ) -> Result<(), String> {
   let run_id = req.run_id.clone();
   let task = req.task;
@@ -463,6 +473,7 @@ async fn run_one(
         req.chain_depth,
         &agent_semaphores,
         &session_registry,
+        memory_client.as_ref(),
       ).await
     }
     "agent_loop" => {
@@ -489,6 +500,7 @@ async fn run_one(
           &agent_semaphores,
           &session_registry,
           &permission_registry,
+          memory_client.as_ref(),
         ).await
       } else {
         agent_loop::run_agent_loop(
@@ -506,6 +518,7 @@ async fn run_one(
           &agent_semaphores,
           &session_registry,
           &permission_registry,
+          memory_client.as_ref(),
         ).await
       }
     }

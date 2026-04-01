@@ -1,4 +1,4 @@
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::db::connection::DbPool;
 use crate::executor::agent_tools;
@@ -6,6 +6,7 @@ use crate::executor::compaction;
 use crate::executor::llm_provider::{
     model_context_window, ChatMessage, ContentBlock, ToolDefinition,
 };
+use crate::executor::memory::MemoryClient;
 use crate::executor::skills;
 use crate::executor::workspace::{self, AgentWorkspaceConfig};
 
@@ -63,6 +64,8 @@ pub struct ContextRequest {
     pub is_sub_agent: bool,
     /// Chain depth from the original user interaction (0 = user-initiated).
     pub chain_depth: i64,
+    /// Active user ID for memory scoping.
+    pub user_id: String,
 }
 
 /// What kind of LLM interaction is being built.
@@ -146,10 +149,13 @@ impl ContextPipeline {
 }
 
 /// Construct the default context pipeline with all built-in stages.
-pub fn default_pipeline() -> ContextPipeline {
+pub fn default_pipeline(memory_client: Option<MemoryClient>) -> ContextPipeline {
     let mut p = ContextPipeline::new();
     p.add_stage(Box::new(BasePromptStage));
     p.add_stage(Box::new(GuardrailStage));
+    if let Some(client) = memory_client {
+        p.add_stage(Box::new(MemoryStage { client }));
+    }
     p.add_stage(Box::new(SkillCatalogStage));
     p.add_stage(Box::new(MessageHistoryStage));
     p.add_stage(Box::new(ToolResolutionStage));
@@ -230,6 +236,115 @@ impl ContextStage for GuardrailStage {
 
     fn name(&self) -> &str {
         "Guardrails"
+    }
+}
+
+// ─── MemoryStage ──────────────────────────────────────────────────────────
+
+/// Searches long-term memory and injects relevant memories into the system prompt.
+/// Placed after GuardrailStage so guardrails are always present, and before
+/// SkillCatalogStage so the LLM sees memories alongside skills context.
+pub struct MemoryStage {
+    client: MemoryClient,
+}
+
+#[async_trait::async_trait]
+impl ContextStage for MemoryStage {
+    async fn process(
+        &self,
+        mut snapshot: ContextSnapshot,
+        request: &ContextRequest,
+        _db: &DbPool,
+    ) -> Result<ContextSnapshot, String> {
+        if !request.ws_config.memory_enabled {
+            return Ok(snapshot);
+        }
+
+        // Build a search query from the goal or the latest user message
+        let query = request
+            .goal
+            .as_deref()
+            .or_else(|| {
+                snapshot
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == "user")
+                    .and_then(|m| {
+                        m.content.iter().find_map(|block| match block {
+                            ContentBlock::Text { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                    })
+            });
+
+        let query = match query {
+            Some(q) if !q.trim().is_empty() => q,
+            _ => return Ok(snapshot), // No query to search with
+        };
+
+        // Search for relevant memories (cap at 10)
+        let memories = match self
+            .client
+            .search_memories(query, &request.user_id, &request.agent_id, None, 10)
+            .await
+        {
+            Ok(mems) => mems,
+            Err(e) => {
+                warn!("Memory search failed (continuing without memories): {}", e);
+                return Ok(snapshot);
+            }
+        };
+
+        if memories.is_empty() {
+            return Ok(snapshot);
+        }
+
+        let staleness_days = request.ws_config.memory_staleness_threshold_days;
+        let now = chrono::Utc::now();
+
+        let mut section = String::from("\n\n## Long-term Memory\nVerify any file paths or function names from memories before using them.\n\n");
+
+        for mem in &memories {
+            // Determine staleness
+            let stale_prefix = if !mem.updated_at.is_empty() {
+                chrono::DateTime::parse_from_rfc3339(&mem.updated_at)
+                    .ok()
+                    .and_then(|dt| {
+                        let age = now.signed_duration_since(dt.with_timezone(&chrono::Utc));
+                        let days = age.num_days();
+                        if days > staleness_days as i64 {
+                            Some(format!("STALE ({}d): ", days))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+
+            let date_suffix = if !mem.created_at.is_empty() {
+                chrono::DateTime::parse_from_rfc3339(&mem.created_at)
+                    .ok()
+                    .map(|dt| format!(" ({})", dt.format("%Y-%m-%d")))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+
+            section.push_str(&format!(
+                "- [{}] {}{}{}\n",
+                mem.memory_type, stale_prefix, mem.text, date_suffix
+            ));
+        }
+
+        snapshot.system_prompt.push_str(&section);
+        Ok(snapshot)
+    }
+
+    fn name(&self) -> &str {
+        "Memory"
     }
 }
 

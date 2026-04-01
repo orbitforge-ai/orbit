@@ -12,6 +12,7 @@ use tauri::Manager;
 use tauri::menu::{ Menu, MenuItem };
 use tauri::tray::TrayIconBuilder;
 
+use commands::users::ActiveUser;
 use db::connection::init as init_db;
 use executor::engine::{ AgentSemaphores, ExecutorEngine, ExecutorTx, SessionExecutionRegistry };
 use executor::permissions::PermissionRegistry;
@@ -63,12 +64,42 @@ pub fn run() {
       let session_registry = SessionExecutionRegistry::new();
       let permission_registry = PermissionRegistry::new();
 
+      // Start memory service sidecar (blocking but with timeout — app works without it)
+      let memory_state: Option<memory_service::MemoryServiceState> = {
+        let memory_data_dir = data_dir();
+        match tauri::async_runtime::block_on(async {
+          tokio::time::timeout(
+            tokio::time::Duration::from_secs(90),
+            memory_service::MemoryServiceState::start(memory_data_dir),
+          ).await
+        }) {
+          Ok(Ok(state)) => {
+            info!("Memory service started successfully");
+            let health_state = state.clone();
+            tauri::async_runtime::spawn(async move { health_state.health_loop().await });
+            Some(state)
+          }
+          Ok(Err(e)) => {
+            tracing::warn!("Memory service failed to start (agents will work without memory): {}", e);
+            None
+          }
+          Err(_) => {
+            tracing::warn!("Memory service startup timed out (agents will work without memory)");
+            None
+          }
+        }
+      };
+
+      let memory_client = memory_state.as_ref().map(|s| s.client.clone());
+
       // Register managed state
       app.manage(db_pool.clone());
       app.manage(executor_tx_state);
       app.manage(agent_semaphores.clone());
       app.manage(session_registry.clone());
       app.manage(permission_registry.clone());
+      app.manage(memory_state);
+      app.manage(ActiveUser::new("default_user".to_string()));
 
       // Start execution engine (now takes tx clone for retry scheduling)
       let engine = ExecutorEngine::new(
@@ -79,28 +110,10 @@ pub fn run() {
         agent_semaphores,
         session_registry.clone(),
         permission_registry.clone(),
-        log_dir.clone()
+        log_dir.clone(),
+        memory_client,
       );
       tauri::async_runtime::spawn(async move { engine.run().await });
-
-      // Start memory service sidecar (non-blocking — app works without it)
-      let memory_data_dir = data_dir();
-      tauri::async_runtime::spawn(async move {
-        match memory_service::MemoryServiceState::start(memory_data_dir).await {
-          Ok(state) => {
-            info!("Memory service started successfully");
-            // Spawn background health monitor
-            let health_state = state.clone();
-            tokio::spawn(async move { health_state.health_loop().await });
-            // Note: state is kept alive by the health loop task.
-            // In Phase 2, we'll register this as Tauri managed state for
-            // context pipeline and tool access.
-          }
-          Err(e) => {
-            tracing::warn!("Memory service failed to start (agents will work without memory): {}", e);
-          }
-        }
-      });
 
       // Start scheduler engine
       let scheduler = SchedulerEngine::new(
@@ -216,7 +229,12 @@ pub fn run() {
         // Permissions
         commands::permissions::respond_to_permission,
         commands::permissions::save_permission_rule,
-        commands::permissions::delete_permission_rule
+        commands::permissions::delete_permission_rule,
+        // Users
+        commands::users::list_users,
+        commands::users::create_user,
+        commands::users::get_active_user,
+        commands::users::set_active_user
       ]
     )
     .run(tauri::generate_context!())

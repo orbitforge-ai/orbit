@@ -106,10 +106,22 @@ pub struct AgentWorkspaceConfig {
     pub permission_rules: Vec<PermissionRule>,
     #[serde(default = "default_permission_mode")]
     pub permission_mode: String,
+    #[serde(default = "default_true")]
+    pub memory_enabled: bool,
+    #[serde(default = "default_staleness_days")]
+    pub memory_staleness_threshold_days: u32,
 }
 
 fn default_permission_mode() -> String {
     "normal".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_staleness_days() -> u32 {
+    30
 }
 
 fn default_search_provider() -> String {
@@ -173,6 +185,8 @@ impl Default for AgentWorkspaceConfig {
             identity: default_agent_identity(),
             permission_rules: Vec::new(),
             permission_mode: default_permission_mode(),
+            memory_enabled: true,
+            memory_staleness_threshold_days: default_staleness_days(),
         }
     }
 }

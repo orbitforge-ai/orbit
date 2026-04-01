@@ -7,6 +7,7 @@ use crate::db::DbPool;
 use crate::events::emitter::{ emit_bus_message_sent, emit_log_chunk, emit_sub_agents_spawned };
 use crate::executor::engine::{ AgentSemaphores, RunRequest, SessionExecutionRegistry };
 use crate::executor::llm_provider::ToolDefinition;
+use crate::executor::memory::MemoryClient;
 use crate::executor::permissions::PermissionRegistry;
 use crate::executor::session_agent;
 use crate::executor::skills;
@@ -47,6 +48,8 @@ pub struct ToolExecutionContext {
   pub is_sub_agent: bool,
   /// Permission registry for gating tool execution.
   pub permission_registry: Option<PermissionRegistry>,
+  /// Optional memory client for long-term memory operations.
+  pub memory_client: Option<MemoryClient>,
 }
 
 impl ToolExecutionContext {
@@ -71,6 +74,7 @@ impl ToolExecutionContext {
       session_registry: None,
       is_sub_agent: false,
       permission_registry: None,
+      memory_client: None,
     }
   }
 
@@ -105,12 +109,19 @@ impl ToolExecutionContext {
       session_registry: Some(session_registry),
       is_sub_agent: false,
       permission_registry: None,
+      memory_client: None,
     }
   }
 
   /// Set the permission registry on this context (builder pattern).
   pub fn with_permission_registry(mut self, registry: PermissionRegistry) -> Self {
     self.permission_registry = Some(registry);
+    self
+  }
+
+  /// Set the memory client on this context (builder pattern).
+  pub fn with_memory_client(mut self, client: Option<MemoryClient>) -> Self {
+    self.memory_client = client;
     self
   }
 
@@ -610,6 +621,7 @@ pub async fn execute_tool(
       let semaphores = agent_semaphores.clone();
       let registry = session_registry.clone();
       let perm_registry = ctx.permission_registry.clone().unwrap_or_else(PermissionRegistry::new);
+      let mem_client = ctx.memory_client.clone();
       let target_agent_id = to_agent_id.clone();
       let target_session_id = new_session_id.clone();
       tokio::task::spawn_blocking(move || {
@@ -625,6 +637,7 @@ pub async fn execute_tool(
             &semaphores,
             &registry,
             &perm_registry,
+            mem_client.as_ref(),
           ).await {
             warn!(session_id = %target_session_id, "send_message session failed: {}", e);
           }
@@ -796,6 +809,7 @@ pub async fn execute_tool(
         let semaphores = agent_semaphores.clone();
         let registry = session_registry.clone();
         let perm_registry = ctx.permission_registry.clone().unwrap_or_else(PermissionRegistry::new);
+        let mem_client = ctx.memory_client.clone();
         let sub_agent_id = agent_id.to_string();
         let sub_session_id = st.session_id.clone();
         tokio::task::spawn_blocking(move || {
@@ -811,6 +825,7 @@ pub async fn execute_tool(
               &semaphores,
               &registry,
               &perm_registry,
+              mem_client.as_ref(),
             ).await {
               warn!(session_id = %sub_session_id, "sub-agent session failed: {}", e);
             }

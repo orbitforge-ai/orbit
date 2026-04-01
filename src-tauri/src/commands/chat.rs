@@ -11,8 +11,10 @@ use crate::executor::engine::{ AgentSemaphores, ExecutorTx, SessionExecutionRegi
 use crate::executor::keychain;
 use crate::executor::permissions::{ self, PermissionRegistry };
 use crate::executor::llm_provider::{ self, ChatMessage, ContentBlock, LlmConfig };
+use crate::executor::memory::MemoryClient;
 use crate::executor::session_agent;
 use crate::executor::workspace;
+use crate::memory_service::MemoryServiceState;
 use crate::models::chat::ChatSession;
 
 const MAX_TOKENS_PER_CALL: u32 = 4096;
@@ -394,6 +396,7 @@ pub async fn send_chat_message(
   agent_semaphores: tauri::State<'_, AgentSemaphores>,
   session_registry: tauri::State<'_, SessionExecutionRegistry>,
   permission_registry: tauri::State<'_, PermissionRegistry>,
+  memory_state: tauri::State<'_, Option<MemoryServiceState>>,
 ) -> Result<String, String> {
   let pool = db.0.clone();
   let stream_id = format!("chat:{}", session_id);
@@ -506,6 +509,7 @@ pub async fn send_chat_message(
   let semaphores = agent_semaphores.inner().clone();
   let registry = session_registry.inner().clone();
   let perm_registry = permission_registry.inner().clone();
+  let mem_client = memory_state.as_ref().map(|s| s.client.clone());
 
   tauri::async_runtime::spawn(async move {
     if let Err(e) = do_llm_chat(
@@ -520,6 +524,7 @@ pub async fn send_chat_message(
       semaphores,
       registry,
       perm_registry,
+      mem_client.as_ref(),
     ).await {
       warn!("Chat LLM error: {}", e);
       // Emit finished with error info
@@ -579,6 +584,7 @@ async fn do_llm_chat(
   agent_semaphores: AgentSemaphores,
   session_registry: SessionExecutionRegistry,
   permission_registry: PermissionRegistry,
+  memory_client: Option<&MemoryClient>,
 ) -> Result<(), String> {
   // Load agent config
   let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
@@ -591,7 +597,7 @@ async fn do_llm_chat(
   let provider = llm_provider::create_provider(provider_name, api_key)?;
 
   // Build context via pipeline (messages already loaded, pass them to avoid re-query)
-  let pipeline = context::default_pipeline();
+  let pipeline = context::default_pipeline(memory_client.cloned());
   let ctx_request = ContextRequest {
     agent_id: agent_id.to_string(),
     mode: ContextMode::Chat,
@@ -602,6 +608,7 @@ async fn do_llm_chat(
     existing_messages: Some(messages),
     is_sub_agent: false,
     chain_depth: 0,
+    user_id: "default_user".to_string(),
   };
   let snapshot = pipeline.build(&ctx_request, db).await?;
   let mut messages = snapshot.messages;
@@ -626,7 +633,8 @@ async fn do_llm_chat(
     app.clone(),
     agent_semaphores,
     session_registry,
-  ).with_permission_registry(permission_registry.clone());
+  ).with_permission_registry(permission_registry.clone())
+   .with_memory_client(memory_client.cloned());
   let pool = db.0.clone();
 
   let mut cumulative_input_tokens: u32 = 0;
