@@ -62,6 +62,7 @@ export function SessionList({
   const [collapsedSenderGroups, setCollapsedSenderGroups] = useState<Record<string, boolean>>({});
   const [collapsedSourceGroups, setCollapsedSourceGroups] = useState<Record<string, boolean>>({});
   const menuRef = useRef<HTMLDivElement>(null);
+  const prevActiveSessionIdRef = useRef(activeSessionId);
 
   useEffect(() => {
     if (!menuSessionId) return;
@@ -262,6 +263,10 @@ export function SessionList({
     });
 
   useEffect(() => {
+    const activeSessionChanged = activeSessionId !== prevActiveSessionIdRef.current;
+    const newSessionSelected = activeSessionChanged && activeSessionId !== null;
+    prevActiveSessionIdRef.current = activeSessionId;
+
     setCollapsedSenderGroups((prev) => {
       const next: Record<string, boolean> = {};
       for (const group of orderedSenderGroups) {
@@ -275,7 +280,7 @@ export function SessionList({
         );
         const defaultCollapsed = orderedSenderGroups.length > 1;
         next[group.key] = prev[group.key] ?? defaultCollapsed;
-        if (hasActiveSession || hasRunningSession) {
+        if ((newSessionSelected && hasActiveSession) || hasRunningSession) {
           next[group.key] = false;
         }
       }
@@ -284,6 +289,9 @@ export function SessionList({
   }, [activeSessionId, orderedSenderGroups]);
 
   useEffect(() => {
+    const activeSessionChanged = activeSessionId !== prevActiveSessionIdRef.current;
+    const newSessionSelected = activeSessionChanged && activeSessionId !== null;
+
     setCollapsedSourceGroups((prev) => {
       const next: Record<string, boolean> = {};
       for (const senderGroup of orderedSenderGroups) {
@@ -297,7 +305,7 @@ export function SessionList({
           const defaultCollapsed =
             senderGroup.sourceGroups.length > 1 || senderGroup.ungroupedSessions.length > 0;
           next[sourceGroup.key] = prev[sourceGroup.key] ?? defaultCollapsed;
-          if (hasActiveSession || hasRunningSession) {
+          if ((newSessionSelected && hasActiveSession) || hasRunningSession) {
             next[sourceGroup.key] = false;
           }
         }
