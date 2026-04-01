@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard,
   ListChecks,
@@ -10,24 +10,24 @@ import {
   Plus,
   ChevronRight,
   Shield,
-} from "lucide-react";
-import { cn } from "../lib/cn";
-import { useUiStore } from "../store/uiStore";
-import { agentsApi } from "../api/agents";
-import { Agent } from "../types";
-import { usePermissionStore } from "../store/permissionStore";
-import { onPermissionRequest, onPermissionCancelled } from "../events/permissionEvents";
+} from 'lucide-react';
+import { cn } from '../lib/cn';
+import { useUiStore } from '../store/uiStore';
+import { agentsApi } from '../api/agents';
+import { Agent } from '../types';
+import { usePermissionStore } from '../store/permissionStore';
+import { onPermissionRequest, onPermissionCancelled } from '../events/permissionEvents';
 
 const NAV_ITEMS = [
-  { id: "dashboard" as const, label: "Dashboard", icon: LayoutDashboard },
-  { id: "tasks" as const, label: "Tasks", icon: ListChecks },
-  { id: "history" as const, label: "Run History", icon: History },
-  { id: "schedules" as const, label: "Schedules", icon: Clock },
+  { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'tasks' as const, label: 'Tasks', icon: ListChecks },
+  { id: 'history' as const, label: 'Run History', icon: History },
+  { id: 'schedules' as const, label: 'Schedules', icon: Clock },
 ];
 
 export function Sidebar() {
   const { screen, selectedAgentId, navigate, selectAgent, openAgentChat } = useUiStore();
-  const [agentsOpen, setAgentsOpen] = useState(screen === "agents");
+  const [agentsOpen, setAgentsOpen] = useState(screen === 'agents');
   const pendingCount = usePermissionStore((s) => s.pendingCount);
 
   // Global listener for permission events (so badge works even when chat panel isn't open)
@@ -43,18 +43,19 @@ export function Sidebar() {
         usePermissionStore.getState().removeRequest(payload.requestId);
       })
     );
-    return () => { unsubs.forEach((p) => p.then((fn) => fn())); };
+    return () => {
+      unsubs.forEach((p) => p.then((fn) => fn()));
+    };
   }, []);
 
   const { data: agents = [] } = useQuery<Agent[]>({
-    queryKey: ["agents"],
+    queryKey: ['agents'],
     queryFn: agentsApi.list,
     refetchInterval: 10_000,
   });
 
   return (
     <aside className="w-[220px] flex-shrink-0 flex flex-col border-r border-edge bg-panel h-full">
-
       {/* Navigation */}
       <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
         {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
@@ -62,10 +63,10 @@ export function Sidebar() {
             key={id}
             onClick={() => navigate(id)}
             className={cn(
-              "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+              'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
               screen === id
-                ? "bg-accent/15 text-accent-hover"
-                : "text-secondary hover:bg-surface hover:text-white"
+                ? 'bg-accent/15 text-accent-hover'
+                : 'text-secondary hover:bg-surface hover:text-white'
             )}
           >
             <Icon size={16} />
@@ -78,10 +79,10 @@ export function Sidebar() {
           <button
             onClick={() => setAgentsOpen(!agentsOpen)}
             className={cn(
-              "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-              screen === "agents"
-                ? "bg-accent/15 text-accent-hover"
-                : "text-secondary hover:bg-surface hover:text-white"
+              'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+              screen === 'agents'
+                ? 'bg-accent/15 text-accent-hover'
+                : 'text-secondary hover:bg-surface hover:text-white'
             )}
           >
             <Bot size={16} />
@@ -94,10 +95,7 @@ export function Sidebar() {
             )}
             <ChevronRight
               size={14}
-              className={cn(
-                "transition-transform text-muted",
-                agentsOpen && "rotate-90"
-              )}
+              className={cn('transition-transform text-muted', agentsOpen && 'rotate-90')}
             />
           </button>
 
@@ -107,10 +105,10 @@ export function Sidebar() {
                 <div
                   key={agent.id}
                   className={cn(
-                    "group flex items-center gap-1 rounded-md transition-colors",
-                    screen === "agents" && selectedAgentId === agent.id
-                      ? "bg-accent/10 text-accent-hover"
-                      : "text-secondary hover:bg-surface hover:text-white"
+                    'group flex items-center gap-1 rounded-md transition-colors',
+                    screen === 'agents' && selectedAgentId === agent.id
+                      ? 'bg-accent/10 text-accent-hover'
+                      : 'text-secondary hover:bg-surface hover:text-white'
                   )}
                 >
                   <button
@@ -119,8 +117,8 @@ export function Sidebar() {
                   >
                     <span
                       className={cn(
-                        "w-1.5 h-1.5 rounded-full shrink-0",
-                        agent.state === "idle" ? "bg-emerald-400" : "bg-text-muted"
+                        'w-1.5 h-1.5 rounded-full shrink-0',
+                        agent.state === 'idle' ? 'bg-emerald-400' : 'bg-text-muted'
                       )}
                     />
                     <span className="truncate">{agent.name}</span>
@@ -142,7 +140,7 @@ export function Sidebar() {
               {/* New Agent link */}
               <button
                 onClick={() => {
-                  selectAgent("__new__");
+                  selectAgent('__new__');
                 }}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium text-muted hover:text-accent-hover hover:bg-accent/10 transition-colors"
               >
@@ -157,7 +155,7 @@ export function Sidebar() {
       {/* New Task shortcut */}
       <div className="p-3 border-t border-edge">
         <button
-          onClick={() => navigate("task-builder")}
+          onClick={() => navigate('task-builder')}
           className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors"
         >
           <Plus size={14} />

@@ -1,6 +1,6 @@
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { StreamingCursor } from "./StreamingCursor";
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { StreamingCursor } from './StreamingCursor';
 
 interface TextBlockProps {
   text: string;

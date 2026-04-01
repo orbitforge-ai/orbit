@@ -41,10 +41,7 @@ function busMessagesToDisplay(messages: BusThreadMessage[]): DisplayMessage[] {
     });
 
     // Response from triggered run
-    if (
-      msg.triggeredRunState &&
-      TERMINAL_STATES.has(msg.triggeredRunState)
-    ) {
+    if (msg.triggeredRunState && TERMINAL_STATES.has(msg.triggeredRunState)) {
       result.push({
         id: `bus-out-${msg.id}-${++id}`,
         role: 'assistant',
@@ -113,10 +110,7 @@ export function BusMessagePanel({ agentId }: BusMessagePanelProps) {
     });
   }, [data]);
 
-  const displayMessages = useMemo(
-    () => busMessagesToDisplay(allBusMessages),
-    [allBusMessages]
-  );
+  const displayMessages = useMemo(() => busMessagesToDisplay(allBusMessages), [allBusMessages]);
 
   // Real-time: new bus messages targeting this agent
   useEffect(() => {
@@ -198,9 +192,7 @@ export function BusMessagePanel({ agentId }: BusMessagePanelProps) {
       <div className="flex items-center gap-2 px-4 py-3 border-b border-edge">
         <MessageSquare size={14} className="text-blue-400" />
         <h3 className="text-sm font-semibold text-white">Agent Messages</h3>
-        <span className="text-xs text-muted">
-          {data?.pages?.[0]?.totalCount ?? 0} messages
-        </span>
+        <span className="text-xs text-muted">{data?.pages?.[0]?.totalCount ?? 0} messages</span>
       </div>
 
       {/* Messages */}

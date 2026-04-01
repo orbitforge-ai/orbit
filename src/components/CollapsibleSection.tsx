@@ -34,17 +34,11 @@ export function CollapsibleSection({
         />
         <div className="flex-1 min-w-0">
           <span className="text-sm font-semibold text-white">{title}</span>
-          {description && (
-            <p className="text-xs text-muted mt-0.5 leading-tight">{description}</p>
-          )}
+          {description && <p className="text-xs text-muted mt-0.5 leading-tight">{description}</p>}
         </div>
         {badge && <div className="shrink-0">{badge}</div>}
       </button>
-      {open && (
-        <div className="border-t border-edge px-4 py-4">
-          {children}
-        </div>
-      )}
+      {open && <div className="border-t border-edge px-4 py-4">{children}</div>}
     </div>
   );
 }

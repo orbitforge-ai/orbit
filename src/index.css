@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 @theme {
   /* Backgrounds */
@@ -37,7 +37,9 @@
   box-sizing: border-box;
 }
 
-button, a, [role="button"] {
+button,
+a,
+[role='button'] {
   cursor: pointer;
 }
 
@@ -46,7 +48,14 @@ button, a, [role="button"] {
   user-select: none;
 }
 
-input, textarea, [contenteditable="true"], pre, code, .monaco-editor *, .select-text, .select-text * {
+input,
+textarea,
+[contenteditable='true'],
+pre,
+code,
+.monaco-editor *,
+.select-text,
+.select-text * {
   -webkit-user-select: text;
   user-select: text;
 }
@@ -61,8 +70,7 @@ body,
   overscroll-behavior: none;
   background: var(--color-background);
   color: var(--color-primary);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI",
-    sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -85,8 +93,16 @@ body,
 /* ─── Typing indicator ───────────────────────────────────────────────────── */
 
 @keyframes typing-bounce {
-  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-  30% { transform: translateY(-4px); opacity: 1; }
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
 }
 
 .typing-dot {
@@ -122,12 +138,18 @@ body,
   font-weight: 600;
   margin: 0.8em 0 0.3em;
 }
-.chat-markdown h1 { font-size: 1.25em; }
-.chat-markdown h2 { font-size: 1.1em; }
-.chat-markdown h3 { font-size: 1em; }
+.chat-markdown h1 {
+  font-size: 1.25em;
+}
+.chat-markdown h2 {
+  font-size: 1.1em;
+}
+.chat-markdown h3 {
+  font-size: 1em;
+}
 
 .chat-markdown code {
-  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, monospace;
   font-size: 0.85em;
   background: var(--color-inset);
   border: 1px solid var(--color-edge);
@@ -158,8 +180,12 @@ body,
 .chat-markdown li {
   margin: 0.15em 0;
 }
-.chat-markdown ul { list-style-type: disc; }
-.chat-markdown ol { list-style-type: decimal; }
+.chat-markdown ul {
+  list-style-type: disc;
+}
+.chat-markdown ol {
+  list-style-type: decimal;
+}
 
 .chat-markdown blockquote {
   border-left: 3px solid var(--color-accent);

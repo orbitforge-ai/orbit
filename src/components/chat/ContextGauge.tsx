@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
-import { Check } from "lucide-react";
-import { chatApi } from "../../api/chat";
-import { onChatContextUpdate } from "../../events/runEvents";
+import { useEffect, useState } from 'react';
+import { Check } from 'lucide-react';
+import { chatApi } from '../../api/chat';
+import { onChatContextUpdate } from '../../events/runEvents';
 
 interface ContextGaugeProps {
   sessionId: string;
@@ -9,10 +9,10 @@ interface ContextGaugeProps {
 }
 
 function getColor(percent: number): string {
-  if (percent >= 80) return "var(--color-failure)";
-  if (percent >= 65) return "var(--color-orange)";
-  if (percent >= 50) return "var(--color-yellow)";
-  return "var(--color-success)";
+  if (percent >= 80) return 'var(--color-failure)';
+  if (percent >= 65) return 'var(--color-orange)';
+  if (percent >= 50) return 'var(--color-yellow)';
+  return 'var(--color-success)';
 }
 
 function formatTokens(n: number): string {
@@ -70,7 +70,7 @@ export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
       onCompacted?.();
       setTimeout(() => setJustCompacted(false), 2000);
     } catch (err) {
-      console.error("Compaction failed:", err);
+      console.error('Compaction failed:', err);
     }
     setCompacting(false);
   }
@@ -84,7 +84,7 @@ export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
   const circumference = 2 * Math.PI * radius;
   const fillPercent = Math.min(usagePercent, 100);
   const dashOffset = circumference - (fillPercent / 100) * circumference;
-  const color = justCompacted ? "var(--color-success)" : getColor(usagePercent);
+  const color = justCompacted ? 'var(--color-success)' : getColor(usagePercent);
 
   return (
     <button
@@ -93,16 +93,16 @@ export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
       className="relative inline-flex items-center justify-center cursor-pointer hover:opacity-80 disabled:opacity-40 transition-opacity"
       title={
         compacting
-          ? "Compacting..."
+          ? 'Compacting...'
           : justCompacted
-            ? "Compaction complete"
+            ? 'Compaction complete'
             : `${formatTokens(inputTokens)} / ${formatTokens(contextWindow)} tokens (${usagePercent.toFixed(1)}%) — click to compact`
       }
     >
       <svg
         width={size}
         height={size}
-        className={`transform -rotate-90 ${compacting ? "animate-spin" : ""}`}
+        className={`transform -rotate-90 ${compacting ? 'animate-spin' : ''}`}
       >
         <circle
           cx={size / 2}
@@ -127,11 +127,7 @@ export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
         />
       </svg>
       {compacting ? null : justCompacted ? (
-        <Check
-          size={10}
-          className="absolute text-emerald-400"
-          strokeWidth={3}
-        />
+        <Check size={10} className="absolute text-emerald-400" strokeWidth={3} />
       ) : (
         <span
           className="absolute text-[7px] font-mono tabular-nums leading-none"

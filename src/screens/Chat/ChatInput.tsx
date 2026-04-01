@@ -1,6 +1,6 @@
-import { useState, useRef, useCallback } from "react";
-import { Send, Paperclip, X, Image as ImageIcon, FileText } from "lucide-react";
-import { ContentBlock } from "../../types";
+import { useState, useRef, useCallback } from 'react';
+import { Send, Paperclip, X, Image as ImageIcon, FileText } from 'lucide-react';
+import { ContentBlock } from '../../types';
 
 interface ChatInputProps {
   onSend: (content: ContentBlock[]) => void;
@@ -10,7 +10,7 @@ interface ChatInputProps {
 
 interface Attachment {
   id: string;
-  type: "image" | "document";
+  type: 'image' | 'document';
   name: string;
   mediaType: string;
   data: string; // base64 for images, text content for documents
@@ -19,7 +19,7 @@ interface Attachment {
 let attachId = 0;
 
 export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -32,30 +32,30 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
 
     // Add image attachments
     for (const att of attachments) {
-      if (att.type === "image") {
-        blocks.push({ type: "image", media_type: att.mediaType, data: att.data });
+      if (att.type === 'image') {
+        blocks.push({ type: 'image', media_type: att.mediaType, data: att.data });
       } else {
-        blocks.push({ type: "text", text: `[File: ${att.name}]\n${att.data}` });
+        blocks.push({ type: 'text', text: `[File: ${att.name}]\n${att.data}` });
       }
     }
 
     // Add text
     if (trimmed) {
-      blocks.push({ type: "text", text: trimmed });
+      blocks.push({ type: 'text', text: trimmed });
     }
 
     onSend(blocks);
-    setText("");
+    setText('');
     setAttachments([]);
 
     // Reset textarea height
     if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = 'auto';
     }
   }, [text, attachments, onSend]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
@@ -65,8 +65,8 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
     setText(e.target.value);
     // Auto-resize
     const el = e.target;
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
   }
 
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -74,7 +74,7 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
     if (!files) return;
 
     for (const file of Array.from(files)) {
-      const isImage = file.type.startsWith("image/");
+      const isImage = file.type.startsWith('image/');
 
       if (isImage) {
         const base64 = await fileToBase64(file);
@@ -82,7 +82,7 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
           ...prev,
           {
             id: `att-${++attachId}`,
-            type: "image",
+            type: 'image',
             name: file.name,
             mediaType: file.type,
             data: base64,
@@ -95,7 +95,7 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
           ...prev,
           {
             id: `att-${++attachId}`,
-            type: "document",
+            type: 'document',
             name: file.name,
             mediaType: file.type,
             data: text,
@@ -105,7 +105,7 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
     }
 
     // Reset input
-    e.target.value = "";
+    e.target.value = '';
   }
 
   function removeAttachment(id: string) {
@@ -124,7 +124,7 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
               key={att.id}
               className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-surface border border-edge text-xs"
             >
-              {att.type === "image" ? (
+              {att.type === 'image' ? (
                 <ImageIcon size={12} className="text-accent-hover" />
               ) : (
                 <FileText size={12} className="text-warning" />
@@ -171,9 +171,7 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
           style={{ maxHeight: 200 }}
         />
 
-        {contextGauge && (
-          <div className="shrink-0 mb-0.5">{contextGauge}</div>
-        )}
+        {contextGauge && <div className="shrink-0 mb-0.5">{contextGauge}</div>}
 
         <button
           onClick={handleSend}
@@ -193,7 +191,7 @@ function fileToBase64(file: File): Promise<string> {
     reader.onload = () => {
       const result = reader.result as string;
       // Strip the data:...;base64, prefix
-      const base64 = result.split(",")[1] || result;
+      const base64 = result.split(',')[1] || result;
       resolve(base64);
     };
     reader.onerror = reject;

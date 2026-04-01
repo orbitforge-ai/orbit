@@ -1,6 +1,6 @@
 /** Format a duration in milliseconds as a human-readable string. */
 export function formatDuration(ms: number | null | undefined): string {
-  if (ms == null) return "—";
+  if (ms == null) return '—';
   if (ms < 1000) return `${ms}ms`;
   const secs = Math.floor(ms / 1000);
   if (secs < 60) return `${secs}s`;
@@ -14,7 +14,7 @@ export function formatDuration(ms: number | null | undefined): string {
 
 /** Format elapsed seconds as a live counter string. */
 export function formatElapsed(startedAt: string | null): string {
-  if (!startedAt) return "0s";
+  if (!startedAt) return '0s';
   const elapsed = Date.now() - new Date(startedAt).getTime();
   return formatDuration(elapsed);
 }

@@ -1,5 +1,5 @@
-import { create } from "zustand";
-import { PermissionRequestPayload } from "../types";
+import { create } from 'zustand';
+import { PermissionRequestPayload } from '../types';
 
 interface PermissionStore {
   /** All pending permission requests, keyed by requestId. */
@@ -11,7 +11,7 @@ interface PermissionStore {
   removeRequest: (requestId: string) => void;
   removeForRun: (runId: string) => void;
   /** Mark a request as resolved (keeps it briefly for UI display). */
-  resolveRequest: (requestId: string, decision: "allow" | "always_allow" | "deny") => void;
+  resolveRequest: (requestId: string, decision: 'allow' | 'always_allow' | 'deny') => void;
 }
 
 export const usePermissionStore = create<PermissionStore>((set) => ({

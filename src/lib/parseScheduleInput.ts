@@ -1,14 +1,11 @@
-import { RRule } from "rrule";
-import { RecurringConfig } from "../types";
+import { RRule } from 'rrule';
+import { RecurringConfig } from '../types';
 
 /**
  * Parses a natural-language schedule string or a 5-field cron expression
  * into a RecurringConfig. Returns null if the input can't be understood.
  */
-export function parseScheduleInput(
-  raw: string,
-  timezone: string,
-): RecurringConfig | null {
+export function parseScheduleInput(raw: string, timezone: string): RecurringConfig | null {
   const input = raw.trim().toLowerCase();
   if (!input) return null;
 
@@ -30,28 +27,29 @@ function parseCron(input: string, timezone: string): RecurringConfig | null {
 
   const [minute, hour, _dom, _month, dow] = parts;
 
-  const timeOfDay = parseSimpleNum(hour) != null && parseSimpleNum(minute) != null
-    ? { hour: parseSimpleNum(hour)!, minute: parseSimpleNum(minute)! }
-    : undefined;
+  const timeOfDay =
+    parseSimpleNum(hour) != null && parseSimpleNum(minute) != null
+      ? { hour: parseSimpleNum(hour)!, minute: parseSimpleNum(minute)! }
+      : undefined;
 
   // Detect step-based intervals: */N in minute or hour field
   const minStep = parseStep(minute);
-  if (minStep && hour === "*") {
+  if (minStep && hour === '*') {
     return {
-      intervalUnit: "minutes",
+      intervalUnit: 'minutes',
       intervalValue: minStep,
       timezone,
-      missedRunPolicy: "skip",
+      missedRunPolicy: 'skip',
     };
   }
   const hourStep = parseStep(hour);
-  if (hourStep && minute !== "*") {
+  if (hourStep && minute !== '*') {
     return {
-      intervalUnit: "hours",
+      intervalUnit: 'hours',
       intervalValue: hourStep,
       timeOfDay: { hour: 0, minute: parseSimpleNum(minute) ?? 0 },
       timezone,
-      missedRunPolicy: "skip",
+      missedRunPolicy: 'skip',
     };
   }
 
@@ -60,23 +58,23 @@ function parseCron(input: string, timezone: string): RecurringConfig | null {
 
   if (daysOfWeek && daysOfWeek.length > 0 && daysOfWeek.length < 7) {
     return {
-      intervalUnit: "weeks",
+      intervalUnit: 'weeks',
       intervalValue: 1,
       daysOfWeek,
       timeOfDay,
       timezone,
-      missedRunPolicy: "skip",
+      missedRunPolicy: 'skip',
     };
   }
 
   // Daily (dow is * or 0-6 full range)
   if (timeOfDay) {
     return {
-      intervalUnit: "days",
+      intervalUnit: 'days',
       intervalValue: 1,
       timeOfDay,
       timezone,
-      missedRunPolicy: "skip",
+      missedRunPolicy: 'skip',
     };
   }
 
@@ -93,15 +91,28 @@ function parseSimpleNum(field: string): number | null {
 }
 
 function parseDowField(field: string): number[] | undefined {
-  if (field === "*") return undefined;
+  if (field === '*') return undefined;
 
   const DAY_MAP: Record<string, number> = {
-    sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6,
-    "0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 0,
+    sun: 0,
+    mon: 1,
+    tue: 2,
+    wed: 3,
+    thu: 4,
+    fri: 5,
+    sat: 6,
+    '0': 0,
+    '1': 1,
+    '2': 2,
+    '3': 3,
+    '4': 4,
+    '5': 5,
+    '6': 6,
+    '7': 0,
   };
 
   const days = new Set<number>();
-  for (const part of field.split(",")) {
+  for (const part of field.split(',')) {
     const range = part.match(/^(\w+)-(\w+)$/);
     if (range) {
       const start = DAY_MAP[range[1]];
@@ -120,12 +131,12 @@ function parseDowField(field: string): number[] | undefined {
 
 // ─── Natural language (via rrule) ───────────────────────────────────────────
 
-const FREQ_MAP: Record<number, RecurringConfig["intervalUnit"] | null> = {
-  [RRule.MINUTELY]: "minutes",
-  [RRule.HOURLY]: "hours",
-  [RRule.DAILY]: "days",
-  [RRule.WEEKLY]: "weeks",
-  [RRule.MONTHLY]: "months",
+const FREQ_MAP: Record<number, RecurringConfig['intervalUnit'] | null> = {
+  [RRule.MINUTELY]: 'minutes',
+  [RRule.HOURLY]: 'hours',
+  [RRule.DAILY]: 'days',
+  [RRule.WEEKLY]: 'weeks',
+  [RRule.MONTHLY]: 'months',
   [RRule.YEARLY]: null,
 };
 
@@ -133,10 +144,13 @@ function parseNatural(input: string, timezone: string): RecurringConfig | null {
   // Pre-process phrases rrule NLP doesn't handle
   let text = input;
   if (/every\s+weekday/i.test(text)) {
-    text = text.replace(/every\s+weekday(s)?/i, "every week on monday, tuesday, wednesday, thursday and friday");
+    text = text.replace(
+      /every\s+weekday(s)?/i,
+      'every week on monday, tuesday, wednesday, thursday and friday'
+    );
   }
   if (/every\s+weekend/i.test(text)) {
-    text = text.replace(/every\s+weekend(s)?/i, "every week on saturday and sunday");
+    text = text.replace(/every\s+weekend(s)?/i, 'every week on saturday and sunday');
   }
 
   let rule: RRule;
@@ -164,7 +178,7 @@ function parseNatural(input: string, timezone: string): RecurringConfig | null {
     const hour = opts.byhour?.[0] ?? 0;
     const minute = opts.byminute?.[0] ?? 0;
     timeOfDay = { hour, minute };
-  } else if (["days", "weeks", "months"].includes(unit)) {
+  } else if (['days', 'weeks', 'months'].includes(unit)) {
     timeOfDay = { hour: 9, minute: 0 };
   }
 
@@ -174,6 +188,6 @@ function parseNatural(input: string, timezone: string): RecurringConfig | null {
     ...(daysOfWeek && { daysOfWeek }),
     ...(timeOfDay && { timeOfDay }),
     timezone,
-    missedRunPolicy: "skip",
+    missedRunPolicy: 'skip',
   };
 }

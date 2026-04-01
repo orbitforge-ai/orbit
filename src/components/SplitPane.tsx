@@ -1,5 +1,5 @@
-import { useCallback, useRef, useState } from "react";
-import { cn } from "../lib/cn";
+import { useCallback, useRef, useState } from 'react';
+import { cn } from '../lib/cn';
 
 interface SplitPaneProps {
   top: React.ReactNode;
@@ -8,20 +8,15 @@ interface SplitPaneProps {
   className?: string;
 }
 
-export function SplitPane({
-  top,
-  bottom,
-  defaultSplit = 0.55,
-  className,
-}: SplitPaneProps) {
+export function SplitPane({ top, bottom, defaultSplit = 0.55, className }: SplitPaneProps) {
   const [split, setSplit] = useState(defaultSplit);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
 
   const onMouseDown = useCallback(() => {
     dragging.current = true;
-    document.body.style.cursor = "row-resize";
-    document.body.style.userSelect = "none";
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
   }, []);
 
   const onMouseMove = useCallback((e: React.MouseEvent) => {
@@ -34,14 +29,14 @@ export function SplitPane({
   const onMouseUp = useCallback(() => {
     if (!dragging.current) return;
     dragging.current = false;
-    document.body.style.cursor = "";
-    document.body.style.userSelect = "";
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
   }, []);
 
   return (
     <div
       ref={containerRef}
-      className={cn("flex flex-col h-full", className)}
+      className={cn('flex flex-col h-full', className)}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
       onMouseLeave={onMouseUp}

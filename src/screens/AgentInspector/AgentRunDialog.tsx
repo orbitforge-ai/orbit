@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { Play, X } from "lucide-react";
-import { llmApi } from "../../api/llm";
+import { useState } from 'react';
+import { Play, X } from 'lucide-react';
+import { llmApi } from '../../api/llm';
 
 interface AgentRunDialogProps {
   agentId: string;
@@ -17,7 +17,7 @@ export function AgentRunDialog({
   onClose,
   onRunStarted,
 }: AgentRunDialogProps) {
-  const [goal, setGoal] = useState("");
+  const [goal, setGoal] = useState('');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,7 +30,7 @@ export function AgentRunDialog({
     try {
       const runId = await llmApi.triggerAgentLoop(agentId, goal.trim());
       onRunStarted(runId);
-      setGoal("");
+      setGoal('');
       onClose();
     } catch (err) {
       setError(String(err));
@@ -43,9 +43,7 @@ export function AgentRunDialog({
       <div className="w-[560px] rounded-2xl border border-edge bg-panel shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-edge">
-          <h3 className="text-base font-semibold text-white">
-            Run Agent: {agentName}
-          </h3>
+          <h3 className="text-base font-semibold text-white">Run Agent: {agentName}</h3>
           <button
             onClick={onClose}
             className="p-1.5 rounded text-muted hover:text-white hover:bg-edge"
@@ -68,7 +66,7 @@ export function AgentRunDialog({
               autoFocus
               className="w-full px-3 py-2.5 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent resize-none leading-relaxed"
               onKeyDown={(e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
                   handleRun();
                 }
               }}
@@ -96,7 +94,7 @@ export function AgentRunDialog({
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-sm font-medium transition-colors"
           >
             <Play size={14} />
-            {running ? "Starting..." : "Run Agent"}
+            {running ? 'Starting...' : 'Run Agent'}
           </button>
         </div>
       </div>

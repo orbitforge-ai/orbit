@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import { RecurringConfig } from "../types";
+import { invoke } from '@tauri-apps/api/core';
+import { RecurringConfig } from '../types';
 
 export interface PulseConfig {
   enabled: boolean;
@@ -13,14 +13,12 @@ export interface PulseConfig {
 }
 
 export const pulseApi = {
-  getConfig: (agentId: string): Promise<PulseConfig> =>
-    invoke("get_pulse_config", { agentId }),
+  getConfig: (agentId: string): Promise<PulseConfig> => invoke('get_pulse_config', { agentId }),
 
   update: (
     agentId: string,
     content: string,
     scheduleConfig: RecurringConfig,
     enabled: boolean
-  ): Promise<PulseConfig> =>
-    invoke("update_pulse", { agentId, content, scheduleConfig, enabled }),
+  ): Promise<PulseConfig> => invoke('update_pulse', { agentId, content, scheduleConfig, enabled }),
 };

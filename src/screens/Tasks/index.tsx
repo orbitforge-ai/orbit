@@ -1,10 +1,10 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play, Pencil, Trash2, ToggleLeft, ToggleRight } from "lucide-react";
-import { tasksApi } from "../../api/tasks";
-import { StatusBadge } from "../../components/StatusBadge";
-import { useUiStore } from "../../store/uiStore";
-import { Task } from "../../types";
-import {info} from '@tauri-apps/plugin-log'
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Play, Pencil, Trash2, ToggleLeft, ToggleRight } from 'lucide-react';
+import { tasksApi } from '../../api/tasks';
+import { StatusBadge } from '../../components/StatusBadge';
+import { useUiStore } from '../../store/uiStore';
+import { Task } from '../../types';
+import { info } from '@tauri-apps/plugin-log';
 import { confirm } from '@tauri-apps/plugin-dialog';
 
 export function TasksScreen() {
@@ -12,28 +12,33 @@ export function TasksScreen() {
   const queryClient = useQueryClient();
 
   const { data: tasks = [], isLoading } = useQuery({
-    queryKey: ["tasks"],
+    queryKey: ['tasks'],
     queryFn: tasksApi.list,
-    select: (all: Task[]) => all.filter((t) => !t.tags.includes("pulse")),
+    select: (all: Task[]) => all.filter((t) => !t.tags.includes('pulse')),
   });
 
   async function handleTrigger(task: Task) {
     console.log(`Triggering task: ${task.name}`);
     await tasksApi.trigger(task.id);
-    queryClient.invalidateQueries({ queryKey: ["runs"] });
-    navigate("history");
+    queryClient.invalidateQueries({ queryKey: ['runs'] });
+    navigate('history');
   }
 
   async function handleToggle(task: Task) {
-    info(`${!task.enabled ? "Enabling" : "Disabling"} task: ${task.name}`);
+    info(`${!task.enabled ? 'Enabling' : 'Disabling'} task: ${task.name}`);
     await tasksApi.update(task.id, { enabled: !task.enabled });
-    queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    queryClient.invalidateQueries({ queryKey: ['tasks'] });
   }
 
   async function handleDelete(task: Task) {
-    if (!await confirm(`Are you sure you want to delete "${task.name}"?`, { title: "Confirm Delete", })) return;
+    if (
+      !(await confirm(`Are you sure you want to delete "${task.name}"?`, {
+        title: 'Confirm Delete',
+      }))
+    )
+      return;
     await tasksApi.delete(task.id);
-    queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    queryClient.invalidateQueries({ queryKey: ['tasks'] });
   }
 
   return (
@@ -41,7 +46,7 @@ export function TasksScreen() {
       <div className="flex items-center justify-between px-6 py-4 border-b border-edge">
         <h2 className="text-lg font-semibold text-white">Tasks</h2>
         <button
-          onClick={() => navigate("task-builder")}
+          onClick={() => navigate('task-builder')}
           className="px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors"
         >
           + New Task
@@ -49,14 +54,12 @@ export function TasksScreen() {
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {isLoading && (
-          <div className="p-8 text-center text-muted text-sm">Loading…</div>
-        )}
+        {isLoading && <div className="p-8 text-center text-muted text-sm">Loading…</div>}
         {!isLoading && tasks.length === 0 && (
           <div className="p-16 text-center">
             <p className="text-muted text-sm">No tasks yet</p>
             <button
-              onClick={() => navigate("task-builder")}
+              onClick={() => navigate('task-builder')}
               className="mt-3 px-4 py-2 rounded-lg bg-accent text-white text-sm"
             >
               Create your first task
@@ -66,16 +69,17 @@ export function TasksScreen() {
 
         <div className="divide-y divide-border">
           {tasks.map((task) => (
-            <div key={task.id} className="flex items-center gap-3 px-6 py-4 hover:bg-surface transition-colors">
+            <div
+              key={task.id}
+              className="flex items-center gap-3 px-6 py-4 hover:bg-surface transition-colors"
+            >
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <p className="text-sm font-medium text-white truncate">{task.name}</p>
-                  {!task.enabled && (
-                    <StatusBadge state="cancelled" />
-                  )}
+                  {!task.enabled && <StatusBadge state="cancelled" />}
                 </div>
                 <p className="text-xs text-muted mt-0.5 capitalize">
-                  {task.kind.replace("_", " ")}
+                  {task.kind.replace('_', ' ')}
                 </p>
               </div>
 
@@ -96,7 +100,7 @@ export function TasksScreen() {
                 </button>
                 <button
                   onClick={() => handleToggle(task)}
-                  title={task.enabled ? "Disable" : "Enable"}
+                  title={task.enabled ? 'Disable' : 'Enable'}
                   className="p-1.5 rounded text-muted hover:text-white hover:bg-edge transition-colors"
                 >
                   {task.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}

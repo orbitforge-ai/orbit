@@ -1,30 +1,30 @@
-import { useEffect, useState } from "react";
-import { ChevronDown } from "lucide-react";
-import * as Select from "@radix-ui/react-select";
-import { schedulesApi } from "../../api/schedules";
-import { DAY_NAMES, humanSchedule } from "../../lib/humanSchedule";
-import { parseScheduleInput } from "../../lib/parseScheduleInput";
-import { RecurringConfig } from "../../types";
+import { useEffect, useState } from 'react';
+import { ChevronDown } from 'lucide-react';
+import * as Select from '@radix-ui/react-select';
+import { schedulesApi } from '../../api/schedules';
+import { DAY_NAMES, humanSchedule } from '../../lib/humanSchedule';
+import { parseScheduleInput } from '../../lib/parseScheduleInput';
+import { RecurringConfig } from '../../types';
 
 interface RecurringPickerProps {
   value: RecurringConfig;
   onChange: (cfg: RecurringConfig) => void;
 }
 
-type InputMode = "text" | "manual";
+type InputMode = 'text' | 'manual';
 
 const UNIT_OPTIONS = [
-  { value: "minutes", label: "Minutes" },
-  { value: "hours", label: "Hours" },
-  { value: "days", label: "Days" },
-  { value: "weeks", label: "Weeks" },
-  { value: "months", label: "Months" },
+  { value: 'minutes', label: 'Minutes' },
+  { value: 'hours', label: 'Hours' },
+  { value: 'days', label: 'Days' },
+  { value: 'weeks', label: 'Weeks' },
+  { value: 'months', label: 'Months' },
 ] as const;
 
 export function RecurringPicker({ value, onChange }: RecurringPickerProps) {
   const [nextRuns, setNextRuns] = useState<string[]>([]);
-  const [mode, setMode] = useState<InputMode>(value.expression ? "text" : "text");
-  const [textInput, setTextInput] = useState(value.expression ?? "");
+  const [mode, setMode] = useState<InputMode>(value.expression ? 'text' : 'text');
+  const [textInput, setTextInput] = useState(value.expression ?? '');
   const [parseError, setParseError] = useState(false);
 
   useEffect(() => {
@@ -49,8 +49,8 @@ export function RecurringPicker({ value, onChange }: RecurringPickerProps) {
     }
   }
 
-  const showTimePicker = ["days", "weeks", "months"].includes(value.intervalUnit);
-  const showDayPicker = value.intervalUnit === "weeks";
+  const showTimePicker = ['days', 'weeks', 'months'].includes(value.intervalUnit);
+  const showDayPicker = value.intervalUnit === 'weeks';
 
   return (
     <div className="space-y-4">
@@ -58,33 +58,27 @@ export function RecurringPicker({ value, onChange }: RecurringPickerProps) {
       <div className="flex rounded-lg bg-surface border border-edge p-0.5">
         <button
           type="button"
-          onClick={() => setMode("text")}
+          onClick={() => setMode('text')}
           className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-            mode === "text"
-              ? "bg-accent text-white"
-              : "text-muted hover:text-white"
+            mode === 'text' ? 'bg-accent text-white' : 'text-muted hover:text-white'
           }`}
         >
           Natural Language / Cron
         </button>
         <button
           type="button"
-          onClick={() => setMode("manual")}
+          onClick={() => setMode('manual')}
           className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-            mode === "manual"
-              ? "bg-accent text-white"
-              : "text-muted hover:text-white"
+            mode === 'manual' ? 'bg-accent text-white' : 'text-muted hover:text-white'
           }`}
         >
           Manual
         </button>
       </div>
 
-      {mode === "text" && (
+      {mode === 'text' && (
         <div>
-          <label className="block text-xs font-medium text-muted mb-1.5">
-            Schedule
-          </label>
+          <label className="block text-xs font-medium text-muted mb-1.5">Schedule</label>
           <input
             type="text"
             value={textInput}
@@ -92,13 +86,14 @@ export function RecurringPicker({ value, onChange }: RecurringPickerProps) {
             placeholder="e.g. every weekday at 9am, daily at 5pm, */30 * * * *"
             className={`w-full px-3 py-2 rounded-lg bg-surface border text-white text-sm focus:outline-none transition-colors ${
               parseError
-                ? "border-red-500/60 focus:border-red-500"
-                : "border-edge focus:border-accent"
+                ? 'border-red-500/60 focus:border-red-500'
+                : 'border-edge focus:border-accent'
             }`}
           />
           {parseError && (
             <p className="mt-1 text-xs text-red-400">
-              Couldn't parse that schedule. Try "every 2 hours", "daily at 9am", or a cron like "0 9 * * 1-5".
+              Couldn't parse that schedule. Try "every 2 hours", "daily at 9am", or a cron like "0 9
+              * * 1-5".
             </p>
           )}
           {!parseError && textInput.trim().length === 0 && (
@@ -111,49 +106,51 @@ export function RecurringPicker({ value, onChange }: RecurringPickerProps) {
         </div>
       )}
 
-      {mode === "manual" && (
-      <div>
-        <label className="block text-xs font-medium text-muted mb-1.5">
-          Frequency
-        </label>
-        <div className="flex gap-2">
-          <input
-            type="number"
-            min={1}
-            max={value.intervalUnit === "minutes" ? 59 : value.intervalUnit === "hours" ? 23 : 31}
-            value={value.intervalValue}
-            onChange={(e) => update({ intervalValue: Number(e.target.value) || 1 })}
-            className="w-20 px-3 py-2 rounded-lg bg-surface border border-edge text-white text-sm text-center focus:outline-none focus:border-accent"
-          />
-          <Select.Root
-            value={value.intervalUnit}
-            onValueChange={(v) => update({ intervalUnit: v as RecurringConfig["intervalUnit"] })}
-          >
-            <Select.Trigger className="flex items-center justify-between flex-1 px-3 py-2 rounded-lg bg-surface border border-edge text-white text-sm focus:outline-none focus:border-accent">
-              <Select.Value />
-              <Select.Icon><ChevronDown size={14} className="text-muted" /></Select.Icon>
-            </Select.Trigger>
-            <Select.Portal>
-              <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
-                <Select.Viewport className="p-1">
-                  {UNIT_OPTIONS.map((o) => (
-                    <Select.Item key={o.value} value={o.value} className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20">
-                      <Select.ItemText>{o.label}</Select.ItemText>
-                    </Select.Item>
-                  ))}
-                </Select.Viewport>
-              </Select.Content>
-            </Select.Portal>
-          </Select.Root>
+      {mode === 'manual' && (
+        <div>
+          <label className="block text-xs font-medium text-muted mb-1.5">Frequency</label>
+          <div className="flex gap-2">
+            <input
+              type="number"
+              min={1}
+              max={value.intervalUnit === 'minutes' ? 59 : value.intervalUnit === 'hours' ? 23 : 31}
+              value={value.intervalValue}
+              onChange={(e) => update({ intervalValue: Number(e.target.value) || 1 })}
+              className="w-20 px-3 py-2 rounded-lg bg-surface border border-edge text-white text-sm text-center focus:outline-none focus:border-accent"
+            />
+            <Select.Root
+              value={value.intervalUnit}
+              onValueChange={(v) => update({ intervalUnit: v as RecurringConfig['intervalUnit'] })}
+            >
+              <Select.Trigger className="flex items-center justify-between flex-1 px-3 py-2 rounded-lg bg-surface border border-edge text-white text-sm focus:outline-none focus:border-accent">
+                <Select.Value />
+                <Select.Icon>
+                  <ChevronDown size={14} className="text-muted" />
+                </Select.Icon>
+              </Select.Trigger>
+              <Select.Portal>
+                <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
+                  <Select.Viewport className="p-1">
+                    {UNIT_OPTIONS.map((o) => (
+                      <Select.Item
+                        key={o.value}
+                        value={o.value}
+                        className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
+                      >
+                        <Select.ItemText>{o.label}</Select.ItemText>
+                      </Select.Item>
+                    ))}
+                  </Select.Viewport>
+                </Select.Content>
+              </Select.Portal>
+            </Select.Root>
+          </div>
         </div>
-      </div>
       )}
 
-      {mode === "manual" && showDayPicker && (
+      {mode === 'manual' && showDayPicker && (
         <div>
-          <label className="block text-xs font-medium text-muted mb-1.5">
-            Days of week
-          </label>
+          <label className="block text-xs font-medium text-muted mb-1.5">Days of week</label>
           <div className="flex gap-1.5">
             {DAY_NAMES.map((name, i) => {
               const selected = value.daysOfWeek?.includes(i) ?? false;
@@ -163,15 +160,13 @@ export function RecurringPicker({ value, onChange }: RecurringPickerProps) {
                   type="button"
                   onClick={() => {
                     const current = value.daysOfWeek ?? [];
-                    const next = selected
-                      ? current.filter((d) => d !== i)
-                      : [...current, i].sort();
+                    const next = selected ? current.filter((d) => d !== i) : [...current, i].sort();
                     update({ daysOfWeek: next });
                   }}
                   className={`w-8 h-8 rounded-full text-xs font-medium transition-colors ${
                     selected
-                      ? "bg-accent text-white"
-                      : "bg-surface border border-edge text-muted hover:border-accent hover:text-white"
+                      ? 'bg-accent text-white'
+                      : 'bg-surface border border-edge text-muted hover:border-accent hover:text-white'
                   }`}
                 >
                   {name[0]}
@@ -182,11 +177,9 @@ export function RecurringPicker({ value, onChange }: RecurringPickerProps) {
         </div>
       )}
 
-      {mode === "manual" && showTimePicker && (
+      {mode === 'manual' && showTimePicker && (
         <div>
-          <label className="block text-xs font-medium text-muted mb-1.5">
-            Time of day
-          </label>
+          <label className="block text-xs font-medium text-muted mb-1.5">Time of day</label>
           <div className="flex gap-2 items-center">
             <input
               type="number"
@@ -232,9 +225,7 @@ export function RecurringPicker({ value, onChange }: RecurringPickerProps) {
       {/* Next 5 runs preview */}
       {nextRuns.length > 0 && (
         <div>
-          <p className="text-xs font-medium text-muted mb-1.5">
-            Next {nextRuns.length} runs
-          </p>
+          <p className="text-xs font-medium text-muted mb-1.5">Next {nextRuns.length} runs</p>
           <ul className="space-y-1">
             {nextRuns.map((iso, i) => (
               <li key={i} className="text-xs text-secondary">

@@ -1,17 +1,17 @@
-import { useEffect } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play, Clock, CheckCircle, XCircle, Plus } from "lucide-react";
-import { runsApi } from "../../api/runs";
-import { tasksApi } from "../../api/tasks";
-import { schedulesApi } from "../../api/schedules";
-import { StatusBadge } from "../../components/StatusBadge";
-import { onRunStateChanged } from "../../events/runEvents";
-import { useLiveRunStore } from "../../store/liveRunStore";
-import { useUiStore } from "../../store/uiStore";
-import { Task } from "../../types";
-import { formatDuration, formatElapsed } from "../../lib/formatDuration";
-import { humanSchedule } from "../../lib/humanSchedule";
-import { RecurringConfig, RunState } from "../../types";
+import { useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Play, Clock, CheckCircle, XCircle, Plus } from 'lucide-react';
+import { runsApi } from '../../api/runs';
+import { tasksApi } from '../../api/tasks';
+import { schedulesApi } from '../../api/schedules';
+import { StatusBadge } from '../../components/StatusBadge';
+import { onRunStateChanged } from '../../events/runEvents';
+import { useLiveRunStore } from '../../store/liveRunStore';
+import { useUiStore } from '../../store/uiStore';
+import { Task } from '../../types';
+import { formatDuration, formatElapsed } from '../../lib/formatDuration';
+import { humanSchedule } from '../../lib/humanSchedule';
+import { RecurringConfig, RunState } from '../../types';
 
 export function Dashboard() {
   const queryClient = useQueryClient();
@@ -19,26 +19,26 @@ export function Dashboard() {
   const { activeRuns, upsertRun, updateRunState } = useLiveRunStore();
 
   const { data: runs = [] } = useQuery({
-    queryKey: ["runs", "recent"],
+    queryKey: ['runs', 'recent'],
     queryFn: () => runsApi.list({ limit: 20 }),
     refetchInterval: 10_000,
   });
 
   const { data: tasks = [] } = useQuery({
-    queryKey: ["tasks"],
+    queryKey: ['tasks'],
     queryFn: tasksApi.list,
     refetchInterval: 30_000,
-    select: (all: Task[]) => all.filter((t) => !t.tags.includes("pulse")),
+    select: (all: Task[]) => all.filter((t) => !t.tags.includes('pulse')),
   });
 
   const { data: schedules = [] } = useQuery({
-    queryKey: ["schedules"],
+    queryKey: ['schedules'],
     queryFn: schedulesApi.list,
     refetchInterval: 30_000,
   });
 
   const { data: active = [] } = useQuery({
-    queryKey: ["runs", "active"],
+    queryKey: ['runs', 'active'],
     queryFn: runsApi.getActive,
     refetchInterval: 5_000,
   });
@@ -54,15 +54,17 @@ export function Dashboard() {
   useEffect(() => {
     const unlisten = onRunStateChanged((payload) => {
       updateRunState(payload.runId, payload.newState);
-      queryClient.invalidateQueries({ queryKey: ["runs"] });
+      queryClient.invalidateQueries({ queryKey: ['runs'] });
     });
-    return () => { unlisten.then((fn) => fn()); };
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, [queryClient, updateRunState]);
 
   const activeRunList = Object.values(activeRuns);
-  const recentRuns = runs.filter(
-    (r) => !["pending", "queued", "running"].includes(r.state)
-  ).slice(0, 10);
+  const recentRuns = runs
+    .filter((r) => !['pending', 'queued', 'running'].includes(r.state))
+    .slice(0, 10);
 
   // Upcoming schedules: enabled schedules with a nextRunAt
   const upcoming = schedules
@@ -81,7 +83,7 @@ export function Dashboard() {
           </p>
         </div>
         <button
-          onClick={() => navigate("task-builder")}
+          onClick={() => navigate('task-builder')}
           className="flex items-center gap-2 px-3 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors"
         >
           <Plus size={14} />
@@ -113,7 +115,7 @@ export function Dashboard() {
                 run={run}
                 onClick={() => {
                   selectRun(run.runId);
-                  navigate("history");
+                  navigate('history');
                 }}
               />
             ))}
@@ -124,9 +126,7 @@ export function Dashboard() {
       {/* Upcoming */}
       {upcoming.length > 0 && (
         <section>
-          <h3 className="text-sm font-medium text-muted uppercase tracking-wider mb-3">
-            Upcoming
-          </h3>
+          <h3 className="text-sm font-medium text-muted uppercase tracking-wider mb-3">Upcoming</h3>
           <div className="rounded-xl border border-edge bg-surface divide-y divide-border overflow-hidden">
             {upcoming.map((sched) => {
               const task = tasks.find((t) => t.id === sched.taskId);
@@ -138,10 +138,8 @@ export function Dashboard() {
                 <div key={sched.id} className="flex items-center gap-3 px-4 py-3">
                   <Clock size={14} className="text-accent flex-shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm text-white truncate">
-                      {task?.name ?? "Unknown task"}
-                    </p>
-                    {sched.kind === "recurring" && (
+                    <p className="text-sm text-white truncate">{task?.name ?? 'Unknown task'}</p>
+                    {sched.kind === 'recurring' && (
                       <p className="text-xs text-muted">
                         {humanSchedule(sched.config as RecurringConfig)}
                       </p>
@@ -149,10 +147,10 @@ export function Dashboard() {
                   </div>
                   <span className="text-xs text-muted flex-shrink-0">
                     {diffMins <= 0
-                      ? "Now"
+                      ? 'Now'
                       : diffMins < 60
-                      ? `in ${diffMins}m`
-                      : `in ${Math.round(diffMins / 60)}h`}
+                        ? `in ${diffMins}m`
+                        : `in ${Math.round(diffMins / 60)}h`}
                   </span>
                 </div>
               );
@@ -182,20 +180,18 @@ export function Dashboard() {
                 key={run.id}
                 onClick={() => {
                   selectRun(run.id);
-                  navigate("history");
+                  navigate('history');
                 }}
                 className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-surface-hover text-left transition-colors ${
-                  i > 0 ? "border-t border-edge" : ""
+                  i > 0 ? 'border-t border-edge' : ''
                 }`}
               >
                 <StatusBadge state={run.state} className="flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-white truncate">{run.taskName}</p>
                   <p className="text-xs text-muted">
-                    {run.trigger === "scheduled" ? "Scheduled" : "Manual"} ·{" "}
-                    {run.startedAt
-                      ? new Date(run.startedAt).toLocaleString()
-                      : "—"}
+                    {run.trigger === 'scheduled' ? 'Scheduled' : 'Manual'} ·{' '}
+                    {run.startedAt ? new Date(run.startedAt).toLocaleString() : '—'}
                   </p>
                 </div>
                 <span className="text-xs text-muted flex-shrink-0">
@@ -214,12 +210,16 @@ function ActiveRunCard({
   run,
   onClick,
 }: {
-  run: { id?: string; runId?: string; taskName?: string; state: RunState; startedAt: string | null };
+  run: {
+    id?: string;
+    runId?: string;
+    taskName?: string;
+    state: RunState;
+    startedAt: string | null;
+  };
   onClick: () => void;
 }) {
-  const liveRun = useLiveRunStore(
-    (s) => s.activeRuns[run.id ?? run.runId ?? ""]
-  );
+  const liveRun = useLiveRunStore((s) => s.activeRuns[run.id ?? run.runId ?? '']);
   const state = liveRun?.state ?? run.state;
   const taskName = liveRun?.taskName ?? run.taskName;
   const startedAt = liveRun?.startedAt ?? run.startedAt;

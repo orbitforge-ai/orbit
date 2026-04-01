@@ -1,5 +1,13 @@
 import { useEffect, useState } from 'react';
-import { ChevronRight, CheckCircle, XCircle, Hammer, Loader2, GitBranch, ChevronDown } from 'lucide-react';
+import {
+  ChevronRight,
+  CheckCircle,
+  XCircle,
+  Hammer,
+  Loader2,
+  GitBranch,
+  ChevronDown,
+} from 'lucide-react';
 import { onRunStateChanged } from '../../events/runEvents';
 import { runsApi } from '../../api/runs';
 import { RunSummary } from '../../types';
@@ -14,10 +22,7 @@ export function ToolUseBlock({ name, input, result }: ToolUseBlockProps) {
   const [expanded, setExpanded] = useState(false);
   const inputStr = JSON.stringify(input, null, 2);
   const isSubAgentTool = name === 'spawn_sub_agents';
-  const isWaitingSendMessage =
-    name === 'send_message' &&
-    input.wait_for_result === true &&
-    !result;
+  const isWaitingSendMessage = name === 'send_message' && input.wait_for_result === true && !result;
 
   return (
     <div className="rounded-lg border border-warning/30 bg-warning/5 overflow-hidden">
@@ -49,7 +54,9 @@ export function ToolUseBlock({ name, input, result }: ToolUseBlockProps) {
         <SubAgentTracker tasks={input.tasks as SubAgentTask[] | undefined} />
       )}
       {isWaitingSendMessage && (
-        <SendMessagePending targetAgent={typeof input.target_agent === 'string' ? input.target_agent : undefined} />
+        <SendMessagePending
+          targetAgent={typeof input.target_agent === 'string' ? input.target_agent : undefined}
+        />
       )}
 
       {/* Expanded details */}
@@ -106,7 +113,8 @@ function SendMessagePending({ targetAgent }: { targetAgent?: string }) {
       <div className="flex items-center gap-2 text-xs text-secondary">
         <Loader2 size={12} className="text-accent-hover animate-spin shrink-0" />
         <span>
-          Waiting for {targetAgent ? `"${targetAgent}"` : "target agent"} to finish and return a result
+          Waiting for {targetAgent ? `"${targetAgent}"` : 'target agent'} to finish and return a
+          result
         </span>
       </div>
       <div className="mt-1 pl-5 text-[11px] text-muted">
@@ -144,9 +152,7 @@ function SubAgentTracker({ tasks }: { tasks?: SubAgentTask[] }) {
 
         const matched = new Map<string, RunSummary>();
         for (const task of tasks) {
-          const run = combined.find(
-            (r) => r.isSubAgent && r.taskName === `sub-agent:${task.id}`
-          );
+          const run = combined.find((r) => r.isSubAgent && r.taskName === `sub-agent:${task.id}`);
           if (run) matched.set(task.id, run);
         }
         if (!cancelled) {
@@ -183,7 +189,9 @@ function SubAgentTracker({ tasks }: { tasks?: SubAgentTask[] }) {
         return next;
       });
     });
-    return () => { unsub.then((fn) => fn()); };
+    return () => {
+      unsub.then((fn) => fn());
+    };
   }, []);
 
   if (!tasks || tasks.length === 0) return null;
@@ -198,15 +206,21 @@ function SubAgentTracker({ tasks }: { tasks?: SubAgentTask[] }) {
       {tasks.map((task) => {
         const run = runs.get(task.id);
         const state = run?.state ?? 'pending';
-        return (
-          <SubAgentRow key={task.id} task={task} run={run} state={state} />
-        );
+        return <SubAgentRow key={task.id} task={task} run={run} state={state} />;
       })}
     </div>
   );
 }
 
-function SubAgentRow({ task, run, state }: { task: SubAgentTask; run?: RunSummary; state: string }) {
+function SubAgentRow({
+  task,
+  run,
+  state,
+}: {
+  task: SubAgentTask;
+  run?: RunSummary;
+  state: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [toolCalls, setToolCalls] = useState<{ name: string; isError: boolean }[] | null>(null);
   const canExpand = run && TERMINAL.has(state);
@@ -215,25 +229,37 @@ function SubAgentRow({ task, run, state }: { task: SubAgentTask; run?: RunSummar
     if (!expanded || !run) return;
     if (toolCalls !== null) return; // already loaded
 
-    runsApi.getConversation(run.id).then((conversation) => {
-      if (!conversation) { setToolCalls([]); return; }
-      const calls: { name: string; isError: boolean }[] = [];
-      for (const msg of conversation) {
-        for (const block of msg.content) {
-          if (block.type === 'tool_use') {
-            // Find the matching tool_result
-            const resultBlock = conversation
-              .flatMap((m) => m.content)
-              .find((b) => b.type === 'tool_result' && 'tool_use_id' in b && b.tool_use_id === block.id);
-            calls.push({
-              name: block.name,
-              isError: resultBlock?.type === 'tool_result' && 'is_error' in resultBlock ? resultBlock.is_error : false,
-            });
+    runsApi
+      .getConversation(run.id)
+      .then((conversation) => {
+        if (!conversation) {
+          setToolCalls([]);
+          return;
+        }
+        const calls: { name: string; isError: boolean }[] = [];
+        for (const msg of conversation) {
+          for (const block of msg.content) {
+            if (block.type === 'tool_use') {
+              // Find the matching tool_result
+              const resultBlock = conversation
+                .flatMap((m) => m.content)
+                .find(
+                  (b) =>
+                    b.type === 'tool_result' && 'tool_use_id' in b && b.tool_use_id === block.id
+                );
+              calls.push({
+                name: block.name,
+                isError:
+                  resultBlock?.type === 'tool_result' && 'is_error' in resultBlock
+                    ? resultBlock.is_error
+                    : false,
+              });
+            }
           }
         }
-      }
-      setToolCalls(calls);
-    }).catch(() => setToolCalls([]));
+        setToolCalls(calls);
+      })
+      .catch(() => setToolCalls([]));
   }, [expanded, run?.id]);
 
   return (

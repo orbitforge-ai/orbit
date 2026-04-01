@@ -4,7 +4,7 @@ export interface Agent {
   id: string;
   name: string;
   description: string | null;
-  state: "idle" | "busy" | "paused" | "error" | "offline";
+  state: 'idle' | 'busy' | 'paused' | 'error' | 'offline';
   maxConcurrentRuns: number;
   heartbeatAt: string | null;
   createdAt: string;
@@ -26,12 +26,18 @@ export interface Task {
   id: string;
   name: string;
   description: string | null;
-  kind: "shell_command" | "script_file" | "http_request" | "agent_step" | "agent_loop";
-  config: ShellCommandConfig | ScriptFileConfig | HttpRequestConfig | AgentStepConfig | AgentLoopConfig | Record<string, unknown>;
+  kind: 'shell_command' | 'script_file' | 'http_request' | 'agent_step' | 'agent_loop';
+  config:
+    | ShellCommandConfig
+    | ScriptFileConfig
+    | HttpRequestConfig
+    | AgentStepConfig
+    | AgentLoopConfig
+    | Record<string, unknown>;
   maxDurationSeconds: number;
   maxRetries: number;
   retryDelaySeconds: number;
-  concurrencyPolicy: "allow" | "skip" | "queue" | "cancel_previous";
+  concurrencyPolicy: 'allow' | 'skip' | 'queue' | 'cancel_previous';
   tags: string[];
   agentId: string | null;
   enabled: boolean;
@@ -55,7 +61,7 @@ export interface ScriptFileConfig {
 
 export interface HttpRequestConfig {
   url: string;
-  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   headers?: Record<string, string>;
   body?: string;
   timeoutSeconds?: number;
@@ -75,13 +81,13 @@ export interface AgentLoopConfig {
 }
 
 export type RunState =
-  | "pending"
-  | "queued"
-  | "running"
-  | "success"
-  | "failure"
-  | "cancelled"
-  | "timed_out";
+  | 'pending'
+  | 'queued'
+  | 'running'
+  | 'success'
+  | 'failure'
+  | 'cancelled'
+  | 'timed_out';
 
 export interface Run {
   id: string;
@@ -89,7 +95,7 @@ export interface Run {
   scheduleId: string | null;
   agentId: string | null;
   state: RunState;
-  trigger: "scheduled" | "manual" | "channel" | "retry" | "bus" | "sub_agent";
+  trigger: 'scheduled' | 'manual' | 'channel' | 'retry' | 'bus' | 'sub_agent';
   exitCode: number | null;
   pid: number | null;
   logPath: string;
@@ -125,7 +131,7 @@ export interface RunSummary {
 export interface Schedule {
   id: string;
   taskId: string;
-  kind: "recurring" | "one_shot" | "triggered";
+  kind: 'recurring' | 'one_shot' | 'triggered';
   config: RecurringConfig | OneShotConfig | Record<string, unknown>;
   enabled: boolean;
   nextRunAt: string | null;
@@ -135,12 +141,12 @@ export interface Schedule {
 }
 
 export interface RecurringConfig {
-  intervalUnit: "minutes" | "hours" | "days" | "weeks" | "months";
+  intervalUnit: 'minutes' | 'hours' | 'days' | 'weeks' | 'months';
   intervalValue: number;
   daysOfWeek?: number[]; // 0=Sun … 6=Sat
   timeOfDay?: { hour: number; minute: number };
   timezone: string;
-  missedRunPolicy: "run_once" | "skip";
+  missedRunPolicy: 'run_once' | 'skip';
   /** Original text/cron input so users can edit what they typed */
   expression?: string;
 }
@@ -157,11 +163,11 @@ export interface ChatSession {
   agentId: string;
   title: string;
   archived: boolean;
-  sessionType: "user_chat" | "bus_message" | "sub_agent" | "pulse";
+  sessionType: 'user_chat' | 'bus_message' | 'sub_agent' | 'pulse';
   parentSessionId: string | null;
   sourceBusMessageId: string | null;
   chainDepth: number;
-  executionState: "queued" | "running" | "success" | "failure" | "cancelled" | "timed_out" | null;
+  executionState: 'queued' | 'running' | 'success' | 'failure' | 'cancelled' | 'timed_out' | null;
   finishSummary: string | null;
   terminalError: string | null;
   sourceAgentId?: string | null;
@@ -175,7 +181,7 @@ export interface ChatSession {
 // ─── IPC event payloads ───────────────────────────────────────────────────────
 
 export interface LogLine {
-  stream: "stdout" | "stderr";
+  stream: 'stdout' | 'stderr';
   line: string;
 }
 
@@ -197,19 +203,25 @@ export interface RunStateChangedPayload {
 export interface CreateTask {
   name: string;
   description?: string;
-  kind: Task["kind"];
-  config: ShellCommandConfig | ScriptFileConfig | HttpRequestConfig | AgentStepConfig | AgentLoopConfig | Record<string, unknown>;
+  kind: Task['kind'];
+  config:
+    | ShellCommandConfig
+    | ScriptFileConfig
+    | HttpRequestConfig
+    | AgentStepConfig
+    | AgentLoopConfig
+    | Record<string, unknown>;
   maxDurationSeconds?: number;
   maxRetries?: number;
   retryDelaySeconds?: number;
-  concurrencyPolicy?: Task["concurrencyPolicy"];
+  concurrencyPolicy?: Task['concurrencyPolicy'];
   tags?: string[];
   agentId?: string;
 }
 
 export interface CreateSchedule {
   taskId: string;
-  kind: Schedule["kind"];
+  kind: Schedule['kind'];
   config: RecurringConfig | OneShotConfig | Record<string, unknown>;
 }
 
@@ -232,7 +244,7 @@ export interface PermissionRule {
   id: string;
   tool: string;
   pattern: string;
-  decision: "allow" | "deny";
+  decision: 'allow' | 'deny';
   createdAt: string;
   description?: string;
 }
@@ -244,7 +256,7 @@ export interface PermissionRequestPayload {
   agentId: string;
   toolName: string;
   toolInput: Record<string, unknown>;
-  riskLevel: "moderate" | "dangerous";
+  riskLevel: 'moderate' | 'dangerous';
   riskDescription: string;
   suggestedPattern: string;
   timestamp: string;
@@ -279,12 +291,12 @@ export interface AgentWorkspaceConfig {
   disabledSkills: string[];
   identity: AgentIdentityConfig;
   permissionRules: PermissionRule[];
-  permissionMode: "normal" | "strict" | "permissive";
+  permissionMode: 'normal' | 'strict' | 'permissive';
 }
 
 // ─── Agent Skills types ────────────────────────────────────────────────────
 
-export type SkillSource = "agent_local" | "orbit_global" | "standard" | "built_in";
+export type SkillSource = 'agent_local' | 'orbit_global' | 'standard' | 'built_in';
 
 export interface SkillInfo {
   name: string;
@@ -297,14 +309,14 @@ export interface SkillInfo {
 // ─── LLM content types ──────────────────────────────────────────────────────
 
 export type ContentBlock =
-  | { type: "text"; text: string }
-  | { type: "thinking"; thinking: string }
-  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-  | { type: "tool_result"; tool_use_id: string; content: string; is_error: boolean }
-  | { type: "image"; media_type: string; data: string };
+  | { type: 'text'; text: string }
+  | { type: 'thinking'; thinking: string }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error: boolean }
+  | { type: 'image'; media_type: string; data: string };
 
 export interface ChatMessage {
-  role: "user" | "assistant";
+  role: 'user' | 'assistant';
   content: ContentBlock[];
   created_at?: string;
   isCompacted?: boolean;
@@ -328,7 +340,7 @@ export interface AgentLlmChunkPayload {
 export interface AgentIterationPayload {
   runId: string;
   iteration: number;
-  action: "llm_call" | "tool_exec" | "finished";
+  action: 'llm_call' | 'tool_exec' | 'finished';
   toolName: string | null;
   totalTokens: number;
   timestamp: string;
@@ -378,10 +390,10 @@ export interface BusMessage {
   toAgentId: string;
   toRunId: string | null;
   toSessionId: string | null;
-  kind: "direct" | "event";
+  kind: 'direct' | 'event';
   eventType: string | null;
   payload: Record<string, unknown>;
-  status: "delivered" | "failed" | "depth_exceeded";
+  status: 'delivered' | 'failed' | 'depth_exceeded';
   createdAt: string;
 }
 
@@ -389,7 +401,7 @@ export interface BusSubscription {
   id: string;
   subscriberAgentId: string;
   sourceAgentId: string;
-  eventType: "run:completed" | "run:failed" | "run:any_terminal";
+  eventType: 'run:completed' | 'run:failed' | 'run:any_terminal';
   taskId: string;
   payloadTemplate: string;
   enabled: boolean;
@@ -419,7 +431,7 @@ export interface BusThreadMessage {
   fromAgentId: string;
   fromAgentName: string;
   toAgentId: string;
-  kind: "direct" | "event";
+  kind: 'direct' | 'event';
   payload: Record<string, unknown>;
   status: string;
   createdAt: string;
@@ -450,7 +462,7 @@ export interface BusMessageSentPayload {
 
 export interface SessionExecutionStatus {
   sessionId: string;
-  executionState: ChatSession["executionState"];
+  executionState: ChatSession['executionState'];
   finishSummary: string | null;
   terminalError: string | null;
 }

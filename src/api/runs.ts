@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import { ChatMessage, Run, RunSummary } from "../types";
+import { invoke } from '@tauri-apps/api/core';
+import { ChatMessage, Run, RunSummary } from '../types';
 
 export interface ListRunsParams {
   limit?: number;
@@ -10,25 +10,22 @@ export interface ListRunsParams {
 
 export const runsApi = {
   list: (params: ListRunsParams = {}): Promise<RunSummary[]> =>
-    invoke("list_runs", {
+    invoke('list_runs', {
       limit: params.limit ?? 100,
       offset: params.offset ?? 0,
       taskId: params.taskId ?? null,
-      stateFilter: params.stateFilter && params.stateFilter !== "all" ? params.stateFilter : null,
+      stateFilter: params.stateFilter && params.stateFilter !== 'all' ? params.stateFilter : null,
     }),
 
-  getActive: (): Promise<RunSummary[]> =>
-    invoke("get_active_runs"),
+  getActive: (): Promise<RunSummary[]> => invoke('get_active_runs'),
 
-  get: (id: string): Promise<Run> =>
-    invoke("get_run", { id }),
+  get: (id: string): Promise<Run> => invoke('get_run', { id }),
 
-  readLog: (runId: string): Promise<string> =>
-    invoke("read_run_log", { runId }),
+  readLog: (runId: string): Promise<string> => invoke('read_run_log', { runId }),
 
   listSubAgentRuns: (parentRunId: string): Promise<RunSummary[]> =>
-    invoke("list_sub_agent_runs", { parentRunId }),
+    invoke('list_sub_agent_runs', { parentRunId }),
 
   getConversation: (runId: string): Promise<ChatMessage[] | null> =>
-    invoke("get_agent_conversation", { runId }),
+    invoke('get_agent_conversation', { runId }),
 };

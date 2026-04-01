@@ -1,16 +1,16 @@
-import { useEffect, useRef, useState, useMemo } from "react";
-import { ArrowDown } from "lucide-react";
-import { ChatMessage } from "../../types";
-import { useLiveRunStore } from "../../store/liveRunStore";
+import { useEffect, useRef, useState, useMemo } from 'react';
+import { ArrowDown } from 'lucide-react';
+import { ChatMessage } from '../../types';
+import { useLiveRunStore } from '../../store/liveRunStore';
 import {
   onAgentLlmChunk,
   onAgentContentBlock,
   onAgentToolResult,
   onAgentIteration,
-} from "../../events/runEvents";
-import { DisplayMessage } from "./types";
-import { chatMessagesToDisplay } from "./utils";
-import { MessageBubble } from "./MessageBubble";
+} from '../../events/runEvents';
+import { DisplayMessage } from './types';
+import { chatMessagesToDisplay } from './utils';
+import { MessageBubble } from './MessageBubble';
 
 interface ChatViewProps {
   /** Static messages to display (history mode for completed runs) */
@@ -21,7 +21,7 @@ interface ChatViewProps {
   className?: string;
 }
 
-export function ChatView({ messages, liveRunId, className = "" }: ChatViewProps) {
+export function ChatView({ messages, liveRunId, className = '' }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const store = useLiveRunStore();
@@ -61,12 +61,7 @@ export function ChatView({ messages, liveRunId, className = "" }: ChatViewProps)
     unsubs.push(
       onAgentToolResult((payload) => {
         if (payload.runId === liveRunId) {
-          store.addToolResult(
-            liveRunId,
-            payload.toolUseId,
-            payload.content,
-            payload.isError
-          );
+          store.addToolResult(liveRunId, payload.toolUseId, payload.content, payload.isError);
         }
       })
     );
@@ -74,12 +69,7 @@ export function ChatView({ messages, liveRunId, className = "" }: ChatViewProps)
     unsubs.push(
       onAgentIteration((payload) => {
         if (payload.runId === liveRunId) {
-          store.handleIteration(
-            liveRunId,
-            payload.iteration,
-            payload.action,
-            payload.totalTokens
-          );
+          store.handleIteration(liveRunId, payload.iteration, payload.action, payload.totalTokens);
         }
       })
     );
@@ -110,15 +100,9 @@ export function ChatView({ messages, liveRunId, className = "" }: ChatViewProps)
 
   return (
     <div className={`relative flex flex-col ${className}`}>
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-4 space-y-4"
-      >
+      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-4 space-y-4">
         {displayMessages.length === 0 && (
-          <div className="text-center text-muted text-sm py-12">
-            No messages yet.
-          </div>
+          <div className="text-center text-muted text-sm py-12">No messages yet.</div>
         )}
         {displayMessages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />

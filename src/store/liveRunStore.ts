@@ -1,7 +1,7 @@
-import { create } from "zustand";
-import { LogLine, RunState, RunSummary, ContentBlock } from "../types";
-import { DisplayMessage, DisplayBlock } from "../components/chat/types";
-import { info } from "@tauri-apps/plugin-log";
+import { create } from 'zustand';
+import { LogLine, RunState, RunSummary, ContentBlock } from '../types';
+import { DisplayMessage, DisplayBlock } from '../components/chat/types';
+import { info } from '@tauri-apps/plugin-log';
 
 interface AgentLoopState {
   iteration: number;
@@ -33,7 +33,12 @@ interface LiveRunStore {
   removeRun: (runId: string) => void;
   clearLogs: (runId: string) => void;
   // Agent loop state tracking
-  updateAgentIteration: (runId: string, iteration: number, action: string, totalTokens: number) => void;
+  updateAgentIteration: (
+    runId: string,
+    iteration: number,
+    action: string,
+    totalTokens: number
+  ) => void;
   appendLlmChunk: (runId: string, delta: string, iteration: number) => void;
   // Structured message tracking for ChatView
   appendTextDelta: (runId: string, delta: string, iteration: number) => void;
@@ -42,35 +47,33 @@ interface LiveRunStore {
   handleIteration: (runId: string, iteration: number, action: string, totalTokens: number) => void;
 }
 
-const TERMINAL_STATES: RunState[] = [
-  "success", "failure", "cancelled", "timed_out",
-];
+const TERMINAL_STATES: RunState[] = ['success', 'failure', 'cancelled', 'timed_out'];
 
 function ensureAgentState(run: LiveRun): AgentLoopState {
-  return run.agentLoopState ?? {
-    iteration: 0,
-    totalTokens: 0,
-    currentAction: "llm_call",
-    llmStreamBuffer: "",
-    displayMessages: [],
-  };
+  return (
+    run.agentLoopState ?? {
+      iteration: 0,
+      totalTokens: 0,
+      currentAction: 'llm_call',
+      llmStreamBuffer: '',
+      displayMessages: [],
+    }
+  );
 }
 
 /**
  * Get or create the current assistant message for streaming content into.
  * Returns the updated displayMessages array and index of the current assistant message.
  */
-function getOrCreateAssistantMessage(
-  msgs: DisplayMessage[]
-): [DisplayMessage[], number] {
+function getOrCreateAssistantMessage(msgs: DisplayMessage[]): [DisplayMessage[], number] {
   const last = msgs[msgs.length - 1];
-  if (last && last.role === "assistant" && last.isStreaming) {
+  if (last && last.role === 'assistant' && last.isStreaming) {
     return [msgs, msgs.length - 1];
   }
   // Create a new streaming assistant message
   const newMsg: DisplayMessage = {
     id: nextMsgId(),
-    role: "assistant",
+    role: 'assistant',
     blocks: [],
     isStreaming: true,
   };
@@ -102,7 +105,7 @@ export const useLiveRunStore = create<LiveRunStore>((set) => ({
         info(`Manually triggered run ${runId}`);
         const placeholder: LiveRun = {
           runId,
-          taskName: "Unknown Task",
+          taskName: 'Unknown Task',
           state: newState,
           startedAt: null,
           logs: [],
@@ -210,13 +213,13 @@ export const useLiveRunStore = create<LiveRunStore>((set) => ({
 
       // Append to existing streaming text block, or create one
       const lastBlock = blocks[blocks.length - 1];
-      if (lastBlock && lastBlock.kind === "text" && lastBlock.isStreaming) {
+      if (lastBlock && lastBlock.kind === 'text' && lastBlock.isStreaming) {
         blocks[blocks.length - 1] = {
           ...lastBlock,
           text: lastBlock.text + delta,
         };
       } else {
-        blocks.push({ kind: "text", text: delta, isStreaming: true });
+        blocks.push({ kind: 'text', text: delta, isStreaming: true });
       }
 
       msg.blocks = blocks;
@@ -249,17 +252,17 @@ export const useLiveRunStore = create<LiveRunStore>((set) => ({
 
       // Finalize any streaming text block
       const lastBlock = blocks[blocks.length - 1];
-      if (lastBlock && lastBlock.kind === "text" && lastBlock.isStreaming) {
+      if (lastBlock && lastBlock.kind === 'text' && lastBlock.isStreaming) {
         blocks[blocks.length - 1] = { ...lastBlock, isStreaming: false };
       }
 
       // Add the content block
       let displayBlock: DisplayBlock;
-      if (block.type === "thinking") {
-        displayBlock = { kind: "thinking", thinking: block.thinking };
-      } else if (block.type === "tool_use") {
+      if (block.type === 'thinking') {
+        displayBlock = { kind: 'thinking', thinking: block.thinking };
+      } else if (block.type === 'tool_use') {
         displayBlock = {
-          kind: "tool_call",
+          kind: 'tool_call',
           id: block.id,
           name: block.name,
           input: block.input,
@@ -298,10 +301,10 @@ export const useLiveRunStore = create<LiveRunStore>((set) => ({
       // Find the tool_call block with matching id and attach the result
       for (let i = msgs.length - 1; i >= 0; i--) {
         const msg = msgs[i];
-        if (msg.role !== "assistant") continue;
+        if (msg.role !== 'assistant') continue;
         for (let j = msg.blocks.length - 1; j >= 0; j--) {
           const block = msg.blocks[j];
-          if (block.kind === "tool_call" && block.id === toolUseId) {
+          if (block.kind === 'tool_call' && block.id === toolUseId) {
             const updatedBlocks = [...msg.blocks];
             updatedBlocks[j] = { ...block, result: { content, isError } };
             msgs[i] = { ...msg, blocks: updatedBlocks };
@@ -333,12 +336,12 @@ export const useLiveRunStore = create<LiveRunStore>((set) => ({
       const msgs = [...prev.displayMessages];
 
       // When a new llm_call starts, finalize the previous assistant message
-      if (action === "llm_call" && msgs.length > 0) {
+      if (action === 'llm_call' && msgs.length > 0) {
         const last = msgs[msgs.length - 1];
-        if (last.role === "assistant" && last.isStreaming) {
+        if (last.role === 'assistant' && last.isStreaming) {
           const blocks = [...last.blocks];
           const lastBlock = blocks[blocks.length - 1];
-          if (lastBlock && lastBlock.kind === "text" && lastBlock.isStreaming) {
+          if (lastBlock && lastBlock.kind === 'text' && lastBlock.isStreaming) {
             blocks[blocks.length - 1] = { ...lastBlock, isStreaming: false };
           }
           msgs[msgs.length - 1] = { ...last, blocks, isStreaming: false };
@@ -346,12 +349,12 @@ export const useLiveRunStore = create<LiveRunStore>((set) => ({
       }
 
       // When finished, mark everything as not streaming
-      if (action === "finished" && msgs.length > 0) {
+      if (action === 'finished' && msgs.length > 0) {
         const last = msgs[msgs.length - 1];
         if (last.isStreaming) {
           const blocks = [...last.blocks];
           const lastBlock = blocks[blocks.length - 1];
-          if (lastBlock && lastBlock.kind === "text" && lastBlock.isStreaming) {
+          if (lastBlock && lastBlock.kind === 'text' && lastBlock.isStreaming) {
             blocks[blocks.length - 1] = { ...lastBlock, isStreaming: false };
           }
           msgs[msgs.length - 1] = { ...last, blocks, isStreaming: false };

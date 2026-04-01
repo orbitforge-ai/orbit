@@ -1,32 +1,32 @@
-import { create } from "zustand";
+import { create } from 'zustand';
 
 type Screen =
-  | "dashboard"
-  | "tasks"
-  | "history"
-  | "agents"
-  | "schedules"
-  | "task-builder"
-  | "schedule-builder"
-  | "task-edit";
+  | 'dashboard'
+  | 'tasks'
+  | 'history'
+  | 'agents'
+  | 'schedules'
+  | 'task-builder'
+  | 'schedule-builder'
+  | 'task-edit';
 
 function getPersistedScreen(): Screen {
   try {
-    const saved = localStorage.getItem("orbit:lastScreen");
-    if (saved === "chat") return "agents";
+    const saved = localStorage.getItem('orbit:lastScreen');
+    if (saved === 'chat') return 'agents';
     if (saved) return saved as Screen;
   } catch {}
-  return "dashboard";
+  return 'dashboard';
 }
 
 function getPersistedAgentId(): string | null {
   try {
-    return localStorage.getItem("orbit:lastAgentId");
+    return localStorage.getItem('orbit:lastAgentId');
   } catch {}
   return null;
 }
 
-type AgentTab = "chat" | "workspace" | "config" | "skills" | "schedules" | "bus";
+type AgentTab = 'chat' | 'workspace' | 'config' | 'skills' | 'schedules' | 'bus';
 
 interface UiStore {
   screen: Screen;
@@ -57,32 +57,34 @@ export const useUiStore = create<UiStore>((set) => ({
   selectedAgentId: getPersistedAgentId(),
   pendingChatSessionId: null,
   logPanelOpen: false,
-  agentTab: "chat" as AgentTab,
+  agentTab: 'chat' as AgentTab,
 
   navigate: (screen) => {
-    try { localStorage.setItem("orbit:lastScreen", screen); } catch {}
+    try {
+      localStorage.setItem('orbit:lastScreen', screen);
+    } catch {}
     set({ screen });
   },
   selectRun: (id) => set({ selectedRunId: id, logPanelOpen: id !== null }),
   selectTask: (id) => set({ selectedTaskId: id }),
-  editTask: (id) => set({ editingTaskId: id, screen: "task-edit" }),
+  editTask: (id) => set({ editingTaskId: id, screen: 'task-edit' }),
   selectAgent: (id) => {
     try {
-      localStorage.setItem("orbit:lastScreen", "agents");
-      localStorage.setItem("orbit:lastAgentId", id);
+      localStorage.setItem('orbit:lastScreen', 'agents');
+      localStorage.setItem('orbit:lastAgentId', id);
     } catch {}
-    set({ selectedAgentId: id, screen: "agents" });
+    set({ selectedAgentId: id, screen: 'agents' });
   },
   openAgentChat: (agentId, sessionId = null) => {
     try {
-      localStorage.setItem("orbit:lastScreen", "agents");
-      localStorage.setItem("orbit:lastAgentId", agentId);
+      localStorage.setItem('orbit:lastScreen', 'agents');
+      localStorage.setItem('orbit:lastAgentId', agentId);
     } catch {}
     set({
       selectedAgentId: agentId,
       pendingChatSessionId: sessionId,
-      screen: "agents",
-      agentTab: "chat",
+      screen: 'agents',
+      agentTab: 'chat',
     });
   },
   clearPendingChatSession: () => set({ pendingChatSessionId: null }),

@@ -1,22 +1,22 @@
-import { useState, useEffect } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronLeft } from "lucide-react";
-import { tasksApi } from "../../api/tasks";
-import { useUiStore } from "../../store/uiStore";
-import { ShellCommandConfig } from "../../types";
+import { useState, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Check, ChevronLeft } from 'lucide-react';
+import { tasksApi } from '../../api/tasks';
+import { useUiStore } from '../../store/uiStore';
+import { ShellCommandConfig } from '../../types';
 
 export function TaskEdit() {
   const { editingTaskId, navigate } = useUiStore();
   const queryClient = useQueryClient();
 
   const { data: task, isLoading } = useQuery({
-    queryKey: ["tasks", editingTaskId],
+    queryKey: ['tasks', editingTaskId],
     queryFn: () => tasksApi.get(editingTaskId!),
     enabled: !!editingTaskId,
   });
 
-  const [name, setName] = useState("");
-  const [command, setCommand] = useState("");
+  const [name, setName] = useState('');
+  const [command, setCommand] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,7 +25,7 @@ export function TaskEdit() {
     if (!task) return;
     setName(task.name);
     const cfg = task.config as ShellCommandConfig;
-    setCommand(cfg.command ?? "");
+    setCommand(cfg.command ?? '');
   }, [task]);
 
   const canSave = name.trim().length > 0 && command.trim().length > 0;
@@ -37,8 +37,8 @@ export function TaskEdit() {
     try {
       const config: ShellCommandConfig = { command };
       await tasksApi.update(editingTaskId, { name, config });
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
-      navigate("tasks");
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      navigate('tasks');
     } catch (e) {
       setError(String(e));
     } finally {
@@ -48,9 +48,7 @@ export function TaskEdit() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full text-muted text-sm">
-        Loading…
-      </div>
+      <div className="flex items-center justify-center h-full text-muted text-sm">Loading…</div>
     );
   }
 
@@ -66,7 +64,7 @@ export function TaskEdit() {
     <div className="flex flex-col h-full max-w-2xl mx-auto p-6">
       <div className="mb-8">
         <button
-          onClick={() => navigate("tasks")}
+          onClick={() => navigate('tasks')}
           className="flex items-center gap-1.5 text-sm text-muted hover:text-white mb-4 transition-colors"
         >
           <ChevronLeft size={14} />
@@ -77,9 +75,7 @@ export function TaskEdit() {
 
       <div className="flex-1 overflow-y-auto space-y-5">
         <div>
-          <label className="block text-sm font-medium text-secondary mb-1.5">
-            Task name
-          </label>
+          <label className="block text-sm font-medium text-secondary mb-1.5">Task name</label>
           <input
             type="text"
             value={name}
@@ -89,9 +85,7 @@ export function TaskEdit() {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-secondary mb-1.5">
-            Command
-          </label>
+          <label className="block text-sm font-medium text-secondary mb-1.5">Command</label>
           <textarea
             value={command}
             onChange={(e) => setCommand(e.target.value)}
@@ -113,7 +107,7 @@ export function TaskEdit() {
           onClick={handleSave}
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
         >
-          {saving ? "Saving…" : "Save Changes"}
+          {saving ? 'Saving…' : 'Save Changes'}
           <Check size={14} />
         </button>
       </div>

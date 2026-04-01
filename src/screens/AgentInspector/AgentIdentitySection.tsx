@@ -1,8 +1,8 @@
-import * as Select from "@radix-ui/react-select";
-import { ChevronDown } from "lucide-react";
+import * as Select from '@radix-ui/react-select';
+import { ChevronDown } from 'lucide-react';
 
-import { AgentIdentityConfig } from "../../types";
-import { CollapsibleSection } from "../../components/CollapsibleSection";
+import { AgentIdentityConfig } from '../../types';
+import { CollapsibleSection } from '../../components/CollapsibleSection';
 import {
   AGENT_IDENTITY_PRESETS,
   CUSTOM_IDENTITY_OPTION,
@@ -10,7 +10,7 @@ import {
   buildIdentityPromptPreview,
   sanitizeIdentity,
   updateIdentityField,
-} from "../../lib/agentIdentity";
+} from '../../lib/agentIdentity';
 
 interface AgentIdentitySectionProps {
   identity: AgentIdentityConfig;
@@ -26,11 +26,11 @@ export function AgentIdentitySection({
   showPreview = false,
 }: AgentIdentitySectionProps) {
   const resolved = sanitizeIdentity(identity);
-  const isCustom = resolved.presetId === "custom";
+  const isCustom = resolved.presetId === 'custom';
 
   function handlePresetChange(presetId: string) {
-    if (presetId === "custom") {
-      onChange({ ...resolved, presetId: "custom" });
+    if (presetId === 'custom') {
+      onChange({ ...resolved, presetId: 'custom' });
       return;
     }
     onChange(applyIdentityPreset(presetId));
@@ -107,7 +107,7 @@ export function AgentIdentitySection({
                 type="text"
                 maxLength={60}
                 value={resolved.identityName}
-                onChange={(e) => handleFieldChange("identityName", e.target.value)}
+                onChange={(e) => handleFieldChange('identityName', e.target.value)}
                 className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
               />
             </div>
@@ -117,7 +117,7 @@ export function AgentIdentitySection({
                 type="text"
                 maxLength={40}
                 value={resolved.voice}
-                onChange={(e) => handleFieldChange("voice", e.target.value)}
+                onChange={(e) => handleFieldChange('voice', e.target.value)}
                 className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
               />
             </div>
@@ -129,7 +129,7 @@ export function AgentIdentitySection({
               type="text"
               maxLength={80}
               value={resolved.vibe}
-              onChange={(e) => handleFieldChange("vibe", e.target.value)}
+              onChange={(e) => handleFieldChange('vibe', e.target.value)}
               className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
             />
             <span className="text-[10px] text-muted mt-0.5 block">
@@ -141,17 +141,17 @@ export function AgentIdentitySection({
             <TraitInput
               label="Warmth"
               value={resolved.warmth}
-              onChange={(value) => handleFieldChange("warmth", value)}
+              onChange={(value) => handleFieldChange('warmth', value)}
             />
             <TraitInput
               label="Directness"
               value={resolved.directness}
-              onChange={(value) => handleFieldChange("directness", value)}
+              onChange={(value) => handleFieldChange('directness', value)}
             />
             <TraitInput
               label="Humor"
               value={resolved.humor}
-              onChange={(value) => handleFieldChange("humor", value)}
+              onChange={(value) => handleFieldChange('humor', value)}
             />
           </div>
 
@@ -160,21 +160,19 @@ export function AgentIdentitySection({
             <textarea
               rows={3}
               maxLength={240}
-              value={resolved.customNote ?? ""}
-              onChange={(e) => handleFieldChange("customNote", e.target.value)}
+              value={resolved.customNote ?? ''}
+              onChange={(e) => handleFieldChange('customNote', e.target.value)}
               placeholder="Optional extra note for how this identity should come through."
               className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent resize-none leading-relaxed"
             />
-            <span className="text-[10px] text-muted mt-0.5 block">
-              Optional and kept concise.
-            </span>
+            <span className="text-[10px] text-muted mt-0.5 block">Optional and kept concise.</span>
           </div>
 
           {showPreview && (
             <div className="rounded-lg border border-edge bg-background px-3 py-3">
               <p className="text-[11px] uppercase tracking-wide text-secondary">Prompt Preview</p>
               <p className="text-sm text-muted mt-1 leading-relaxed">
-                {buildIdentityPromptPreview(agentName || "this agent", resolved)}
+                {buildIdentityPromptPreview(agentName || 'this agent', resolved)}
               </p>
             </div>
           )}

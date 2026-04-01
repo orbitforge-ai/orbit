@@ -15,10 +15,7 @@ import {
   onAgentToolResult,
   onAgentIteration,
 } from '../../events/runEvents';
-import {
-  onPermissionRequest,
-  onPermissionCancelled,
-} from '../../events/permissionEvents';
+import { onPermissionRequest, onPermissionCancelled } from '../../events/permissionEvents';
 import { usePermissionStore } from '../../store/permissionStore';
 
 const PAGE_SIZE = 50;

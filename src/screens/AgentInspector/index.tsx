@@ -212,13 +212,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
     if (latestUserChat) {
       setActiveSessionId(latestUserChat.id);
     }
-  }, [
-    activeSessionId,
-    chatSessions,
-    clearPendingChatSession,
-    pendingChatSessionId,
-    setAgentTab,
-  ]);
+  }, [activeSessionId, chatSessions, clearPendingChatSession, pendingChatSessionId, setAgentTab]);
 
   useEffect(() => {
     if (activeSessionId || getLatestUserChat(chatSessions)) return;
@@ -362,10 +356,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
                   value={activeRuns.length.toString()}
                   accent={activeRuns.length > 0}
                 />
-                <HeaderStatChip
-                  label="Max concurrent"
-                  value={agent.maxConcurrentRuns.toString()}
-                />
+                <HeaderStatChip label="Max concurrent" value={agent.maxConcurrentRuns.toString()} />
                 <HeaderStatChip
                   label="Success"
                   value={successRate !== null ? `${successRate}%` : '--'}

@@ -1,13 +1,13 @@
-import { useState, useEffect } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, ChevronDown } from "lucide-react";
-import * as Select from "@radix-ui/react-select";
-import { agentsApi } from "../../api/agents";
-import { chatApi } from "../../api/chat";
-import { useUiStore } from "../../store/uiStore";
-import { ChatSession } from "../../types";
-import { SessionList } from "./SessionList";
-import { ChatPanel } from "./ChatPanel";
+import { useState, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Bot, ChevronDown } from 'lucide-react';
+import * as Select from '@radix-ui/react-select';
+import { agentsApi } from '../../api/agents';
+import { chatApi } from '../../api/chat';
+import { useUiStore } from '../../store/uiStore';
+import { ChatSession } from '../../types';
+import { SessionList } from './SessionList';
+import { ChatPanel } from './ChatPanel';
 
 export function ChatScreen() {
   const queryClient = useQueryClient();
@@ -16,7 +16,7 @@ export function ChatScreen() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
   const { data: agents = [] } = useQuery({
-    queryKey: ["agents"],
+    queryKey: ['agents'],
     queryFn: agentsApi.list,
   });
 
@@ -52,7 +52,7 @@ export function ChatScreen() {
   async function handleNewSession() {
     if (!selectedAgentId) return;
     const session = await chatApi.createSession(selectedAgentId);
-    queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
+    queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
     setActiveSessionId(session.id);
   }
 

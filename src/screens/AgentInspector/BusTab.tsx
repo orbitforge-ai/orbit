@@ -1,23 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  ArrowRight,
-  Plus,
-  Trash2,
-  Zap,
-  MessageSquare,
-  Radio,
-} from 'lucide-react';
+import { ArrowRight, Plus, Trash2, Zap, MessageSquare, Radio } from 'lucide-react';
 import * as Switch from '@radix-ui/react-switch';
 import { busApi } from '../../api/bus';
 import { agentsApi } from '../../api/agents';
 import { tasksApi } from '../../api/tasks';
 import { onBusMessageSent } from '../../events/runEvents';
-import {
-  Agent,
-  Task,
-  CreateBusSubscription,
-} from '../../types';
+import { Agent, Task, CreateBusSubscription } from '../../types';
 
 interface BusTabProps {
   agentId: string;
@@ -128,13 +117,9 @@ function SubscriptionsSection({ agentId }: { agentId: string }) {
                   <span className="text-xs px-1.5 py-0.5 rounded bg-accent/20 text-accent-hover">
                     {eventLabels[sub.eventType] ?? sub.eventType}
                   </span>
-                  <span className="text-xs text-muted">
-                    triggers: {taskName(sub.taskId)}
-                  </span>
+                  <span className="text-xs text-muted">triggers: {taskName(sub.taskId)}</span>
                   {sub.maxChainDepth < 10 && (
-                    <span className="text-xs text-muted">
-                      max depth: {sub.maxChainDepth}
-                    </span>
+                    <span className="text-xs text-muted">max depth: {sub.maxChainDepth}</span>
                   )}
                 </div>
               </div>
@@ -204,7 +189,10 @@ function NewSubscriptionForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="rounded-lg border border-edge bg-surface p-4 mb-4 space-y-3">
+    <form
+      onSubmit={handleSubmit}
+      className="rounded-lg border border-edge bg-surface p-4 mb-4 space-y-3"
+    >
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="text-xs text-muted mb-1 block">When this agent finishes:</label>
@@ -339,21 +327,13 @@ function ActivitySection({ agentId }: { agentId: string }) {
                     : 'bg-purple-500/20 text-purple-400'
                 }`}
               >
-                {msg.kind === 'direct' ? (
-                  <Zap size={14} />
-                ) : (
-                  <Radio size={14} />
-                )}
+                {msg.kind === 'direct' ? <Zap size={14} /> : <Radio size={14} />}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 text-sm">
-                  <span className="font-medium text-white">
-                    {agentName(msg.fromAgentId)}
-                  </span>
+                  <span className="font-medium text-white">{agentName(msg.fromAgentId)}</span>
                   <ArrowRight size={12} className="text-muted" />
-                  <span className="font-medium text-white">
-                    {agentName(msg.toAgentId)}
-                  </span>
+                  <span className="font-medium text-white">{agentName(msg.toAgentId)}</span>
                   <span
                     className={`text-xs px-1.5 py-0.5 rounded ${
                       msg.kind === 'direct'
@@ -363,9 +343,7 @@ function ActivitySection({ agentId }: { agentId: string }) {
                   >
                     {msg.kind}
                   </span>
-                  {msg.eventType && (
-                    <span className="text-xs text-muted">{msg.eventType}</span>
-                  )}
+                  {msg.eventType && <span className="text-xs text-muted">{msg.eventType}</span>}
                 </div>
                 {msg.payload && typeof msg.payload === 'object' && 'message' in msg.payload && (
                   <p className="text-xs text-muted mt-1 truncate max-w-md">

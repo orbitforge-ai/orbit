@@ -1,38 +1,40 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { ChevronDown } from "lucide-react";
-import * as Select from "@radix-ui/react-select";
-import { schedulesApi } from "../../api/schedules";
-import { tasksApi } from "../../api/tasks";
-import { StatusBadge } from "../../components/StatusBadge";
-import { humanSchedule } from "../../lib/humanSchedule";
-import { RecurringConfig, Schedule, Task } from "../../types";
-import { RecurringPicker } from "./RecurringPicker";
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { ChevronDown } from 'lucide-react';
+import * as Select from '@radix-ui/react-select';
+import { schedulesApi } from '../../api/schedules';
+import { tasksApi } from '../../api/tasks';
+import { StatusBadge } from '../../components/StatusBadge';
+import { humanSchedule } from '../../lib/humanSchedule';
+import { RecurringConfig, Schedule, Task } from '../../types';
+import { RecurringPicker } from './RecurringPicker';
 
 export function ScheduleBuilderScreen() {
   const [creating, setCreating] = useState(false);
-  const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [selectedTaskId, setSelectedTaskId] = useState('');
   const [config, setConfig] = useState<RecurringConfig>({
-    intervalUnit: "hours",
+    intervalUnit: 'hours',
     intervalValue: 1,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    missedRunPolicy: "skip",
+    missedRunPolicy: 'skip',
   });
 
   const { data: tasks = [] } = useQuery({
-    queryKey: ["tasks"],
+    queryKey: ['tasks'],
     queryFn: tasksApi.list,
-    select: (all: Task[]) => all.filter((t) => !t.tags.includes("pulse")),
+    select: (all: Task[]) => all.filter((t) => !t.tags.includes('pulse')),
   });
 
-  const pulseTaskIds = useQuery({
-    queryKey: ["tasks"],
-    queryFn: tasksApi.list,
-    select: (all: Task[]) => new Set(all.filter((t) => t.tags.includes("pulse")).map((t) => t.id)),
-  }).data ?? new Set<string>();
+  const pulseTaskIds =
+    useQuery({
+      queryKey: ['tasks'],
+      queryFn: tasksApi.list,
+      select: (all: Task[]) =>
+        new Set(all.filter((t) => t.tags.includes('pulse')).map((t) => t.id)),
+    }).data ?? new Set<string>();
 
   const { data: schedules = [], refetch } = useQuery({
-    queryKey: ["schedules"],
+    queryKey: ['schedules'],
     queryFn: schedulesApi.list,
     select: (all: Schedule[]) => all.filter((s) => !pulseTaskIds.has(s.taskId)),
   });
@@ -41,7 +43,7 @@ export function ScheduleBuilderScreen() {
     if (!selectedTaskId) return;
     await schedulesApi.create({
       taskId: selectedTaskId,
-      kind: "recurring",
+      kind: 'recurring',
       config,
     });
     setCreating(false);
@@ -72,13 +74,9 @@ export function ScheduleBuilderScreen() {
             <ScheduleCard
               key={s.id}
               schedule={s}
-              taskName={tasks.find((t) => t.id === s.taskId)?.name ?? "Unknown task"}
-              onToggle={() =>
-                schedulesApi.toggle(s.id, !s.enabled).then(() => refetch())
-              }
-              onDelete={() =>
-                schedulesApi.delete(s.id).then(() => refetch())
-              }
+              taskName={tasks.find((t) => t.id === s.taskId)?.name ?? 'Unknown task'}
+              onToggle={() => schedulesApi.toggle(s.id, !s.enabled).then(() => refetch())}
+              onDelete={() => schedulesApi.delete(s.id).then(() => refetch())}
             />
           ))}
         </div>
@@ -100,19 +98,23 @@ export function ScheduleBuilderScreen() {
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {/* Task selector */}
             <div>
-              <label className="block text-xs font-medium text-muted mb-1.5">
-                Task
-              </label>
+              <label className="block text-xs font-medium text-muted mb-1.5">Task</label>
               <Select.Root value={selectedTaskId} onValueChange={setSelectedTaskId}>
                 <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-surface border border-edge text-white text-sm focus:outline-none focus:border-accent">
                   <Select.Value placeholder="Select a task…" />
-                  <Select.Icon><ChevronDown size={14} className="text-muted" /></Select.Icon>
+                  <Select.Icon>
+                    <ChevronDown size={14} className="text-muted" />
+                  </Select.Icon>
                 </Select.Trigger>
                 <Select.Portal>
                   <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
                     <Select.Viewport className="p-1">
                       {tasks.map((t) => (
-                        <Select.Item key={t.id} value={t.id} className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20">
+                        <Select.Item
+                          key={t.id}
+                          value={t.id}
+                          className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
+                        >
                           <Select.ItemText>{t.name}</Select.ItemText>
                         </Select.Item>
                       ))}
@@ -152,7 +154,7 @@ function ScheduleCard({
   onDelete: () => void;
 }) {
   const cfg = schedule.config as RecurringConfig;
-  const label = schedule.kind === "recurring" ? humanSchedule(cfg) : schedule.kind;
+  const label = schedule.kind === 'recurring' ? humanSchedule(cfg) : schedule.kind;
 
   return (
     <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-edge bg-surface">
@@ -165,12 +167,12 @@ function ScheduleCard({
           </p>
         )}
       </div>
-      <StatusBadge state={schedule.enabled ? "idle" : "cancelled"} />
+      <StatusBadge state={schedule.enabled ? 'idle' : 'cancelled'} />
       <button
         onClick={onToggle}
         className="px-2 py-1 rounded text-xs text-muted hover:text-white hover:bg-edge transition-colors"
       >
-        {schedule.enabled ? "Pause" : "Resume"}
+        {schedule.enabled ? 'Pause' : 'Resume'}
       </button>
       <button
         onClick={onDelete}

@@ -15,7 +15,11 @@ import { AgentIdentitySection } from './AgentIdentitySection';
 const PERMISSION_MODES = [
   { value: 'normal', label: 'Normal', description: 'Prompt for writes/exec, auto-allow reads' },
   { value: 'strict', label: 'Strict', description: 'Prompt for all non-read operations' },
-  { value: 'permissive', label: 'Permissive', description: 'Auto-allow everything (advanced users)' },
+  {
+    value: 'permissive',
+    label: 'Permissive',
+    description: 'Auto-allow everything (advanced users)',
+  },
 ];
 
 const TOOL_CATEGORIES = [
@@ -170,9 +174,7 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
   function toggleTool(toolId: string) {
     if (!config) return;
     // If allowedTools is empty (meaning "all"), expand to explicit list first
-    const currentTools = config.allowedTools.length === 0
-      ? [...ALL_TOOL_IDS]
-      : config.allowedTools;
+    const currentTools = config.allowedTools.length === 0 ? [...ALL_TOOL_IDS] : config.allowedTools;
     let tools = currentTools.includes(toolId)
       ? currentTools.filter((t) => t !== toolId)
       : [...currentTools, toolId];
@@ -437,7 +439,9 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
                   min={1000}
                   step={10000}
                   value={config.maxTotalTokens}
-                  onChange={(e) => updateConfig({ maxTotalTokens: parseInt(e.target.value) || 200000 })}
+                  onChange={(e) =>
+                    updateConfig({ maxTotalTokens: parseInt(e.target.value) || 200000 })
+                  }
                   className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
                 />
                 <span className="text-[10px] text-muted mt-0.5 block">Default 200k</span>
@@ -603,7 +607,11 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
               {PERMISSION_MODES.map((mode) => (
                 <button
                   key={mode.value}
-                  onClick={() => updateConfig({ permissionMode: mode.value as AgentWorkspaceConfig['permissionMode'] })}
+                  onClick={() =>
+                    updateConfig({
+                      permissionMode: mode.value as AgentWorkspaceConfig['permissionMode'],
+                    })
+                  }
                   className={`px-3 py-1.5 rounded text-xs transition-colors ${
                     config?.permissionMode === mode.value
                       ? 'bg-accent/20 text-accent-hover border border-accent/40'
@@ -625,9 +633,10 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
             <label className="text-xs text-muted block mb-1">
               Saved Rules ({config?.permissionRules?.length ?? 0})
             </label>
-            {(!config?.permissionRules || config.permissionRules.length === 0) ? (
+            {!config?.permissionRules || config.permissionRules.length === 0 ? (
               <p className="text-[10px] text-muted italic">
-                No saved rules. Click "Always Allow" or "Always Deny" on a permission prompt to create rules.
+                No saved rules. Click "Always Allow" or "Always Deny" on a permission prompt to
+                create rules.
               </p>
             ) : (
               <div className="space-y-1">
@@ -636,11 +645,13 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
                     key={rule.id}
                     className="flex items-center gap-2 px-2 py-1.5 rounded bg-background/50 border border-edge/50 text-xs"
                   >
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                      rule.decision === 'allow'
-                        ? 'bg-emerald-500/10 text-emerald-400'
-                        : 'bg-red-500/10 text-red-400'
-                    }`}>
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                        rule.decision === 'allow'
+                          ? 'bg-emerald-500/10 text-emerald-400'
+                          : 'bg-red-500/10 text-red-400'
+                      }`}
+                    >
                       {rule.decision}
                     </span>
                     <span className="text-warning font-mono">{rule.tool}</span>

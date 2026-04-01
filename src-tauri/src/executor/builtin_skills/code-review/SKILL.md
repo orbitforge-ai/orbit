@@ -19,12 +19,15 @@ description: Review code changes for bugs, security issues, performance problems
 Organize findings by severity:
 
 ### Critical
+
 Issues that will cause bugs, data loss, or security vulnerabilities in production.
 
 ### Warning
+
 Issues that could cause problems under certain conditions or indicate code smell.
 
 ### Suggestion
+
 Improvements to readability, performance, or maintainability that aren't urgent.
 
 ## Gotchas
