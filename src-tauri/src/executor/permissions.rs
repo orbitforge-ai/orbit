@@ -167,6 +167,80 @@ const DANGEROUS_PATTERNS: &[&str] = &[
     "--hard",     // git reset --hard
 ];
 
+/// Detect shell command injection patterns in a command string.
+/// Returns Some(reason) if injection patterns are found.
+fn detect_command_injection(command: &str) -> Option<String> {
+    let trimmed = command.trim();
+
+    // Check for $(...) command substitution
+    // We look for $( not preceded by a backslash and not inside single quotes
+    if contains_unquoted_pattern(trimmed, "$(") {
+        return Some("Command substitution detected: '$(...)'".to_string());
+    }
+
+    // Check for backtick command substitution
+    if contains_unquoted_pattern(trimmed, "`") {
+        return Some("Backtick command substitution detected".to_string());
+    }
+
+    // Check for eval
+    let base = trimmed.split_whitespace().next().unwrap_or("");
+    if base == "eval" {
+        return Some("'eval' can execute arbitrary code".to_string());
+    }
+
+    // Check for process substitution <(...) and >(...)
+    if contains_unquoted_pattern(trimmed, "<(") || contains_unquoted_pattern(trimmed, ">(") {
+        return Some("Process substitution detected".to_string());
+    }
+
+    // Check for base64 decode piped to execution (common obfuscation)
+    let lower = trimmed.to_lowercase();
+    if (lower.contains("base64") && lower.contains("decode"))
+        || (lower.contains("base64") && lower.contains("-d"))
+    {
+        if lower.contains("|") || lower.contains("xargs") || lower.contains("eval") {
+            return Some("Base64 decode piped to execution (potential obfuscation)".to_string());
+        }
+    }
+
+    // Check for hex/octal escape sequences used for obfuscation
+    if trimmed.contains("\\x") || trimmed.contains("$'\\x") || trimmed.contains("$'\\0") {
+        return Some("Hex/octal escape sequences detected (potential obfuscation)".to_string());
+    }
+
+    None
+}
+
+/// Check if a pattern appears outside of single-quoted strings.
+/// Single-quoted strings in shell prevent all interpretation, so patterns
+/// inside them are safe data, not injection vectors.
+fn contains_unquoted_pattern(command: &str, pattern: &str) -> bool {
+    let mut in_single_quote = false;
+    let chars: Vec<char> = command.chars().collect();
+    let pattern_chars: Vec<char> = pattern.chars().collect();
+
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\'' && (i == 0 || chars[i - 1] != '\\') {
+            in_single_quote = !in_single_quote;
+            i += 1;
+            continue;
+        }
+
+        if !in_single_quote && i + pattern_chars.len() <= chars.len() {
+            let slice: String = chars[i..i + pattern_chars.len()].iter().collect();
+            if slice == pattern.to_string() {
+                return true;
+            }
+        }
+
+        i += 1;
+    }
+
+    false
+}
+
 /// Path prefixes that indicate sensitive system locations.
 /// Any command referencing these should never auto-allow.
 const SENSITIVE_PATH_PREFIXES: &[&str] = &[
@@ -242,6 +316,11 @@ fn classify_shell_command(command: &str) -> (RiskLevel, String) {
     // ── First pass: check the ENTIRE command for sensitive path references ──
     // This catches cases like `cat /etc/passwd` where `cat` is otherwise "safe".
     if let Some(reason) = references_sensitive_paths(trimmed) {
+        return (RiskLevel::PromptDangerous, reason);
+    }
+
+    // ── Check for command injection patterns ──
+    if let Some(reason) = detect_command_injection(trimmed) {
         return (RiskLevel::PromptDangerous, reason);
     }
 
@@ -810,6 +889,41 @@ mod tests {
 
         let input = serde_json::json!({"target_agent": "research-agent"});
         assert_eq!(generate_always_allow_pattern("send_message", &input), "research-agent");
+    }
+
+    #[test]
+    fn command_injection_detection() {
+        // $(...) substitution
+        let (risk, _) = classify_shell_command("echo $(cat /etc/passwd)");
+        assert_eq!(risk, RiskLevel::PromptDangerous);
+
+        // Backtick substitution
+        let (risk, _) = classify_shell_command("echo `whoami`");
+        assert_eq!(risk, RiskLevel::PromptDangerous);
+
+        // eval
+        let (risk, _) = classify_shell_command("eval 'rm -rf /'");
+        assert_eq!(risk, RiskLevel::PromptDangerous);
+
+        // Process substitution
+        let (risk, _) = classify_shell_command("diff <(cat file1) <(cat file2)");
+        assert_eq!(risk, RiskLevel::PromptDangerous);
+
+        // Base64 obfuscation piped to execution
+        let (risk, _) = classify_shell_command("echo cm0gLXJmIC8= | base64 --decode | sh");
+        assert_eq!(risk, RiskLevel::PromptDangerous);
+
+        // Hex escape obfuscation
+        let (risk, _) = classify_shell_command("printf '\\x72\\x6d' | sh");
+        assert_eq!(risk, RiskLevel::PromptDangerous);
+
+        // Safe: $(...) inside single quotes is data, not injection
+        let (risk, _) = classify_shell_command("echo '$(not executed)'");
+        assert_eq!(risk, RiskLevel::AutoAllow);
+
+        // Safe: backtick inside single quotes
+        let (risk, _) = classify_shell_command("echo '`not executed`'");
+        assert_eq!(risk, RiskLevel::AutoAllow);
     }
 
     #[test]
