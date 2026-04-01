@@ -175,6 +175,8 @@ impl Default for AgentWorkspaceConfig {
                 "list_files".to_string(),
                 "web_search".to_string(),
                 "activate_skill".to_string(),
+                "remember".to_string(),
+                "search_memory".to_string(),
                 "finish".to_string(),
             ],
             compaction_threshold: None,

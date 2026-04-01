@@ -304,6 +304,80 @@ pub fn build_tool_definitions(allowed: &[String]) -> Vec<ToolDefinition> {
             }),
     },
     ToolDefinition {
+      name: "remember".to_string(),
+      description: "Save a piece of information to long-term memory. Use this to persist important facts, user preferences, feedback, or project context across sessions.".to_string(),
+      input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "The information to remember"
+                    },
+                    "memory_type": {
+                        "type": "string",
+                        "enum": ["user", "feedback", "project", "reference"],
+                        "description": "Category: 'user' for user facts/preferences, 'feedback' for guidance on your approach, 'project' for project context/decisions, 'reference' for pointers to external resources"
+                    }
+                },
+                "required": ["text", "memory_type"]
+            }),
+    },
+    ToolDefinition {
+      name: "forget".to_string(),
+      description: "Remove a memory by searching for the best match and deleting it.".to_string(),
+      input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Description of the memory to forget"
+                    }
+                },
+                "required": ["query"]
+            }),
+    },
+    ToolDefinition {
+      name: "search_memory".to_string(),
+      description: "Search long-term memory for relevant information using semantic similarity.".to_string(),
+      input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What to search for"
+                    },
+                    "memory_type": {
+                        "type": "string",
+                        "enum": ["user", "feedback", "project", "reference"],
+                        "description": "Optional: filter by memory category"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results to return (default: 5, max: 20)"
+                    }
+                },
+                "required": ["query"]
+            }),
+    },
+    ToolDefinition {
+      name: "list_memories".to_string(),
+      description: "List all memories, optionally filtered by type.".to_string(),
+      input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "memory_type": {
+                        "type": "string",
+                        "enum": ["user", "feedback", "project", "reference"],
+                        "description": "Optional: filter by memory category"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results to return (default: 50, max: 200)"
+                    }
+                }
+            }),
+    },
+    ToolDefinition {
       name: "finish".to_string(),
       description: "Signal that the goal has been completed. Provide a summary of what was accomplished.".to_string(),
       input_schema: json!({
@@ -950,6 +1024,109 @@ pub async fn execute_tool(
         format!("<skill-instructions name=\"{}\">\n{}\n</skill-instructions>", skill_name, instructions),
         false,
       ))
+    }
+
+    "remember" => {
+      let text = input["text"].as_str().ok_or("remember: missing 'text' field")?;
+      let memory_type = input["memory_type"].as_str().ok_or("remember: missing 'memory_type' field")?;
+
+      if !matches!(memory_type, "user" | "feedback" | "project" | "reference") {
+        return Ok((
+          format!("Error: invalid memory_type '{}'. Must be one of: user, feedback, project, reference", memory_type),
+          false,
+        ));
+      }
+
+      let client = match &ctx.memory_client {
+        Some(c) => c,
+        None => return Ok(("Memory service is not available.".to_string(), false)),
+      };
+      let agent_id = ctx.current_agent_id.as_deref().unwrap_or(&ctx.agent_id);
+
+      info!(run_id = run_id, memory_type = memory_type, "agent tool: remember");
+
+      match client.add_memory(text, memory_type, "default_user", agent_id, None).await {
+        Ok(_) => Ok((format!("Remembered: \"{}\" (type: {})", text, memory_type), false)),
+        Err(e) => Ok((format!("Failed to save memory: {}", e), false)),
+      }
+    }
+
+    "forget" => {
+      let query = input["query"].as_str().ok_or("forget: missing 'query' field")?;
+
+      let client = match &ctx.memory_client {
+        Some(c) => c,
+        None => return Ok(("Memory service is not available.".to_string(), false)),
+      };
+      let agent_id = ctx.current_agent_id.as_deref().unwrap_or(&ctx.agent_id);
+
+      info!(run_id = run_id, query = query, "agent tool: forget");
+
+      let matches = match client.search_memories(query, "default_user", agent_id, None, 1).await {
+        Ok(m) => m,
+        Err(e) => return Ok((format!("Failed to search for memory to forget: {}", e), false)),
+      };
+
+      let Some(top) = matches.into_iter().next() else {
+        return Ok(("No matching memory found.".to_string(), false));
+      };
+
+      let preview: String = top.text.chars().take(80).collect();
+      match client.delete_memory(&top.id).await {
+        Ok(()) => Ok((format!("Forgot: \"{}\"", preview), false)),
+        Err(e) => Ok((format!("Failed to delete memory: {}", e), false)),
+      }
+    }
+
+    "search_memory" => {
+      let query = input["query"].as_str().ok_or("search_memory: missing 'query' field")?;
+      let memory_type = input["memory_type"].as_str();
+      let limit = input["limit"].as_u64().unwrap_or(5).min(20) as u32;
+
+      let client = match &ctx.memory_client {
+        Some(c) => c,
+        None => return Ok(("Memory service is not available.".to_string(), false)),
+      };
+      let agent_id = ctx.current_agent_id.as_deref().unwrap_or(&ctx.agent_id);
+
+      info!(run_id = run_id, query = query, "agent tool: search_memory");
+
+      match client.search_memories(query, "default_user", agent_id, memory_type, limit).await {
+        Ok(entries) if entries.is_empty() => Ok(("No matching memories found.".to_string(), false)),
+        Ok(entries) => {
+          let lines: Vec<String> = entries
+            .iter()
+            .map(|e| format!("[{}] {} ({})", e.memory_type, e.text, e.created_at))
+            .collect();
+          Ok((lines.join("\n"), false))
+        }
+        Err(e) => Ok((format!("Memory search failed: {}", e), false)),
+      }
+    }
+
+    "list_memories" => {
+      let memory_type = input["memory_type"].as_str();
+      let limit = input["limit"].as_u64().unwrap_or(50).min(200) as u32;
+
+      let client = match &ctx.memory_client {
+        Some(c) => c,
+        None => return Ok(("Memory service is not available.".to_string(), false)),
+      };
+      let agent_id = ctx.current_agent_id.as_deref().unwrap_or(&ctx.agent_id);
+
+      info!(run_id = run_id, "agent tool: list_memories");
+
+      match client.list_memories("default_user", agent_id, memory_type, limit, 0).await {
+        Ok(entries) if entries.is_empty() => Ok(("No memories stored.".to_string(), false)),
+        Ok(entries) => {
+          let lines: Vec<String> = entries
+            .iter()
+            .map(|e| format!("[{}] {} ({})", e.memory_type, e.text, e.created_at))
+            .collect();
+          Ok((lines.join("\n"), false))
+        }
+        Err(e) => Ok((format!("Failed to list memories: {}", e), false)),
+      }
     }
 
     "finish" => {
