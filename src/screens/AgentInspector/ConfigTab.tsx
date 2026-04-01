@@ -6,10 +6,17 @@ import * as Switch from '@radix-ui/react-switch';
 
 import { workspaceApi } from '../../api/workspace';
 import { llmApi } from '../../api/llm';
+import { permissionsApi } from '../../api/permissions';
 import { AgentWorkspaceConfig } from '../../types';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { CollapsibleSection } from '../../components/CollapsibleSection';
 import { AgentIdentitySection } from './AgentIdentitySection';
+
+const PERMISSION_MODES = [
+  { value: 'normal', label: 'Normal', description: 'Prompt for writes/exec, auto-allow reads' },
+  { value: 'strict', label: 'Strict', description: 'Prompt for all non-read operations' },
+  { value: 'permissive', label: 'Permissive', description: 'Auto-allow everything (advanced users)' },
+];
 
 const TOOL_CATEGORIES = [
   {
@@ -579,6 +586,81 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
                 Finish
               </span>
             </div>
+          </div>
+        </div>
+      </CollapsibleSection>
+
+      {/* Permissions — collapsed by default */}
+      <CollapsibleSection
+        title="Permissions"
+        description="Control which tool actions require user approval"
+      >
+        <div className="space-y-4">
+          {/* Permission Mode */}
+          <div>
+            <label className="text-xs text-muted block mb-1">Permission Mode</label>
+            <div className="flex gap-2">
+              {PERMISSION_MODES.map((mode) => (
+                <button
+                  key={mode.value}
+                  onClick={() => updateConfig({ permissionMode: mode.value as AgentWorkspaceConfig['permissionMode'] })}
+                  className={`px-3 py-1.5 rounded text-xs transition-colors ${
+                    config?.permissionMode === mode.value
+                      ? 'bg-accent/20 text-accent-hover border border-accent/40'
+                      : 'bg-surface border border-edge text-secondary hover:border-edge-hover'
+                  }`}
+                  title={mode.description}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] text-muted mt-1">
+              {PERMISSION_MODES.find((m) => m.value === config?.permissionMode)?.description}
+            </p>
+          </div>
+
+          {/* Saved Permission Rules */}
+          <div>
+            <label className="text-xs text-muted block mb-1">
+              Saved Rules ({config?.permissionRules?.length ?? 0})
+            </label>
+            {(!config?.permissionRules || config.permissionRules.length === 0) ? (
+              <p className="text-[10px] text-muted italic">
+                No saved rules. Click "Always Allow" or "Always Deny" on a permission prompt to create rules.
+              </p>
+            ) : (
+              <div className="space-y-1">
+                {config.permissionRules.map((rule) => (
+                  <div
+                    key={rule.id}
+                    className="flex items-center gap-2 px-2 py-1.5 rounded bg-background/50 border border-edge/50 text-xs"
+                  >
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                      rule.decision === 'allow'
+                        ? 'bg-emerald-500/10 text-emerald-400'
+                        : 'bg-red-500/10 text-red-400'
+                    }`}>
+                      {rule.decision}
+                    </span>
+                    <span className="text-warning font-mono">{rule.tool}</span>
+                    <span className="text-muted font-mono truncate flex-1">{rule.pattern}</span>
+                    <button
+                      onClick={async () => {
+                        await permissionsApi.deleteRule(agentId, rule.id);
+                        updateConfig({
+                          permissionRules: config.permissionRules.filter((r) => r.id !== rule.id),
+                        });
+                      }}
+                      className="text-muted hover:text-red-400 transition-colors shrink-0"
+                      title="Delete rule"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </CollapsibleSection>

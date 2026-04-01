@@ -11,6 +11,7 @@ const MIGRATION_5: &str = include_str!("migrations/0005_context_management.sql")
 const MIGRATION_6: &str = include_str!("migrations/0006_agent_bus.sql");
 const MIGRATION_7: &str = include_str!("migrations/0007_sub_agents.sql");
 const MIGRATION_8: &str = include_str!("migrations/0008_session_workflows.sql");
+const MIGRATION_9: &str = include_str!("migrations/0009_drop_sessions.sql");
 
 /// Newtype wrapper — stored as Tauri managed state.
 /// r2d2::Pool is Arc-based internally: cheap to clone.
@@ -86,6 +87,11 @@ pub fn init(data_dir: PathBuf) -> Result<DbPool, Box<dyn std::error::Error>> {
         conn.execute_batch(MIGRATION_8)?;
         conn.execute_batch("PRAGMA user_version = 8;")?;
         info!("Applied migration 8 (session_workflows)");
+    }
+    if version < 9 {
+        conn.execute_batch(MIGRATION_9)?;
+        conn.execute_batch("PRAGMA user_version = 9;")?;
+        info!("Applied migration 9 (drop_sessions)");
     }
 
     info!("Database initialised at {:?}", db_path);

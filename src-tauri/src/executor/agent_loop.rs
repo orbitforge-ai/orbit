@@ -10,6 +10,7 @@ use crate::executor::agent_tools::{ self, ToolExecutionContext };
 use crate::executor::context::{ self, ContextMode, ContextRequest };
 use crate::executor::engine::{ AgentSemaphores, SessionExecutionRegistry };
 use crate::executor::keychain;
+use crate::executor::permissions::{ self, PermissionRegistry };
 use crate::executor::llm_provider::{
   self,
   ChatMessage,
@@ -87,6 +88,7 @@ pub async fn run_agent_loop(
   is_sub_agent: bool,
   agent_semaphores: &AgentSemaphores,
   session_registry: &SessionExecutionRegistry,
+  permission_registry: &PermissionRegistry,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -144,6 +146,7 @@ pub async fn run_agent_loop(
     ws_config: ws_config.clone(),
     existing_messages: None,
     is_sub_agent,
+    chain_depth,
   };
   let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
     log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
@@ -170,7 +173,7 @@ pub async fn run_agent_loop(
       app.clone(),
       agent_semaphores.clone(),
       session_registry.clone(),
-    )
+    ).with_permission_registry(permission_registry.clone())
   } else {
     ToolExecutionContext::new_with_bus(
       agent_id,
@@ -182,7 +185,7 @@ pub async fn run_agent_loop(
       app.clone(),
       agent_semaphores.clone(),
       session_registry.clone(),
-    )
+    ).with_permission_registry(permission_registry.clone())
   };
 
   // ── Init conversation ────────────────────────────────────────────────
@@ -369,11 +372,17 @@ pub async fn run_agent_loop(
               cumulative_input_tokens + cumulative_output_tokens
             );
 
-            match agent_tools::execute_tool(&tool_ctx, name, input, app, run_id).await {
+            let perm_reg = tool_ctx.permission_registry.as_ref().unwrap_or(permission_registry);
+            match permissions::execute_tool_with_permissions(&tool_ctx, name, input, app, run_id, perm_reg).await {
               Ok((result, is_finish)) => {
+                // Wrap tool output in data tags to signal untrusted content
+                let wrapped = format!(
+                  "<tool_result name=\"{}\" data_source=\"untrusted\">{}</tool_result>",
+                  name, result
+                );
                 tool_results.push(ContentBlock::ToolResult {
                   tool_use_id: id.clone(),
-                  content: result.clone(),
+                  content: wrapped,
                   is_error: false,
                 });
                 emit_agent_tool_result(app, run_id, iteration, id, &result, false);
@@ -568,6 +577,7 @@ pub async fn run_agent_prompt(
     ws_config: ws_config.clone(),
     existing_messages: None,
     is_sub_agent: false,
+    chain_depth: 0,
   };
   let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
     log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
@@ -803,6 +813,7 @@ pub async fn run_pulse(
     ws_config: ws_config.clone(),
     existing_messages: None,
     is_sub_agent: false,
+    chain_depth: 0,
   };
   let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
     log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);

@@ -9,6 +9,7 @@ use crate::executor::compaction;
 use crate::executor::context::{ self, ContextMode, ContextRequest };
 use crate::executor::engine::{ AgentSemaphores, ExecutorTx, SessionExecutionRegistry };
 use crate::executor::keychain;
+use crate::executor::permissions::{ self, PermissionRegistry };
 use crate::executor::llm_provider::{ self, ChatMessage, ContentBlock, LlmConfig };
 use crate::executor::session_agent;
 use crate::executor::workspace;
@@ -392,6 +393,7 @@ pub async fn send_chat_message(
   executor_tx: tauri::State<'_, ExecutorTx>,
   agent_semaphores: tauri::State<'_, AgentSemaphores>,
   session_registry: tauri::State<'_, SessionExecutionRegistry>,
+  permission_registry: tauri::State<'_, PermissionRegistry>,
 ) -> Result<String, String> {
   let pool = db.0.clone();
   let stream_id = format!("chat:{}", session_id);
@@ -503,6 +505,7 @@ pub async fn send_chat_message(
   let etx = executor_tx.0.clone();
   let semaphores = agent_semaphores.inner().clone();
   let registry = session_registry.inner().clone();
+  let perm_registry = permission_registry.inner().clone();
 
   tauri::async_runtime::spawn(async move {
     if let Err(e) = do_llm_chat(
@@ -516,6 +519,7 @@ pub async fn send_chat_message(
       chain_depth,
       semaphores,
       registry,
+      perm_registry,
     ).await {
       warn!("Chat LLM error: {}", e);
       // Emit finished with error info
@@ -574,6 +578,7 @@ async fn do_llm_chat(
   chain_depth: i64,
   agent_semaphores: AgentSemaphores,
   session_registry: SessionExecutionRegistry,
+  permission_registry: PermissionRegistry,
 ) -> Result<(), String> {
   // Load agent config
   let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
@@ -596,6 +601,7 @@ async fn do_llm_chat(
     ws_config: ws_config.clone(),
     existing_messages: Some(messages),
     is_sub_agent: false,
+    chain_depth: 0,
   };
   let snapshot = pipeline.build(&ctx_request, db).await?;
   let mut messages = snapshot.messages;
@@ -620,7 +626,7 @@ async fn do_llm_chat(
     app.clone(),
     agent_semaphores,
     session_registry,
-  );
+  ).with_permission_registry(permission_registry.clone());
   let pool = db.0.clone();
 
   let mut cumulative_input_tokens: u32 = 0;
@@ -686,11 +692,16 @@ async fn do_llm_chat(
               cumulative_input_tokens + cumulative_output_tokens,
             );
 
-            match agent_tools::execute_tool(&tool_ctx, name, input, app, stream_id).await {
+            match permissions::execute_tool_with_permissions(&tool_ctx, name, input, app, stream_id, &permission_registry).await {
               Ok((result, _is_finish)) => {
+                // Wrap tool output in data tags to signal untrusted content
+                let wrapped = format!(
+                  "<tool_result name=\"{}\" data_source=\"untrusted\">{}</tool_result>",
+                  name, result
+                );
                 tool_results.push(ContentBlock::ToolResult {
                   tool_use_id: id.clone(),
-                  content: result.clone(),
+                  content: wrapped,
                   is_error: false,
                 });
                 emit_agent_tool_result(app, stream_id, iteration, id, &result, false);

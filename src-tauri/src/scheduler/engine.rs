@@ -233,7 +233,7 @@ fn load_task(conn: &rusqlite::Connection, task_id: &str) -> Option<Task> {
   conn
     .query_row(
       "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
-                retry_delay_seconds, concurrency_policy, tags, agent_id, session_id,
+                retry_delay_seconds, concurrency_policy, tags, agent_id,
                 enabled, created_at, updated_at
          FROM tasks WHERE id = ?1",
       rusqlite::params![task_id],
@@ -252,10 +252,9 @@ fn load_task(conn: &rusqlite::Connection, task_id: &str) -> Option<Task> {
           concurrency_policy: row.get(8)?,
           tags: serde_json::from_str(&tags_str).unwrap_or_default(),
           agent_id: row.get(10)?,
-          session_id: row.get(11)?,
-          enabled: row.get::<_, bool>(12)?,
-          created_at: row.get(13)?,
-          updated_at: row.get(14)?,
+          enabled: row.get::<_, bool>(11)?,
+          created_at: row.get(12)?,
+          updated_at: row.get(13)?,
         })
       }
     )

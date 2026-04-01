@@ -290,3 +290,73 @@ pub fn emit_bus_message_sent(
     warn!("failed to emit bus:message_sent: {}", e);
   }
 }
+
+// ─── Permission events ─────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRequestPayload {
+  pub request_id: String,
+  pub run_id: String,
+  pub session_id: Option<String>,
+  pub agent_id: String,
+  pub tool_name: String,
+  pub tool_input: serde_json::Value,
+  pub risk_level: String,        // "moderate" | "dangerous"
+  pub risk_description: String,
+  pub suggested_pattern: String,
+  pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionCancelledPayload {
+  pub request_id: String,
+  pub run_id: String,
+  pub timestamp: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn emit_permission_request(
+  app: &tauri::AppHandle,
+  request_id: &str,
+  run_id: &str,
+  session_id: Option<&str>,
+  agent_id: &str,
+  tool_name: &str,
+  tool_input: &serde_json::Value,
+  risk_level: &str,
+  risk_description: &str,
+  suggested_pattern: &str,
+) {
+  let payload = PermissionRequestPayload {
+    request_id: request_id.to_string(),
+    run_id: run_id.to_string(),
+    session_id: session_id.map(|s| s.to_string()),
+    agent_id: agent_id.to_string(),
+    tool_name: tool_name.to_string(),
+    tool_input: tool_input.clone(),
+    risk_level: risk_level.to_string(),
+    risk_description: risk_description.to_string(),
+    suggested_pattern: suggested_pattern.to_string(),
+    timestamp: chrono::Utc::now().to_rfc3339(),
+  };
+  if let Err(e) = app.emit("permission:request", &payload) {
+    warn!("failed to emit permission:request: {}", e);
+  }
+}
+
+pub fn emit_permission_cancelled(
+  app: &tauri::AppHandle,
+  request_id: &str,
+  run_id: &str,
+) {
+  let payload = PermissionCancelledPayload {
+    request_id: request_id.to_string(),
+    run_id: run_id.to_string(),
+    timestamp: chrono::Utc::now().to_rfc3339(),
+  };
+  if let Err(e) = app.emit("permission:cancelled", &payload) {
+    warn!("failed to emit permission:cancelled: {}", e);
+  }
+}

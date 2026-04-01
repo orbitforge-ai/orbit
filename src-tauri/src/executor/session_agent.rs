@@ -7,6 +7,7 @@ use crate::executor::compaction;
 use crate::executor::context::{ self, ContextMode, ContextRequest };
 use crate::executor::engine::{ AgentSemaphores, RunRequest, SessionExecutionRegistry };
 use crate::executor::keychain;
+use crate::executor::permissions::{ self, PermissionRegistry };
 use crate::executor::llm_provider::{
   self,
   ChatMessage,
@@ -33,6 +34,7 @@ pub async fn run_agent_session(
   executor_tx: &tokio::sync::mpsc::UnboundedSender<RunRequest>,
   agent_semaphores: &AgentSemaphores,
   session_registry: &SessionExecutionRegistry,
+  permission_registry: &PermissionRegistry,
 ) -> Result<String, String> {
   let stream_id = format!("chat:{}", session_id);
   let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
@@ -73,6 +75,7 @@ pub async fn run_agent_session(
     ws_config: ws_config.clone(),
     existing_messages: Some(history),
     is_sub_agent,
+    chain_depth,
   };
   let snapshot = pipeline.build(&ctx_request, db).await?;
   let tools = snapshot.tools;
@@ -96,7 +99,7 @@ pub async fn run_agent_session(
       app.clone(),
       agent_semaphores.clone(),
       session_registry.clone(),
-    )
+    ).with_permission_registry(permission_registry.clone())
   } else {
     ToolExecutionContext::new_with_bus(
       agent_id,
@@ -108,7 +111,7 @@ pub async fn run_agent_session(
       app.clone(),
       agent_semaphores.clone(),
       session_registry.clone(),
-    )
+    ).with_permission_registry(permission_registry.clone())
   };
 
   let result = run_session_loop(
@@ -126,6 +129,7 @@ pub async fn run_agent_session(
     app,
     db,
     session_registry,
+    permission_registry,
   ).await;
 
   match result {
@@ -153,6 +157,7 @@ async fn run_session_loop(
   app: &tauri::AppHandle,
   db: &DbPool,
   session_registry: &SessionExecutionRegistry,
+  permission_registry: &PermissionRegistry,
 ) -> Result<String, String> {
   let mut cumulative_input_tokens: u32 = 0;
   let mut cumulative_output_tokens: u32 = 0;
@@ -234,11 +239,17 @@ async fn run_session_loop(
               cumulative_input_tokens + cumulative_output_tokens,
             );
 
-            match agent_tools::execute_tool(tool_ctx, name, input, app, stream_id).await {
+            let perm_reg = tool_ctx.permission_registry.as_ref().unwrap_or(permission_registry);
+            match permissions::execute_tool_with_permissions(tool_ctx, name, input, app, stream_id, perm_reg).await {
               Ok((result, is_finish)) => {
+                // Wrap tool output in data tags to signal untrusted content
+                let wrapped = format!(
+                  "<tool_result name=\"{}\" data_source=\"untrusted\">{}</tool_result>",
+                  name, result
+                );
                 tool_results.push(ContentBlock::ToolResult {
                   tool_use_id: id.clone(),
-                  content: result.clone(),
+                  content: wrapped,
                   is_error: false,
                 });
                 emit_agent_tool_result(app, stream_id, iteration, id, &result, false);

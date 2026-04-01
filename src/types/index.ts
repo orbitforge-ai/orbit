@@ -226,7 +226,37 @@ export interface UpdateAgent {
   maxConcurrentRuns?: number;
 }
 
-// ─── Agent workspace types ───────────────────────────────────────────────────
+// ─── Permission types ────────────────────────────────────────────────────────
+
+export interface PermissionRule {
+  id: string;
+  tool: string;
+  pattern: string;
+  decision: "allow" | "deny";
+  createdAt: string;
+  description?: string;
+}
+
+export interface PermissionRequestPayload {
+  requestId: string;
+  runId: string;
+  sessionId: string | null;
+  agentId: string;
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  riskLevel: "moderate" | "dangerous";
+  riskDescription: string;
+  suggestedPattern: string;
+  timestamp: string;
+}
+
+export interface PermissionCancelledPayload {
+  requestId: string;
+  runId: string;
+  timestamp: string;
+}
+
+// ─── Agent workspace types ────────────────────────────────────────────────────
 
 export interface FileEntry {
   name: string;
@@ -248,6 +278,8 @@ export interface AgentWorkspaceConfig {
   webSearchProvider: string;
   disabledSkills: string[];
   identity: AgentIdentityConfig;
+  permissionRules: PermissionRule[];
+  permissionMode: "normal" | "strict" | "permissive";
 }
 
 // ─── Agent Skills types ────────────────────────────────────────────────────

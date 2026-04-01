@@ -20,4 +20,14 @@ export type DisplayBlock =
       input: Record<string, unknown>;
       result?: { content: string; isError: boolean };
     }
-  | { kind: "image"; mediaType: string; data: string };
+  | { kind: "image"; mediaType: string; data: string }
+  | {
+      kind: "permission_prompt";
+      requestId: string;
+      toolName: string;
+      toolInput: Record<string, unknown>;
+      riskLevel: "moderate" | "dangerous";
+      riskDescription: string;
+      suggestedPattern: string;
+      resolved?: "allow" | "always_allow" | "deny";
+    };

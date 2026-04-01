@@ -2,6 +2,7 @@ pub mod agents;
 pub mod bus;
 pub mod chat;
 pub mod llm;
+pub mod permissions;
 pub mod pulse;
 pub mod runs;
 pub mod schedules;

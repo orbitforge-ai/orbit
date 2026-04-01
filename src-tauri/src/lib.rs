@@ -13,6 +13,7 @@ use tauri::tray::TrayIconBuilder;
 
 use db::connection::init as init_db;
 use executor::engine::{ AgentSemaphores, ExecutorEngine, ExecutorTx, SessionExecutionRegistry };
+use executor::permissions::PermissionRegistry;
 use scheduler::SchedulerEngine;
 use tauri_plugin_log::{ Builder, Target, TargetKind };
 use tracing::info;
@@ -59,12 +60,14 @@ pub fn run() {
       let executor_tx_state = ExecutorTx(executor_tx.clone());
       let agent_semaphores = AgentSemaphores::new();
       let session_registry = SessionExecutionRegistry::new();
+      let permission_registry = PermissionRegistry::new();
 
       // Register managed state
       app.manage(db_pool.clone());
       app.manage(executor_tx_state);
       app.manage(agent_semaphores.clone());
       app.manage(session_registry.clone());
+      app.manage(permission_registry.clone());
 
       // Start execution engine (now takes tx clone for retry scheduling)
       let engine = ExecutorEngine::new(
@@ -74,6 +77,7 @@ pub fn run() {
         app.handle().clone(),
         agent_semaphores,
         session_registry.clone(),
+        permission_registry.clone(),
         log_dir.clone()
       );
       tauri::async_runtime::spawn(async move { engine.run().await });
@@ -188,7 +192,11 @@ pub fn run() {
         commands::skills::list_skills,
         commands::skills::get_skill_content,
         commands::skills::create_skill,
-        commands::skills::delete_skill
+        commands::skills::delete_skill,
+        // Permissions
+        commands::permissions::respond_to_permission,
+        commands::permissions::save_permission_rule,
+        commands::permissions::delete_permission_rule
       ]
     )
     .run(tauri::generate_context!())

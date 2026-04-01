@@ -15,6 +15,11 @@ import {
   onAgentToolResult,
   onAgentIteration,
 } from '../../events/runEvents';
+import {
+  onPermissionRequest,
+  onPermissionCancelled,
+} from '../../events/permissionEvents';
+import { usePermissionStore } from '../../store/permissionStore';
 
 const PAGE_SIZE = 50;
 
@@ -193,6 +198,45 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
           queryClient.invalidateQueries({ queryKey: ['chat-messages', sessionId] });
           queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
         }
+      })
+    );
+
+    // Permission request: inject a permission_prompt block into the stream
+    unsubs.push(
+      onPermissionRequest((payload) => {
+        if (payload.runId !== streamId && payload.sessionId !== sessionId) return;
+        usePermissionStore.getState().addRequest(payload);
+        setStreamMessages((prev) => {
+          const msgs = [...prev];
+          let last = msgs[msgs.length - 1];
+          if (!last || last.role !== 'assistant') {
+            last = { id: `stream-${++msgId}`, role: 'assistant', blocks: [], isStreaming: true };
+            msgs.push(last);
+          } else {
+            last = { ...last };
+            msgs[msgs.length - 1] = last;
+          }
+          last.blocks = [
+            ...last.blocks,
+            {
+              kind: 'permission_prompt' as const,
+              requestId: payload.requestId,
+              toolName: payload.toolName,
+              toolInput: payload.toolInput,
+              riskLevel: payload.riskLevel,
+              riskDescription: payload.riskDescription,
+              suggestedPattern: payload.suggestedPattern,
+            },
+          ];
+          return msgs;
+        });
+      })
+    );
+
+    // Permission cancelled: remove the prompt block
+    unsubs.push(
+      onPermissionCancelled((payload) => {
+        usePermissionStore.getState().removeRequest(payload.requestId);
       })
     );
 

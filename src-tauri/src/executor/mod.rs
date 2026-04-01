@@ -8,6 +8,7 @@ pub mod http;
 pub mod keychain;
 pub mod llm_provider;
 pub mod minimax;
+pub mod permissions;
 pub mod process;
 pub mod session_agent;
 pub mod skills;

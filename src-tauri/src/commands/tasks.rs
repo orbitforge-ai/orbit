@@ -13,7 +13,7 @@ pub async fn list_tasks(db: tauri::State<'_, DbPool>) -> Result<Vec<Task>, Strin
       let mut stmt = conn
         .prepare(
           "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
-                        retry_delay_seconds, concurrency_policy, tags, agent_id, session_id,
+                        retry_delay_seconds, concurrency_policy, tags, agent_id,
                         enabled, created_at, updated_at
                  FROM tasks ORDER BY created_at DESC"
         )
@@ -35,10 +35,9 @@ pub async fn list_tasks(db: tauri::State<'_, DbPool>) -> Result<Vec<Task>, Strin
             concurrency_policy: row.get(8)?,
             tags: serde_json::from_str(&tags_str).unwrap_or_default(),
             agent_id: row.get(10)?,
-            session_id: row.get(11)?,
-            enabled: row.get::<_, bool>(12)?,
-            created_at: row.get(13)?,
-            updated_at: row.get(14)?,
+            enabled: row.get::<_, bool>(11)?,
+            created_at: row.get(12)?,
+            updated_at: row.get(13)?,
           })
         })
         .map_err(|e| e.to_string())?
@@ -59,7 +58,7 @@ pub async fn get_task(id: String, db: tauri::State<'_, DbPool>) -> Result<Task, 
       conn
         .query_row(
           "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
-                    retry_delay_seconds, concurrency_policy, tags, agent_id, session_id,
+                    retry_delay_seconds, concurrency_policy, tags, agent_id,
                     enabled, created_at, updated_at
              FROM tasks WHERE id = ?1",
           rusqlite::params![id],
@@ -78,10 +77,9 @@ pub async fn get_task(id: String, db: tauri::State<'_, DbPool>) -> Result<Task, 
               concurrency_policy: row.get(8)?,
               tags: serde_json::from_str(&tags_str).unwrap_or_default(),
               agent_id: row.get(10)?,
-              session_id: row.get(11)?,
-              enabled: row.get::<_, bool>(12)?,
-              created_at: row.get(13)?,
-              updated_at: row.get(14)?,
+              enabled: row.get::<_, bool>(11)?,
+              created_at: row.get(12)?,
+              updated_at: row.get(13)?,
             })
           }
         )
@@ -115,8 +113,8 @@ pub async fn create_task(
         .execute(
           "INSERT INTO tasks (id, name, description, kind, config, max_duration_seconds,
                                 max_retries, retry_delay_seconds, concurrency_policy, tags,
-                                agent_id, session_id, enabled, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, 1, ?12, ?12)",
+                                agent_id, enabled, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?12)",
           rusqlite::params![
             id,
             payload.name,
@@ -137,7 +135,7 @@ pub async fn create_task(
       conn
         .query_row(
           "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
-                    retry_delay_seconds, concurrency_policy, tags, agent_id, session_id,
+                    retry_delay_seconds, concurrency_policy, tags, agent_id,
                     enabled, created_at, updated_at
              FROM tasks WHERE id = ?1",
           rusqlite::params![id],
@@ -156,10 +154,9 @@ pub async fn create_task(
               concurrency_policy: row.get(8)?,
               tags: serde_json::from_str(&tags).unwrap_or_default(),
               agent_id: row.get(10)?,
-              session_id: row.get(11)?,
-              enabled: row.get::<_, bool>(12)?,
-              created_at: row.get(13)?,
-              updated_at: row.get(14)?,
+              enabled: row.get::<_, bool>(11)?,
+              created_at: row.get(12)?,
+              updated_at: row.get(13)?,
             })
           }
         )
@@ -266,7 +263,7 @@ pub async fn update_task(
       conn
         .query_row(
           "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
-                    retry_delay_seconds, concurrency_policy, tags, agent_id, session_id,
+                    retry_delay_seconds, concurrency_policy, tags, agent_id,
                     enabled, created_at, updated_at FROM tasks WHERE id = ?1",
           rusqlite::params![id],
           |row| {
@@ -284,10 +281,9 @@ pub async fn update_task(
               concurrency_policy: row.get(8)?,
               tags: serde_json::from_str(&tags).unwrap_or_default(),
               agent_id: row.get(10)?,
-              session_id: row.get(11)?,
-              enabled: row.get::<_, bool>(12)?,
-              created_at: row.get(13)?,
-              updated_at: row.get(14)?,
+              enabled: row.get::<_, bool>(11)?,
+              created_at: row.get(12)?,
+              updated_at: row.get(13)?,
             })
           }
         )
@@ -326,7 +322,7 @@ pub async fn trigger_task(
       let task = conn
         .query_row(
           "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
-                        retry_delay_seconds, concurrency_policy, tags, agent_id, session_id,
+                        retry_delay_seconds, concurrency_policy, tags, agent_id,
                         enabled, created_at, updated_at FROM tasks WHERE id = ?1 AND enabled = 1",
           rusqlite::params![task_id],
           |row| {
@@ -344,10 +340,9 @@ pub async fn trigger_task(
               concurrency_policy: row.get(8)?,
               tags: serde_json::from_str(&tags).unwrap_or_default(),
               agent_id: row.get(10)?,
-              session_id: row.get(11)?,
-              enabled: row.get::<_, bool>(12)?,
-              created_at: row.get(13)?,
-              updated_at: row.get(14)?,
+              enabled: row.get::<_, bool>(11)?,
+              created_at: row.get(12)?,
+              updated_at: row.get(13)?,
             })
           }
         )

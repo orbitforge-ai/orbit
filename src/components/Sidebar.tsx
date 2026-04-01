@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   LayoutDashboard,
@@ -9,11 +9,14 @@ import {
   MessageSquare,
   Plus,
   ChevronRight,
+  Shield,
 } from "lucide-react";
 import { cn } from "../lib/cn";
 import { useUiStore } from "../store/uiStore";
 import { agentsApi } from "../api/agents";
 import { Agent } from "../types";
+import { usePermissionStore } from "../store/permissionStore";
+import { onPermissionRequest, onPermissionCancelled } from "../events/permissionEvents";
 
 const NAV_ITEMS = [
   { id: "dashboard" as const, label: "Dashboard", icon: LayoutDashboard },
@@ -25,6 +28,23 @@ const NAV_ITEMS = [
 export function Sidebar() {
   const { screen, selectedAgentId, navigate, selectAgent, openAgentChat } = useUiStore();
   const [agentsOpen, setAgentsOpen] = useState(screen === "agents");
+  const pendingCount = usePermissionStore((s) => s.pendingCount);
+
+  // Global listener for permission events (so badge works even when chat panel isn't open)
+  useEffect(() => {
+    const unsubs: Promise<() => void>[] = [];
+    unsubs.push(
+      onPermissionRequest((payload) => {
+        usePermissionStore.getState().addRequest(payload);
+      })
+    );
+    unsubs.push(
+      onPermissionCancelled((payload) => {
+        usePermissionStore.getState().removeRequest(payload.requestId);
+      })
+    );
+    return () => { unsubs.forEach((p) => p.then((fn) => fn())); };
+  }, []);
 
   const { data: agents = [] } = useQuery<Agent[]>({
     queryKey: ["agents"],
@@ -66,6 +86,12 @@ export function Sidebar() {
           >
             <Bot size={16} />
             <span className="flex-1 text-left">Agents</span>
+            {pendingCount > 0 && (
+              <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 text-[10px] font-medium">
+                <Shield size={8} />
+                {pendingCount}
+              </span>
+            )}
             <ChevronRight
               size={14}
               className={cn(

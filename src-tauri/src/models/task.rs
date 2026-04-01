@@ -15,7 +15,6 @@ pub struct Task {
     pub concurrency_policy: String,
     pub tags: Vec<String>,
     pub agent_id: Option<String>,
-    pub session_id: Option<String>,
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,

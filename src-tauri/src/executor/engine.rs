@@ -7,6 +7,7 @@ use tracing::{ error, info, warn };
 use crate::db::DbPool;
 use crate::events::emitter::{ emit_bus_message_sent, emit_run_state_changed };
 use crate::executor::{ agent_loop, http, process };
+use crate::executor::permissions::PermissionRegistry;
 use crate::executor::state_machine::{ transition, ExecutorEvent };
 use crate::models::run::RunState;
 use crate::models::task::{
@@ -221,6 +222,7 @@ pub struct ExecutorEngine {
   app: tauri::AppHandle,
   agent_semaphores: AgentSemaphores,
   session_registry: SessionExecutionRegistry,
+  permission_registry: PermissionRegistry,
   /// Shared active run registry for concurrency policy enforcement
   registry: ActiveRunRegistry,
   log_dir: PathBuf,
@@ -234,6 +236,7 @@ impl ExecutorEngine {
     app: tauri::AppHandle,
     agent_semaphores: AgentSemaphores,
     session_registry: SessionExecutionRegistry,
+    permission_registry: PermissionRegistry,
     log_dir: PathBuf
   ) -> Self {
     Self {
@@ -243,6 +246,7 @@ impl ExecutorEngine {
       app,
       agent_semaphores,
       session_registry,
+      permission_registry,
       registry: ActiveRunRegistry::new(),
       log_dir,
     }
@@ -263,6 +267,7 @@ impl ExecutorEngine {
       let registry = self.registry.clone();
       let agent_semaphores = self.agent_semaphores.clone();
       let session_registry = self.session_registry.clone();
+      let permission_registry = self.permission_registry.clone();
       let tx = self.tx.clone();
 
       match policy.as_str() {
@@ -284,6 +289,7 @@ impl ExecutorEngine {
                     tx.clone(),
                     agent_semaphores.clone(),
                     session_registry.clone(),
+                    permission_registry.clone(),
                   ).await
                 {
                   error!("run failed: {}", e);
@@ -342,6 +348,7 @@ impl ExecutorEngine {
                 tx.clone(),
                 agent_semaphores.clone(),
                 session_registry.clone(),
+                permission_registry.clone(),
               ).await
             {
               error!("run failed: {}", e);
@@ -373,6 +380,7 @@ impl ExecutorEngine {
                 tx.clone(),
                 agent_semaphores.clone(),
                 session_registry.clone(),
+                permission_registry.clone(),
               ).await
             {
               error!("run failed: {}", e);
@@ -402,6 +410,7 @@ async fn run_one(
   executor_tx: mpsc::UnboundedSender<RunRequest>,
   agent_semaphores: AgentSemaphores,
   session_registry: SessionExecutionRegistry,
+  permission_registry: PermissionRegistry,
 ) -> Result<(), String> {
   let run_id = req.run_id.clone();
   let task = req.task;
@@ -495,6 +504,7 @@ async fn run_one(
           is_sub_agent,
           &agent_semaphores,
           &session_registry,
+          &permission_registry,
         ).await
       }
     }
@@ -813,7 +823,7 @@ async fn evaluate_bus_subscriptions(
     let task = match tokio::task::spawn_blocking(move || -> Result<Task, String> {
       let conn = pool.get().map_err(|e| e.to_string())?;
       let row = conn.query_row(
-        "SELECT id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, session_id, enabled, created_at, updated_at
+        "SELECT id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, enabled, created_at, updated_at
          FROM tasks WHERE id = ?1",
         rusqlite::params![tid],
         |row| {
@@ -833,10 +843,9 @@ async fn evaluate_bus_subscriptions(
             concurrency_policy: row.get(8)?,
             tags,
             agent_id: row.get(10)?,
-            session_id: row.get(11)?,
-            enabled: row.get(12)?,
-            created_at: row.get(13)?,
-            updated_at: row.get(14)?,
+            enabled: row.get(11)?,
+            created_at: row.get(12)?,
+            updated_at: row.get(13)?,
           })
         },
       ).map_err(|e| format!("task {} not found: {}", tid, e))?;

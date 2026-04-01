@@ -60,6 +60,27 @@ pub struct AgentIdentityConfig {
     pub custom_note: Option<String>,
 }
 
+/// A saved permission rule for fine-grained tool access control.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRule {
+    /// Unique ID for this rule.
+    pub id: String,
+    /// Tool name this rule applies to (e.g. "shell_command", "write_file", "send_message").
+    pub tool: String,
+    /// Glob-like pattern matched against tool input.
+    /// shell_command: matched against command string (e.g. "echo *", "git commit *").
+    /// write_file: matched against path (e.g. "*.md", "src/**").
+    /// send_message: matched against target agent name (e.g. "research-agent").
+    pub pattern: String,
+    /// The decision: "allow" or "deny".
+    pub decision: String,
+    /// When this rule was created (ISO 8601).
+    pub created_at: String,
+    /// Optional human-readable description.
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentWorkspaceConfig {
@@ -81,6 +102,14 @@ pub struct AgentWorkspaceConfig {
     pub disabled_skills: Vec<String>,
     #[serde(default = "default_agent_identity")]
     pub identity: AgentIdentityConfig,
+    #[serde(default)]
+    pub permission_rules: Vec<PermissionRule>,
+    #[serde(default = "default_permission_mode")]
+    pub permission_mode: String,
+}
+
+fn default_permission_mode() -> String {
+    "normal".to_string()
 }
 
 fn default_search_provider() -> String {
@@ -142,6 +171,8 @@ impl Default for AgentWorkspaceConfig {
             web_search_provider: default_search_provider(),
             disabled_skills: Vec::new(),
             identity: default_agent_identity(),
+            permission_rules: Vec::new(),
+            permission_mode: default_permission_mode(),
         }
     }
 }

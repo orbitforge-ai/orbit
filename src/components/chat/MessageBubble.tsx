@@ -5,6 +5,7 @@ import { DisplayMessage } from "./types";
 import { TextBlock } from "./TextBlock";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolUseBlock } from "./ToolUseBlock";
+import { PermissionPrompt } from "./PermissionPrompt";
 import { TypingIndicator } from "./StreamingCursor";
 import { useUiStore } from "../../store/uiStore";
 
@@ -24,9 +25,10 @@ function formatTimestamp(iso: string): string {
 
 interface MessageBubbleProps {
   message: DisplayMessage;
+  agentId?: string;
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, agentId }: MessageBubbleProps) {
   const isUser = message.role === "user";
   const [expanded, setExpanded] = useState(false);
 
@@ -186,6 +188,20 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                   src={`data:${block.mediaType};base64,${block.data}`}
                   alt="Attached image"
                   className="max-w-full max-h-[300px] rounded-lg object-contain"
+                />
+              );
+            case "permission_prompt":
+              return (
+                <PermissionPrompt
+                  key={i}
+                  requestId={block.requestId}
+                  toolName={block.toolName}
+                  toolInput={block.toolInput}
+                  riskLevel={block.riskLevel}
+                  riskDescription={block.riskDescription}
+                  suggestedPattern={block.suggestedPattern}
+                  agentId={agentId ?? ""}
+                  resolved={block.resolved}
                 />
               );
           }

@@ -7,6 +7,7 @@ use crate::db::DbPool;
 use crate::events::emitter::{ emit_bus_message_sent, emit_log_chunk, emit_sub_agents_spawned };
 use crate::executor::engine::{ AgentSemaphores, RunRequest, SessionExecutionRegistry };
 use crate::executor::llm_provider::ToolDefinition;
+use crate::executor::permissions::PermissionRegistry;
 use crate::executor::session_agent;
 use crate::executor::skills;
 
@@ -44,6 +45,8 @@ pub struct ToolExecutionContext {
   pub session_registry: Option<SessionExecutionRegistry>,
   /// Whether this context is for a sub-agent (prevents nesting).
   pub is_sub_agent: bool,
+  /// Permission registry for gating tool execution.
+  pub permission_registry: Option<PermissionRegistry>,
 }
 
 impl ToolExecutionContext {
@@ -67,6 +70,7 @@ impl ToolExecutionContext {
       agent_semaphores: None,
       session_registry: None,
       is_sub_agent: false,
+      permission_registry: None,
     }
   }
 
@@ -100,7 +104,14 @@ impl ToolExecutionContext {
       agent_semaphores: Some(agent_semaphores),
       session_registry: Some(session_registry),
       is_sub_agent: false,
+      permission_registry: None,
     }
+  }
+
+  /// Set the permission registry on this context (builder pattern).
+  pub fn with_permission_registry(mut self, registry: PermissionRegistry) -> Self {
+    self.permission_registry = Some(registry);
+    self
   }
 
   pub fn new_for_sub_agent(
@@ -558,9 +569,14 @@ pub async fn execute_tool(
             rusqlite::params![new_session_id, to_agent_id, title, next_depth, now],
           ).map_err(|e| e.to_string())?;
 
+          // Wrap bus message payload in data tags to prevent prompt injection
+          let wrapped_payload = format!(
+            "<agent_message from=\"{}\" untrusted=\"true\">{}</agent_message>",
+            from_agent, payload_str
+          );
           let user_content = serde_json::to_string(&vec![serde_json::json!({
             "type": "text",
-            "text": payload_str.clone(),
+            "text": wrapped_payload,
           })]).map_err(|e| e.to_string())?;
           conn.execute(
             "INSERT INTO chat_messages (id, session_id, role, content, created_at)
@@ -593,6 +609,7 @@ pub async fn execute_tool(
       let tx_clone = ctx.executor_tx.as_ref().ok_or("send_message: executor channel not available")?.clone();
       let semaphores = agent_semaphores.clone();
       let registry = session_registry.clone();
+      let perm_registry = ctx.permission_registry.clone().unwrap_or_else(PermissionRegistry::new);
       let target_agent_id = to_agent_id.clone();
       let target_session_id = new_session_id.clone();
       tokio::task::spawn_blocking(move || {
@@ -607,6 +624,7 @@ pub async fn execute_tool(
             &tx_clone,
             &semaphores,
             &registry,
+            &perm_registry,
           ).await {
             warn!(session_id = %target_session_id, "send_message session failed: {}", e);
           }
@@ -777,6 +795,7 @@ pub async fn execute_tool(
         let tx_clone = executor_tx.clone();
         let semaphores = agent_semaphores.clone();
         let registry = session_registry.clone();
+        let perm_registry = ctx.permission_registry.clone().unwrap_or_else(PermissionRegistry::new);
         let sub_agent_id = agent_id.to_string();
         let sub_session_id = st.session_id.clone();
         tokio::task::spawn_blocking(move || {
@@ -791,6 +810,7 @@ pub async fn execute_tool(
               &tx_clone,
               &semaphores,
               &registry,
+              &perm_registry,
             ).await {
               warn!(session_id = %sub_session_id, "sub-agent session failed: {}", e);
             }
