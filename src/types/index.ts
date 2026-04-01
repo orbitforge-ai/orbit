@@ -316,6 +316,8 @@ export interface AgentWorkspaceConfig {
   identity: AgentIdentityConfig;
   permissionRules: PermissionRule[];
   permissionMode: 'normal' | 'strict' | 'permissive';
+  memoryEnabled: boolean;
+  memoryStalenessThresholdDays: number;
 }
 
 // ─── Agent Skills types ────────────────────────────────────────────────────

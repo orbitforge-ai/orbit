@@ -2,6 +2,7 @@ import { useEffect, useState, useImperativeHandle, forwardRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Key, Trash2, Check, ChevronDown } from 'lucide-react';
 import * as Select from '@radix-ui/react-select';
+import * as Slider from '@radix-ui/react-slider';
 import * as Switch from '@radix-ui/react-switch';
 
 import { workspaceApi } from '../../api/workspace';
@@ -47,6 +48,15 @@ const TOOL_CATEGORIES = [
     tools: [
       { id: 'spawn_sub_agents', label: 'Sub-Agents' },
       { id: 'activate_skill', label: 'Activate Skill' },
+    ],
+  },
+  {
+    label: 'Memory',
+    tools: [
+      { id: 'remember', label: 'Remember' },
+      { id: 'search_memory', label: 'Search Memory' },
+      { id: 'forget', label: 'Forget' },
+      { id: 'list_memories', label: 'List Memories' },
     ],
   },
 ];
@@ -590,6 +600,58 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
                 Finish
               </span>
             </div>
+          </div>
+        </div>
+      </CollapsibleSection>
+
+      {/* Memory — collapsed by default */}
+      <CollapsibleSection
+        title="Memory"
+        description="Long-term memory across sessions"
+      >
+        <div className="space-y-4">
+          {/* Enable / disable */}
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="text-xs text-white font-medium">Enable memory</label>
+              <p className="text-[10px] text-muted mt-0.5">
+                Inject relevant memories into context and extract new ones after sessions.
+              </p>
+            </div>
+            <Switch.Root
+              checked={config?.memoryEnabled ?? true}
+              onCheckedChange={(v) => updateConfig({ memoryEnabled: v })}
+              className="w-9 h-5 rounded-full bg-edge data-[state=checked]:bg-emerald-500 transition-colors outline-none shrink-0"
+            >
+              <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
+            </Switch.Root>
+          </div>
+
+          {/* Staleness threshold */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-muted">Staleness threshold</label>
+              <span className="text-xs text-white font-medium tabular-nums">
+                {config?.memoryStalenessThresholdDays ?? 30}d
+              </span>
+            </div>
+            <Slider.Root
+              min={7}
+              max={90}
+              step={1}
+              value={[config?.memoryStalenessThresholdDays ?? 30]}
+              onValueChange={([v]) => updateConfig({ memoryStalenessThresholdDays: v })}
+              disabled={!(config?.memoryEnabled ?? true)}
+              className="relative flex items-center select-none touch-none w-full h-5"
+            >
+              <Slider.Track className="bg-edge relative grow rounded-full h-1">
+                <Slider.Range className="absolute bg-accent rounded-full h-full" />
+              </Slider.Track>
+              <Slider.Thumb className="block w-4 h-4 bg-white rounded-full shadow border border-edge/50 hover:border-accent focus:outline-none focus:border-accent" />
+            </Slider.Root>
+            <p className="text-[10px] text-muted">
+              Memories older than this many days are flagged as stale in context.
+            </p>
           </div>
         </div>
       </CollapsibleSection>
