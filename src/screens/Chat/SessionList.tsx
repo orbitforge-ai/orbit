@@ -21,6 +21,7 @@ import { chatApi } from '../../api/chat';
 import { ChatSession } from '../../types';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { useUiStore } from '../../store/uiStore';
+import { usePermissionStore } from '../../store/permissionStore';
 
 interface SessionListProps {
   agentId: string;
@@ -92,6 +93,10 @@ export function SessionList({
   async function handleDelete(session: ChatSession) {
     if (!(await confirm(`Delete "${session.title}"? This cannot be undone.`))) return;
     await chatApi.deleteSession(session.id);
+    usePermissionStore.getState().removeForSession(session.id);
+    if (activeSessionId === session.id) {
+      onSelectSession(null);
+    }
     queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
     setMenuSessionId(null);
   }

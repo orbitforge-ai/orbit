@@ -10,6 +10,7 @@ interface PermissionStore {
   addRequest: (req: PermissionRequestPayload) => void;
   removeRequest: (requestId: string) => void;
   removeForRun: (runId: string) => void;
+  removeForSession: (sessionId: string) => void;
   /** Mark a request as resolved (keeps it briefly for UI display). */
   resolveRequest: (requestId: string, decision: 'allow' | 'always_allow' | 'deny') => void;
 }
@@ -35,6 +36,18 @@ export const usePermissionStore = create<PermissionStore>((set) => ({
       const pending: Record<string, PermissionRequestPayload> = {};
       for (const [id, req] of Object.entries(state.pending)) {
         if (req.runId !== runId) {
+          pending[id] = req;
+        }
+      }
+      return { pending, pendingCount: Object.keys(pending).length };
+    }),
+
+  removeForSession: (sessionId) =>
+    set((state) => {
+      const pending: Record<string, PermissionRequestPayload> = {};
+      const chatRunId = `chat:${sessionId}`;
+      for (const [id, req] of Object.entries(state.pending)) {
+        if (req.sessionId !== sessionId && req.runId !== chatRunId) {
           pending[id] = req;
         }
       }
