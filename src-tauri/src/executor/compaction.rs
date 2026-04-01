@@ -1,4 +1,4 @@
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use ulid::Ulid;
 
 use crate::db::connection::DbPool;
@@ -6,6 +6,7 @@ use crate::events::emitter::emit_chat_context_update;
 use crate::executor::llm_provider::{
     model_context_window, ChatMessage, ContentBlock, LlmConfig, LlmProvider,
 };
+use crate::executor::memory::MemoryClient;
 use crate::executor::workspace::AgentWorkspaceConfig;
 
 const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.65;
@@ -74,12 +75,13 @@ pub fn select_messages_for_compaction(
 
 /// Performs the full compaction flow for a chat session.
 pub async fn perform_compaction(
-    _agent_id: &str,
+    agent_id: &str,
     session_id: &str,
     provider: &dyn LlmProvider,
     ws_config: &AgentWorkspaceConfig,
     app: &tauri::AppHandle,
     db: &DbPool,
+    memory_client: Option<MemoryClient>,
 ) -> Result<(), String> {
     let pool = db.0.clone();
     let sid = session_id.to_string();
@@ -327,6 +329,54 @@ pub async fn perform_compaction(
     );
 
     emit_chat_context_update(app, session_id, estimated_tokens, 0, context_window);
+
+    // Post-compaction memory extraction from the summary
+    if ws_config.memory_enabled {
+        if let Some(client) = memory_client {
+            let agent_id = agent_id.to_string();
+            let session_id = session_id.to_string();
+            let db_clone = DbPool(db.0.clone());
+            let extract_text = summary_text.clone();
+            tauri::async_runtime::spawn(async move {
+                let log_id = Ulid::new().to_string();
+                let now = chrono::Utc::now().to_rfc3339();
+                {
+                    let pool = db_clone.0.clone();
+                    let log_id = log_id.clone();
+                    let sid = session_id.clone();
+                    let aid = agent_id.clone();
+                    let now = now.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        if let Ok(conn) = pool.get() {
+                            let _ = conn.execute(
+                                "INSERT INTO memory_extraction_log (id, session_id, agent_id, memories_extracted, status, created_at)
+                                 VALUES (?1, ?2, ?3, 0, 'running', ?4)",
+                                rusqlite::params![log_id, sid, aid, now],
+                            );
+                        }
+                    })
+                    .await;
+                }
+                let (count, status) = match client.extract_memories(&extract_text, "default_user", &agent_id).await {
+                    Ok(entries) => (entries.len() as i64, "success".to_string()),
+                    Err(e) => {
+                        warn!(session_id = %session_id, "Post-compaction memory extraction failed: {}", e);
+                        (0, "failure".to_string())
+                    }
+                };
+                let pool = db_clone.0.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Ok(conn) = pool.get() {
+                        let _ = conn.execute(
+                            "UPDATE memory_extraction_log SET memories_extracted = ?1, status = ?2 WHERE id = ?3",
+                            rusqlite::params![count, status, log_id],
+                        );
+                    }
+                })
+                .await;
+            });
+        }
+    }
 
     Ok(())
 }

@@ -1,4 +1,5 @@
 use tracing::warn;
+use ulid::Ulid;
 
 use crate::db::DbPool;
 use crate::events::emitter::{ emit_agent_iteration, emit_agent_tool_result, emit_chat_context_update };
@@ -334,6 +335,19 @@ pub async fn run_session_loop(
   ).await?;
   update_last_input_tokens(db, session_id, cumulative_input_tokens).await;
 
+  // Post-session memory extraction
+  if ws_config.memory_enabled {
+    if let Some(client) = tool_ctx.memory_client.clone() {
+      let agent_id = tool_ctx.agent_id.clone();
+      let conversation_text = build_conversation_text(&messages);
+      let db_clone = DbPool(db.0.clone());
+      let session_id_str = session_id.to_string();
+      tauri::async_runtime::spawn(async move {
+        extract_session_memories(client, conversation_text, "default_user", &agent_id, &session_id_str, &db_clone).await;
+      });
+    }
+  }
+
   let threshold = compaction::effective_threshold(ws_config);
   if compaction::should_compact(cumulative_input_tokens, context_window, threshold) {
     let agent_id = tool_ctx.agent_id.clone();
@@ -341,6 +355,7 @@ pub async fn run_session_loop(
     let ws_config = ws_config.clone();
     let app = app.clone();
     let db = DbPool(db.0.clone());
+    let mem_client = tool_ctx.memory_client.clone();
     if let Ok(api_key) = keychain::retrieve_api_key(&ws_config.provider) {
       if let Ok(provider) = llm_provider::create_provider(&ws_config.provider, api_key) {
         tauri::async_runtime::spawn(async move {
@@ -351,6 +366,7 @@ pub async fn run_session_loop(
             &ws_config,
             &app,
             &db,
+            mem_client,
           ).await {
             warn!(session_id = %session_id, "Session compaction failed: {}", e);
           }
@@ -511,6 +527,80 @@ async fn is_session_cancelled(
       .ok();
     matches!(state.as_deref(), Some("cancelled"))
   }).await.unwrap_or(false)
+}
+
+fn build_conversation_text(messages: &[ChatMessage]) -> String {
+  let mut text = String::new();
+  for msg in messages {
+    let label = if msg.role == "user" { "User" } else { "Assistant" };
+    for block in &msg.content {
+      match block {
+        ContentBlock::Text { text: t } => {
+          text.push_str(&format!("{}: {}\n\n", label, t));
+        }
+        ContentBlock::ToolUse { name, input, .. } => {
+          text.push_str(&format!("{} used tool `{}` with input: {}\n\n", label, name, input));
+        }
+        ContentBlock::ToolResult { content, .. } => {
+          text.push_str(&format!("Tool result: {}\n\n", content));
+        }
+        _ => {}
+      }
+    }
+  }
+  text
+}
+
+async fn extract_session_memories(
+  client: MemoryClient,
+  conversation_text: String,
+  user_id: &str,
+  agent_id: &str,
+  session_id: &str,
+  db: &DbPool,
+) {
+  if conversation_text.trim().is_empty() {
+    return;
+  }
+
+  let log_id = Ulid::new().to_string();
+  let now = chrono::Utc::now().to_rfc3339();
+  {
+    let pool = db.0.clone();
+    let log_id = log_id.clone();
+    let sid = session_id.to_string();
+    let aid = agent_id.to_string();
+    let now = now.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+      if let Ok(conn) = pool.get() {
+        let _ = conn.execute(
+          "INSERT INTO memory_extraction_log (id, session_id, agent_id, memories_extracted, status, created_at)
+           VALUES (?1, ?2, ?3, 0, 'running', ?4)",
+          rusqlite::params![log_id, sid, aid, now],
+        );
+      }
+    })
+    .await;
+  }
+
+  let (count, status) = match client.extract_memories(&conversation_text, user_id, agent_id).await {
+    Ok(entries) => (entries.len() as i64, "success".to_string()),
+    Err(e) => {
+      warn!(session_id = session_id, "Post-session memory extraction failed: {}", e);
+      (0, "failure".to_string())
+    }
+  };
+
+  let pool = db.0.clone();
+  let _ = tokio::task::spawn_blocking(move || {
+    if let Ok(conn) = pool.get() {
+      let _ = conn.execute(
+        "UPDATE memory_extraction_log SET memories_extracted = ?1, status = ?2 WHERE id = ?3",
+        rusqlite::params![count, status, log_id],
+      );
+    }
+  })
+  .await;
 }
 
 fn extract_text_summary(content: &[ContentBlock]) -> Option<String> {

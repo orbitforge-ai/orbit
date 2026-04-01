@@ -789,7 +789,7 @@ async fn do_llm_chat(
     tauri::async_runtime::spawn(async move {
       match compaction::perform_compaction(
         &agent_id, &session_id, compact_provider.as_ref(),
-        &ws_config, &app, &db,
+        &ws_config, &app, &db, None,
       ).await {
         Ok(()) => info!(session_id = %session_id, "Background compaction completed"),
         Err(e) => warn!(session_id = %session_id, "Background compaction failed: {}", e),
@@ -959,7 +959,8 @@ pub async fn compact_chat_session(
     provider.as_ref(),
     &ws_config,
     &app,
-    &db_pool
+    &db_pool,
+    None
   ).await?;
 
   // Refetch and emit updated context usage
