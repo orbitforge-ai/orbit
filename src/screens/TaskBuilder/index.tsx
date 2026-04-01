@@ -1,19 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  Terminal,
-  Globe,
-  FileCode,
-  Bot,
-  Cpu,
-  ChevronRight,
-  ChevronLeft,
-  Check,
-  Plus,
-  Minus,
-  ChevronDown,
-} from 'lucide-react';
-import * as Select from '@radix-ui/react-select';
+import { ChevronRight, ChevronLeft, Check, Bot } from 'lucide-react';
 import * as Slider from '@radix-ui/react-slider';
 import { tasksApi } from '../../api/tasks';
 import { schedulesApi } from '../../api/schedules';
@@ -21,6 +8,15 @@ import { agentsApi } from '../../api/agents';
 import { useUiStore } from '../../store/uiStore';
 import { RecurringPicker } from '../ScheduleBuilder/RecurringPicker';
 import { humanSchedule } from '../../lib/humanSchedule';
+import { Field, Row } from '../../components/TaskFormFields';
+import { TaskConfigForm, defaultConfigState, type TaskConfigState } from '../../components/TaskConfigForm';
+import {
+  KIND_OPTIONS,
+  CONCURRENCY_OPTIONS,
+  inputCls,
+  type TaskKind,
+  type ScheduleKind,
+} from '../../lib/taskConstants';
 import {
   AgentLoopConfig,
   AgentStepConfig,
@@ -35,43 +31,6 @@ import {
 const STEPS = ['What', 'Who', 'When', 'Review'] as const;
 type Step = (typeof STEPS)[number];
 
-type TaskKind = 'shell_command' | 'script_file' | 'http_request' | 'agent_step' | 'agent_loop';
-type ScheduleKind = 'none' | 'recurring' | 'one_shot';
-
-const KIND_OPTIONS: {
-  id: TaskKind;
-  label: string;
-  description: string;
-  icon: React.ElementType;
-}[] = [
-  {
-    id: 'shell_command',
-    label: 'Shell Command',
-    description: 'Run a bash/sh command',
-    icon: Terminal,
-  },
-  {
-    id: 'script_file',
-    label: 'Script File',
-    description: 'Execute a file on disk',
-    icon: FileCode,
-  },
-  { id: 'http_request', label: 'HTTP Request', description: 'Call a URL or webhook', icon: Globe },
-  { id: 'agent_step', label: 'Prompt', description: "Send a prompt to the agent's LLM", icon: Bot },
-  { id: 'agent_loop', label: 'Agent Loop', description: 'Autonomous LLM-powered agent', icon: Cpu },
-];
-
-const CONCURRENCY_OPTIONS: { value: string; label: string; hint: string }[] = [
-  { value: 'allow', label: 'Allow', hint: 'Start a new run even if one is active' },
-  { value: 'skip', label: 'Skip', hint: 'Drop the new run if agent is busy' },
-  { value: 'queue', label: 'Queue', hint: 'Wait for a free slot before starting' },
-  {
-    value: 'cancel_previous',
-    label: 'Cancel previous',
-    hint: 'Stop the active run and start the new one',
-  },
-];
-
 export function TaskBuilder() {
   const { navigate } = useUiStore();
   const queryClient = useQueryClient();
@@ -84,29 +43,16 @@ export function TaskBuilder() {
   const [kind, setKind] = useState<TaskKind>('shell_command');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [configState, setConfigState] = useState<TaskConfigState>({ ...defaultConfigState });
 
-  // Shell / AgentStep config
-  const [command, setCommand] = useState('');
-  const [workingDir, setWorkingDir] = useState('');
+  function handleConfigChange<K extends keyof TaskConfigState>(key: K, value: TaskConfigState[K]) {
+    setConfigState((prev) => ({ ...prev, [key]: value }));
+  }
 
-  // Script file config
-  const [scriptPath, setScriptPath] = useState('');
-  const [interpreter, setInterpreter] = useState('/bin/sh');
-
-  // Agent step (prompt) config
-  const [prompt, setPrompt] = useState('');
-
-  // Agent loop config
-  const [goal, setGoal] = useState('');
-  const [loopMaxIterations, setLoopMaxIterations] = useState(25);
-  const [loopMaxTokens, setLoopMaxTokens] = useState(200000);
-
-  // HTTP config
-  const [httpUrl, setHttpUrl] = useState('');
-  const [httpMethod, setHttpMethod] = useState<HttpRequestConfig['method']>('GET');
-  const [httpHeaders, setHttpHeaders] = useState<{ k: string; v: string }[]>([]);
-  const [httpBody, setHttpBody] = useState('');
-  const [httpExpectedCodes, setHttpExpectedCodes] = useState('');
+  // Convenience aliases for buildConfig / canProceed
+  const { command, workingDir, scriptPath, interpreter, prompt, goal,
+    loopMaxIterations, loopMaxTokens, httpUrl, httpMethod, httpHeaders,
+    httpBody, httpExpectedCodes } = configState;
 
   // Step 2 — Who
   const [agentId, setAgentId] = useState('default');
@@ -318,219 +264,12 @@ export function TaskBuilder() {
               </div>
             </Field>
 
-            {/* Config panel for each kind */}
-            {kind === 'shell_command' && (
-              <>
-                <Field label="Command">
-                  <textarea
-                    value={command}
-                    onChange={(e) => setCommand(e.target.value)}
-                    rows={6}
-                    placeholder={"#!/bin/bash\necho 'Hello from Orbit!'"}
-                    className="w-full px-4 py-3 rounded-lg bg-inset border border-edge text-green-400 text-sm font-mono placeholder-border focus:outline-none focus:border-accent resize-none"
-                  />
-                </Field>
-                <Field label="Working directory (optional)">
-                  <input
-                    type="text"
-                    value={workingDir}
-                    onChange={(e) => setWorkingDir(e.target.value)}
-                    placeholder="~/scripts"
-                    className={inputCls}
-                  />
-                </Field>
-              </>
-            )}
-
-            {kind === 'agent_step' && (
-              <Field label="Prompt">
-                <textarea
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  rows={6}
-                  placeholder="e.g., Summarize the key trends in our latest sales data and suggest three action items."
-                  className="w-full px-4 py-3 rounded-lg bg-inset border border-edge text-white text-sm placeholder-border focus:outline-none focus:border-accent resize-none leading-relaxed"
-                />
-              </Field>
-            )}
-
-            {kind === 'script_file' && (
-              <>
-                <Field label="Script path">
-                  <input
-                    type="text"
-                    value={scriptPath}
-                    onChange={(e) => setScriptPath(e.target.value)}
-                    placeholder="/Users/you/scripts/backup.sh"
-                    className={inputCls}
-                  />
-                </Field>
-                <Field label="Interpreter">
-                  <input
-                    type="text"
-                    value={interpreter}
-                    onChange={(e) => setInterpreter(e.target.value)}
-                    placeholder="/bin/sh"
-                    className={inputCls}
-                  />
-                </Field>
-                <Field label="Working directory (optional)">
-                  <input
-                    type="text"
-                    value={workingDir}
-                    onChange={(e) => setWorkingDir(e.target.value)}
-                    placeholder="~/scripts"
-                    className={inputCls}
-                  />
-                </Field>
-              </>
-            )}
-
-            {kind === 'agent_loop' && (
-              <>
-                <Field label="Goal">
-                  <textarea
-                    value={goal}
-                    onChange={(e) => setGoal(e.target.value)}
-                    rows={5}
-                    placeholder="e.g., Create a Python script that scrapes weather data and saves it to a CSV file"
-                    className="w-full px-4 py-3 rounded-lg bg-inset border border-edge text-white text-sm placeholder-border focus:outline-none focus:border-accent resize-none leading-relaxed"
-                  />
-                </Field>
-                <div className="grid grid-cols-2 gap-4">
-                  <Field label="Max iterations">
-                    <input
-                      type="number"
-                      min={1}
-                      max={100}
-                      value={loopMaxIterations}
-                      onChange={(e) => setLoopMaxIterations(Number(e.target.value))}
-                      className={inputCls}
-                    />
-                  </Field>
-                  <Field label="Max total tokens">
-                    <input
-                      type="number"
-                      min={1000}
-                      step={10000}
-                      value={loopMaxTokens}
-                      onChange={(e) => setLoopMaxTokens(Number(e.target.value))}
-                      className={inputCls}
-                    />
-                  </Field>
-                </div>
-              </>
-            )}
-
-            {kind === 'http_request' && (
-              <>
-                <Field label="URL">
-                  <div className="flex gap-2">
-                    <Select.Root
-                      value={httpMethod}
-                      onValueChange={(v) => setHttpMethod(v as HttpRequestConfig['method'])}
-                    >
-                      <Select.Trigger className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-surface border border-edge text-white text-sm focus:outline-none focus:border-accent">
-                        <Select.Value />
-                        <Select.Icon>
-                          <ChevronDown size={14} className="text-muted" />
-                        </Select.Icon>
-                      </Select.Trigger>
-                      <Select.Portal>
-                        <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
-                          <Select.Viewport className="p-1">
-                            {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => (
-                              <Select.Item
-                                key={m}
-                                value={m}
-                                className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
-                              >
-                                <Select.ItemText>{m}</Select.ItemText>
-                              </Select.Item>
-                            ))}
-                          </Select.Viewport>
-                        </Select.Content>
-                      </Select.Portal>
-                    </Select.Root>
-                    <input
-                      type="url"
-                      value={httpUrl}
-                      onChange={(e) => setHttpUrl(e.target.value)}
-                      placeholder="https://api.example.com/endpoint"
-                      className={`${inputCls} flex-1`}
-                    />
-                  </div>
-                </Field>
-
-                <Field label="Headers">
-                  <div className="space-y-2">
-                    {httpHeaders.map((h, i) => (
-                      <div key={i} className="flex gap-2 items-center">
-                        <input
-                          type="text"
-                          placeholder="Header-Name"
-                          value={h.k}
-                          onChange={(e) =>
-                            setHttpHeaders((prev) =>
-                              prev.map((x, j) => (j === i ? { ...x, k: e.target.value } : x))
-                            )
-                          }
-                          className={`${inputCls} flex-1`}
-                        />
-                        <input
-                          type="text"
-                          placeholder="value"
-                          value={h.v}
-                          onChange={(e) =>
-                            setHttpHeaders((prev) =>
-                              prev.map((x, j) => (j === i ? { ...x, v: e.target.value } : x))
-                            )
-                          }
-                          className={`${inputCls} flex-1`}
-                        />
-                        <button
-                          onClick={() => setHttpHeaders((prev) => prev.filter((_, j) => j !== i))}
-                          className="p-1.5 text-muted hover:text-red-400"
-                        >
-                          <Minus size={14} />
-                        </button>
-                      </div>
-                    ))}
-                    <button
-                      onClick={() => setHttpHeaders((prev) => [...prev, { k: '', v: '' }])}
-                      className="flex items-center gap-1.5 text-xs text-accent hover:text-accent-hover"
-                    >
-                      <Plus size={12} /> Add header
-                    </button>
-                  </div>
-                </Field>
-
-                {['POST', 'PUT', 'PATCH'].includes(httpMethod) && (
-                  <Field label="Body">
-                    <textarea
-                      value={httpBody}
-                      onChange={(e) => setHttpBody(e.target.value)}
-                      rows={4}
-                      placeholder='{"key": "value"}'
-                      className="w-full px-4 py-3 rounded-lg bg-inset border border-edge text-green-400 text-sm font-mono placeholder-border focus:outline-none focus:border-accent resize-none"
-                    />
-                  </Field>
-                )}
-
-                <Field label="Expected status codes (optional)">
-                  <input
-                    type="text"
-                    value={httpExpectedCodes}
-                    onChange={(e) => setHttpExpectedCodes(e.target.value)}
-                    placeholder="200, 201, 204"
-                    className={inputCls}
-                  />
-                  <p className="text-xs text-muted mt-1">
-                    Comma-separated. Leave blank for any 2xx.
-                  </p>
-                </Field>
-              </>
-            )}
+            {/* Config panel for the selected kind */}
+            <TaskConfigForm
+              kind={kind}
+              state={configState}
+              onChange={handleConfigChange}
+            />
           </>
         )}
 
@@ -788,27 +527,3 @@ export function TaskBuilder() {
   );
 }
 
-const inputCls =
-  'w-full px-4 py-2.5 rounded-lg bg-surface border border-edge text-white text-sm placeholder-border-hover focus:outline-none focus:border-accent';
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <label className="block text-sm font-medium text-secondary mb-1.5">{label}</label>
-      {children}
-    </div>
-  );
-}
-
-function Row({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="flex gap-3">
-      <dt className="w-28 flex-shrink-0 text-xs text-muted pt-0.5">{label}</dt>
-      <dd
-        className={`flex-1 text-sm text-white break-all ${mono ? 'font-mono text-green-400' : ''}`}
-      >
-        {value}
-      </dd>
-    </div>
-  );
-}

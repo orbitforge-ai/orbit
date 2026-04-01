@@ -1,9 +1,14 @@
+import { useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Play, Pencil, Trash2, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Play, Pencil, Trash2, ToggleLeft, ToggleRight, Clock } from 'lucide-react';
 import { tasksApi } from '../../api/tasks';
+import { schedulesApi } from '../../api/schedules';
+import { runsApi } from '../../api/runs';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useUiStore } from '../../store/uiStore';
-import { Task } from '../../types';
+import { KIND_OPTIONS } from '../../lib/taskConstants';
+import { humanSchedule } from '../../lib/humanSchedule';
+import type { Task, Schedule, RunSummary, RecurringConfig } from '../../types';
 import { info } from '@tauri-apps/plugin-log';
 import { confirm } from '@tauri-apps/plugin-dialog';
 
@@ -16,6 +21,34 @@ export function TasksScreen() {
     queryFn: tasksApi.list,
     select: (all: Task[]) => all.filter((t) => !t.tags.includes('pulse')),
   });
+
+  const { data: schedules = [] } = useQuery({
+    queryKey: ['schedules'],
+    queryFn: schedulesApi.list,
+  });
+
+  const { data: recentRuns = [] } = useQuery({
+    queryKey: ['runs', 'recent-for-tasks'],
+    queryFn: () => runsApi.list({ limit: 100 }),
+  });
+
+  // Index: taskId -> first matching schedule
+  const scheduleByTask = useMemo(() => {
+    const map = new Map<string, Schedule>();
+    for (const s of schedules) {
+      if (!map.has(s.taskId)) map.set(s.taskId, s);
+    }
+    return map;
+  }, [schedules]);
+
+  // Index: taskId -> most recent run
+  const lastRunByTask = useMemo(() => {
+    const map = new Map<string, RunSummary>();
+    for (const r of recentRuns) {
+      if (!map.has(r.taskId)) map.set(r.taskId, r);
+    }
+    return map;
+  }, [recentRuns]);
 
   async function handleTrigger(task: Task) {
     console.log(`Triggering task: ${task.name}`);
@@ -68,54 +101,91 @@ export function TasksScreen() {
         )}
 
         <div className="divide-y divide-border">
-          {tasks.map((task) => (
-            <div
-              key={task.id}
-              className="flex items-center gap-3 px-6 py-4 hover:bg-surface transition-colors"
-            >
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-medium text-white truncate">{task.name}</p>
-                  {!task.enabled && <StatusBadge state="cancelled" />}
-                </div>
-                <p className="text-xs text-muted mt-0.5 capitalize">
-                  {task.kind.replace('_', ' ')}
-                </p>
-              </div>
+          {tasks.map((task) => {
+            const kindInfo = KIND_OPTIONS.find((k) => k.id === task.kind);
+            const KindIcon = kindInfo?.icon;
+            const sched = scheduleByTask.get(task.id);
+            const lastRun = lastRunByTask.get(task.id);
+            const schedLabel = sched
+              ? sched.kind === 'recurring'
+                ? humanSchedule(sched.config as RecurringConfig)
+                : 'One-shot'
+              : null;
 
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => handleTrigger(task)}
-                  title="Run now"
-                  className="p-1.5 rounded text-muted hover:text-green-400 hover:bg-green-500/10 transition-colors"
-                >
-                  <Play size={14} />
-                </button>
-                <button
-                  onClick={() => editTask(task.id)}
-                  title="Edit"
-                  className="p-1.5 rounded text-muted hover:text-white hover:bg-edge transition-colors"
-                >
-                  <Pencil size={14} />
-                </button>
-                <button
-                  onClick={() => handleToggle(task)}
-                  title={task.enabled ? 'Disable' : 'Enable'}
-                  className="p-1.5 rounded text-muted hover:text-white hover:bg-edge transition-colors"
-                >
-                  {task.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDelete(task)}
-                  title="Delete"
-                  className="p-1.5 rounded text-muted hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                >
-                  <Trash2 size={14} />
-                </button>
+            return (
+              <div
+                key={task.id}
+                className={`flex items-center gap-3 px-6 py-4 hover:bg-surface transition-colors ${
+                  !task.enabled ? 'opacity-50' : ''
+                }`}
+              >
+                {/* Kind icon */}
+                {KindIcon && (
+                  <div className="shrink-0 w-8 h-8 rounded-lg bg-surface flex items-center justify-center">
+                    <KindIcon size={15} className="text-muted" />
+                  </div>
+                )}
+
+                {/* Name + description + meta */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-white truncate">{task.name}</p>
+                    {!task.enabled && <StatusBadge state="cancelled" />}
+                  </div>
+                  {task.description && (
+                    <p className="text-xs text-muted mt-0.5 truncate">{task.description}</p>
+                  )}
+                  <div className="flex items-center gap-3 mt-1">
+                    <span className="text-xs text-muted capitalize">
+                      {kindInfo?.label ?? task.kind.replace('_', ' ')}
+                    </span>
+                    {schedLabel && (
+                      <span className="flex items-center gap-1 text-xs text-muted">
+                        <Clock size={10} />
+                        {schedLabel}
+                      </span>
+                    )}
+                    {lastRun && (
+                      <StatusBadge state={lastRun.state} />
+                    )}
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => handleTrigger(task)}
+                    title="Run now"
+                    className="p-1.5 rounded text-muted hover:text-green-400 hover:bg-green-500/10 transition-colors"
+                  >
+                    <Play size={14} />
+                  </button>
+                  <button
+                    onClick={() => editTask(task.id)}
+                    title="Edit"
+                    className="p-1.5 rounded text-muted hover:text-white hover:bg-edge transition-colors"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    onClick={() => handleToggle(task)}
+                    title={task.enabled ? 'Disable' : 'Enable'}
+                    className="p-1.5 rounded text-muted hover:text-white hover:bg-edge transition-colors"
+                  >
+                    {task.enabled ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(task)}
+                    title="Delete"
+                    className="p-1.5 rounded text-muted hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>

@@ -5,30 +5,52 @@ import * as Select from '@radix-ui/react-select';
 import { agentsApi } from '../../api/agents';
 import { chatApi } from '../../api/chat';
 import { useUiStore } from '../../store/uiStore';
-import { ChatSession } from '../../types';
+import {
+  draftToChatSession,
+  getDraftSessionId,
+  isDraftSessionId,
+  useChatDraftStore,
+} from '../../store/chatDraftStore';
+import { ChatSession, ContentBlock } from '../../types';
 import { SessionList } from './SessionList';
 import { ChatPanel } from './ChatPanel';
+
+interface PendingInitialSend {
+  key: string;
+  sessionId: string;
+  agentId: string;
+  draftId: string;
+  content: ContentBlock[];
+}
 
 export function ChatScreen() {
   const queryClient = useQueryClient();
   const { pendingChatSessionId, clearPendingChatSession } = useUiStore();
+  const drafts = useChatDraftStore((state) => state.drafts);
+  const ensureDraft = useChatDraftStore((state) => state.ensureDraft);
+  const updateDraftText = useChatDraftStore((state) => state.updateDraftText);
+  const deleteDraft = useChatDraftStore((state) => state.deleteDraft);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [pendingInitialSend, setPendingInitialSend] = useState<PendingInitialSend | null>(null);
 
   const { data: agents = [] } = useQuery({
     queryKey: ['agents'],
     queryFn: agentsApi.list,
   });
 
-  // Handle pending chat session from external navigation (e.g. clicking a pulse run)
+  const selectedDraft = selectedAgentId ? drafts[selectedAgentId] ?? null : null;
+  const visibleDraft =
+    selectedAgentId && pendingInitialSend?.agentId === selectedAgentId ? null : selectedDraft;
+  const draftSession = visibleDraft ? draftToChatSession(visibleDraft) : null;
+
   useEffect(() => {
     if (!pendingChatSessionId || agents.length === 0) return;
 
-    // Look up the session to find which agent it belongs to
     async function resolve() {
       for (const agent of agents) {
         const sessions: ChatSession[] = await chatApi.listSessions(agent.id, true);
-        const match = sessions.find((s) => s.id === pendingChatSessionId);
+        const match = sessions.find((session) => session.id === pendingChatSessionId);
         if (match) {
           setSelectedAgentId(agent.id);
           setActiveSessionId(match.id);
@@ -36,43 +58,96 @@ export function ChatScreen() {
           return;
         }
       }
-      // Session not found — just clear it
       clearPendingChatSession();
     }
-    resolve();
-  }, [pendingChatSessionId, agents]);
 
-  // Auto-select first agent
+    void resolve();
+  }, [agents, clearPendingChatSession, pendingChatSessionId]);
+
   useEffect(() => {
     if (!selectedAgentId && agents.length > 0) {
       setSelectedAgentId(agents[0].id);
     }
   }, [agents, selectedAgentId]);
 
-  async function handleNewSession() {
+  useEffect(() => {
     if (!selectedAgentId) return;
+
+    if (isDraftSessionId(activeSessionId) && !selectedDraft) {
+      setActiveSessionId(null);
+      return;
+    }
+
+    if (!activeSessionId && selectedDraft) {
+      setActiveSessionId(getDraftSessionId(selectedAgentId));
+    }
+  }, [activeSessionId, selectedAgentId, selectedDraft]);
+
+  function handleSelectAgent(agentId: string) {
+    setSelectedAgentId(agentId);
+    setActiveSessionId(drafts[agentId] ? getDraftSessionId(agentId) : null);
+  }
+
+  function handleNewSession() {
+    if (!selectedAgentId) return;
+    ensureDraft(selectedAgentId);
+    setActiveSessionId(getDraftSessionId(selectedAgentId));
+  }
+
+  function handleDeleteDraft() {
+    if (!selectedAgentId) return;
+    deleteDraft(selectedAgentId);
+    if (activeSessionId === getDraftSessionId(selectedAgentId)) {
+      setActiveSessionId(null);
+    }
+  }
+
+  async function handleDraftSend(content: ContentBlock[]) {
+    if (!selectedAgentId) return;
+
+    const draft = useChatDraftStore.getState().drafts[selectedAgentId] ?? ensureDraft(selectedAgentId);
     const session = await chatApi.createSession(selectedAgentId);
     queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
+    setPendingInitialSend({
+      key: `${session.id}:${Date.now()}`,
+      sessionId: session.id,
+      agentId: selectedAgentId,
+      draftId: draft.id,
+      content,
+    });
     setActiveSessionId(session.id);
+  }
+
+  function handleInitialMessageHandled(key: string) {
+    setPendingInitialSend((current) => {
+      if (!current || current.key !== key) return current;
+      const draft = useChatDraftStore.getState().drafts[current.agentId];
+      if (draft?.id === current.draftId) {
+        useChatDraftStore.getState().deleteDraft(current.agentId);
+      }
+      return null;
+    });
+  }
+
+  function handleInitialMessageFailed(key: string) {
+    setPendingInitialSend((current) => {
+      if (!current || current.key !== key) return current;
+      if (selectedAgentId === current.agentId) {
+        setActiveSessionId(getDraftSessionId(current.agentId));
+      }
+      return null;
+    });
   }
 
   return (
     <div className="flex h-full">
-      {/* Left panel: agent selector + session list */}
       <div className="w-[280px] flex flex-col border-r border-edge bg-panel">
-        {/* Agent selector */}
         <div className="px-4 py-3 border-b border-edge">
           <label className="text-[10px] uppercase tracking-wider text-muted mb-1.5 block">
             Agent
           </label>
           {agents.length > 0 && selectedAgentId && (
-            <Select.Root
-              value={selectedAgentId}
-              onValueChange={(id) => {
-                setSelectedAgentId(id);
-                setActiveSessionId(null);
-              }}
-            >
+            <Select.Root value={selectedAgentId} onValueChange={handleSelectAgent}>
               <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent">
                 <div className="flex items-center gap-2">
                   <Bot size={14} className="text-accent-hover" />
@@ -102,13 +177,14 @@ export function ChatScreen() {
           )}
         </div>
 
-        {/* Session list */}
         {selectedAgentId ? (
           <SessionList
             agentId={selectedAgentId}
             activeSessionId={activeSessionId}
             onSelectSession={setActiveSessionId}
             onNewSession={handleNewSession}
+            draftSession={draftSession}
+            onDeleteDraft={handleDeleteDraft}
           />
         ) : (
           <div className="flex-1 flex items-center justify-center text-muted text-xs">
@@ -117,10 +193,26 @@ export function ChatScreen() {
         )}
       </div>
 
-      {/* Right panel: conversation */}
       <div className="flex-1 min-h-0">
-        {activeSessionId ? (
-          <ChatPanel sessionId={activeSessionId} />
+        {selectedDraft &&
+        selectedAgentId &&
+        activeSessionId === getDraftSessionId(selectedAgentId) ? (
+          <ChatPanel
+            draft={selectedDraft}
+            onDraftTextChange={(text) => updateDraftText(selectedAgentId, text)}
+            onDraftSend={handleDraftSend}
+          />
+        ) : activeSessionId && !isDraftSessionId(activeSessionId) ? (
+          <ChatPanel
+            sessionId={activeSessionId}
+            initialQueuedMessage={
+              pendingInitialSend?.sessionId === activeSessionId
+                ? { key: pendingInitialSend.key, content: pendingInitialSend.content }
+                : null
+            }
+            onInitialMessageHandled={handleInitialMessageHandled}
+            onInitialMessageFailed={handleInitialMessageFailed}
+          />
         ) : (
           <div className="flex items-center justify-center h-full text-muted text-sm">
             Select or create a chat session

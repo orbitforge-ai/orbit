@@ -27,6 +27,8 @@ interface SessionListProps {
   activeSessionId: string | null;
   onSelectSession: (id: string | null) => void;
   onNewSession: () => void;
+  draftSession?: ChatSession | null;
+  onDeleteDraft?: () => void;
 }
 
 interface SourceSessionGroup {
@@ -49,6 +51,8 @@ export function SessionList({
   activeSessionId,
   onSelectSession,
   onNewSession,
+  draftSession = null,
+  onDeleteDraft,
 }: SessionListProps) {
   const queryClient = useQueryClient();
   const { openAgentChat } = useUiStore();
@@ -139,6 +143,8 @@ export function SessionList({
       session.sessionType !== 'user_chat'
   );
   const userChats = visibleSessions.filter((session) => session.sessionType === 'user_chat');
+  const topLevelUserChats =
+    !showArchived && draftSession ? [...userChats, draftSession].sort(compareSessions) : userChats;
 
   const senderGroups = busSessions.reduce(
     (groups, session) => {
@@ -316,6 +322,7 @@ export function SessionList({
   }
 
   function renderSessionRow(session: ChatSession) {
+    const isDraft = draftSession?.id === session.id;
     const isPulse = session.sessionType === 'pulse';
     const icon = isPulse ? (
       <Zap size={14} className="shrink-0 text-warning" />
@@ -327,14 +334,14 @@ export function SessionList({
       <MessageSquare size={14} className="shrink-0 opacity-50" />
     );
 
-    const stateIcon =
-      session.executionState === 'queued' || session.executionState === 'running' ? (
-        <Loader2 size={12} className="animate-spin text-accent-hover" />
-      ) : session.executionState === 'success' ? (
-        <CheckCircle2 size={12} className="text-emerald-400" />
-      ) : session.executionState ? (
-        <XCircle size={12} className="text-red-400" />
-      ) : null;
+    const stateIcon = isDraft ? null : session.executionState === 'queued' ||
+      session.executionState === 'running' ? (
+      <Loader2 size={12} className="animate-spin text-accent-hover" />
+    ) : session.executionState === 'success' ? (
+      <CheckCircle2 size={12} className="text-emerald-400" />
+    ) : session.executionState ? (
+      <XCircle size={12} className="text-red-400" />
+    ) : null;
 
     return (
       <div
@@ -342,16 +349,27 @@ export function SessionList({
         key={session.id}
         onClick={() => onSelectSession(session.id)}
         className={`group relative flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${
-          activeSessionId === session.id
-            ? 'bg-accent/15 text-white'
-            : 'text-secondary hover:bg-surface hover:text-white'
+          isDraft && activeSessionId === session.id
+            ? 'border border-dashed border-accent/60 bg-accent/12 text-white'
+            : isDraft
+              ? 'border border-dashed border-edge-hover/80 bg-surface/60 text-secondary hover:border-accent/40 hover:bg-accent/8 hover:text-white'
+              : activeSessionId === session.id
+                ? 'bg-accent/15 text-white'
+                : 'text-secondary hover:bg-surface hover:text-white'
         }`}
       >
         {icon}
         <div className="flex-1 min-w-0">
-          <p className="text-sm truncate">{session.title}</p>
+          <div className="flex items-center gap-2 min-w-0">
+            <p className={`text-sm truncate ${isDraft ? 'italic' : ''}`}>{session.title}</p>
+            {isDraft && (
+              <span className="shrink-0 rounded-full border border-accent/40 bg-accent/12 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-accent-hover">
+                Draft
+              </span>
+            )}
+          </div>
           <p className="text-[10px] text-muted">
-            {session.executionState ? `${session.executionState} · ` : ''}
+            {!isDraft && session.executionState ? `${session.executionState} · ` : ''}
             {formatTime(session.updatedAt)}
           </p>
         </div>
@@ -373,25 +391,34 @@ export function SessionList({
             className="absolute right-2 top-full mt-1 z-50 rounded-lg bg-surface border border-edge shadow-xl py-1 min-w-[140px]"
             onClick={(e) => e.stopPropagation()}
           >
+            {!isDraft && (
+              <button
+                onClick={() => handleArchive(session)}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-secondary hover:text-white hover:bg-surface-hover"
+              >
+                {session.archived ? (
+                  <>
+                    <ArchiveRestore size={12} /> Unarchive
+                  </>
+                ) : (
+                  <>
+                    <Archive size={12} /> Archive
+                  </>
+                )}
+              </button>
+            )}
             <button
-              onClick={() => handleArchive(session)}
-              className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-secondary hover:text-white hover:bg-surface-hover"
-            >
-              {session.archived ? (
-                <>
-                  <ArchiveRestore size={12} /> Unarchive
-                </>
-              ) : (
-                <>
-                  <Archive size={12} /> Archive
-                </>
-              )}
-            </button>
-            <button
-              onClick={() => handleDelete(session)}
+              onClick={() => {
+                if (isDraft) {
+                  onDeleteDraft?.();
+                  setMenuSessionId(null);
+                  return;
+                }
+                void handleDelete(session);
+              }}
               className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10"
             >
-              <Trash2 size={12} /> Delete
+              <Trash2 size={12} /> {isDraft ? 'Delete draft' : 'Delete'}
             </button>
           </div>
         )}
@@ -414,11 +441,14 @@ export function SessionList({
 
       {/* Session list */}
       <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
-        {visibleSessions.length === 0 && (
-          <div className="text-center py-12 text-muted text-xs">
-            {showArchived ? 'No archived chats.' : 'No chats yet. Start a new one!'}
-          </div>
-        )}
+        {pulseSessions.length === 0 &&
+          orderedSenderGroups.length === 0 &&
+          otherAgenticSessions.length === 0 &&
+          topLevelUserChats.length === 0 && (
+            <div className="text-center py-12 text-muted text-xs">
+              {showArchived ? 'No archived chats.' : 'No chats yet. Start a new one!'}
+            </div>
+          )}
 
         {pulseSessions.map(renderSessionRow)}
 
@@ -498,7 +528,7 @@ export function SessionList({
         })}
 
         {otherAgenticSessions.map(renderSessionRow)}
-        {userChats.map(renderSessionRow)}
+        {topLevelUserChats.map(renderSessionRow)}
       </div>
 
       {/* Footer: archived toggle */}

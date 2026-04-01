@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ArrowDown, Loader2 } from 'lucide-react';
 import { chatApi } from '../../api/chat';
-import { ContentBlock } from '../../types';
+import { ChatDraft, ContentBlock } from '../../types';
 import { DisplayMessage, DisplayBlock } from '../../components/chat/types';
 import { chatMessagesToDisplay } from '../../components/chat/utils';
 import { MessageBubble } from '../../components/chat/MessageBubble';
@@ -20,50 +20,74 @@ import { usePermissionStore } from '../../store/permissionStore';
 
 const PAGE_SIZE = 50;
 
+interface QueuedInitialMessage {
+  key: string;
+  content: ContentBlock[];
+}
+
 interface ChatPanelProps {
-  sessionId: string;
+  sessionId?: string;
+  draft?: ChatDraft | null;
+  onDraftTextChange?: (text: string) => void;
+  onDraftSend?: (content: ContentBlock[]) => Promise<void>;
+  initialQueuedMessage?: QueuedInitialMessage | null;
+  onInitialMessageHandled?: (key: string) => void;
+  onInitialMessageFailed?: (key: string) => void;
 }
 
 let msgId = 0;
 
-export function ChatPanel({ sessionId }: ChatPanelProps) {
+export function ChatPanel({
+  sessionId,
+  draft,
+  onDraftTextChange,
+  onDraftSend,
+  initialQueuedMessage,
+  onInitialMessageHandled,
+  onInitialMessageFailed,
+}: ChatPanelProps) {
   const queryClient = useQueryClient();
   const parentRef = useRef<HTMLDivElement>(null);
+  const consumedInitialMessageRef = useRef<string | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [streaming, setStreaming] = useState(false);
   const [streamMessages, setStreamMessages] = useState<DisplayMessage[]>([]);
 
-  // Scroll position preservation for loading older messages
   const prevScrollHeightRef = useRef(0);
   const prevScrollTopRef = useRef(0);
   const isLoadingOlderRef = useRef(false);
+  const isDraft = Boolean(draft && !sessionId);
+  const streamId = sessionId ? `chat:${sessionId}` : null;
 
-  const streamId = `chat:${sessionId}`;
+  useEffect(() => {
+    setStreaming(false);
+    setStreamMessages([]);
+    setAutoScroll(true);
+    consumedInitialMessageRef.current = null;
+  }, [draft?.id, sessionId]);
 
-  // Load messages from DB with pagination
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
-    queryKey: ['chat-messages', sessionId],
+    queryKey: sessionId ? ['chat-messages', sessionId] : ['chat-messages', 'draft'],
     queryFn: async ({ pageParam = 0 }) => {
-      return chatApi.getMessagesPaginated(sessionId, PAGE_SIZE, pageParam);
+      return chatApi.getMessagesPaginated(sessionId!, PAGE_SIZE, pageParam);
     },
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) => {
       if (!lastPage.hasMore) return undefined;
-      const totalLoaded = allPages.reduce((sum, p) => sum + p.messages.length, 0);
+      const totalLoaded = allPages.reduce((sum, page) => sum + page.messages.length, 0);
       return totalLoaded;
     },
     refetchInterval: streaming ? false : 10_000,
     refetchOnWindowFocus: false,
     staleTime: 30_000,
     gcTime: 10 * 60_000,
+    enabled: Boolean(sessionId),
   });
 
-  // Flatten pages: pages[0]=newest, pages[N]=oldest → reverse so oldest first
   const allDbMessages = useMemo(() => {
     if (!data?.pages) return [];
     const reversed = [...data.pages].reverse();
     const all = reversed.flatMap((page) => page.messages);
-    // Deduplicate by created_at+role in case pages overlap from new messages arriving
     const seen = new Set<string>();
     return all.filter((msg) => {
       const key = `${msg.created_at}:${msg.role}`;
@@ -74,14 +98,15 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
   }, [data]);
 
   const historyMessages = useMemo(() => {
+    if (!sessionId) return [];
     return chatMessagesToDisplay(allDbMessages);
-  }, [allDbMessages]);
+  }, [allDbMessages, sessionId]);
 
-  // Combine history + streaming messages
-  const displayMessages = streaming ? streamMessages : historyMessages;
+  const displayMessages = isDraft ? [] : streaming ? streamMessages : historyMessages;
 
-  // Subscribe to streaming events
   useEffect(() => {
+    if (!streamId || !sessionId) return;
+
     const unsubs: Promise<() => void>[] = [];
 
     unsubs.push(
@@ -123,7 +148,6 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
           msgs[msgs.length - 1] = last;
 
           const blocks = [...last.blocks];
-          // Finalize any streaming text block
           const lastBlock = blocks[blocks.length - 1];
           if (lastBlock && lastBlock.kind === 'text' && lastBlock.isStreaming) {
             blocks[blocks.length - 1] = { ...lastBlock, isStreaming: false };
@@ -177,7 +201,6 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
         if (payload.runId !== streamId) return;
         if (payload.action === 'finished') {
           setStreaming(false);
-          // Finalize streaming blocks
           setStreamMessages((prev) => {
             const msgs = [...prev];
             const last = msgs[msgs.length - 1];
@@ -191,14 +214,12 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
             }
             return msgs;
           });
-          // Refetch from DB for consistency
           queryClient.invalidateQueries({ queryKey: ['chat-messages', sessionId] });
           queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
         }
       })
     );
 
-    // Permission request: inject a permission_prompt block into the stream
     unsubs.push(
       onPermissionRequest((payload) => {
         if (payload.runId !== streamId && payload.sessionId !== sessionId) return;
@@ -230,7 +251,6 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
       })
     );
 
-    // Permission cancelled: remove the prompt block
     unsubs.push(
       onPermissionCancelled((payload) => {
         usePermissionStore.getState().removeRequest(payload.requestId);
@@ -240,9 +260,8 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
     return () => {
       unsubs.forEach((p) => p.then((unsub) => unsub()));
     };
-  }, [streamId, sessionId]);
+  }, [queryClient, sessionId, streamId]);
 
-  // Scroll position preservation after loading older messages
   useEffect(() => {
     if (!isLoadingOlderRef.current || !parentRef.current) return;
     requestAnimationFrame(() => {
@@ -262,15 +281,13 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
     overscan: 5,
   });
 
-  // Auto-scroll — use virtualizer.scrollToIndex so it accounts for measured sizes
   useEffect(() => {
     if (autoScroll && displayMessages.length > 0 && !isLoadingOlderRef.current) {
-      // requestAnimationFrame lets the virtualizer measure before we scroll
       requestAnimationFrame(() => {
         virtualizer.scrollToIndex(displayMessages.length - 1, { align: 'end' });
       });
     }
-  }, [displayMessages, autoScroll]);
+  }, [autoScroll, displayMessages, virtualizer]);
 
   const handleLoadOlder = useCallback(() => {
     if (!parentRef.current || !hasNextPage || isFetchingNextPage) return;
@@ -278,7 +295,7 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
     prevScrollHeightRef.current = el.scrollHeight;
     prevScrollTopRef.current = el.scrollTop;
     isLoadingOlderRef.current = true;
-    fetchNextPage();
+    void fetchNextPage();
   }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
   function handleScroll() {
@@ -286,35 +303,36 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
     const { scrollTop, scrollHeight, clientHeight } = parentRef.current;
     setAutoScroll(scrollHeight - scrollTop - clientHeight < 50);
 
-    // Load older messages when scrolled near top
     if (scrollTop < 200 && hasNextPage && !isFetchingNextPage) {
       handleLoadOlder();
     }
   }
 
-  const handleSend = useCallback(
+  const handlePersistedSend = useCallback(
     async (content: ContentBlock[]) => {
-      // Optimistically add user message to stream view
+      if (!sessionId) return;
+
       const userMsg: DisplayMessage = {
         id: `user-${++msgId}`,
         role: 'user',
         blocks: content.map((block): DisplayBlock => {
           if (block.type === 'text') return { kind: 'text', text: block.text, isStreaming: false };
-          if (block.type === 'image')
+          if (block.type === 'image') {
             return { kind: 'image', mediaType: block.media_type, data: block.data };
+          }
           return { kind: 'text', text: '[attachment]', isStreaming: false };
         }),
         isStreaming: false,
         timestamp: new Date().toISOString(),
       };
 
-      // Add user message + empty streaming assistant placeholder
       const assistantPlaceholder: DisplayMessage = {
         id: `assistant-${++msgId}`,
         role: 'assistant',
         blocks: [],
         isStreaming: true,
       };
+
       setStreamMessages([...historyMessages, userMsg, assistantPlaceholder]);
       setStreaming(true);
 
@@ -323,23 +341,65 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
       } catch (err) {
         console.error('Failed to send message:', err);
         setStreaming(false);
+        throw err;
       }
     },
-    [sessionId, historyMessages]
+    [historyMessages, sessionId]
   );
 
-  const showScrollBtn = !autoScroll;
+  const handleSend = useCallback(
+    async (content: ContentBlock[]) => {
+      if (isDraft) {
+        if (!onDraftSend) return;
+        await onDraftSend(content);
+        return;
+      }
+
+      await handlePersistedSend(content);
+    },
+    [handlePersistedSend, isDraft, onDraftSend]
+  );
+
+  const queuedMessageKey = initialQueuedMessage?.key;
+  const queuedMessageContent = initialQueuedMessage?.content;
+
+  useEffect(() => {
+    if (!sessionId || !queuedMessageKey || !queuedMessageContent) return;
+    if (consumedInitialMessageRef.current === queuedMessageKey) return;
+
+    consumedInitialMessageRef.current = queuedMessageKey;
+
+    const run = async () => {
+      try {
+        await handlePersistedSend(queuedMessageContent);
+        onInitialMessageHandled?.(queuedMessageKey);
+      } catch {
+        consumedInitialMessageRef.current = null;
+        onInitialMessageFailed?.(queuedMessageKey);
+      }
+    };
+
+    void run();
+  }, [
+    handlePersistedSend,
+    queuedMessageKey,
+    queuedMessageContent,
+    onInitialMessageFailed,
+    onInitialMessageHandled,
+    sessionId,
+  ]);
+
+  const showScrollBtn = !isDraft && !autoScroll;
 
   return (
     <div className="flex flex-col h-full">
-      {/* Messages */}
       <div className="relative flex-1 min-h-0">
         <div
           ref={parentRef}
           onScroll={handleScroll}
           className="h-full overflow-y-auto overflow-x-hidden"
         >
-          {isFetchingNextPage && (
+          {isFetchingNextPage && !isDraft && (
             <div className="flex items-center justify-center gap-2 py-3">
               <Loader2 size={14} className="animate-spin text-muted" />
               <span className="text-muted text-xs">Loading older messages...</span>
@@ -347,8 +407,15 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
           )}
 
           {displayMessages.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-muted text-sm">
-              Send a message to start the conversation.
+            <div className="flex h-full items-center justify-center px-6">
+              <div className="max-w-sm text-center">
+                {isDraft && (
+                  <div className="mb-3 inline-flex items-center rounded-full border border-dashed border-accent/50 bg-accent/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-hover">
+                    Draft Chat
+                  </div>
+                )}
+                <div className="text-sm text-muted">Send a message to start the conversation.</div>
+              </div>
             </div>
           ) : (
             <div
@@ -397,17 +464,20 @@ export function ChatPanel({ sessionId }: ChatPanelProps) {
         )}
       </div>
 
-      {/* Input */}
       <ChatInput
         onSend={handleSend}
         disabled={streaming}
+        textValue={isDraft ? (draft?.text ?? '') : undefined}
+        onTextChange={isDraft ? onDraftTextChange : undefined}
         contextGauge={
-          <ContextGauge
-            sessionId={sessionId}
-            onCompacted={() => {
-              queryClient.invalidateQueries({ queryKey: ['chat-messages', sessionId] });
-            }}
-          />
+          sessionId ? (
+            <ContextGauge
+              sessionId={sessionId}
+              onCompacted={() => {
+                queryClient.invalidateQueries({ queryKey: ['chat-messages', sessionId] });
+              }}
+            />
+          ) : undefined
         }
       />
     </div>

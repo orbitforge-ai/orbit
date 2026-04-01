@@ -1,11 +1,13 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Send, Paperclip, X, Image as ImageIcon, FileText } from 'lucide-react';
 import { ContentBlock } from '../../types';
 
 interface ChatInputProps {
-  onSend: (content: ContentBlock[]) => void;
+  onSend: (content: ContentBlock[]) => Promise<void> | void;
   disabled?: boolean;
   contextGauge?: React.ReactNode;
+  textValue?: string;
+  onTextChange?: (text: string) => void;
 }
 
 interface Attachment {
@@ -13,24 +15,51 @@ interface Attachment {
   type: 'image' | 'document';
   name: string;
   mediaType: string;
-  data: string; // base64 for images, text content for documents
+  data: string;
 }
 
 let attachId = 0;
 
-export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
-  const [text, setText] = useState('');
+export function ChatInput({
+  onSend,
+  disabled,
+  contextGauge,
+  textValue,
+  onTextChange,
+}: ChatInputProps) {
+  const [internalText, setInternalText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [sending, setSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isControlled = textValue !== undefined;
+  const text = isControlled ? textValue ?? '' : internalText;
+
+  const setText = useCallback(
+    (value: string) => {
+      if (isControlled) {
+        onTextChange?.(value);
+        return;
+      }
+      setInternalText(value);
+    },
+    [isControlled, onTextChange]
+  );
+
+  useEffect(() => {
+    if (!textareaRef.current) return;
+    textareaRef.current.style.height = 'auto';
+    textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+  }, [text]);
 
   const handleSend = useCallback(() => {
+    if (sending) return;
+
     const trimmed = text.trim();
     if (!trimmed && attachments.length === 0) return;
 
     const blocks: ContentBlock[] = [];
 
-    // Add image attachments
     for (const att of attachments) {
       if (att.type === 'image') {
         blocks.push({ type: 'image', media_type: att.mediaType, data: att.data });
@@ -39,20 +68,28 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
       }
     }
 
-    // Add text
     if (trimmed) {
       blocks.push({ type: 'text', text: trimmed });
     }
 
-    onSend(blocks);
-    setText('');
-    setAttachments([]);
+    const run = async () => {
+      setSending(true);
+      try {
+        await Promise.resolve(onSend(blocks));
+        setText('');
+        setAttachments([]);
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+        }
+      } catch {
+        return;
+      } finally {
+        setSending(false);
+      }
+    };
 
-    // Reset textarea height
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
-  }, [text, attachments, onSend]);
+    void run();
+  }, [attachments, onSend, sending, setText, text]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -63,10 +100,9 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
 
   function handleTextareaInput(e: React.ChangeEvent<HTMLTextAreaElement>) {
     setText(e.target.value);
-    // Auto-resize
     const el = e.target;
     el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }
 
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -89,8 +125,7 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
           },
         ]);
       } else {
-        // Read as text
-        const text = await file.text();
+        const fileText = await file.text();
         setAttachments((prev) => [
           ...prev,
           {
@@ -98,13 +133,12 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
             type: 'document',
             name: file.name,
             mediaType: file.type,
-            data: text,
+            data: fileText,
           },
         ]);
       }
     }
 
-    // Reset input
     e.target.value = '';
   }
 
@@ -112,11 +146,11 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   }
 
-  const canSend = !disabled && (text.trim().length > 0 || attachments.length > 0);
+  const inputDisabled = disabled || sending;
+  const canSend = !inputDisabled && (text.trim().length > 0 || attachments.length > 0);
 
   return (
     <div className="border-t border-edge bg-panel">
-      {/* Attachment previews */}
       {attachments.length > 0 && (
         <div className="flex gap-2 px-4 pt-3 flex-wrap">
           {attachments.map((att) => (
@@ -141,11 +175,10 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
         </div>
       )}
 
-      {/* Input row */}
       <div className="flex items-end gap-2 p-3">
         <button
           onClick={() => fileInputRef.current?.click()}
-          disabled={disabled}
+          disabled={inputDisabled}
           className="p-2 rounded-lg text-muted hover:text-white hover:bg-surface disabled:opacity-50 transition-colors shrink-0 mb-0.5"
         >
           <Paperclip size={16} />
@@ -164,7 +197,7 @@ export function ChatInput({ onSend, disabled, contextGauge }: ChatInputProps) {
           value={text}
           onChange={handleTextareaInput}
           onKeyDown={handleKeyDown}
-          disabled={disabled}
+          disabled={inputDisabled}
           placeholder="Type a message..."
           rows={1}
           className="flex-1 px-3 py-2 rounded-xl bg-background border border-edge text-white text-sm resize-none focus:outline-none focus:border-accent disabled:opacity-50 placeholder:text-border-hover"
@@ -190,7 +223,6 @@ function fileToBase64(file: File): Promise<string> {
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
-      // Strip the data:...;base64, prefix
       const base64 = result.split(',')[1] || result;
       resolve(base64);
     };

@@ -178,6 +178,14 @@ export interface ChatSession {
   updatedAt: string;
 }
 
+export interface ChatDraft {
+  id: string;
+  agentId: string;
+  text: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ─── IPC event payloads ───────────────────────────────────────────────────────
 
 export interface LogLine {
