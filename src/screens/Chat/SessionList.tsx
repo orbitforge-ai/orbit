@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Plus,
@@ -45,6 +45,16 @@ interface SenderGroup {
   senderName: string;
   ungroupedSessions: ChatSession[];
   sourceGroups: SourceSessionGroup[];
+}
+
+function areCollapsedStatesEqual(
+  prev: Record<string, boolean>,
+  next: Record<string, boolean>
+) {
+  const prevKeys = Object.keys(prev);
+  const nextKeys = Object.keys(next);
+  if (prevKeys.length !== nextKeys.length) return false;
+  return nextKeys.every((key) => prev[key] === next[key]);
 }
 
 export function SessionList({
@@ -152,121 +162,143 @@ export function SessionList({
     return Math.max(...groupSessions.map((session) => new Date(session.updatedAt).getTime()));
   }
 
-  const visibleSessions = [...sessions]
-    .sort(compareSessions)
-    .filter(
-      (session) =>
-        session.sessionType !== 'sub_agent' ||
-        session.executionState === 'queued' ||
-        session.executionState === 'running'
-    );
-
-  const pulseSessions = visibleSessions.filter((session) => session.sessionType === 'pulse');
-  const busSessions = visibleSessions.filter((session) => session.sessionType === 'bus_message');
-  const otherAgenticSessions = visibleSessions.filter(
-    (session) =>
-      session.sessionType !== 'pulse' &&
-      session.sessionType !== 'bus_message' &&
-      session.sessionType !== 'user_chat'
+  const visibleSessions = useMemo(
+    () =>
+      [...sessions]
+        .sort(compareSessions)
+        .filter(
+          (session) =>
+            session.sessionType !== 'sub_agent' ||
+            session.executionState === 'queued' ||
+            session.executionState === 'running'
+        ),
+    [sessions]
   );
-  const userChats = visibleSessions.filter((session) => session.sessionType === 'user_chat');
-  const topLevelUserChats =
-    !showArchived && draftSession ? [...userChats, draftSession].sort(compareSessions) : userChats;
 
-  const senderGroups = busSessions.reduce(
-    (groups, session) => {
-      const senderName = session.sourceAgentName?.trim() || 'Unknown sender';
-      const senderId = session.sourceAgentId?.trim() || `unknown:${senderName}`;
-      const key = `${senderId}:${senderName}`;
-      const existing = groups.get(key);
-      if (existing) {
-        const sourceSessionId = session.sourceSessionId?.trim();
-        const sourceSessionTitle = session.sourceSessionTitle?.trim();
-        if (sourceSessionId && sourceSessionTitle) {
-          const sourceKey = `${key}:${sourceSessionId}`;
-          const sourceGroup = existing.sourceGroups.get(sourceKey);
-          if (sourceGroup) {
-            sourceGroup.sessions.push(session);
+  const pulseSessions = useMemo(
+    () => visibleSessions.filter((session) => session.sessionType === 'pulse'),
+    [visibleSessions]
+  );
+  const busSessions = useMemo(
+    () => visibleSessions.filter((session) => session.sessionType === 'bus_message'),
+    [visibleSessions]
+  );
+  const otherAgenticSessions = useMemo(
+    () =>
+      visibleSessions.filter(
+        (session) =>
+          session.sessionType !== 'pulse' &&
+          session.sessionType !== 'bus_message' &&
+          session.sessionType !== 'user_chat'
+      ),
+    [visibleSessions]
+  );
+  const userChats = useMemo(
+    () => visibleSessions.filter((session) => session.sessionType === 'user_chat'),
+    [visibleSessions]
+  );
+  const topLevelUserChats = useMemo(
+    () =>
+      !showArchived && draftSession ? [...userChats, draftSession].sort(compareSessions) : userChats,
+    [draftSession, showArchived, userChats]
+  );
+
+  const orderedSenderGroups = useMemo<SenderGroup[]>(() => {
+    const senderGroups = busSessions.reduce(
+      (groups, session) => {
+        const senderName = session.sourceAgentName?.trim() || 'Unknown sender';
+        const senderId = session.sourceAgentId?.trim() || `unknown:${senderName}`;
+        const key = `${senderId}:${senderName}`;
+        const existing = groups.get(key);
+        if (existing) {
+          const sourceSessionId = session.sourceSessionId?.trim();
+          const sourceSessionTitle = session.sourceSessionTitle?.trim();
+          if (sourceSessionId && sourceSessionTitle) {
+            const sourceKey = `${key}:${sourceSessionId}`;
+            const sourceGroup = existing.sourceGroups.get(sourceKey);
+            if (sourceGroup) {
+              sourceGroup.sessions.push(session);
+            } else {
+              existing.sourceGroups.set(sourceKey, {
+                key: sourceKey,
+                sourceSessionId,
+                sourceSessionTitle,
+                sessions: [session],
+              });
+            }
           } else {
-            existing.sourceGroups.set(sourceKey, {
-              key: sourceKey,
+            existing.ungroupedSessions.push(session);
+          }
+        } else {
+          const sourceGroups = new Map<string, SourceSessionGroup>();
+          const ungroupedSessions: ChatSession[] = [];
+          const sourceSessionId = session.sourceSessionId?.trim();
+          const sourceSessionTitle = session.sourceSessionTitle?.trim();
+
+          if (sourceSessionId && sourceSessionTitle) {
+            sourceGroups.set(`${key}:${sourceSessionId}`, {
+              key: `${key}:${sourceSessionId}`,
               sourceSessionId,
               sourceSessionTitle,
               sessions: [session],
             });
+          } else {
+            ungroupedSessions.push(session);
           }
-        } else {
-          existing.ungroupedSessions.push(session);
-        }
-      } else {
-        const sourceGroups = new Map<string, SourceSessionGroup>();
-        const ungroupedSessions: ChatSession[] = [];
-        const sourceSessionId = session.sourceSessionId?.trim();
-        const sourceSessionTitle = session.sourceSessionTitle?.trim();
 
-        if (sourceSessionId && sourceSessionTitle) {
-          sourceGroups.set(`${key}:${sourceSessionId}`, {
-            key: `${key}:${sourceSessionId}`,
-            sourceSessionId,
-            sourceSessionTitle,
-            sessions: [session],
+          groups.set(key, {
+            key,
+            senderId,
+            senderName,
+            ungroupedSessions,
+            sourceGroups,
           });
-        } else {
-          ungroupedSessions.push(session);
         }
+        return groups;
+      },
+      new Map<
+        string,
+        {
+          key: string;
+          senderId: string;
+          senderName: string;
+          ungroupedSessions: ChatSession[];
+          sourceGroups: Map<string, SourceSessionGroup>;
+        }
+      >()
+    );
 
-        groups.set(key, {
-          key,
-          senderId,
-          senderName,
-          ungroupedSessions,
-          sourceGroups,
-        });
-      }
-      return groups;
-    },
-    new Map<
-      string,
-      {
-        key: string;
-        senderId: string;
-        senderName: string;
-        ungroupedSessions: ChatSession[];
-        sourceGroups: Map<string, SourceSessionGroup>;
-      }
-    >()
-  );
+    return Array.from(senderGroups.values())
+      .map((group) => ({
+        key: group.key,
+        senderId: group.senderId,
+        senderName: group.senderName,
+        ungroupedSessions: [...group.ungroupedSessions].sort(compareSessions),
+        sourceGroups: Array.from(group.sourceGroups.values())
+          .sort((a, b) => latestSessionTimestamp(b.sessions) - latestSessionTimestamp(a.sessions))
+          .map((sourceGroup) => ({
+            ...sourceGroup,
+            sessions: [...sourceGroup.sessions].sort(compareSessions),
+          })),
+      }))
+      .sort((a, b) => {
+        const aLatest = latestSessionTimestamp([
+          ...a.ungroupedSessions,
+          ...a.sourceGroups.flatMap((group) => group.sessions),
+        ]);
+        const bLatest = latestSessionTimestamp([
+          ...b.ungroupedSessions,
+          ...b.sourceGroups.flatMap((group) => group.sessions),
+        ]);
+        return bLatest - aLatest;
+      });
+  }, [busSessions]);
 
-  const orderedSenderGroups: SenderGroup[] = Array.from(senderGroups.values())
-    .map((group) => ({
-      key: group.key,
-      senderId: group.senderId,
-      senderName: group.senderName,
-      ungroupedSessions: [...group.ungroupedSessions].sort(compareSessions),
-      sourceGroups: Array.from(group.sourceGroups.values())
-        .sort((a, b) => latestSessionTimestamp(b.sessions) - latestSessionTimestamp(a.sessions))
-        .map((sourceGroup) => ({
-          ...sourceGroup,
-          sessions: [...sourceGroup.sessions].sort(compareSessions),
-        })),
-    }))
-    .sort((a, b) => {
-      const aLatest = latestSessionTimestamp([
-        ...a.ungroupedSessions,
-        ...a.sourceGroups.flatMap((group) => group.sessions),
-      ]);
-      const bLatest = latestSessionTimestamp([
-        ...b.ungroupedSessions,
-        ...b.sourceGroups.flatMap((group) => group.sessions),
-      ]);
-      return bLatest - aLatest;
-    });
+  const previousActiveSessionId = prevActiveSessionIdRef.current;
+  const activeSessionChanged = activeSessionId !== previousActiveSessionId;
+  const newSessionSelected = activeSessionChanged && activeSessionId !== null;
 
   useEffect(() => {
-    const activeSessionChanged = activeSessionId !== prevActiveSessionIdRef.current;
-    const newSessionSelected = activeSessionChanged && activeSessionId !== null;
-    prevActiveSessionIdRef.current = activeSessionId;
-
     setCollapsedSenderGroups((prev) => {
       const next: Record<string, boolean> = {};
       for (const group of orderedSenderGroups) {
@@ -284,14 +316,11 @@ export function SessionList({
           next[group.key] = false;
         }
       }
-      return next;
+      return areCollapsedStatesEqual(prev, next) ? prev : next;
     });
-  }, [activeSessionId, orderedSenderGroups]);
+  }, [newSessionSelected, activeSessionId, orderedSenderGroups]);
 
   useEffect(() => {
-    const activeSessionChanged = activeSessionId !== prevActiveSessionIdRef.current;
-    const newSessionSelected = activeSessionChanged && activeSessionId !== null;
-
     setCollapsedSourceGroups((prev) => {
       const next: Record<string, boolean> = {};
       for (const senderGroup of orderedSenderGroups) {
@@ -310,9 +339,13 @@ export function SessionList({
           }
         }
       }
-      return next;
+      return areCollapsedStatesEqual(prev, next) ? prev : next;
     });
-  }, [activeSessionId, orderedSenderGroups]);
+  }, [newSessionSelected, activeSessionId, orderedSenderGroups]);
+
+  useEffect(() => {
+    prevActiveSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
 
   function toggleSenderGroup(key: string) {
     const group = orderedSenderGroups.find((candidate) => candidate.key === key);
