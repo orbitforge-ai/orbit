@@ -81,10 +81,24 @@ export function SessionList({
   });
 
   async function handleArchive(session: ChatSession) {
-    if (session.archived) {
-      await chatApi.unarchiveSession(session.id);
-    } else {
-      await chatApi.archiveSession(session.id);
+    try {
+      if (session.archived) {
+        await chatApi.unarchiveSession(session.id);
+      } else {
+        await chatApi.archiveSession(session.id);
+      }
+    } catch (err) {
+      console.error('Failed to archive/unarchive session:', err);
+    }
+    queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
+    setMenuSessionId(null);
+  }
+
+  async function handleCancel(session: ChatSession) {
+    try {
+      await chatApi.cancelAgentSession(session.id);
+    } catch (err) {
+      console.error('Failed to cancel session:', err);
     }
     queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
     setMenuSessionId(null);
@@ -92,10 +106,17 @@ export function SessionList({
 
   async function handleDelete(session: ChatSession) {
     if (!(await confirm(`Delete "${session.title}"? This cannot be undone.`))) return;
-    await chatApi.deleteSession(session.id);
-    usePermissionStore.getState().removeForSession(session.id);
-    if (activeSessionId === session.id) {
-      onSelectSession(null);
+    try {
+      if (session.executionState === 'queued' || session.executionState === 'running') {
+        await chatApi.cancelAgentSession(session.id);
+      }
+      await chatApi.deleteSession(session.id);
+      usePermissionStore.getState().removeForSession(session.id);
+      if (activeSessionId === session.id) {
+        onSelectSession(null);
+      }
+    } catch (err) {
+      console.error('Failed to delete session:', err);
     }
     queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
     setMenuSessionId(null);
@@ -396,6 +417,14 @@ export function SessionList({
             className="absolute right-2 top-full mt-1 z-50 rounded-lg bg-surface border border-edge shadow-xl py-1 min-w-[140px]"
             onClick={(e) => e.stopPropagation()}
           >
+            {!isDraft && (session.executionState === 'queued' || session.executionState === 'running') && (
+              <button
+                onClick={() => handleCancel(session)}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-warning hover:bg-warning/10"
+              >
+                <XCircle size={12} /> Cancel
+              </button>
+            )}
             {!isDraft && (
               <button
                 onClick={() => handleArchive(session)}

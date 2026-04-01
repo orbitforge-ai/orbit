@@ -4,9 +4,8 @@ use tokio::sync::oneshot;
 use tracing::{ error, info, warn };
 
 use crate::db::DbPool;
-use crate::events::emitter::{ emit_agent_iteration, emit_agent_tool_result, emit_chat_context_update, emit_log_chunk };
-use crate::executor::compaction;
-use crate::executor::agent_tools::{ self, ToolExecutionContext };
+use crate::events::emitter::{ emit_agent_iteration, emit_agent_tool_result, emit_log_chunk };
+use crate::executor::agent_tools::{ ToolExecutionContext };
 use crate::executor::context::{ self, ContextMode, ContextRequest };
 use crate::executor::engine::{ AgentSemaphores, SessionExecutionRegistry };
 use crate::executor::keychain;
@@ -20,6 +19,7 @@ use crate::executor::llm_provider::{
   ToolDefinition,
 };
 use crate::executor::process::ProcessResult;
+use crate::executor::session_agent;
 use crate::executor::workspace;
 use crate::models::task::{ AgentLoopConfig, AgentStepConfig };
 
@@ -705,10 +705,12 @@ pub async fn run_agent_prompt(
   })
 }
 
-// ─── Pulse (chat-session-based single-shot) ────────────────────────────────
+// ─── Pulse (chat-session-based with tool support) ─────────────────────────
+
+const PULSE_MAX_ITERATIONS: u32 = 10;
 
 /// Runs a pulse prompt: sends the goal as a user message into the agent's
-/// dedicated "Pulse" chat session and streams the LLM response back into it.
+/// dedicated "Pulse" chat session and runs the session loop with tool support.
 pub async fn run_pulse(
   run_id: &str,
   agent_id: &str,
@@ -718,10 +720,11 @@ pub async fn run_pulse(
   app: &tauri::AppHandle,
   _cancel: oneshot::Receiver<()>,
   db: &DbPool,
-  _executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
-  _chain_depth: i64,
-  _agent_semaphores: &AgentSemaphores,
-  _session_registry: &SessionExecutionRegistry,
+  executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
+  chain_depth: i64,
+  agent_semaphores: &AgentSemaphores,
+  session_registry: &SessionExecutionRegistry,
+  permission_registry: &PermissionRegistry,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -729,6 +732,16 @@ pub async fn run_pulse(
 
   // ── Load workspace config ────────────────────────────────────────────
   let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
+  let max_iterations = if ws_config.max_iterations > 0 {
+    ws_config.max_iterations.min(PULSE_MAX_ITERATIONS)
+  } else {
+    PULSE_MAX_ITERATIONS
+  };
+  let max_total_tokens = if ws_config.max_total_tokens > 0 {
+    ws_config.max_total_tokens
+  } else {
+    DEFAULT_MAX_TOTAL_TOKENS
+  };
 
   let provider_name = &ws_config.provider;
   let api_key = keychain::retrieve_api_key(provider_name).map_err(|_| {
@@ -813,7 +826,7 @@ pub async fn run_pulse(
     ws_config: ws_config.clone(),
     existing_messages: None,
     is_sub_agent: false,
-    chain_depth: 0,
+    chain_depth,
   };
   let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
     log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
@@ -821,6 +834,8 @@ pub async fn run_pulse(
     e
   })?;
 
+  let tools = snapshot.tools;
+  let context_window = snapshot.token_budget.context_window;
   let llm_config = LlmConfig {
     model: ws_config.model.clone(),
     max_tokens: DEFAULT_MAX_TOKENS_PER_CALL,
@@ -834,137 +849,69 @@ pub async fn run_pulse(
     run_id,
     vec![
       ("stdout".to_string(), "=== Pulse ===".to_string()),
-      ("stdout".to_string(), format!("Model: {}", ws_config.model)),
+      ("stdout".to_string(), format!("Model: {} | Tools: {}", ws_config.model, tools.len())),
       ("stdout".to_string(), "".to_string())
     ]
   );
 
-  emit_agent_iteration(app, &stream_id, 1, "llm_call", None, 0);
+  // ── Build tool execution context ────────────────────────────────────
+  let tool_ctx = ToolExecutionContext::new_with_bus(
+    agent_id,
+    &stream_id,
+    Some(&session_id),
+    chain_depth,
+    db.clone(),
+    executor_tx.clone(),
+    app.clone(),
+    agent_semaphores.clone(),
+    session_registry.clone(),
+  ).with_permission_registry(permission_registry.clone());
 
-  // ── LLM call ─────────────────────────────────────────────────────────
-  let response = match
-    call_llm_with_retry(
-      provider.as_ref(),
-      &llm_config,
-      &history,
-      &[],
-      app,
-      &stream_id,
-      1,
-      &log
-    ).await
-  {
-    Ok(r) => r,
-    Err(e) => {
-      log.log(app, run_id, vec![("stderr".to_string(), format!("=== Pulse Error ===\n{}", e))]);
-      emit_agent_iteration(app, &stream_id, 1, "finished", None, 0);
-      log.flush_to_file(log_path);
-      return Err(e);
-    }
-  };
-
-  let total_tokens = response.usage.input_tokens + response.usage.output_tokens;
-  emit_agent_iteration(app, &stream_id, 1, "finished", None, total_tokens);
-
-  // ── Save assistant response to chat session ──────────────────────────
-  let content_json = serde_json::to_string(&response.content).map_err(|e| e.to_string())?;
-  let sid = session_id.clone();
-
-  tokio::task
-    ::spawn_blocking({
-      let pool = pool.clone();
-      move || -> Result<(), String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let msg_id = ulid::Ulid::new().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
-
-        conn
-          .execute(
-            "INSERT INTO chat_messages (id, session_id, role, content, created_at)
-                 VALUES (?1, ?2, 'assistant', ?3, ?4)",
-            rusqlite::params![msg_id, sid, content_json, now]
-          )
-          .map_err(|e| e.to_string())?;
-
-        conn
-          .execute(
-            "UPDATE chat_sessions SET updated_at = ?1, execution_state = 'success' WHERE id = ?2",
-            rusqlite::params![now, sid]
-          )
-          .map_err(|e| e.to_string())?;
-
-        Ok(())
-      }
-    }).await
-    .map_err(|e| e.to_string())??;
-
-  // ── Context window tracking & compaction ──────────────────────────────
-  let context_window = compaction::effective_context_window(&ws_config);
-  let input_tokens = response.usage.input_tokens;
-  let output_tokens = response.usage.output_tokens;
-
-  // Update last_input_tokens on session
-  if let Ok(conn) = db.get() {
-    let now = chrono::Utc::now().to_rfc3339();
-    let _ = conn.execute(
-      "UPDATE chat_sessions SET last_input_tokens = ?1, updated_at = ?2 WHERE id = ?3",
-      rusqlite::params![input_tokens, now, session_id],
-    );
-  }
-
-  // Emit context update for the gauge
-  emit_chat_context_update(app, &session_id, input_tokens, output_tokens, context_window);
-
-  // Check if compaction is needed
-  let threshold = compaction::effective_threshold(&ws_config);
-  if compaction::should_compact(input_tokens, context_window, threshold) {
-    info!(
-      session_id = %session_id,
-      "Pulse context {:.1}% exceeds threshold {:.0}%, triggering compaction",
-      (input_tokens as f64 / context_window as f64) * 100.0,
-      threshold * 100.0
-    );
-
-    let agent_id_c = agent_id.to_string();
-    let session_id_c = session_id.clone();
-    let ws_config_c = ws_config.clone();
-    let app_c = app.clone();
-    let db_c = DbPool(db.0.clone());
-
-    if let Ok(compact_key) = keychain::retrieve_api_key(&ws_config.provider) {
-      if let Ok(compact_provider) = llm_provider::create_provider(&ws_config.provider, compact_key) {
-        tauri::async_runtime::spawn(async move {
-          match compaction::perform_compaction(
-            &agent_id_c, &session_id_c, compact_provider.as_ref(),
-            &ws_config_c, &app_c, &db_c,
-          ).await {
-            Ok(()) => info!(session_id = %session_id_c, "Pulse compaction completed"),
-            Err(e) => warn!(session_id = %session_id_c, "Pulse compaction failed: {}", e),
-          }
-        });
-      }
-    }
-  }
-
-  log.log(
+  // ── Run session loop (LLM + tool execution) ─────────────────────────
+  let result = session_agent::run_session_loop(
+    &provider,
+    &llm_config,
+    history,
+    &tools,
+    &tool_ctx,
+    &stream_id,
+    &session_id,
+    max_iterations,
+    max_total_tokens,
+    context_window,
+    &ws_config,
     app,
-    run_id,
-    vec![
-      ("stdout".to_string(), "=== Pulse Complete ===".to_string()),
-      ("stdout".to_string(), format!("Tokens: {} | Session: {}", total_tokens, session_id))
-    ]
-  );
+    db,
+    session_registry,
+    permission_registry,
+  ).await;
+
+  // ── Handle result ───────────────────────────────────────────────────
+  match &result {
+    Ok(summary) => {
+      log.log(
+        app,
+        run_id,
+        vec![
+          ("stdout".to_string(), "=== Pulse Complete ===".to_string()),
+          ("stdout".to_string(), format!("Session: {} | Summary: {}", session_id, summary))
+        ]
+      );
+    }
+    Err(reason) if reason == "cancelled" => {
+      session_agent::finalize_cancelled_session(db, &session_id).await;
+      log.log(app, run_id, vec![("stderr".to_string(), "Pulse cancelled".to_string())]);
+    }
+    Err(reason) => {
+      let _ = session_agent::finalize_failed_session(db, &session_id, reason).await;
+      log.log(app, run_id, vec![("stderr".to_string(), format!("Pulse failed: {}", reason))]);
+    }
+  }
 
   // Save chat_session_id into run metadata
   if let Ok(conn) = db.get() {
     let metadata = serde_json::json!({
       "chat_session_id": session_id,
-      "agent_loop": {
-        "iteration": 1,
-        "input_tokens": response.usage.input_tokens,
-        "output_tokens": response.usage.output_tokens,
-        "total_tokens": total_tokens,
-      }
     });
     let _ = conn.execute(
       "UPDATE runs SET metadata = ?1 WHERE id = ?2",
@@ -974,11 +921,11 @@ pub async fn run_pulse(
 
   log.flush_to_file(log_path);
 
-  info!(run_id = run_id, agent_id = agent_id, "Pulse completed ({} tokens)", total_tokens);
+  info!(run_id = run_id, agent_id = agent_id, "Pulse completed");
 
   let duration_ms = start.elapsed().as_millis() as i64;
   Ok(ProcessResult {
-    exit_code: 0,
+    exit_code: if result.is_ok() { 0 } else { 1 },
     duration_ms,
   })
 }

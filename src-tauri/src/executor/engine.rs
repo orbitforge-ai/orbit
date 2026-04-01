@@ -488,6 +488,7 @@ async fn run_one(
           req.chain_depth,
           &agent_semaphores,
           &session_registry,
+          &permission_registry,
         ).await
       } else {
         agent_loop::run_agent_loop(

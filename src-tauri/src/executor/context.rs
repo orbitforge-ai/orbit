@@ -367,7 +367,7 @@ impl ContextStage for BasePromptStage {
             context_section.push_str(&format!("- Workspace files: <data type=\"file_listing\">{}</data>\n", workspace_files));
         }
 
-        if !tool_names.is_empty() && (request.mode == ContextMode::AgentLoop || request.mode == ContextMode::Chat) {
+        if !tool_names.is_empty() && (request.mode == ContextMode::AgentLoop || request.mode == ContextMode::Chat || request.mode == ContextMode::Pulse) {
             context_section.push_str(&format!("- Available tools: {}\n", tool_names));
 
             // Add tool usage guidance
@@ -561,7 +561,7 @@ impl ContextStage for ToolResolutionStage {
         _db: &DbPool,
     ) -> Result<ContextSnapshot, String> {
         match request.mode {
-            ContextMode::AgentLoop | ContextMode::Chat => {
+            ContextMode::AgentLoop | ContextMode::Chat | ContextMode::Pulse => {
                 let mut tools =
                     agent_tools::build_tool_definitions(&request.ws_config.allowed_tools);
                 if request.is_sub_agent {
@@ -569,8 +569,7 @@ impl ContextStage for ToolResolutionStage {
                 }
                 snapshot.tools = tools;
             }
-            ContextMode::SingleShot | ContextMode::Pulse => {
-                // No tools for single-shot or pulse modes
+            ContextMode::SingleShot => {
                 snapshot.tools = Vec::new();
             }
         }
@@ -601,7 +600,7 @@ impl ContextStage for SkillCatalogStage {
     ) -> Result<ContextSnapshot, String> {
         // Only inject skills catalog for modes that have tools
         match request.mode {
-            ContextMode::AgentLoop | ContextMode::Chat => {}
+            ContextMode::AgentLoop | ContextMode::Chat | ContextMode::Pulse => {}
             _ => return Ok(snapshot),
         }
 

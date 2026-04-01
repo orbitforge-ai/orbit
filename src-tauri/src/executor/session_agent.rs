@@ -142,7 +142,7 @@ pub async fn run_agent_session(
   }
 }
 
-async fn run_session_loop(
+pub async fn run_session_loop(
   provider: &Box<dyn LlmProvider>,
   llm_config: &LlmConfig,
   mut messages: Vec<ChatMessage>,
@@ -418,7 +418,7 @@ pub async fn update_session_execution_state(
   Ok(())
 }
 
-async fn finalize_failed_session(db: &DbPool, session_id: &str, reason: &str) -> Result<(), String> {
+pub async fn finalize_failed_session(db: &DbPool, session_id: &str, reason: &str) -> Result<(), String> {
   update_session_execution_state(
     db,
     session_id,
@@ -428,7 +428,7 @@ async fn finalize_failed_session(db: &DbPool, session_id: &str, reason: &str) ->
   ).await
 }
 
-async fn finalize_cancelled_session(db: &DbPool, session_id: &str) -> String {
+pub async fn finalize_cancelled_session(db: &DbPool, session_id: &str) -> String {
   let _ = update_session_execution_state(db, session_id, "cancelled", None, Some("Cancelled".to_string())).await;
   "cancelled".to_string()
 }
