@@ -234,7 +234,14 @@ pub fn run() {
         commands::users::list_users,
         commands::users::create_user,
         commands::users::get_active_user,
-        commands::users::set_active_user
+        commands::users::set_active_user,
+        // Memory
+        commands::memory::search_memories,
+        commands::memory::list_memories,
+        commands::memory::add_memory,
+        commands::memory::delete_memory,
+        commands::memory::update_memory,
+        commands::memory::get_memory_health
       ]
     )
     .run(tauri::generate_context!())

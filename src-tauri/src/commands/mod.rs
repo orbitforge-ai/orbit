@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod bus;
 pub mod chat;
+pub mod memory;
 pub mod llm;
 pub mod permissions;
 pub mod pulse;

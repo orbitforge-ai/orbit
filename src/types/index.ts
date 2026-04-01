@@ -1,5 +1,21 @@
 // ─── Core domain types — mirror Rust structs (camelCase from serde) ──────────
 
+// ─── Memory ──────────────────────────────────────────────────────────────────
+
+export type MemoryType = 'user' | 'feedback' | 'project' | 'reference';
+
+export interface MemoryEntry {
+  id: string;
+  text: string;
+  memoryType: MemoryType;
+  userId: string;
+  agentId: string;
+  createdAt: string;
+  updatedAt: string;
+  source: 'explicit' | 'auto_extracted';
+  score?: number;
+}
+
 export interface Agent {
   id: string;
   name: string;
