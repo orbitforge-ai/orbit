@@ -3,6 +3,7 @@ mod db;
 mod error;
 mod events;
 mod executor;
+mod memory_service;
 mod models;
 mod scheduler;
 
@@ -81,6 +82,25 @@ pub fn run() {
         log_dir.clone()
       );
       tauri::async_runtime::spawn(async move { engine.run().await });
+
+      // Start memory service sidecar (non-blocking — app works without it)
+      let memory_data_dir = data_dir();
+      tauri::async_runtime::spawn(async move {
+        match memory_service::MemoryServiceState::start(memory_data_dir).await {
+          Ok(state) => {
+            info!("Memory service started successfully");
+            // Spawn background health monitor
+            let health_state = state.clone();
+            tokio::spawn(async move { health_state.health_loop().await });
+            // Note: state is kept alive by the health loop task.
+            // In Phase 2, we'll register this as Tauri managed state for
+            // context pipeline and tool access.
+          }
+          Err(e) => {
+            tracing::warn!("Memory service failed to start (agents will work without memory): {}", e);
+          }
+        }
+      });
 
       // Start scheduler engine
       let scheduler = SchedulerEngine::new(

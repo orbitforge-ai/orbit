@@ -7,6 +7,7 @@ pub mod engine;
 pub mod http;
 pub mod keychain;
 pub mod llm_provider;
+pub mod memory;
 pub mod minimax;
 pub mod permissions;
 pub mod process;
