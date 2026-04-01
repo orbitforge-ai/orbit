@@ -1,24 +1,32 @@
-import { useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import {
-  Bot,
-  Save,
-  X,
   Activity,
-  Play,
-  FolderOpen,
-  Settings,
-  LayoutDashboard,
+  Bot,
+  ChevronLeft,
+  ChevronRight,
   Clock,
-  Zap,
+  FolderOpen,
+  GitBranch,
+  History,
+  Loader2,
+  MessageSquare,
+  Play,
   Radio,
+  Save,
+  Settings,
   Sparkles,
+  X,
+  Zap,
 } from 'lucide-react';
-import { agentsApi } from '../../api/agents';
-import { StatusBadge } from '../../components/StatusBadge';
-import { Agent, CreateAgent, RunSummary } from '../../types';
 import { invoke } from '@tauri-apps/api/core';
+import { agentsApi } from '../../api/agents';
+import { chatApi } from '../../api/chat';
+import { StatusBadge } from '../../components/StatusBadge';
+import { InlineEdit } from '../../components/InlineEdit';
 import { useUiStore } from '../../store/uiStore';
+import { Agent, ChatSession, CreateAgent, RunSummary } from '../../types';
 import { WorkspaceTab } from './WorkspaceTab';
 import { ConfigTab } from './ConfigTab';
 import { SchedulesTab } from './SchedulesTab';
@@ -26,9 +34,14 @@ import { BusTab } from './BusTab';
 import { SkillsTab } from './SkillsTab';
 import { AgentRunDialog } from './AgentRunDialog';
 import { AgentRunView } from './AgentRunView';
-import { InlineEdit } from '../../components/InlineEdit';
 import { AgentIdentitySection } from './AgentIdentitySection';
 import { getDefaultAgentIdentity } from '../../lib/agentIdentity';
+import { SessionList } from '../Chat/SessionList';
+import { ChatPanel } from '../Chat/ChatPanel';
+
+type ActivityItem =
+  | { key: string; kind: 'session'; timestamp: number; session: ChatSession }
+  | { key: string; kind: 'run'; timestamp: number; run: RunSummary };
 
 export function AgentInspector() {
   const { selectedAgentId } = useUiStore();
@@ -39,17 +52,14 @@ export function AgentInspector() {
     refetchInterval: 5_000,
   });
 
-  // Show create form when "__new__" is selected
   if (selectedAgentId === '__new__') {
     return <NewAgentView />;
   }
 
-  // If an agent is selected, show its detail view
   if (selectedAgentId) {
     return <AgentDetail agentId={selectedAgentId} agents={agents} />;
   }
 
-  // No agent selected — prompt
   return (
     <div className="flex items-center justify-center h-full text-muted text-sm">
       Select an agent from the sidebar
@@ -141,18 +151,93 @@ function NewAgentView() {
 
 function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) {
   const agent = agents.find((a) => a.id === agentId);
-  const { agentTab, setAgentTab } = useUiStore();
+  const { agentTab, setAgentTab, pendingChatSessionId, clearPendingChatSession } = useUiStore();
   const [showRunDialog, setShowRunDialog] = useState(false);
   const [viewingRunId, setViewingRunId] = useState<string | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [chatSidebarCollapsed, setChatSidebarCollapsed] = useState(false);
   const queryClient = useQueryClient();
 
-  // Dirty state tracking for tabs with save functionality
   const [dirtyTabs, setDirtyTabs] = useState<Record<string, boolean>>({});
   const [savingTab] = useState<string | null>(null);
 
-  // Refs to trigger save in child tabs
   const configSaveRef = useRef<{ triggerSave: () => void } | null>(null);
   const schedulesSaveRef = useRef<{ triggerSave: () => void } | null>(null);
+  const creatingDefaultSessionForAgentRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setViewingRunId(null);
+    setActiveSessionId(null);
+    setChatSidebarCollapsed(false);
+  }, [agentId]);
+
+  const { data: recentRuns = [] } = useQuery<RunSummary[]>({
+    queryKey: ['runs', 'agent', agentId],
+    queryFn: () => invoke('list_runs', { limit: 20, offset: 0, stateFilter: null, taskId: null }),
+    refetchInterval: 5_000,
+    select: (runs: RunSummary[]) => runs.filter((r) => r.agentId === agentId && !r.isSubAgent),
+  });
+
+  const { data: activeRuns = [] } = useQuery<RunSummary[]>({
+    queryKey: ['active-runs'],
+    queryFn: () => invoke('get_active_runs'),
+    refetchInterval: 3_000,
+    select: (runs: RunSummary[]) => runs.filter((r) => r.agentId === agentId && !r.isSubAgent),
+  });
+
+  const { data: chatSessions = [] } = useQuery<ChatSession[]>({
+    queryKey: ['chat-sessions', agentId, false],
+    queryFn: () => chatApi.listSessions(agentId, false),
+    refetchInterval: 5_000,
+  });
+
+  useEffect(() => {
+    if (chatSessions.length === 0) return;
+
+    if (pendingChatSessionId) {
+      const pendingSession = chatSessions.find((session) => session.id === pendingChatSessionId);
+      clearPendingChatSession();
+      if (pendingSession) {
+        setActiveSessionId(pendingSession.id);
+        setAgentTab('chat');
+        return;
+      }
+    }
+
+    if (activeSessionId && chatSessions.some((session) => session.id === activeSessionId)) {
+      return;
+    }
+
+    const latestUserChat = getLatestUserChat(chatSessions);
+    if (latestUserChat) {
+      setActiveSessionId(latestUserChat.id);
+    }
+  }, [
+    activeSessionId,
+    chatSessions,
+    clearPendingChatSession,
+    pendingChatSessionId,
+    setAgentTab,
+  ]);
+
+  useEffect(() => {
+    if (activeSessionId || getLatestUserChat(chatSessions)) return;
+    if (creatingDefaultSessionForAgentRef.current === agentId) return;
+
+    creatingDefaultSessionForAgentRef.current = agentId;
+
+    chatApi
+      .createSession(agentId)
+      .then((session) => {
+        queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
+        setActiveSessionId((current) => current ?? session.id);
+      })
+      .finally(() => {
+        if (creatingDefaultSessionForAgentRef.current === agentId) {
+          creatingDefaultSessionForAgentRef.current = null;
+        }
+      });
+  }, [activeSessionId, agentId, chatSessions, queryClient]);
 
   async function handleInlineSave(field: 'name' | 'description', value: string) {
     await agentsApi.update(agentId, { [field]: value || undefined });
@@ -171,8 +256,58 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
     }
   }
 
+  async function handleNewChat() {
+    const session = await chatApi.createSession(agentId);
+    queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
+    setAgentTab('chat');
+    setActiveSessionId(session.id);
+  }
+
+  function handleOpenSession(sessionId: string) {
+    setAgentTab('chat');
+    setViewingRunId(null);
+    setActiveSessionId(sessionId);
+  }
+
+  function handleRunClick(run: RunSummary) {
+    if (run.chatSessionId) {
+      handleOpenSession(run.chatSessionId);
+    } else {
+      setViewingRunId(run.id);
+    }
+  }
+
   const hasDirtyChanges = dirtyTabs[agentTab] === true;
   const isSaveableTab = agentTab === 'config' || agentTab === 'schedules';
+
+  const successCount = recentRuns.filter((run) => run.state === 'success').length;
+  const failureCount = recentRuns.filter((run) => run.state === 'failure').length;
+  const totalCompleted = successCount + failureCount;
+  const successRate = totalCompleted > 0 ? Math.round((successCount / totalCompleted) * 100) : null;
+  const durationRuns = recentRuns.filter((run) => run.durationMs);
+  const avgDuration =
+    durationRuns.length > 0
+      ? Math.round(
+          durationRuns.reduce((sum, run) => sum + (run.durationMs ?? 0), 0) / durationRuns.length
+        )
+      : null;
+
+  const activityItems: ActivityItem[] = [
+    ...chatSessions.map((session) => ({
+      key: `session:${session.id}`,
+      kind: 'session' as const,
+      timestamp: new Date(session.updatedAt).getTime(),
+      session,
+    })),
+    ...recentRuns.map((run) => ({
+      key: `run:${run.id}`,
+      kind: 'run' as const,
+      timestamp: new Date(run.createdAt).getTime(),
+      run,
+    })),
+  ]
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, 10);
 
   if (!agent) {
     return (
@@ -182,13 +317,12 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
     );
   }
 
-  // If viewing a specific agent run, show the run view
   if (viewingRunId) {
     return <AgentRunView runId={viewingRunId} onBack={() => setViewingRunId(null)} />;
   }
 
   const tabs = [
-    { id: 'overview' as const, label: 'Overview', icon: LayoutDashboard },
+    { id: 'chat' as const, label: 'Chat', icon: MessageSquare },
     { id: 'workspace' as const, label: 'Workspace', icon: FolderOpen },
     { id: 'config' as const, label: 'Config', icon: Settings },
     { id: 'skills' as const, label: 'Skills', icon: Sparkles },
@@ -198,34 +332,128 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header with tabs */}
       <div className="border-b border-edge">
-        <div className="flex items-center justify-between px-6 pt-4 pb-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center">
+        <div className="flex items-start justify-between gap-4 px-6 pt-4 pb-3">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent/20">
               <Bot size={18} className="text-accent-hover" />
             </div>
-            <div>
+            <div className="min-w-0">
               <InlineEdit
                 value={agent.name}
-                onSave={(v) => handleInlineSave('name', v)}
+                onSave={(value) => handleInlineSave('name', value)}
                 as="h3"
                 className="text-base font-semibold text-white"
                 inputClassName="text-base font-semibold text-white"
               />
-              <div className="flex items-center gap-2">
+              <div className="mt-1 flex min-w-0 items-center gap-2">
                 <StatusBadge state={agent.state} />
                 <InlineEdit
                   value={agent.description ?? ''}
                   placeholder="Add description"
-                  onSave={(v) => handleInlineSave('description', v)}
-                  className="text-xs text-muted"
+                  onSave={(value) => handleInlineSave('description', value)}
+                  className="truncate text-xs text-muted"
                   inputClassName="text-xs text-muted"
+                />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <HeaderStatChip
+                  label="Active"
+                  value={activeRuns.length.toString()}
+                  accent={activeRuns.length > 0}
+                />
+                <HeaderStatChip
+                  label="Max concurrent"
+                  value={agent.maxConcurrentRuns.toString()}
+                />
+                <HeaderStatChip
+                  label="Success"
+                  value={successRate !== null ? `${successRate}%` : '--'}
+                />
+                <HeaderStatChip
+                  label="Avg duration"
+                  value={avgDuration !== null ? `${(avgDuration / 1000).toFixed(1)}s` : '--'}
                 />
               </div>
             </div>
           </div>
+
           <div className="flex items-center gap-2">
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <button
+                  className="rounded-lg border border-edge bg-surface p-2 text-muted transition-colors hover:text-white hover:border-edge-hover"
+                  title="Recent activity"
+                  aria-label="Open recent activity"
+                >
+                  <History size={14} />
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  align="end"
+                  sideOffset={8}
+                  className="z-50 w-[320px] rounded-xl border border-edge bg-surface p-2 shadow-xl"
+                >
+                  <div className="px-2 py-1.5">
+                    <p className="text-xs font-semibold text-white">Recent Activity</p>
+                    <p className="text-[11px] text-muted">Chats and runs for this agent.</p>
+                  </div>
+
+                  <div className="mt-1 max-h-[360px] overflow-y-auto">
+                    {activityItems.length === 0 ? (
+                      <div className="px-2 py-6 text-center text-xs text-muted">
+                        No recent activity yet.
+                      </div>
+                    ) : (
+                      activityItems.map((item) => (
+                        <DropdownMenu.Item
+                          key={item.key}
+                          onSelect={() => {
+                            if (item.kind === 'session') {
+                              handleOpenSession(item.session.id);
+                            } else {
+                              handleRunClick(item.run);
+                            }
+                          }}
+                          className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 outline-none transition-colors data-[highlighted]:bg-accent/10"
+                        >
+                          {item.kind === 'session' ? (
+                            <>
+                              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-background text-muted">
+                                <SessionTypeIcon sessionType={item.session.sessionType} />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm text-white">{item.session.title}</p>
+                                <p className="text-[11px] text-muted">
+                                  {formatSessionType(item.session)} ·{' '}
+                                  {formatActivityTime(item.session.updatedAt)}
+                                </p>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="shrink-0">
+                                <StatusBadge state={item.run.state} />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm text-white">
+                                  {formatRunName(item.run)}
+                                </p>
+                                <p className="text-[11px] text-muted">
+                                  {item.run.trigger} · {formatActivityTime(item.run.createdAt)}
+                                </p>
+                              </div>
+                            </>
+                          )}
+                        </DropdownMenu.Item>
+                      ))
+                    )}
+                  </div>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+
             {isSaveableTab && (
               <button
                 onClick={handleHeaderSave}
@@ -235,7 +463,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
                     ? 'bg-warning/20 text-warning border border-warning/50 hover:bg-warning/30'
                     : 'bg-surface text-muted border border-edge'
                 }`}
-                title={agentTab === 'config' ? 'Save Configuration' : 'Save Pulse'}
+                title={agentTab === 'config' ? 'Save configuration' : 'Save pulse'}
               >
                 <Save size={12} />
                 {savingTab === agentTab ? 'Saving...' : 'Save'}
@@ -252,8 +480,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
           </div>
         </div>
 
-        {/* Tab bar */}
-        <div className="flex gap-1 px-6 mt-3">
+        <div className="flex gap-1 px-6">
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -271,13 +498,15 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
         </div>
       </div>
 
-      {/* Tab content */}
       <div className="flex-1 overflow-hidden">
-        {agentTab === 'overview' && (
-          <OverviewContent
+        {agentTab === 'chat' && (
+          <ChatWorkspace
             agentId={agentId}
-            agent={agent}
-            onViewRun={(runId) => setViewingRunId(runId)}
+            activeSessionId={activeSessionId}
+            onSelectSession={setActiveSessionId}
+            onNewSession={handleNewChat}
+            sessionsCollapsed={chatSidebarCollapsed}
+            onToggleSessions={() => setChatSidebarCollapsed((current) => !current)}
           />
         )}
         {agentTab === 'workspace' && <WorkspaceTab agentId={agentId} />}
@@ -300,7 +529,6 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
         {agentTab === 'bus' && <BusTab agentId={agentId} />}
       </div>
 
-      {/* Run dialog */}
       <AgentRunDialog
         agentId={agentId}
         agentName={agent.name}
@@ -315,134 +543,53 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
   );
 }
 
-function OverviewContent({
+function ChatWorkspace({
   agentId,
-  agent,
-  onViewRun,
+  activeSessionId,
+  onSelectSession,
+  onNewSession,
+  sessionsCollapsed,
+  onToggleSessions,
 }: {
   agentId: string;
-  agent: Agent;
-  onViewRun: (runId: string) => void;
+  activeSessionId: string | null;
+  onSelectSession: (sessionId: string | null) => void;
+  onNewSession: () => Promise<void>;
+  sessionsCollapsed: boolean;
+  onToggleSessions: () => void;
 }) {
-  const { openChatSession } = useUiStore();
-
-  function handleRunClick(run: RunSummary) {
-    if (run.chatSessionId) {
-      openChatSession(run.chatSessionId);
-    } else {
-      onViewRun(run.id);
-    }
-  }
-
-  function parseName(run: RunSummary) {
-    if (run.taskName.includes('Pulse')) {
-      return (
-        <div className="flex items-center gap-1">
-          <Zap size={16} className="text-warning" />
-          <>{'Pulse'}</>
-        </div>
-      );
-    } else {
-      return run.taskName;
-    }
-  }
-
-  const { data: recentRuns = [] } = useQuery<RunSummary[]>({
-    queryKey: ['runs', 'agent', agentId],
-    queryFn: () => invoke('list_runs', { limit: 20, offset: 0, stateFilter: null, taskId: null }),
-    refetchInterval: 5_000,
-    select: (runs: RunSummary[]) => runs.filter((r) => r.agentId === agentId && !r.isSubAgent),
-  });
-
-  const { data: activeRuns = [] } = useQuery<RunSummary[]>({
-    queryKey: ['active-runs'],
-    queryFn: () => invoke('get_active_runs'),
-    refetchInterval: 3_000,
-    select: (runs: RunSummary[]) => runs.filter((r) => r.agentId === agentId && !r.isSubAgent),
-  });
-
-  const successCount = recentRuns.filter((r) => r.state === 'success').length;
-  const failureCount = recentRuns.filter((r) => r.state === 'failure').length;
-  const totalCompleted = successCount + failureCount;
-  const successRate = totalCompleted > 0 ? Math.round((successCount / totalCompleted) * 100) : null;
-  const avgDuration =
-    recentRuns.filter((r) => r.durationMs).length > 0
-      ? Math.round(
-          recentRuns.filter((r) => r.durationMs).reduce((sum, r) => sum + (r.durationMs ?? 0), 0) /
-            recentRuns.filter((r) => r.durationMs).length
-        )
-      : null;
-
   return (
-    <div className="p-6 space-y-6 overflow-y-auto h-full">
-      {/* Stats */}
-      <div className="grid grid-cols-4 gap-3">
-        <StatCard label="Active runs" value={activeRuns.length.toString()} accent />
-        <StatCard label="Max concurrent" value={agent.maxConcurrentRuns.toString()} />
-        <StatCard label="Success rate" value={successRate !== null ? `${successRate}%` : '--'} />
-        <StatCard
-          label="Avg duration"
-          value={avgDuration !== null ? `${(avgDuration / 1000).toFixed(1)}s` : '--'}
-        />
-      </div>
+    <div className="relative flex h-full">
+      <button
+        type="button"
+        onClick={onToggleSessions}
+        className={`absolute top-1/2 z-10 -translate-y-1/2 rounded-full border border-edge bg-background p-1.5 text-muted shadow-sm transition-colors hover:border-edge-hover hover:text-white ${
+          sessionsCollapsed ? 'left-3' : 'left-[308px]'
+        }`}
+        title={sessionsCollapsed ? 'Show sessions' : 'Collapse sessions'}
+        aria-label={sessionsCollapsed ? 'Show sessions' : 'Collapse sessions'}
+      >
+        {sessionsCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+      </button>
 
-      {/* Active runs */}
-      {activeRuns.length > 0 && (
-        <div>
-          <h4 className="text-sm font-semibold text-white mb-3">Currently Running</h4>
-          <div className="space-y-2">
-            {activeRuns.map((run) => (
-              <div
-                key={run.id}
-                onClick={() => handleRunClick(run)}
-                className="flex items-center gap-3 px-4 py-3 rounded-lg border border-edge bg-surface cursor-pointer hover:border-edge-hover"
-              >
-                <Activity size={14} className="text-blue-400 animate-pulse" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-white truncate">{parseName(run)}</p>
-                  <p className="text-xs text-muted">
-                    {run.trigger} &middot; started{' '}
-                    {run.startedAt ? new Date(run.startedAt).toLocaleTimeString() : '...'}
-                  </p>
-                </div>
-                <button
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    await agentsApi.cancelRun(run.id);
-                  }}
-                  className="px-2 py-1 rounded text-xs text-red-400 hover:bg-red-500/10 border border-red-500/30"
-                >
-                  Stop
-                </button>
-              </div>
-            ))}
-          </div>
+      {!sessionsCollapsed && (
+        <div className="w-[320px] flex-shrink-0 border-r border-edge bg-panel">
+          <SessionList
+            agentId={agentId}
+            activeSessionId={activeSessionId}
+            onSelectSession={onSelectSession}
+            onNewSession={onNewSession}
+          />
         </div>
       )}
 
-      {/* Recent sessions */}
-      <div>
-        <h4 className="text-sm font-semibold text-white mb-3">Recent Sessions</h4>
-        {recentRuns.length === 0 ? (
-          <p className="text-sm text-muted">No runs yet for this agent.</p>
+      <div className="relative flex-1 min-w-0">
+        {activeSessionId ? (
+          <ChatPanel sessionId={activeSessionId} />
         ) : (
-          <div className="space-y-1">
-            {recentRuns.slice(0, 20).map((run) => (
-              <div
-                key={run.id}
-                onClick={() => handleRunClick(run)}
-                className="flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-surface cursor-pointer"
-              >
-                <StatusBadge state={run.state} />
-                <p className="text-sm text-white flex-1 truncate">{parseName(run)}</p>
-                <p className="text-xs text-muted">
-                  {run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : '--'}
-                </p>
-                <p className="text-xs text-muted">
-                  {run.createdAt ? new Date(run.createdAt).toLocaleString() : ''}
-                </p>
-              </div>
-            ))}
+          <div className="flex h-full items-center justify-center gap-2 text-sm text-muted">
+            <Loader2 size={16} className="animate-spin" />
+            Loading chat session...
           </div>
         )}
       </div>
@@ -450,13 +597,72 @@ function OverviewContent({
   );
 }
 
-function StatCard({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function HeaderStatChip({
+  label,
+  value,
+  accent = false,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+}) {
   return (
-    <div className="rounded-xl border border-edge bg-surface p-4">
-      <p className="text-xs text-muted mb-1">{label}</p>
-      <p className={`text-xl font-semibold ${accent ? 'text-accent-hover' : 'text-white'}`}>
-        {value}
-      </p>
+    <div
+      className={`rounded-full border px-2.5 py-1 text-[11px] ${
+        accent
+          ? 'border-accent/50 bg-accent/10 text-accent-hover'
+          : 'border-edge bg-surface text-secondary'
+      }`}
+    >
+      <span className="text-muted">{label}</span> <span className="text-white">{value}</span>
     </div>
   );
+}
+
+function getLatestUserChat(sessions: ChatSession[]) {
+  return [...sessions]
+    .filter((session) => session.sessionType === 'user_chat')
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+}
+
+function formatActivityTime(timestamp: string) {
+  return new Date(timestamp).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function formatRunName(run: RunSummary) {
+  return run.taskName.includes('Pulse') ? 'Pulse' : run.taskName;
+}
+
+function formatSessionType(session: ChatSession) {
+  switch (session.sessionType) {
+    case 'pulse':
+      return 'Pulse chat';
+    case 'bus_message':
+      return 'Bus message';
+    case 'sub_agent':
+      return 'Sub-agent';
+    default:
+      return 'Chat';
+  }
+}
+
+function SessionTypeIcon({ sessionType }: { sessionType: ChatSession['sessionType'] }) {
+  if (sessionType === 'pulse') {
+    return <Zap size={14} className="text-warning" />;
+  }
+
+  if (sessionType === 'sub_agent') {
+    return <GitBranch size={14} className="text-emerald-400" />;
+  }
+
+  if (sessionType === 'bus_message') {
+    return <Activity size={14} className="text-blue-400" />;
+  }
+
+  return <MessageSquare size={14} className="text-accent-hover" />;
 }

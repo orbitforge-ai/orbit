@@ -51,7 +51,7 @@ export function SessionList({
   onNewSession,
 }: SessionListProps) {
   const queryClient = useQueryClient();
-  const { openChatSession } = useUiStore();
+  const { openAgentChat } = useUiStore();
   const [showArchived, setShowArchived] = useState(false);
   const [menuSessionId, setMenuSessionId] = useState<string | null>(null);
   const [collapsedSenderGroups, setCollapsedSenderGroups] = useState<Record<string, boolean>>({});
@@ -448,6 +448,7 @@ export function SessionList({
                 <div className="mt-1 ml-2 space-y-0.5 border-l border-edge pl-2">
                   {group.sourceGroups.map((sourceGroup) => {
                     const isSourceCollapsed = collapsedSourceGroups[sourceGroup.key] ?? false;
+                    const canOpenSourceChat = !group.senderId.startsWith('unknown:');
                     return (
                       <div key={sourceGroup.key} className="space-y-0.5">
                         <div className="flex items-center gap-1">
@@ -467,17 +468,19 @@ export function SessionList({
                               {sourceGroup.sessions.length}
                             </span>
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              openChatSession(sourceGroup.sourceSessionId);
-                            }}
-                            className="rounded p-1 text-muted hover:text-white hover:bg-surface-hover transition-colors"
-                            title="Open source chat"
-                            aria-label={`Open source chat ${sourceGroup.sourceSessionTitle}`}
-                          >
-                            <ArrowUpRight size={11} />
-                          </button>
+                          {canOpenSourceChat && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                openAgentChat(group.senderId, sourceGroup.sourceSessionId);
+                              }}
+                              className="rounded p-1 text-muted hover:text-white hover:bg-surface-hover transition-colors"
+                              title="Open source chat"
+                              aria-label={`Open source chat ${sourceGroup.sourceSessionTitle}`}
+                            >
+                              <ArrowUpRight size={11} />
+                            </button>
+                          )}
                         </div>
                         {!isSourceCollapsed && (
                           <div className="ml-2 space-y-0.5 border-l border-edge/70 pl-2">

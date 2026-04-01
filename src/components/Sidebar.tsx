@@ -20,11 +20,10 @@ const NAV_ITEMS = [
   { id: "tasks" as const, label: "Tasks", icon: ListChecks },
   { id: "history" as const, label: "Run History", icon: History },
   { id: "schedules" as const, label: "Schedules", icon: Clock },
-  { id: "chat" as const, label: "Chat", icon: MessageSquare },
 ];
 
 export function Sidebar() {
-  const { screen, selectedAgentId, navigate, selectAgent } = useUiStore();
+  const { screen, selectedAgentId, navigate, selectAgent, openAgentChat } = useUiStore();
   const [agentsOpen, setAgentsOpen] = useState(screen === "agents");
 
   const { data: agents = [] } = useQuery<Agent[]>({
@@ -79,24 +78,39 @@ export function Sidebar() {
           {agentsOpen && (
             <div className="ml-3 mt-0.5 space-y-0.5 border-l border-edge pl-2">
               {agents.map((agent) => (
-                <button
+                <div
                   key={agent.id}
-                  onClick={() => selectAgent(agent.id)}
                   className={cn(
-                    "w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors truncate",
+                    "group flex items-center gap-1 rounded-md transition-colors",
                     screen === "agents" && selectedAgentId === agent.id
                       ? "bg-accent/10 text-accent-hover"
                       : "text-secondary hover:bg-surface hover:text-white"
                   )}
                 >
-                  <span
-                    className={cn(
-                      "w-1.5 h-1.5 rounded-full shrink-0",
-                      agent.state === "idle" ? "bg-emerald-400" : "bg-text-muted"
-                    )}
-                  />
-                  <span className="truncate">{agent.name}</span>
-                </button>
+                  <button
+                    onClick={() => selectAgent(agent.id)}
+                    className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-xs font-medium truncate"
+                  >
+                    <span
+                      className={cn(
+                        "w-1.5 h-1.5 rounded-full shrink-0",
+                        agent.state === "idle" ? "bg-emerald-400" : "bg-text-muted"
+                      )}
+                    />
+                    <span className="truncate">{agent.name}</span>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openAgentChat(agent.id);
+                    }}
+                    className="mr-1 rounded p-1 text-muted opacity-0 transition-opacity hover:bg-background/60 hover:text-white group-hover:opacity-100"
+                    title={`Open ${agent.name} chat`}
+                    aria-label={`Open ${agent.name} chat`}
+                  >
+                    <MessageSquare size={12} />
+                  </button>
+                </div>
               ))}
 
               {/* New Agent link */}

@@ -45,7 +45,7 @@ interface PulseSectionProps {
 const PulseSection = forwardRef<{ triggerSave: () => void }, PulseSectionProps>(
   function PulseSection({ agentId, onDirtyChange }, ref) {
     const queryClient = useQueryClient();
-    const { navigate } = useUiStore();
+    const { openAgentChat } = useUiStore();
     const [, setSaving] = useState(false);
     const [, setSaved] = useState(false);
     const [triggering, setTriggering] = useState(false);
@@ -199,7 +199,7 @@ const PulseSection = forwardRef<{ triggerSave: () => void }, PulseSectionProps>(
 
           {pulseConfig?.sessionId && (
             <button
-              onClick={() => navigate('chat')}
+              onClick={() => openAgentChat(agentId, pulseConfig.sessionId)}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-edge text-secondary hover:text-white hover:border-edge-hover text-xs transition-colors"
             >
               <ExternalLink size={12} />

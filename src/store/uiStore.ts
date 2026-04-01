@@ -6,7 +6,6 @@ type Screen =
   | "history"
   | "agents"
   | "schedules"
-  | "chat"
   | "task-builder"
   | "schedule-builder"
   | "task-edit";
@@ -14,6 +13,7 @@ type Screen =
 function getPersistedScreen(): Screen {
   try {
     const saved = localStorage.getItem("orbit:lastScreen");
+    if (saved === "chat") return "agents";
     if (saved) return saved as Screen;
   } catch {}
   return "dashboard";
@@ -26,7 +26,7 @@ function getPersistedAgentId(): string | null {
   return null;
 }
 
-type AgentTab = "overview" | "workspace" | "config" | "skills" | "schedules" | "bus";
+type AgentTab = "chat" | "workspace" | "config" | "skills" | "schedules" | "bus";
 
 interface UiStore {
   screen: Screen;
@@ -43,7 +43,7 @@ interface UiStore {
   selectTask: (id: string | null) => void;
   editTask: (id: string) => void;
   selectAgent: (id: string) => void;
-  openChatSession: (sessionId: string) => void;
+  openAgentChat: (agentId: string, sessionId?: string | null) => void;
   clearPendingChatSession: () => void;
   setLogPanelOpen: (open: boolean) => void;
   setAgentTab: (tab: AgentTab) => void;
@@ -57,7 +57,7 @@ export const useUiStore = create<UiStore>((set) => ({
   selectedAgentId: getPersistedAgentId(),
   pendingChatSessionId: null,
   logPanelOpen: false,
-  agentTab: "overview" as AgentTab,
+  agentTab: "chat" as AgentTab,
 
   navigate: (screen) => {
     try { localStorage.setItem("orbit:lastScreen", screen); } catch {}
@@ -73,9 +73,17 @@ export const useUiStore = create<UiStore>((set) => ({
     } catch {}
     set({ selectedAgentId: id, screen: "agents" });
   },
-  openChatSession: (sessionId) => {
-    try { localStorage.setItem("orbit:lastScreen", "chat"); } catch {}
-    set({ pendingChatSessionId: sessionId, screen: "chat" });
+  openAgentChat: (agentId, sessionId = null) => {
+    try {
+      localStorage.setItem("orbit:lastScreen", "agents");
+      localStorage.setItem("orbit:lastAgentId", agentId);
+    } catch {}
+    set({
+      selectedAgentId: agentId,
+      pendingChatSessionId: sessionId,
+      screen: "agents",
+      agentTab: "chat",
+    });
   },
   clearPendingChatSession: () => set({ pendingChatSessionId: null }),
   setLogPanelOpen: (open) => set({ logPanelOpen: open }),
