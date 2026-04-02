@@ -29,3 +29,5 @@ plans
 
 .supabase-pw
 .env
+
+supabase/.temp
