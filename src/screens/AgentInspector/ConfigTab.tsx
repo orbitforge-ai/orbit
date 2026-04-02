@@ -156,12 +156,6 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
     try {
       await workspaceApi.updateConfig(agentId, config);
       queryClient.invalidateQueries({ queryKey: ['agent-config', agentId] });
-      if (config.roleId) {
-        queryClient.setQueryData<Record<string, string>>(['agent-role-ids'], (old = {}) => ({
-          ...old,
-          [agentId]: config.roleId!,
-        }));
-      }
       setSaved(true);
       markClean();
       setTimeout(() => setSaved(false), 2000);

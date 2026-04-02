@@ -117,11 +117,6 @@ function NewAgentView() {
         roleSystemInstructions: getRoleSystemInstructions(roleId),
       };
       const created = await agentsApi.create(payload);
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
-      queryClient.setQueryData<Record<string, string>>(['agent-role-ids'], (old = {}) => ({
-        ...old,
-        [created.id]: roleId,
-      }));
       selectAgent(created.id);
     } catch {
       setSaving(false);
@@ -311,10 +306,6 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
     };
     await workspaceApi.updateConfig(agentId, updated);
     queryClient.invalidateQueries({ queryKey: ['agent-config', agentId] });
-    queryClient.setQueryData<Record<string, string>>(['agent-role-ids'], (old = {}) => ({
-      ...old,
-      [agentId]: newRoleId,
-    }));
   }
 
   function handleDirtyChange(tab: string, isDirty: boolean) {

@@ -1,5 +1,6 @@
 use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
+use crate::events::emitter::{emit_agent_created, emit_agent_deleted, emit_agent_updated};
 use crate::executor::workspace;
 use crate::models::agent::{Agent, CreateAgent, UpdateAgent};
 
@@ -67,10 +68,12 @@ pub async fn list_agents(db: tauri::State<'_, DbPool>) -> Result<Vec<Agent>, Str
 
 #[tauri::command]
 pub async fn create_agent(
+    app: tauri::AppHandle,
     payload: CreateAgent,
     db: tauri::State<'_, DbPool>,
     cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<Agent, String> {
+    let role_id = payload.role_id.clone();
     let cloud = cloud.inner().clone();
     let pool = db.0.clone();
     let agent: Agent = tokio::task::spawn_blocking(move || -> Result<Agent, String> {
@@ -144,12 +147,14 @@ pub async fn create_agent(
     .await
     .map_err(|e| e.to_string())??;
 
+    emit_agent_created(&app, agent.clone(), role_id);
     cloud_upsert_agent!(cloud, agent);
     Ok(agent)
 }
 
 #[tauri::command]
 pub async fn update_agent(
+    app: tauri::AppHandle,
     id: String,
     payload: UpdateAgent,
     db: tauri::State<'_, DbPool>,
@@ -205,12 +210,14 @@ pub async fn update_agent(
     .await
     .map_err(|e| e.to_string())??;
 
+    emit_agent_updated(&app, agent.clone());
     cloud_upsert_agent!(cloud, agent);
     Ok(agent)
 }
 
 #[tauri::command]
 pub async fn delete_agent(
+    app: tauri::AppHandle,
     id: String,
     db: tauri::State<'_, DbPool>,
     cloud: tauri::State<'_, CloudClientState>,
@@ -230,6 +237,7 @@ pub async fn delete_agent(
     .await
     .map_err(|e| e.to_string())??;
 
+    emit_agent_deleted(&app, &id);
     cloud_delete!(cloud, "agents", id);
     Ok(())
 }

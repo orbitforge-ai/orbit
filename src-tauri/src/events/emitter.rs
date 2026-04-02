@@ -118,6 +118,32 @@ pub struct BusMessageSentPayload {
   pub timestamp: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCreatedPayload {
+  pub agent: crate::models::agent::Agent,
+  pub role_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUpdatedPayload {
+  pub agent: crate::models::agent::Agent,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentDeletedPayload {
+  pub agent_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentConfigChangedPayload {
+  pub agent_id: String,
+  pub role_id: Option<String>,
+}
+
 // ─── Emit helpers ────────────────────────────────────────────────────────────
 
 pub fn emit_log_chunk(app: &tauri::AppHandle, run_id: &str, lines: Vec<(String, String)>) {
@@ -358,5 +384,29 @@ pub fn emit_permission_cancelled(
   };
   if let Err(e) = app.emit("permission:cancelled", &payload) {
     warn!("failed to emit permission:cancelled: {}", e);
+  }
+}
+
+pub fn emit_agent_created(app: &tauri::AppHandle, agent: crate::models::agent::Agent, role_id: Option<String>) {
+  if let Err(e) = app.emit("agent:created", AgentCreatedPayload { agent, role_id }) {
+    warn!("failed to emit agent:created: {}", e);
+  }
+}
+
+pub fn emit_agent_updated(app: &tauri::AppHandle, agent: crate::models::agent::Agent) {
+  if let Err(e) = app.emit("agent:updated", AgentUpdatedPayload { agent }) {
+    warn!("failed to emit agent:updated: {}", e);
+  }
+}
+
+pub fn emit_agent_deleted(app: &tauri::AppHandle, agent_id: &str) {
+  if let Err(e) = app.emit("agent:deleted", AgentDeletedPayload { agent_id: agent_id.to_string() }) {
+    warn!("failed to emit agent:deleted: {}", e);
+  }
+}
+
+pub fn emit_agent_config_changed(app: &tauri::AppHandle, agent_id: &str, role_id: Option<String>) {
+  if let Err(e) = app.emit("agent:config_changed", AgentConfigChangedPayload { agent_id: agent_id.to_string(), role_id }) {
+    warn!("failed to emit agent:config_changed: {}", e);
   }
 }

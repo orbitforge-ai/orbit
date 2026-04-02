@@ -1,3 +1,4 @@
+use crate::events::emitter::emit_agent_config_changed;
 use crate::executor::workspace::{self, AgentWorkspaceConfig, FileEntry};
 
 #[tauri::command]
@@ -59,12 +60,17 @@ pub async fn get_agent_config(agent_id: String) -> Result<AgentWorkspaceConfig, 
 
 #[tauri::command]
 pub async fn update_agent_config(
+    app: tauri::AppHandle,
     agent_id: String,
     config: AgentWorkspaceConfig,
 ) -> Result<(), String> {
+    let role_id = config.role_id.clone();
+    let agent_id_emit = agent_id.clone();
     tokio::task::spawn_blocking(move || workspace::save_agent_config(&agent_id, &config))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())??;
+    emit_agent_config_changed(&app, &agent_id_emit, role_id);
+    Ok(())
 }
 
 /// Returns a map of agentId → roleId for all agents that have a role configured.

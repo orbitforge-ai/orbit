@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   LayoutDashboard,
   ListChecks,
@@ -23,6 +23,7 @@ import { workspaceApi } from '../api/workspace';
 import { Agent, Project } from '../types';
 import { usePermissionStore } from '../store/permissionStore';
 import { onPermissionRequest, onPermissionCancelled } from '../events/permissionEvents';
+import { onAgentCreated, onAgentUpdated, onAgentDeleted, onAgentConfigChanged } from '../events/agentEvents';
 import { SyncIndicator } from './SyncIndicator';
 import { resolveRole } from '../lib/agentRoles';
 import { ROLE_ICON_MAP } from '../screens/AgentInspector/RoleSelector';
@@ -56,6 +57,7 @@ export function Sidebar() {
   const [agentsOpen, setAgentsOpen] = useState(screen === 'agents');
   const [projectsOpen, setProjectsOpen] = useState(true);
   const pendingCount = usePermissionStore((s) => s.pendingCount);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     const unsubs: Promise<() => void>[] = [];
@@ -74,10 +76,64 @@ export function Sidebar() {
     };
   }, []);
 
+  useEffect(() => {
+    const unsubs: Promise<() => void>[] = [];
+
+    unsubs.push(
+      onAgentCreated((p) => {
+        queryClient.setQueryData<Agent[]>(['agents'], (old = []) => [...old, p.agent]);
+        if (p.roleId) {
+          queryClient.setQueryData<Record<string, string>>(['agent-role-ids'], (old = {}) => ({
+            ...old,
+            [p.agent.id]: p.roleId!,
+          }));
+        }
+      })
+    );
+
+    unsubs.push(
+      onAgentUpdated((p) => {
+        queryClient.setQueryData<Agent[]>(['agents'], (old = []) =>
+          old.map((a) => (a.id === p.agent.id ? p.agent : a))
+        );
+      })
+    );
+
+    unsubs.push(
+      onAgentDeleted((p) => {
+        queryClient.setQueryData<Agent[]>(['agents'], (old = []) =>
+          old.filter((a) => a.id !== p.agentId)
+        );
+        queryClient.setQueryData<Record<string, string>>(['agent-role-ids'], (old = {}) => {
+          const next = { ...old };
+          delete next[p.agentId];
+          return next;
+        });
+      })
+    );
+
+    unsubs.push(
+      onAgentConfigChanged((p) => {
+        queryClient.setQueryData<Record<string, string>>(['agent-role-ids'], (old = {}) => {
+          const next = { ...old };
+          if (p.roleId) {
+            next[p.agentId] = p.roleId;
+          } else {
+            delete next[p.agentId];
+          }
+          return next;
+        });
+      })
+    );
+
+    return () => {
+      unsubs.forEach((p) => p.then((fn) => fn()).catch(() => {}));
+    };
+  }, [queryClient]);
+
   const { data: agents = [] } = useQuery<Agent[]>({
     queryKey: ['agents'],
     queryFn: agentsApi.list,
-    refetchInterval: 10_000,
   });
 
   const { data: projects = [] } = useQuery<Project[]>({
@@ -89,7 +145,6 @@ export function Sidebar() {
   const { data: agentRoleIds = {} } = useQuery<Record<string, string>>({
     queryKey: ['agent-role-ids'],
     queryFn: workspaceApi.listAgentRoleIds,
-    refetchInterval: 10_000,
   });
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;

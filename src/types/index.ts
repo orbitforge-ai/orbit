@@ -516,6 +516,26 @@ export interface BusMessageSentPayload {
   timestamp: string;
 }
 
+// ─── Agent metadata event payloads ───────────────────────────────────────────
+
+export interface AgentCreatedPayload {
+  agent: Agent;
+  roleId: string | null;
+}
+
+export interface AgentUpdatedPayload {
+  agent: Agent;
+}
+
+export interface AgentDeletedPayload {
+  agentId: string;
+}
+
+export interface AgentConfigChangedPayload {
+  agentId: string;
+  roleId: string | null;
+}
+
 export interface SessionExecutionStatus {
   sessionId: string;
   executionState: ChatSession['executionState'];
