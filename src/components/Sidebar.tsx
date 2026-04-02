@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import {
   LayoutDashboard,
   ListChecks,
@@ -13,7 +14,6 @@ import {
   FolderOpen,
   HardDrive,
   Users,
-  X,
 } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { useUiStore } from '../store/uiStore';
@@ -56,6 +56,16 @@ export function Sidebar() {
   } = useUiStore();
   const [agentsOpen, setAgentsOpen] = useState(screen === 'agents');
   const [projectsOpen, setProjectsOpen] = useState(true);
+  const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(
+    () => selectedProjectId ? new Set([selectedProjectId]) : new Set()
+  );
+  const toggleProjectExpanded = (projectId: string) => {
+    setExpandedProjectIds(prev => {
+      const next = new Set(prev);
+      if (next.has(projectId)) { next.delete(projectId); } else { next.add(projectId); }
+      return next;
+    });
+  };
   const pendingCount = usePermissionStore((s) => s.pendingCount);
   const queryClient = useQueryClient();
 
@@ -147,8 +157,6 @@ export function Sidebar() {
     queryFn: workspaceApi.listAgentRoleIds,
   });
 
-  const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
-
   return (
     <aside className="w-[220px] flex-shrink-0 flex flex-col border-r border-edge bg-panel h-full">
       <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
@@ -165,7 +173,7 @@ export function Sidebar() {
             )}
           >
             <FolderOpen size={16} />
-            <span className="flex-1 text-left">Projects</span>
+            <span className="flex-1 text-left text-xs font-semibold uppercase tracking-wide">Projects</span>
             <ChevronRight
               size={14}
               className={cn('transition-transform text-muted', projectsOpen && 'rotate-90')}
@@ -174,59 +182,58 @@ export function Sidebar() {
 
           {projectsOpen && (
             <div className="ml-3 mt-0.5 space-y-0.5 border-l border-edge pl-2">
-              {/* Active project sub-nav */}
-              {selectedProject ? (
-                <>
-                  <div className="flex items-center gap-1 px-2 py-1">
-                    <span className="flex-1 truncate text-xs font-semibold text-accent-hover">
-                      {selectedProject.name}
-                    </span>
-                    <button
-                      onClick={() => selectProject(null)}
-                      className="rounded p-0.5 text-muted hover:text-white hover:bg-surface transition-colors"
-                      title="Exit project"
-                    >
-                      <X size={10} />
-                    </button>
+              {/* Project list (accordion) */}
+              {projects.map((project) => {
+                const isExpanded = expandedProjectIds.has(project.id);
+                const isSelected = selectedProjectId === project.id && screen === 'projects';
+                return (
+                  <div key={project.id}>
+                    <div className={cn(
+                      'group flex items-center rounded-md transition-colors',
+                      isSelected
+                        ? 'text-accent-hover'
+                        : 'text-secondary hover:bg-surface hover:text-white'
+                    )}>
+                      <button
+                        onClick={() => {
+                          selectProject(project.id);
+                          setExpandedProjectIds(prev => new Set([...prev, project.id]));
+                        }}
+                        className="flex flex-1 min-w-0 items-center gap-2 px-2.5 py-1.5 text-xs font-medium truncate"
+                      >
+                        <FolderOpen size={12} className="shrink-0" />
+                        <span className="truncate text-left">{project.name}</span>
+                      </button>
+                      <button
+                        onClick={() => toggleProjectExpanded(project.id)}
+                        className="pr-2 py-1.5 text-muted hover:text-white transition-colors"
+                        aria-label={isExpanded ? 'Collapse' : 'Expand'}
+                      >
+                        <ChevronRight size={10} className={cn('transition-transform', isExpanded && 'rotate-90')} />
+                      </button>
+                    </div>
+                    {isExpanded && (
+                      <div className="ml-3 mt-0.5 mb-1 space-y-0.5 border-l border-edge pl-2">
+                        {PROJECT_TABS.map(({ id, label, icon: Icon }) => (
+                          <button
+                            key={id}
+                            onClick={() => { setProjectTab(id); navigate('projects'); }}
+                            className={cn(
+                              'w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors',
+                              screen === 'projects' && projectTab === id
+                                ? 'bg-accent/10 text-accent-hover'
+                                : 'text-secondary hover:bg-surface hover:text-white'
+                            )}
+                          >
+                            <Icon size={12} />
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  {PROJECT_TABS.map(({ id, label, icon: Icon }) => (
-                    <button
-                      key={id}
-                      onClick={() => {
-                        setProjectTab(id);
-                        navigate('projects');
-                      }}
-                      className={cn(
-                        'w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors',
-                        screen === 'projects' && projectTab === id
-                          ? 'bg-accent/10 text-accent-hover'
-                          : 'text-secondary hover:bg-surface hover:text-white'
-                      )}
-                    >
-                      <Icon size={12} />
-                      {label}
-                    </button>
-                  ))}
-                  <div className="my-1 border-t border-edge" />
-                </>
-              ) : null}
-
-              {/* Project list */}
-              {projects.map((project) => (
-                <button
-                  key={project.id}
-                  onClick={() => selectProject(project.id)}
-                  className={cn(
-                    'w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors truncate',
-                    selectedProjectId === project.id && screen === 'projects'
-                      ? 'text-accent-hover'
-                      : 'text-secondary hover:bg-surface hover:text-white'
-                  )}
-                >
-                  <FolderOpen size={12} className="shrink-0" />
-                  <span className="truncate">{project.name}</span>
-                </button>
-              ))}
+                );
+              })}
 
               {/* New Project */}
               <button
@@ -244,8 +251,6 @@ export function Sidebar() {
             </div>
           )}
         </div>
-
-        <div className="my-1 border-t border-edge" />
 
         {/* ── Global nav ── */}
         {GLOBAL_NAV.map(({ id, label, icon: Icon }) => (
@@ -276,7 +281,7 @@ export function Sidebar() {
             )}
           >
             <Bot size={16} />
-            <span className="flex-1 text-left">Agents</span>
+            <span className="flex-1 text-left text-xs font-semibold uppercase tracking-wide">Agents</span>
             {pendingCount > 0 && (
               <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 text-[10px] font-medium">
                 <Shield size={8} />
@@ -312,7 +317,7 @@ export function Sidebar() {
                     >
                       <RoleIcon
                         size={12}
-                        className={cn('shrink-0', isSelected ? 'text-accent-hover' : role.color)}
+                        className={cn('shrink-0', role.color)}
                       />
                       <span className="truncate">{agent.name}</span>
                     </button>
@@ -347,14 +352,50 @@ export function Sidebar() {
         <SyncIndicator />
       </div>
 
-      <div className="p-3">
-        <button
-          onClick={() => navigate('task-builder')}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors"
-        >
-          <Plus size={14} />
-          New Task
-        </button>
+      <div className="px-2 pb-2">
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <button className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-edge text-secondary hover:bg-surface hover:text-white text-sm font-medium transition-colors">
+              <Plus size={14} />
+              New
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="top"
+              align="center"
+              sideOffset={6}
+              className="z-50 w-48 rounded-xl border border-edge bg-surface p-1.5 shadow-xl"
+            >
+              <DropdownMenu.Item
+                onSelect={() => navigate('task-builder')}
+                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-secondary outline-none cursor-pointer data-[highlighted]:bg-accent/10 data-[highlighted]:text-white"
+              >
+                <ListChecks size={14} />
+                New Task
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                onSelect={() => selectAgent('__new__')}
+                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-secondary outline-none cursor-pointer data-[highlighted]:bg-accent/10 data-[highlighted]:text-white"
+              >
+                <Bot size={14} />
+                New Agent
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                onSelect={() => {
+                  useUiStore.setState({ screen: 'projects', selectedProjectId: null });
+                  setTimeout(() => {
+                    window.dispatchEvent(new CustomEvent('orbit:new-project'));
+                  }, 50);
+                }}
+                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-secondary outline-none cursor-pointer data-[highlighted]:bg-accent/10 data-[highlighted]:text-white"
+              >
+                <FolderOpen size={14} />
+                New Project
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
       </div>
     </aside>
   );
