@@ -19,6 +19,7 @@ import { onPermissionRequest, onPermissionCancelled } from '../../events/permiss
 import { usePermissionStore } from '../../store/permissionStore';
 import { selectAvatarArchetype } from '../../lib/agentIdentity';
 import { AvatarOverlay, useAvatarState, useAvatarSpeech } from '../../components/avatar';
+import { FEATURES } from '../../lib/features';
 
 const PAGE_SIZE = 50;
 
@@ -64,7 +65,7 @@ export function ChatPanel({
   const streamId = sessionId ? `chat:${sessionId}` : null;
 
   // ── Avatar ────────────────────────────────────────────────────────────────
-  const avatarEnabled = agentIdentity?.avatarEnabled ?? false;
+  const avatarEnabled = FEATURES.avatar && (agentIdentity?.avatarEnabled ?? false);
   const [avatarVisible, setAvatarVisible] = useState(true);
   const [avatarSpeakAloud, setAvatarSpeakAloud] = useState(
     agentIdentity?.avatarSpeakAloud ?? false

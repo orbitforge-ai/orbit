@@ -14,6 +14,7 @@ import {
   updateIdentityField,
 } from '../../lib/agentIdentity';
 import { AVATAR_SVG_MAP, ARCHETYPE_LABELS } from '../../components/avatar/avatarSvgs';
+import { FEATURES } from '../../lib/features';
 
 interface AgentIdentitySectionProps {
   identity: AgentIdentityConfig;
@@ -95,7 +96,7 @@ export function AgentIdentitySection({
         </Select.Root>
       </div>
 
-      <AvatarSection identity={resolved} onChange={onChange} agentName={agentName} />
+      {FEATURES.avatar && <AvatarSection identity={resolved} onChange={onChange} agentName={agentName} />}
 
       <CollapsibleSection
         title="Advanced Identity Options"
