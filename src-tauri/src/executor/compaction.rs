@@ -82,6 +82,7 @@ pub async fn perform_compaction(
     app: &tauri::AppHandle,
     db: &DbPool,
     memory_client: Option<MemoryClient>,
+    memory_user_id: &str,
 ) -> Result<(), String> {
     let pool = db.0.clone();
     let sid = session_id.to_string();
@@ -335,6 +336,7 @@ pub async fn perform_compaction(
         if let Some(client) = memory_client {
             let agent_id = agent_id.to_string();
             let session_id = session_id.to_string();
+            let user_id = memory_user_id.to_string();
             let db_clone = DbPool(db.0.clone());
             let extract_text = summary_text.clone();
             tauri::async_runtime::spawn(async move {
@@ -357,7 +359,7 @@ pub async fn perform_compaction(
                     })
                     .await;
                 }
-                let (count, status) = match client.extract_memories(&extract_text, "default_user", &agent_id).await {
+                let (count, status) = match client.extract_memories(&extract_text, &user_id, &agent_id).await {
                     Ok(entries) => (entries.len() as i64, "success".to_string()),
                     Err(e) => {
                         warn!(session_id = %session_id, "Post-compaction memory extraction failed: {}", e);

@@ -2,6 +2,7 @@ use serde::Serialize;
 use tracing::{ debug, info, warn };
 use ulid::Ulid;
 
+use crate::auth::{ AuthMode, AuthState };
 use crate::db::DbPool;
 use crate::events::emitter::{ emit_agent_iteration, emit_agent_tool_result, emit_chat_context_update };
 use crate::executor::agent_tools::{ self, ToolExecutionContext };
@@ -397,6 +398,7 @@ pub async fn send_chat_message(
   session_registry: tauri::State<'_, SessionExecutionRegistry>,
   permission_registry: tauri::State<'_, PermissionRegistry>,
   memory_state: tauri::State<'_, Option<MemoryServiceState>>,
+  auth: tauri::State<'_, AuthState>,
 ) -> Result<String, String> {
   let pool = db.0.clone();
   let stream_id = format!("chat:{}", session_id);
@@ -502,6 +504,12 @@ pub async fn send_chat_message(
       .map_err(|e| e.to_string())??
   };
 
+  // Resolve memory user_id from auth state
+  let memory_user_id = match auth.get().await {
+    AuthMode::Cloud(session) => session.user_id,
+    _ => "default_user".to_string(),
+  };
+
   // Spawn the LLM call on a background task so the command returns immediately
   let db_bg = DbPool(pool.clone());
   let sid_bg = session_id.clone();
@@ -525,6 +533,7 @@ pub async fn send_chat_message(
       registry,
       perm_registry,
       mem_client.as_ref(),
+      &memory_user_id,
     ).await {
       warn!("Chat LLM error: {}", e);
       // Emit finished with error info
@@ -585,6 +594,7 @@ async fn do_llm_chat(
   session_registry: SessionExecutionRegistry,
   permission_registry: PermissionRegistry,
   memory_client: Option<&MemoryClient>,
+  memory_user_id: &str,
 ) -> Result<(), String> {
   // Load agent config
   let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
@@ -608,7 +618,7 @@ async fn do_llm_chat(
     existing_messages: Some(messages),
     is_sub_agent: false,
     chain_depth: 0,
-    user_id: "default_user".to_string(),
+    user_id: memory_user_id.to_string(),
   };
   let snapshot = pipeline.build(&ctx_request, db).await?;
   let mut messages = snapshot.messages;
@@ -634,7 +644,8 @@ async fn do_llm_chat(
     agent_semaphores,
     session_registry,
   ).with_permission_registry(permission_registry.clone())
-   .with_memory_client(memory_client.cloned());
+   .with_memory_client(memory_client.cloned())
+   .with_memory_user_id(memory_user_id.to_string());
   let pool = db.0.clone();
 
   let mut cumulative_input_tokens: u32 = 0;
@@ -786,10 +797,11 @@ async fn do_llm_chat(
       .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
     let compact_provider = llm_provider::create_provider(provider_name, compact_api_key)?;
 
+    let compaction_user_id = memory_user_id.to_string();
     tauri::async_runtime::spawn(async move {
       match compaction::perform_compaction(
         &agent_id, &session_id, compact_provider.as_ref(),
-        &ws_config, &app, &db, None,
+        &ws_config, &app, &db, None, &compaction_user_id,
       ).await {
         Ok(()) => info!(session_id = %session_id, "Background compaction completed"),
         Err(e) => warn!(session_id = %session_id, "Background compaction failed: {}", e),
@@ -923,7 +935,8 @@ pub async fn get_context_usage(
 pub async fn compact_chat_session(
   session_id: String,
   app: tauri::AppHandle,
-  db: tauri::State<'_, DbPool>
+  db: tauri::State<'_, DbPool>,
+  auth: tauri::State<'_, AuthState>,
 ) -> Result<(), String> {
   let pool = db.0.clone();
 
@@ -952,6 +965,11 @@ pub async fn compact_chat_session(
     .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
   let provider = llm_provider::create_provider(provider_name, api_key)?;
 
+  let memory_user_id = match auth.get().await {
+    AuthMode::Cloud(session) => session.user_id,
+    _ => "default_user".to_string(),
+  };
+
   let db_pool = DbPool(pool);
   compaction::perform_compaction(
     &agent_id,
@@ -960,7 +978,8 @@ pub async fn compact_chat_session(
     &ws_config,
     &app,
     &db_pool,
-    None
+    None,
+    &memory_user_id,
   ).await?;
 
   // Refetch and emit updated context usage

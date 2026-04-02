@@ -67,31 +67,14 @@ pub fn run() {
       let session_registry = SessionExecutionRegistry::new();
       let permission_registry = PermissionRegistry::new();
 
-      // Start memory service sidecar (blocking but with timeout — app works without it)
-      let memory_state: Option<memory_service::MemoryServiceState> = {
-        let memory_data_dir = data_dir();
-        match tauri::async_runtime::block_on(async {
-          tokio::time::timeout(
-            tokio::time::Duration::from_secs(90),
-            memory_service::MemoryServiceState::start(memory_data_dir),
-          ).await
-        }) {
-          Ok(Ok(state)) => {
-            info!("Memory service started successfully");
-            let health_state = state.clone();
-            tauri::async_runtime::spawn(async move { health_state.health_loop().await });
-            Some(state)
-          }
-          Ok(Err(e)) => {
-            tracing::warn!("Memory service failed to start (agents will work without memory): {}", e);
-            None
-          }
-          Err(_) => {
-            tracing::warn!("Memory service startup timed out (agents will work without memory)");
-            None
-          }
-        }
-      };
+      // Initialise memory client from build-time API key (instant — no subprocess)
+      let memory_state: Option<memory_service::MemoryServiceState> =
+        memory_service::MemoryServiceState::try_create();
+      if memory_state.is_some() {
+        info!("Memory service initialised (mem0 cloud)");
+      } else {
+        info!("MEM0_API_KEY not set at build time — memory features disabled");
+      }
 
       let memory_client = memory_state.as_ref().map(|s| s.client.clone());
 

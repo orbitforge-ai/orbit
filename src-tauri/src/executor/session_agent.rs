@@ -38,6 +38,7 @@ pub async fn run_agent_session(
   session_registry: &SessionExecutionRegistry,
   permission_registry: &PermissionRegistry,
   memory_client: Option<&MemoryClient>,
+  memory_user_id: &str,
 ) -> Result<String, String> {
   let stream_id = format!("chat:{}", session_id);
   let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
@@ -79,7 +80,7 @@ pub async fn run_agent_session(
     existing_messages: Some(history),
     is_sub_agent,
     chain_depth,
-    user_id: "default_user".to_string(),
+    user_id: memory_user_id.to_string(),
   };
   let snapshot = pipeline.build(&ctx_request, db).await?;
   let tools = snapshot.tools;
@@ -105,6 +106,7 @@ pub async fn run_agent_session(
       session_registry.clone(),
     ).with_permission_registry(permission_registry.clone())
      .with_memory_client(memory_client.cloned())
+     .with_memory_user_id(memory_user_id.to_string())
   } else {
     ToolExecutionContext::new_with_bus(
       agent_id,
@@ -118,6 +120,7 @@ pub async fn run_agent_session(
       session_registry.clone(),
     ).with_permission_registry(permission_registry.clone())
      .with_memory_client(memory_client.cloned())
+     .with_memory_user_id(memory_user_id.to_string())
   };
 
   let result = run_session_loop(
@@ -339,11 +342,12 @@ pub async fn run_session_loop(
   if ws_config.memory_enabled {
     if let Some(client) = tool_ctx.memory_client.clone() {
       let agent_id = tool_ctx.agent_id.clone();
+      let user_id = tool_ctx.memory_user_id.clone();
       let conversation_text = build_conversation_text(&messages);
       let db_clone = DbPool(db.0.clone());
       let session_id_str = session_id.to_string();
       tauri::async_runtime::spawn(async move {
-        extract_session_memories(client, conversation_text, "default_user", &agent_id, &session_id_str, &db_clone).await;
+        extract_session_memories(client, conversation_text, &user_id, &agent_id, &session_id_str, &db_clone).await;
       });
     }
   }
@@ -356,6 +360,7 @@ pub async fn run_session_loop(
     let app = app.clone();
     let db = DbPool(db.0.clone());
     let mem_client = tool_ctx.memory_client.clone();
+    let compaction_user_id = tool_ctx.memory_user_id.clone();
     if let Ok(api_key) = keychain::retrieve_api_key(&ws_config.provider) {
       if let Ok(provider) = llm_provider::create_provider(&ws_config.provider, api_key) {
         tauri::async_runtime::spawn(async move {
@@ -367,6 +372,7 @@ pub async fn run_session_loop(
             &app,
             &db,
             mem_client,
+            &compaction_user_id,
           ).await {
             warn!(session_id = %session_id, "Session compaction failed: {}", e);
           }

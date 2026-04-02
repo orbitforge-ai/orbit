@@ -474,6 +474,7 @@ async fn run_one(
         &agent_semaphores,
         &session_registry,
         memory_client.as_ref(),
+        "default_user",
       ).await
     }
     "agent_loop" => {
@@ -501,6 +502,7 @@ async fn run_one(
           &session_registry,
           &permission_registry,
           memory_client.as_ref(),
+          "default_user",
         ).await
       } else {
         agent_loop::run_agent_loop(
@@ -519,6 +521,7 @@ async fn run_one(
           &session_registry,
           &permission_registry,
           memory_client.as_ref(),
+          "default_user",
         ).await
       }
     }

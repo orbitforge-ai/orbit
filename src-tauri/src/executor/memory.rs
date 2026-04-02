@@ -1,17 +1,18 @@
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-/// HTTP client for the memory sidecar service.
+/// HTTP client for the mem0 cloud API.
 ///
-/// All memory operations go through this client. The backend (self-hosted mem0
-/// + FAISS) can be swapped by changing the `base_url` — no other Rust code
-/// needs to change.
+/// All memory operations call https://api.mem0.ai directly. The user_id + agent_id
+/// scoping enforces per-user isolation; the API key is a shared org-level credential
+/// embedded at build time.
 #[derive(Clone)]
 pub struct MemoryClient {
-    base_url: String,
+    api_key: String,
     client: reqwest::Client,
 }
 
-// ─── Request / Response types ────────────────────────────────────────────────
+// ─── Public response type ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryEntry {
@@ -28,52 +29,80 @@ pub struct MemoryEntry {
     pub metadata: serde_json::Value,
 }
 
+// ─── Cloud wire types (private) ──────────────────────────────────────────────
+
 #[derive(Debug, Serialize)]
-struct AddMemoryBody {
-    text: String,
-    memory_type: String,
+struct CloudAddBody {
+    messages: Vec<CloudMessage>,
     user_id: String,
     agent_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    metadata: Option<serde_json::Value>,
+    metadata: serde_json::Value,
+    async_mode: bool,
+    output_format: &'static str,
 }
 
 #[derive(Debug, Serialize)]
-struct SearchMemoryBody {
+struct CloudMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CloudSearchBody {
     query: String,
     user_id: String,
     agent_id: String,
+    top_k: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    memory_type: Option<String>,
-    limit: u32,
+    filters: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
-struct UpdateMemoryBody {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    metadata: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Serialize)]
-struct ExtractMemoriesBody {
-    conversation_text: String,
+struct CloudListBody {
     user_id: String,
     agent_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filters: Option<serde_json::Value>,
+    page: u32,
+    page_size: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct CloudUpdateBody {
+    text: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct HealthResponse {
-    status: String,
+struct CloudResponse {
+    results: Vec<CloudMemoryItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CloudMemoryItem {
+    id: String,
+    memory: String,
+    #[serde(default)]
+    score: Option<f64>,
+    #[serde(default)]
+    metadata: serde_json::Value,
+    #[serde(default)]
+    event: Option<String>,
+}
+
+/// The update endpoint returns the item directly, not wrapped in {results:[...]}.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum CloudUpdateResult {
+    Wrapped { results: Vec<CloudMemoryItem> },
+    Direct { id: String, memory: String, #[serde(default)] metadata: serde_json::Value },
 }
 
 // ─── Client implementation ───────────────────────────────────────────────────
 
 impl MemoryClient {
-    pub fn new(base_url: &str) -> Self {
+    pub fn new(api_key: String) -> Self {
         Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
+            api_key,
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
@@ -82,28 +111,24 @@ impl MemoryClient {
     }
 
     fn url(&self, path: &str) -> String {
-        format!("{}/api/v1/memory{}", self.base_url, path)
+        format!("https://api.mem0.ai{}", path)
     }
 
-    /// Check if the memory service is healthy.
+    fn auth(&self) -> String {
+        format!("Token {}", self.api_key)
+    }
+
+    /// Check if the mem0 cloud API is reachable with our key.
     pub async fn health_check(&self) -> Result<bool, String> {
         let resp = self
             .client
-            .get(self.url("/health"))
+            .get(self.url("/v1/ping/"))
+            .header("Authorization", self.auth())
             .send()
             .await
             .map_err(|e| format!("health check request failed: {}", e))?;
 
-        if !resp.status().is_success() {
-            return Ok(false);
-        }
-
-        let body: HealthResponse = resp
-            .json()
-            .await
-            .map_err(|e| format!("health check parse failed: {}", e))?;
-
-        Ok(body.status == "ok")
+        Ok(resp.status().is_success())
     }
 
     /// Add a new memory.
@@ -113,19 +138,40 @@ impl MemoryClient {
         memory_type: &str,
         user_id: &str,
         agent_id: &str,
-        metadata: Option<serde_json::Value>,
+        extra_metadata: Option<serde_json::Value>,
     ) -> Result<Vec<MemoryEntry>, String> {
-        let body = AddMemoryBody {
-            text: text.to_string(),
-            memory_type: memory_type.to_string(),
+        let now = Utc::now().to_rfc3339();
+        let mut meta = serde_json::json!({
+            "memory_type": memory_type,
+            "agent_id": agent_id,
+            "source": "explicit",
+            "created_at": now,
+            "updated_at": now,
+        });
+        if let Some(extra) = extra_metadata {
+            if let (Some(m), Some(e)) = (meta.as_object_mut(), extra.as_object()) {
+                for (k, v) in e {
+                    m.insert(k.clone(), v.clone());
+                }
+            }
+        }
+
+        let body = CloudAddBody {
+            messages: vec![CloudMessage {
+                role: "user".to_string(),
+                content: text.to_string(),
+            }],
             user_id: user_id.to_string(),
             agent_id: agent_id.to_string(),
-            metadata,
+            metadata: meta,
+            async_mode: false,
+            output_format: "v1.1",
         };
 
         let resp = self
             .client
-            .post(self.url("/add"))
+            .post(self.url("/v1/memories/"))
+            .header("Authorization", self.auth())
             .json(&body)
             .send()
             .await
@@ -137,9 +183,25 @@ impl MemoryClient {
             return Err(format!("add_memory failed ({}): {}", status, text));
         }
 
-        resp.json()
+        let cloud: CloudResponse = resp
+            .json()
             .await
-            .map_err(|e| format!("add_memory parse failed: {}", e))
+            .map_err(|e| format!("add_memory parse failed: {}", e))?;
+
+        let entries = cloud
+            .results
+            .into_iter()
+            .filter(|item| {
+                // Keep ADD, UPDATE, and items with no event field (some API versions omit it)
+                matches!(
+                    item.event.as_deref(),
+                    Some("ADD") | Some("add") | Some("UPDATE") | Some("update") | None
+                ) && !item.id.is_empty()
+            })
+            .map(|item| cloud_item_to_entry(item, user_id))
+            .collect();
+
+        Ok(entries)
     }
 
     /// Semantic search for memories.
@@ -151,17 +213,18 @@ impl MemoryClient {
         memory_type: Option<&str>,
         limit: u32,
     ) -> Result<Vec<MemoryEntry>, String> {
-        let body = SearchMemoryBody {
+        let body = CloudSearchBody {
             query: query.to_string(),
             user_id: user_id.to_string(),
             agent_id: agent_id.to_string(),
-            memory_type: memory_type.map(|s| s.to_string()),
-            limit,
+            top_k: limit,
+            filters: Some(serde_json::json!({ "agent_id": agent_id })),
         };
 
         let resp = self
             .client
-            .post(self.url("/search"))
+            .post(self.url("/v2/memories/search/"))
+            .header("Authorization", self.auth())
             .json(&body)
             .send()
             .await
@@ -173,9 +236,23 @@ impl MemoryClient {
             return Err(format!("search_memories failed ({}): {}", status, text));
         }
 
-        resp.json()
+        let cloud: CloudResponse = resp
+            .json()
             .await
-            .map_err(|e| format!("search_memories parse failed: {}", e))
+            .map_err(|e| format!("search_memories parse failed: {}", e))?;
+
+        let mut entries: Vec<MemoryEntry> = cloud
+            .results
+            .into_iter()
+            .map(|item| cloud_item_to_entry(item, user_id))
+            .collect();
+
+        // Post-filter by memory_type if requested (cloud may not filter metadata natively)
+        if let Some(mt) = memory_type {
+            entries.retain(|e| e.memory_type == mt);
+        }
+
+        Ok(entries)
     }
 
     /// List memories for a user/agent.
@@ -187,21 +264,22 @@ impl MemoryClient {
         limit: u32,
         offset: u32,
     ) -> Result<Vec<MemoryEntry>, String> {
-        let mut url = format!(
-            "{}?user_id={}&agent_id={}&limit={}&offset={}",
-            self.url("/list"),
-            urlencoded(user_id),
-            urlencoded(agent_id),
-            limit,
-            offset,
-        );
-        if let Some(mt) = memory_type {
-            url.push_str(&format!("&memory_type={}", urlencoded(mt)));
-        }
+        // Map offset+limit → 1-indexed page (works exactly when offset is a multiple of limit)
+        let page = (offset / limit.max(1)) + 1;
+
+        let body = CloudListBody {
+            user_id: user_id.to_string(),
+            agent_id: agent_id.to_string(),
+            filters: Some(serde_json::json!({ "agent_id": agent_id })),
+            page,
+            page_size: limit,
+        };
 
         let resp = self
             .client
-            .get(&url)
+            .post(self.url("/v2/memories/"))
+            .header("Authorization", self.auth())
+            .json(&body)
             .send()
             .await
             .map_err(|e| format!("list_memories request failed: {}", e))?;
@@ -212,20 +290,35 @@ impl MemoryClient {
             return Err(format!("list_memories failed ({}): {}", status, text));
         }
 
-        resp.json()
+        let cloud: CloudResponse = resp
+            .json()
             .await
-            .map_err(|e| format!("list_memories parse failed: {}", e))
+            .map_err(|e| format!("list_memories parse failed: {}", e))?;
+
+        let mut entries: Vec<MemoryEntry> = cloud
+            .results
+            .into_iter()
+            .map(|item| cloud_item_to_entry(item, user_id))
+            .collect();
+
+        if let Some(mt) = memory_type {
+            entries.retain(|e| e.memory_type == mt);
+        }
+
+        Ok(entries)
     }
 
     /// Delete a memory by ID.
     pub async fn delete_memory(&self, memory_id: &str) -> Result<(), String> {
         let resp = self
             .client
-            .delete(self.url(&format!("/delete/{}", urlencoded(memory_id))))
+            .delete(self.url(&format!("/v1/memories/{}/", memory_id)))
+            .header("Authorization", self.auth())
             .send()
             .await
             .map_err(|e| format!("delete_memory request failed: {}", e))?;
 
+        // Accept 200 or 204
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
@@ -235,21 +328,22 @@ impl MemoryClient {
         Ok(())
     }
 
-    /// Update a memory's text or metadata.
+    /// Update a memory's text.
     pub async fn update_memory(
         &self,
         memory_id: &str,
         text: Option<&str>,
-        metadata: Option<serde_json::Value>,
+        _metadata: Option<serde_json::Value>,
     ) -> Result<MemoryEntry, String> {
-        let body = UpdateMemoryBody {
-            text: text.map(|s| s.to_string()),
-            metadata,
+        let text_val = text.unwrap_or("");
+        let body = CloudUpdateBody {
+            text: text_val.to_string(),
         };
 
         let resp = self
             .client
-            .put(self.url(&format!("/update/{}", urlencoded(memory_id))))
+            .put(self.url(&format!("/v1/memories/{}/", memory_id)))
+            .header("Authorization", self.auth())
             .json(&body)
             .send()
             .await
@@ -261,27 +355,61 @@ impl MemoryClient {
             return Err(format!("update_memory failed ({}): {}", status, text));
         }
 
-        resp.json()
+        let result: CloudUpdateResult = resp
+            .json()
             .await
-            .map_err(|e| format!("update_memory parse failed: {}", e))
+            .map_err(|e| format!("update_memory parse failed: {}", e))?;
+
+        let item = match result {
+            CloudUpdateResult::Wrapped { results } => results
+                .into_iter()
+                .next()
+                .ok_or_else(|| "update_memory: empty results".to_string())?,
+            CloudUpdateResult::Direct { id, memory, metadata } => CloudMemoryItem {
+                id,
+                memory,
+                score: None,
+                metadata,
+                event: None,
+            },
+        };
+
+        Ok(cloud_item_to_entry(item, ""))
     }
 
     /// Auto-extract memories from a conversation.
+    /// Delegates to the same add endpoint — mem0 cloud runs its own extraction pipeline.
     pub async fn extract_memories(
         &self,
         conversation_text: &str,
         user_id: &str,
         agent_id: &str,
     ) -> Result<Vec<MemoryEntry>, String> {
-        let body = ExtractMemoriesBody {
-            conversation_text: conversation_text.to_string(),
+        let now = Utc::now().to_rfc3339();
+        let meta = serde_json::json!({
+            "memory_type": "project",
+            "agent_id": agent_id,
+            "source": "auto_extracted",
+            "created_at": now,
+            "updated_at": now,
+        });
+
+        let body = CloudAddBody {
+            messages: vec![CloudMessage {
+                role: "user".to_string(),
+                content: conversation_text.to_string(),
+            }],
             user_id: user_id.to_string(),
             agent_id: agent_id.to_string(),
+            metadata: meta,
+            async_mode: false,
+            output_format: "v1.1",
         };
 
         let resp = self
             .client
-            .post(self.url("/extract"))
+            .post(self.url("/v1/memories/"))
+            .header("Authorization", self.auth())
             .json(&body)
             .send()
             .await
@@ -293,18 +421,86 @@ impl MemoryClient {
             return Err(format!("extract_memories failed ({}): {}", status, text));
         }
 
-        resp.json()
+        let cloud: CloudResponse = resp
+            .json()
             .await
-            .map_err(|e| format!("extract_memories parse failed: {}", e))
+            .map_err(|e| format!("extract_memories parse failed: {}", e))?;
+
+        let entries = cloud
+            .results
+            .into_iter()
+            .filter(|item| {
+                matches!(
+                    item.event.as_deref(),
+                    Some("ADD") | Some("add") | Some("UPDATE") | Some("update") | None
+                ) && !item.id.is_empty()
+            })
+            .map(|item| cloud_item_to_entry(item, user_id))
+            .collect();
+
+        Ok(entries)
     }
 }
 
-/// Minimal percent-encoding for query parameters.
-fn urlencoded(s: &str) -> String {
-    s.replace('%', "%25")
-        .replace(' ', "%20")
-        .replace('&', "%26")
-        .replace('=', "%3D")
-        .replace('+', "%2B")
-        .replace('#', "%23")
+// ─── Mapping helper ──────────────────────────────────────────────────────────
+
+fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> MemoryEntry {
+    let meta = &item.metadata;
+
+    let memory_type = meta
+        .get("memory_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("reference")
+        .to_string();
+    let agent_id = meta
+        .get("agent_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let source = meta
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("explicit")
+        .to_string();
+    let created_at = meta
+        .get("created_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let updated_at = meta
+        .get("updated_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Strip known fields from residual metadata
+    let residual_metadata = match &item.metadata {
+        serde_json::Value::Object(map) => {
+            let filtered: serde_json::Map<_, _> = map
+                .iter()
+                .filter(|(k, _)| {
+                    !matches!(
+                        k.as_str(),
+                        "memory_type" | "agent_id" | "source" | "created_at" | "updated_at"
+                    )
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            serde_json::Value::Object(filtered)
+        }
+        other => other.clone(),
+    };
+
+    MemoryEntry {
+        id: item.id,
+        text: item.memory,
+        memory_type,
+        user_id: user_id.to_string(),
+        agent_id,
+        created_at,
+        updated_at,
+        source,
+        score: item.score,
+        metadata: residual_metadata,
+    }
 }

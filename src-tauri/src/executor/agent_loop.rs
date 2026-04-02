@@ -91,6 +91,7 @@ pub async fn run_agent_loop(
   session_registry: &SessionExecutionRegistry,
   permission_registry: &PermissionRegistry,
   memory_client: Option<&MemoryClient>,
+  memory_user_id: &str,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -149,7 +150,7 @@ pub async fn run_agent_loop(
     existing_messages: None,
     is_sub_agent,
     chain_depth,
-    user_id: "default_user".to_string(),
+    user_id: memory_user_id.to_string(),
   };
   let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
     log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
@@ -178,6 +179,7 @@ pub async fn run_agent_loop(
       session_registry.clone(),
     ).with_permission_registry(permission_registry.clone())
      .with_memory_client(memory_client.cloned())
+     .with_memory_user_id(memory_user_id.to_string())
   } else {
     ToolExecutionContext::new_with_bus(
       agent_id,
@@ -191,6 +193,7 @@ pub async fn run_agent_loop(
       session_registry.clone(),
     ).with_permission_registry(permission_registry.clone())
      .with_memory_client(memory_client.cloned())
+     .with_memory_user_id(memory_user_id.to_string())
   };
 
   // ── Init conversation ────────────────────────────────────────────────
@@ -548,6 +551,7 @@ pub async fn run_agent_prompt(
   _agent_semaphores: &AgentSemaphores,
   _session_registry: &SessionExecutionRegistry,
   memory_client: Option<&MemoryClient>,
+  memory_user_id: &str,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -584,7 +588,7 @@ pub async fn run_agent_prompt(
     existing_messages: None,
     is_sub_agent: false,
     chain_depth: 0,
-    user_id: "default_user".to_string(),
+    user_id: memory_user_id.to_string(),
   };
   let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
     log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
@@ -733,6 +737,7 @@ pub async fn run_pulse(
   session_registry: &SessionExecutionRegistry,
   permission_registry: &PermissionRegistry,
   memory_client: Option<&MemoryClient>,
+  memory_user_id: &str,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -835,7 +840,7 @@ pub async fn run_pulse(
     existing_messages: None,
     is_sub_agent: false,
     chain_depth,
-    user_id: "default_user".to_string(),
+    user_id: memory_user_id.to_string(),
   };
   let snapshot = pipeline.build(&ctx_request, db).await.map_err(|e| {
     log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
@@ -875,7 +880,8 @@ pub async fn run_pulse(
     agent_semaphores.clone(),
     session_registry.clone(),
   ).with_permission_registry(permission_registry.clone())
-   .with_memory_client(memory_client.cloned());
+   .with_memory_client(memory_client.cloned())
+   .with_memory_user_id(memory_user_id.to_string());
 
   // ── Run session loop (LLM + tool execution) ─────────────────────────
   let result = session_agent::run_session_loop(

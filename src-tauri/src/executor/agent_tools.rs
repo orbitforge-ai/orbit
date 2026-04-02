@@ -50,6 +50,8 @@ pub struct ToolExecutionContext {
   pub permission_registry: Option<PermissionRegistry>,
   /// Optional memory client for long-term memory operations.
   pub memory_client: Option<MemoryClient>,
+  /// User ID used for scoping memory operations (Supabase user_id when cloud, else "default_user").
+  pub memory_user_id: String,
 }
 
 impl ToolExecutionContext {
@@ -75,6 +77,7 @@ impl ToolExecutionContext {
       is_sub_agent: false,
       permission_registry: None,
       memory_client: None,
+      memory_user_id: "default_user".to_string(),
     }
   }
 
@@ -110,6 +113,7 @@ impl ToolExecutionContext {
       is_sub_agent: false,
       permission_registry: None,
       memory_client: None,
+      memory_user_id: "default_user".to_string(),
     }
   }
 
@@ -122,6 +126,12 @@ impl ToolExecutionContext {
   /// Set the memory client on this context (builder pattern).
   pub fn with_memory_client(mut self, client: Option<MemoryClient>) -> Self {
     self.memory_client = client;
+    self
+  }
+
+  /// Set the user ID for memory scoping (builder pattern).
+  pub fn with_memory_user_id(mut self, user_id: String) -> Self {
+    self.memory_user_id = user_id;
     self
   }
 
@@ -696,6 +706,7 @@ pub async fn execute_tool(
       let registry = session_registry.clone();
       let perm_registry = ctx.permission_registry.clone().unwrap_or_else(PermissionRegistry::new);
       let mem_client = ctx.memory_client.clone();
+      let mem_user_id = ctx.memory_user_id.clone();
       let target_agent_id = to_agent_id.clone();
       let target_session_id = new_session_id.clone();
       tokio::task::spawn_blocking(move || {
@@ -712,6 +723,7 @@ pub async fn execute_tool(
             &registry,
             &perm_registry,
             mem_client.as_ref(),
+            &mem_user_id,
           ).await {
             warn!(session_id = %target_session_id, "send_message session failed: {}", e);
           }
@@ -884,6 +896,7 @@ pub async fn execute_tool(
         let registry = session_registry.clone();
         let perm_registry = ctx.permission_registry.clone().unwrap_or_else(PermissionRegistry::new);
         let mem_client = ctx.memory_client.clone();
+        let mem_user_id = ctx.memory_user_id.clone();
         let sub_agent_id = agent_id.to_string();
         let sub_session_id = st.session_id.clone();
         tokio::task::spawn_blocking(move || {
@@ -900,6 +913,7 @@ pub async fn execute_tool(
               &registry,
               &perm_registry,
               mem_client.as_ref(),
+              &mem_user_id,
             ).await {
               warn!(session_id = %sub_session_id, "sub-agent session failed: {}", e);
             }
@@ -1045,7 +1059,7 @@ pub async fn execute_tool(
 
       info!(run_id = run_id, memory_type = memory_type, "agent tool: remember");
 
-      match client.add_memory(text, memory_type, "default_user", agent_id, None).await {
+      match client.add_memory(text, memory_type, &ctx.memory_user_id, agent_id, None).await {
         Ok(_) => Ok((format!("Remembered: \"{}\" (type: {})", text, memory_type), false)),
         Err(e) => Ok((format!("Failed to save memory: {}", e), false)),
       }
@@ -1062,7 +1076,7 @@ pub async fn execute_tool(
 
       info!(run_id = run_id, query = query, "agent tool: forget");
 
-      let matches = match client.search_memories(query, "default_user", agent_id, None, 1).await {
+      let matches = match client.search_memories(query, &ctx.memory_user_id, agent_id, None, 1).await {
         Ok(m) => m,
         Err(e) => return Ok((format!("Failed to search for memory to forget: {}", e), false)),
       };
@@ -1091,7 +1105,7 @@ pub async fn execute_tool(
 
       info!(run_id = run_id, query = query, "agent tool: search_memory");
 
-      match client.search_memories(query, "default_user", agent_id, memory_type, limit).await {
+      match client.search_memories(query, &ctx.memory_user_id, agent_id, memory_type, limit).await {
         Ok(entries) if entries.is_empty() => Ok(("No matching memories found.".to_string(), false)),
         Ok(entries) => {
           let lines: Vec<String> = entries
@@ -1116,7 +1130,7 @@ pub async fn execute_tool(
 
       info!(run_id = run_id, "agent tool: list_memories");
 
-      match client.list_memories("default_user", agent_id, memory_type, limit, 0).await {
+      match client.list_memories(&ctx.memory_user_id, agent_id, memory_type, limit, 0).await {
         Ok(entries) if entries.is_empty() => Ok(("No memories stored.".to_string(), false)),
         Ok(entries) => {
           let lines: Vec<String> = entries
