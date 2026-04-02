@@ -55,32 +55,6 @@ pub struct ToolExecutionContext {
 }
 
 impl ToolExecutionContext {
-  pub fn new(agent_id: &str) -> Self {
-    let agent_root = super::workspace::agent_dir(agent_id);
-    let workspace_root = agent_root.join("workspace");
-    let ws_config = super::workspace::load_agent_config(agent_id).unwrap_or_default();
-    Self {
-      agent_id: agent_id.to_string(),
-      _agent_root: agent_root,
-      workspace_root,
-      web_search_provider: ws_config.web_search_provider,
-      disabled_skills: ws_config.disabled_skills,
-      db: None,
-      executor_tx: None,
-      app: None,
-      current_agent_id: None,
-      current_run_id: None,
-      current_session_id: None,
-      chain_depth: 0,
-      agent_semaphores: None,
-      session_registry: None,
-      is_sub_agent: false,
-      permission_registry: None,
-      memory_client: None,
-      memory_user_id: "default_user".to_string(),
-    }
-  }
-
   pub fn new_with_bus(
     agent_id: &str,
     run_id: &str,

@@ -574,6 +574,8 @@ async fn run_one(
     }
   }
 
+  permission_registry.cancel_for_run(&run_id, &app).await;
+
   Ok(())
 }
 

@@ -44,7 +44,7 @@ pnpm install
 
 ### 2. Configure environment variables
 
-Create `src-tauri/.env` with the following:
+Create a repo-root `.env` with the following:
 
 ```env
 SUPABASE_URL=https://your-project.supabase.co
@@ -56,7 +56,7 @@ MEM0_API_KEY=your-mem0-api-key
 - `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_PASSWORD` — from your [Supabase project settings](https://supabase.com/dashboard)
 - `MEM0_API_KEY` — from [Mem0](https://mem0.ai); optional, memory features are disabled if not set
 
-These variables are embedded into the binary at build time via `src-tauri/build.rs`.
+`src-tauri/build.rs` now reads both the repo-root `.env` and `src-tauri/.env` at build time. If both files define the same key, `src-tauri/.env` wins.
 
 ### 3. Run in development
 

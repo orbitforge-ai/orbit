@@ -3,7 +3,7 @@ use ulid::Ulid;
 
 use crate::db::DbPool;
 use crate::events::emitter::{ emit_agent_iteration, emit_agent_tool_result, emit_chat_context_update };
-use crate::executor::agent_tools::{ self, ToolExecutionContext };
+use crate::executor::agent_tools::ToolExecutionContext;
 use crate::executor::compaction;
 use crate::executor::context::{ self, ContextMode, ContextRequest };
 use crate::executor::engine::{ AgentSemaphores, RunRequest, SessionExecutionRegistry };
@@ -56,6 +56,8 @@ pub async fn run_agent_session(
   let semaphore = agent_semaphores.get_or_create(agent_id, db).await;
   let _permit = semaphore.acquire_owned().await.map_err(|e| e.to_string())?;
 
+  session_registry.clear_cancelled(session_id).await;
+
   if is_session_cancelled(session_id, db, session_registry).await {
     return Err(finalize_cancelled_session(db, session_id).await);
   }
@@ -74,7 +76,6 @@ pub async fn run_agent_session(
     agent_id: agent_id.to_string(),
     mode: ContextMode::Chat,
     session_id: Some(session_id.to_string()),
-    run_id: stream_id.clone(),
     goal: None,
     ws_config: ws_config.clone(),
     existing_messages: Some(history),

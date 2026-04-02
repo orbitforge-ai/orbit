@@ -49,19 +49,6 @@ pub enum AuthMode {
     Cloud(AuthSession),
 }
 
-impl AuthMode {
-    pub fn is_cloud(&self) -> bool {
-        matches!(self, AuthMode::Cloud(_))
-    }
-
-    pub fn session(&self) -> Option<&AuthSession> {
-        match self {
-            AuthMode::Cloud(s) => Some(s),
-            _ => None,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Managed state
 // ---------------------------------------------------------------------------

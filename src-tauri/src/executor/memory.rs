@@ -118,19 +118,6 @@ impl MemoryClient {
         format!("Token {}", self.api_key)
     }
 
-    /// Check if the mem0 cloud API is reachable with our key.
-    pub async fn health_check(&self) -> Result<bool, String> {
-        let resp = self
-            .client
-            .get(self.url("/v1/ping/"))
-            .header("Authorization", self.auth())
-            .send()
-            .await
-            .map_err(|e| format!("health check request failed: {}", e))?;
-
-        Ok(resp.status().is_success())
-    }
-
     /// Add a new memory.
     pub async fn add_memory(
         &self,

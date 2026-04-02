@@ -2,7 +2,6 @@ use tracing::{debug, warn};
 
 use crate::db::connection::DbPool;
 use crate::executor::agent_tools;
-use crate::executor::compaction;
 use crate::executor::llm_provider::{
     model_context_window, ChatMessage, ContentBlock, ToolDefinition,
 };
@@ -19,7 +18,6 @@ pub struct ContextSnapshot {
     pub messages: Vec<ChatMessage>,
     pub tools: Vec<ToolDefinition>,
     pub token_budget: TokenBudget,
-    pub metadata: ContextMeta,
 }
 
 impl ContextSnapshot {
@@ -28,7 +26,6 @@ impl ContextSnapshot {
             .ws_config
             .context_window_override
             .unwrap_or_else(|| model_context_window(&request.ws_config.model));
-        let threshold = compaction::effective_threshold(&request.ws_config);
 
         Self {
             system_prompt: String::new(),
@@ -36,14 +33,6 @@ impl ContextSnapshot {
             tools: Vec::new(),
             token_budget: TokenBudget {
                 context_window,
-                max_output_tokens: 4096,
-                used_input_tokens: 0,
-                compaction_threshold: threshold,
-            },
-            metadata: ContextMeta {
-                agent_id: request.agent_id.clone(),
-                session_id: request.session_id.clone(),
-                mode: request.mode.clone(),
             },
         }
     }
@@ -55,7 +44,6 @@ pub struct ContextRequest {
     pub agent_id: String,
     pub mode: ContextMode,
     pub session_id: Option<String>,
-    pub run_id: String,
     pub goal: Option<String>,
     pub ws_config: AgentWorkspaceConfig,
     /// For agent_loop: messages managed in-memory during the loop.
@@ -91,16 +79,6 @@ impl std::fmt::Display for ContextMode {
 #[derive(Debug, Clone)]
 pub struct TokenBudget {
     pub context_window: u32,
-    pub max_output_tokens: u32,
-    pub used_input_tokens: u32,
-    pub compaction_threshold: f64,
-}
-
-#[derive(Debug, Clone)]
-pub struct ContextMeta {
-    pub agent_id: String,
-    pub session_id: Option<String>,
-    pub mode: ContextMode,
 }
 
 // ─── Stage trait + Pipeline ─────────────────────────────────────────────────
