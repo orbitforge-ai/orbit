@@ -1,0 +1,112 @@
+import { useState } from 'react';
+import { Cloud, WifiOff, Loader2 } from 'lucide-react';
+import { useAuthStore } from '../../store/authStore';
+
+export function AuthScreen() {
+  const { login, continueOffline, isLoading } = useAuthStore();
+
+  const [view, setView] = useState<'choice' | 'login'>('choice');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    try {
+      await login(email, password);
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  return (
+    <div className="flex h-screen w-screen items-center justify-center bg-background">
+      <div className="w-full max-w-sm space-y-6 px-6">
+        {/* Logo / title */}
+        <div className="text-center space-y-1">
+          <h1 className="text-2xl font-semibold text-bright">Orbit</h1>
+          <p className="text-sm text-secondary">macOS automation platform</p>
+        </div>
+
+        {view === 'choice' ? (
+          <div className="space-y-3">
+            <button
+              onClick={() => setView('login')}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-lg bg-accent hover:bg-accent-hover text-white font-medium transition-colors"
+            >
+              <Cloud size={18} />
+              <span className="flex-1 text-left">Sign in / Create account</span>
+            </button>
+
+            <button
+              onClick={() => continueOffline()}
+              disabled={isLoading}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-edge bg-surface hover:bg-surface-hover text-primary font-medium transition-colors disabled:opacity-50"
+            >
+              <WifiOff size={18} className="text-secondary" />
+              <span className="flex-1 text-left">Continue offline</span>
+            </button>
+
+            <p className="text-center text-xs text-muted pt-1">
+              Offline mode stores all data locally on this device.
+            </p>
+          </div>
+        ) : (
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-secondary">Email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoFocus
+                className="w-full px-3 py-2 rounded-lg bg-surface border border-edge text-primary placeholder:text-muted text-sm focus:outline-none focus:border-accent"
+                placeholder="you@example.com"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-secondary">Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                className="w-full px-3 py-2 rounded-lg bg-surface border border-edge text-primary placeholder:text-muted text-sm focus:outline-none focus:border-accent"
+                placeholder="••••••••"
+              />
+            </div>
+
+            {error && (
+              <p className="text-sm text-failure bg-failure/10 border border-failure/20 rounded-lg px-3 py-2">
+                {error}
+              </p>
+            )}
+
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-accent hover:bg-accent-hover text-white font-medium transition-colors disabled:opacity-50"
+            >
+              {isLoading ? <Loader2 size={16} className="animate-spin" /> : null}
+              Sign in
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setView('choice');
+                setError(null);
+              }}
+              className="w-full text-center text-sm text-secondary hover:text-primary transition-colors"
+            >
+              ← Back
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}

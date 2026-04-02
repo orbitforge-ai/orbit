@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod auth;
 pub mod bus;
 pub mod chat;
 pub mod memory;

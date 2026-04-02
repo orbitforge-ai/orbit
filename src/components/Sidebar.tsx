@@ -17,6 +17,7 @@ import { agentsApi } from '../api/agents';
 import { Agent } from '../types';
 import { usePermissionStore } from '../store/permissionStore';
 import { onPermissionRequest, onPermissionCancelled } from '../events/permissionEvents';
+import { SyncIndicator } from './SyncIndicator';
 
 const NAV_ITEMS = [
   { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard },
@@ -152,8 +153,13 @@ export function Sidebar() {
         </div>
       </nav>
 
+      {/* Sync status + account */}
+      <div className="px-2 pt-2 border-t border-edge">
+        <SyncIndicator />
+      </div>
+
       {/* New Task shortcut */}
-      <div className="p-3 border-t border-edge">
+      <div className="p-3">
         <button
           onClick={() => navigate('task-builder')}
           className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors"

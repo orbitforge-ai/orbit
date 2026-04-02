@@ -1,6 +1,8 @@
+import { useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Sidebar } from './components/Sidebar';
 import { useUiStore } from './store/uiStore';
+import { useAuthStore } from './store/authStore';
 import { Dashboard } from './screens/Dashboard';
 import { RunHistory } from './screens/RunHistory';
 import { TaskBuilder } from './screens/TaskBuilder';
@@ -8,6 +10,7 @@ import { ScheduleBuilderScreen } from './screens/ScheduleBuilder';
 import { TasksScreen } from './screens/Tasks';
 import { AgentInspector } from './screens/AgentInspector';
 import { TaskEdit } from './screens/TaskEdit';
+import { AuthScreen } from './screens/Auth';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,6 +23,18 @@ const queryClient = new QueryClient({
 
 function AppContent() {
   const { screen } = useUiStore();
+  const { state, load } = useAuthStore();
+
+  // Load auth state from Rust backend on first render
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Not yet loaded — render nothing (avoids flash)
+  if (state === null) return null;
+
+  // Show auth screen on first launch or after logout
+  if (state.mode === 'unset') return <AuthScreen />;
 
   const content = (
     {

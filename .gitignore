@@ -26,3 +26,6 @@ dist-ssr
 # Agents
 plans
 .claude/skills/ui-ux*
+
+.supabase-pw
+.env

@@ -1,3 +1,4 @@
+mod auth;
 mod commands;
 mod db;
 mod error;
@@ -12,6 +13,7 @@ use tauri::Manager;
 use tauri::menu::{ Menu, MenuItem };
 use tauri::tray::TrayIconBuilder;
 
+use auth::{load_auth_state, AuthState};
 use commands::users::ActiveUser;
 use db::connection::init as init_db;
 use executor::engine::{ AgentSemaphores, ExecutorEngine, ExecutorTx, SessionExecutionRegistry };
@@ -20,7 +22,7 @@ use scheduler::SchedulerEngine;
 use tauri_plugin_log::{ Builder, Target, TargetKind };
 use tracing::info;
 
-fn data_dir() -> PathBuf {
+pub fn data_dir() -> PathBuf {
   let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
   PathBuf::from(home).join(".orbit")
 }
@@ -49,6 +51,7 @@ pub fn run() {
     )
     .setup(|app| {
       let db_pool = init_db(data_dir())?;
+      let auth_state = AuthState::new(load_auth_state(&data_dir()));
       let log_dir = log_dir();
       std::fs::create_dir_all(&log_dir)?;
 
@@ -93,6 +96,7 @@ pub fn run() {
       let memory_client = memory_state.as_ref().map(|s| s.client.clone());
 
       // Register managed state
+      app.manage(auth_state);
       app.manage(db_pool.clone());
       app.manage(executor_tx_state);
       app.manage(agent_semaphores.clone());
@@ -157,6 +161,11 @@ pub fn run() {
     })
     .invoke_handler(
       tauri::generate_handler![
+        // Auth
+        commands::auth::get_auth_state,
+        commands::auth::set_offline_mode,
+        commands::auth::login,
+        commands::auth::logout,
         // Tasks
         commands::tasks::list_tasks,
         commands::tasks::get_task,
