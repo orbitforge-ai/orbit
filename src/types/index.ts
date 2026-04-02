@@ -27,6 +27,8 @@ export interface Agent {
   updatedAt: string;
 }
 
+export type AvatarArchetype = 'auto' | 'fox' | 'bear' | 'owl' | 'spark' | 'cat' | 'bot' | 'sage';
+
 export interface AgentIdentityConfig {
   presetId: string;
   identityName: string;
@@ -36,6 +38,9 @@ export interface AgentIdentityConfig {
   directness: number;
   humor: number;
   customNote?: string;
+  avatarEnabled: boolean;
+  avatarArchetype: AvatarArchetype;
+  avatarSpeakAloud: boolean;
 }
 
 export interface Task {

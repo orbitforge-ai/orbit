@@ -58,6 +58,12 @@ pub struct AgentIdentityConfig {
     pub humor: u8,
     #[serde(default)]
     pub custom_note: Option<String>,
+    #[serde(default)]
+    pub avatar_enabled: bool,
+    #[serde(default = "default_avatar_archetype")]
+    pub avatar_archetype: String,
+    #[serde(default)]
+    pub avatar_speak_aloud: bool,
 }
 
 /// A saved permission rule for fine-grained tool access control.
@@ -156,6 +162,10 @@ fn default_identity_humor() -> u8 {
     20
 }
 
+fn default_avatar_archetype() -> String {
+    "auto".to_string()
+}
+
 pub fn default_agent_identity() -> AgentIdentityConfig {
     builtin_identity_preset("balanced_assistant")
 }
@@ -204,6 +214,9 @@ pub fn builtin_identity_preset(preset_id: &str) -> AgentIdentityConfig {
             directness: 40,
             humor: 25,
             custom_note: None,
+            avatar_enabled: false,
+            avatar_archetype: default_avatar_archetype(),
+            avatar_speak_aloud: false,
         },
         "crisp_operator" => AgentIdentityConfig {
             preset_id: "crisp_operator".to_string(),
@@ -214,6 +227,9 @@ pub fn builtin_identity_preset(preset_id: &str) -> AgentIdentityConfig {
             directness: 85,
             humor: 5,
             custom_note: None,
+            avatar_enabled: false,
+            avatar_archetype: default_avatar_archetype(),
+            avatar_speak_aloud: false,
         },
         "calm_analyst" => AgentIdentityConfig {
             preset_id: "calm_analyst".to_string(),
@@ -224,6 +240,9 @@ pub fn builtin_identity_preset(preset_id: &str) -> AgentIdentityConfig {
             directness: 70,
             humor: 10,
             custom_note: None,
+            avatar_enabled: false,
+            avatar_archetype: default_avatar_archetype(),
+            avatar_speak_aloud: false,
         },
         "playful_creative" => AgentIdentityConfig {
             preset_id: "playful_creative".to_string(),
@@ -234,6 +253,9 @@ pub fn builtin_identity_preset(preset_id: &str) -> AgentIdentityConfig {
             directness: 45,
             humor: 60,
             custom_note: None,
+            avatar_enabled: false,
+            avatar_archetype: default_avatar_archetype(),
+            avatar_speak_aloud: false,
         },
         "steady_coach" => AgentIdentityConfig {
             preset_id: "steady_coach".to_string(),
@@ -244,6 +266,9 @@ pub fn builtin_identity_preset(preset_id: &str) -> AgentIdentityConfig {
             directness: 65,
             humor: 15,
             custom_note: None,
+            avatar_enabled: false,
+            avatar_archetype: default_avatar_archetype(),
+            avatar_speak_aloud: false,
         },
         _ => AgentIdentityConfig {
             preset_id: "balanced_assistant".to_string(),
@@ -254,13 +279,21 @@ pub fn builtin_identity_preset(preset_id: &str) -> AgentIdentityConfig {
             directness: 55,
             humor: 20,
             custom_note: None,
+            avatar_enabled: false,
+            avatar_archetype: default_avatar_archetype(),
+            avatar_speak_aloud: false,
         },
     }
 }
 
 pub fn normalize_agent_identity(identity: &AgentIdentityConfig) -> AgentIdentityConfig {
     if identity.preset_id != "custom" {
-        return builtin_identity_preset(&identity.preset_id);
+        let mut preset = builtin_identity_preset(&identity.preset_id);
+        // Preserve avatar settings even for named presets
+        preset.avatar_enabled = identity.avatar_enabled;
+        preset.avatar_archetype = identity.avatar_archetype.clone();
+        preset.avatar_speak_aloud = identity.avatar_speak_aloud;
+        return preset;
     }
 
     let base = default_agent_identity();
@@ -279,6 +312,9 @@ pub fn normalize_agent_identity(identity: &AgentIdentityConfig) -> AgentIdentity
         directness: identity.directness.min(100),
         humor: identity.humor.min(100),
         custom_note: sanitize_text_option(identity.custom_note.as_deref(), 240),
+        avatar_enabled: identity.avatar_enabled,
+        avatar_archetype: identity.avatar_archetype.clone(),
+        avatar_speak_aloud: identity.avatar_speak_aloud,
     }
 }
 

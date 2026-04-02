@@ -26,9 +26,10 @@ r2d2_sqlite = "0.33"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
-# Cloud sync (Supabase / PostgreSQL)
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "tls-native-tls", "uuid", "chrono"], optional = true }
+# Cloud sync — uuid for device identity
 uuid = { version = "1", features = ["v4"] }
+# Note: sqlx (PostgreSQL) will be added when cloud DB queries are implemented,
+# at which point rusqlite/r2d2_sqlite will be removed to avoid the sqlite3 link conflict.
 
 # Scheduling
 tokio-cron-scheduler = { version = "0.15.1", features = ["signal"] }

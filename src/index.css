@@ -90,6 +90,49 @@ body,
   background: var(--color-edge-hover);
 }
 
+/* ─── Avatar animations ──────────────────────────────────────────────────── */
+
+@keyframes avatar-float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-6px); }
+}
+
+@keyframes avatar-think {
+  0%, 100% { transform: scale(1) translateY(0px); opacity: 1; }
+  50%       { transform: scale(1.06) translateY(-3px); opacity: 0.85; }
+}
+
+@keyframes avatar-speak {
+  0%, 100% { transform: translateY(0px) rotate(-1deg); }
+  25%       { transform: translateY(-4px) rotate(1deg); }
+  75%       { transform: translateY(-2px) rotate(-0.5deg); }
+}
+
+@keyframes avatar-blink {
+  0%, 88%, 100% { transform: scaleY(1); }
+  94%            { transform: scaleY(0.05); }
+}
+
+@keyframes tool-badge-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes bubble-appear {
+  from { opacity: 0; transform: translateY(6px) scale(0.95); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes avatar-entry {
+  from { opacity: 0; transform: scale(0.7) translateY(12px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.avatar-idle    { animation: avatar-float  3s ease-in-out infinite; }
+.avatar-thinking{ animation: avatar-think  1.2s ease-in-out infinite; }
+.avatar-speaking{ animation: avatar-speak  0.5s ease-in-out infinite; }
+.avatar-entry   { animation: avatar-entry  0.3s ease-out forwards; }
+
 /* ─── Typing indicator ───────────────────────────────────────────────────── */
 
 @keyframes typing-bounce {

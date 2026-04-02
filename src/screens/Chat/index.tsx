@@ -4,6 +4,7 @@ import { Bot, ChevronDown } from 'lucide-react';
 import * as Select from '@radix-ui/react-select';
 import { agentsApi } from '../../api/agents';
 import { chatApi } from '../../api/chat';
+import { workspaceApi } from '../../api/workspace';
 import { useUiStore } from '../../store/uiStore';
 import {
   draftToChatSession,
@@ -37,6 +38,13 @@ export function ChatScreen() {
   const { data: agents = [] } = useQuery({
     queryKey: ['agents'],
     queryFn: agentsApi.list,
+  });
+
+  const { data: agentConfig } = useQuery({
+    queryKey: ['agent-config', selectedAgentId],
+    queryFn: () => workspaceApi.getConfig(selectedAgentId!),
+    enabled: Boolean(selectedAgentId),
+    staleTime: 60_000,
   });
 
   const selectedDraft = selectedAgentId ? drafts[selectedAgentId] ?? null : null;
@@ -201,6 +209,7 @@ export function ChatScreen() {
             draft={selectedDraft}
             onDraftTextChange={(text) => updateDraftText(selectedAgentId, text)}
             onDraftSend={handleDraftSend}
+            agentIdentity={agentConfig?.identity}
           />
         ) : activeSessionId && !isDraftSessionId(activeSessionId) ? (
           <ChatPanel
@@ -212,6 +221,7 @@ export function ChatScreen() {
             }
             onInitialMessageHandled={handleInitialMessageHandled}
             onInitialMessageFailed={handleInitialMessageFailed}
+            agentIdentity={agentConfig?.identity}
           />
         ) : (
           <div className="flex items-center justify-center h-full text-muted text-sm">

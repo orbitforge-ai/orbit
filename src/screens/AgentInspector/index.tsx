@@ -23,6 +23,7 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { agentsApi } from '../../api/agents';
 import { chatApi } from '../../api/chat';
+import { workspaceApi } from '../../api/workspace';
 import { memoryApi } from '../../api/memory';
 import { StatusBadge } from '../../components/StatusBadge';
 import { InlineEdit } from '../../components/InlineEdit';
@@ -670,6 +671,12 @@ function ChatWorkspace({
     refetchInterval: 60_000,
   });
 
+  const { data: agentConfig } = useQuery({
+    queryKey: ['agent-config', agentId],
+    queryFn: () => workspaceApi.getConfig(agentId),
+    staleTime: 60_000,
+  });
+
   return (
     <div className="relative flex h-full">
       <button
@@ -718,6 +725,7 @@ function ChatWorkspace({
             }}
             onDraftTextChange={onDraftTextChange}
             onDraftSend={onDraftSend}
+            agentIdentity={agentConfig?.identity}
           />
         ) : activeSessionId && !isDraftSessionId(activeSessionId) ? (
           <ChatPanel
@@ -729,6 +737,7 @@ function ChatWorkspace({
             }
             onInitialMessageHandled={onInitialMessageHandled}
             onInitialMessageFailed={onInitialMessageFailed}
+            agentIdentity={agentConfig?.identity}
           />
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-muted">

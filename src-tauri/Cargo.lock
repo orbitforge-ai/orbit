@@ -2743,6 +2743,7 @@ dependencies = [
  "tracing",
  "ulid",
  "url",
+ "uuid",
 ]
 
 [[package]]

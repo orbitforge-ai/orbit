@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ArrowDown, Loader2 } from 'lucide-react';
 import { chatApi } from '../../api/chat';
-import { ChatDraft, ContentBlock } from '../../types';
+import { AgentIdentityConfig, ChatDraft, ContentBlock } from '../../types';
 import { DisplayMessage, DisplayBlock } from '../../components/chat/types';
 import { chatMessagesToDisplay } from '../../components/chat/utils';
 import { MessageBubble } from '../../components/chat/MessageBubble';
@@ -17,6 +17,8 @@ import {
 } from '../../events/runEvents';
 import { onPermissionRequest, onPermissionCancelled } from '../../events/permissionEvents';
 import { usePermissionStore } from '../../store/permissionStore';
+import { selectAvatarArchetype } from '../../lib/agentIdentity';
+import { AvatarOverlay, useAvatarState, useAvatarSpeech } from '../../components/avatar';
 
 const PAGE_SIZE = 50;
 
@@ -33,6 +35,7 @@ interface ChatPanelProps {
   initialQueuedMessage?: QueuedInitialMessage | null;
   onInitialMessageHandled?: (key: string) => void;
   onInitialMessageFailed?: (key: string) => void;
+  agentIdentity?: AgentIdentityConfig;
 }
 
 let msgId = 0;
@@ -45,6 +48,7 @@ export function ChatPanel({
   initialQueuedMessage,
   onInitialMessageHandled,
   onInitialMessageFailed,
+  agentIdentity,
 }: ChatPanelProps) {
   const queryClient = useQueryClient();
   const parentRef = useRef<HTMLDivElement>(null);
@@ -58,6 +62,25 @@ export function ChatPanel({
   const isLoadingOlderRef = useRef(false);
   const isDraft = Boolean(draft && !sessionId);
   const streamId = sessionId ? `chat:${sessionId}` : null;
+
+  // ── Avatar ────────────────────────────────────────────────────────────────
+  const avatarEnabled = agentIdentity?.avatarEnabled ?? false;
+  const [avatarVisible, setAvatarVisible] = useState(true);
+  const [avatarSpeakAloud, setAvatarSpeakAloud] = useState(
+    agentIdentity?.avatarSpeakAloud ?? false
+  );
+  const resolvedArchetype = useMemo(
+    () => selectAvatarArchetype(agentIdentity ?? { presetId: 'balanced_assistant', identityName: 'Assistant', voice: 'neutral', vibe: '', warmth: 55, directness: 55, humor: 20, avatarEnabled: false, avatarArchetype: 'auto', avatarSpeakAloud: false }),
+    [agentIdentity]
+  );
+  const { state: avatarState, forceThinking } = useAvatarState(isDraft ? null : streamId);
+  useAvatarSpeech(avatarState, agentIdentity, avatarSpeakAloud);
+
+  // Reset avatar visibility/speak when session changes
+  useEffect(() => {
+    setAvatarVisible(true);
+    setAvatarSpeakAloud(agentIdentity?.avatarSpeakAloud ?? false);
+  }, [sessionId, agentIdentity?.avatarSpeakAloud]);
 
   useEffect(() => {
     setStreaming(false);
@@ -335,6 +358,7 @@ export function ChatPanel({
 
       setStreamMessages([...historyMessages, userMsg, assistantPlaceholder]);
       setStreaming(true);
+      forceThinking();
 
       try {
         await chatApi.sendMessage(sessionId, content);
@@ -461,6 +485,17 @@ export function ChatPanel({
           >
             <ArrowDown size={14} />
           </button>
+        )}
+
+        {avatarEnabled && (
+          <AvatarOverlay
+            archetype={resolvedArchetype}
+            state={avatarState}
+            visible={avatarVisible}
+            speakAloud={avatarSpeakAloud}
+            onToggleVisible={() => setAvatarVisible((v) => !v)}
+            onToggleSpeakAloud={() => setAvatarSpeakAloud((v) => !v)}
+          />
         )}
       </div>
 

@@ -1,8 +1,14 @@
-import { AgentIdentityConfig } from '../types';
+import { AgentIdentityConfig, AvatarArchetype } from '../types';
 
 export interface AgentIdentityPreset extends AgentIdentityConfig {
   label: string;
 }
+
+const DEFAULT_AVATAR_FIELDS = {
+  avatarEnabled: false,
+  avatarArchetype: 'auto' as AvatarArchetype,
+  avatarSpeakAloud: false,
+};
 
 export const AGENT_IDENTITY_PRESETS: AgentIdentityPreset[] = [
   {
@@ -15,6 +21,7 @@ export const AGENT_IDENTITY_PRESETS: AgentIdentityPreset[] = [
     directness: 55,
     humor: 20,
     customNote: '',
+    ...DEFAULT_AVATAR_FIELDS,
   },
   {
     presetId: 'warm_guide',
@@ -26,6 +33,7 @@ export const AGENT_IDENTITY_PRESETS: AgentIdentityPreset[] = [
     directness: 40,
     humor: 25,
     customNote: '',
+    ...DEFAULT_AVATAR_FIELDS,
   },
   {
     presetId: 'crisp_operator',
@@ -37,6 +45,7 @@ export const AGENT_IDENTITY_PRESETS: AgentIdentityPreset[] = [
     directness: 85,
     humor: 5,
     customNote: '',
+    ...DEFAULT_AVATAR_FIELDS,
   },
   {
     presetId: 'calm_analyst',
@@ -48,6 +57,7 @@ export const AGENT_IDENTITY_PRESETS: AgentIdentityPreset[] = [
     directness: 70,
     humor: 10,
     customNote: '',
+    ...DEFAULT_AVATAR_FIELDS,
   },
   {
     presetId: 'playful_creative',
@@ -59,6 +69,7 @@ export const AGENT_IDENTITY_PRESETS: AgentIdentityPreset[] = [
     directness: 45,
     humor: 60,
     customNote: '',
+    ...DEFAULT_AVATAR_FIELDS,
   },
   {
     presetId: 'steady_coach',
@@ -70,6 +81,7 @@ export const AGENT_IDENTITY_PRESETS: AgentIdentityPreset[] = [
     directness: 65,
     humor: 15,
     customNote: '',
+    ...DEFAULT_AVATAR_FIELDS,
   },
 ];
 
@@ -100,8 +112,19 @@ export function applyIdentityPreset(presetId: string): AgentIdentityConfig {
   return cloneIdentity(preset);
 }
 
+const VALID_ARCHETYPES = new Set<AvatarArchetype>([
+  'auto', 'fox', 'bear', 'owl', 'spark', 'cat', 'bot', 'sage',
+]);
+
 export function sanitizeIdentity(identity: AgentIdentityConfig): AgentIdentityConfig {
   const base = identity.presetId === 'custom' ? identity : applyIdentityPreset(identity.presetId);
+
+  // Preserve avatar settings from the incoming identity, not the preset base
+  const avatarEnabled = identity.avatarEnabled ?? false;
+  const avatarArchetype: AvatarArchetype = VALID_ARCHETYPES.has(identity.avatarArchetype as AvatarArchetype)
+    ? (identity.avatarArchetype as AvatarArchetype)
+    : 'auto';
+  const avatarSpeakAloud = identity.avatarSpeakAloud ?? false;
 
   return {
     presetId: base.presetId || DEFAULT_PRESET.presetId,
@@ -112,7 +135,40 @@ export function sanitizeIdentity(identity: AgentIdentityConfig): AgentIdentityCo
     directness: clampScore(base.directness),
     humor: clampScore(base.humor),
     customNote: clampText(base.customNote ?? '', 240),
+    avatarEnabled,
+    avatarArchetype,
+    avatarSpeakAloud,
   };
+}
+
+/** Scores identity traits against each archetype and returns the best fit. */
+export function selectAvatarArchetype(identity: AgentIdentityConfig): Exclude<AvatarArchetype, 'auto'> {
+  if (identity.avatarArchetype !== 'auto') {
+    return identity.avatarArchetype as Exclude<AvatarArchetype, 'auto'>;
+  }
+
+  // Voice shortcut for named presets
+  if (identity.presetId !== 'custom') {
+    if (identity.voice === 'warm') return 'bear';
+    if (identity.voice === 'crisp') return 'cat';
+    if (identity.voice === 'bright') return 'spark';
+    if (identity.voice === 'calm') return 'owl';
+  }
+
+  const { warmth: w, directness: d, humor: h } = identity;
+
+  const scores: Record<Exclude<AvatarArchetype, 'auto'>, number> = {
+    fox:   d * 1.2 + h * 0.8 + w * 0.4,
+    bear:  w * 1.5 + h * 0.3 + d * 0.2,
+    owl:   d * 1.0 + (100 - w) * 1.0 + (100 - h) * 0.5,
+    spark: h * 1.5 + w * 0.8 + (100 - d) * 0.2,
+    cat:   d * 1.2 + (100 - w) * 1.2,
+    bot:   Math.abs(w - 55) < 15 && Math.abs(d - 55) < 15 ? 500 : 0,
+    sage:  (100 - h) * 1.5 + d * 0.3,
+  };
+
+  return (Object.entries(scores) as [Exclude<AvatarArchetype, 'auto'>, number][])
+    .reduce((best, [arch, score]) => (score > best[1] ? [arch, score] : best), ['bot', 0] as [Exclude<AvatarArchetype, 'auto'>, number])[0];
 }
 
 export function updateIdentityField<K extends keyof AgentIdentityConfig>(
