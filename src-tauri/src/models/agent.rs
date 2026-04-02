@@ -21,6 +21,8 @@ pub struct CreateAgent {
     pub description: Option<String>,
     pub max_concurrent_runs: Option<i64>,
     pub identity: Option<AgentIdentityConfig>,
+    pub role_id: Option<String>,
+    pub role_system_instructions: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

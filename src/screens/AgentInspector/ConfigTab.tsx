@@ -12,6 +12,12 @@ import { AgentWorkspaceConfig } from '../../types';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { CollapsibleSection } from '../../components/CollapsibleSection';
 import { AgentIdentitySection } from './AgentIdentitySection';
+import { RoleSelector } from './RoleSelector';
+import {
+  getRoleDefaultTools,
+  getRoleSystemInstructions,
+  DEFAULT_ROLE_ID,
+} from '../../lib/agentRoles';
 
 const PERMISSION_MODES = [
   { value: 'normal', label: 'Normal', description: 'Prompt for writes/exec, auto-allow reads' },
@@ -149,6 +155,7 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
     try {
       await workspaceApi.updateConfig(agentId, config);
       queryClient.invalidateQueries({ queryKey: ['agent-config', agentId] });
+      queryClient.invalidateQueries({ queryKey: ['agent-role-ids'] });
       setSaved(true);
       markClean();
       setTimeout(() => setSaved(false), 2000);
@@ -209,6 +216,23 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
       // Disable all except finish (which is always on)
       updateConfig({ allowedTools: ['finish'] });
     }
+  }
+
+  function handleRoleChange(newRoleId: string) {
+    updateConfig({
+      roleId: newRoleId,
+      roleSystemInstructions: getRoleSystemInstructions(newRoleId),
+      allowedTools: getRoleDefaultTools(newRoleId),
+    });
+  }
+
+  function isRoleDefaultsDirty(): boolean {
+    if (!config?.roleId || config.roleId === DEFAULT_ROLE_ID) return false;
+    const defaultTools = getRoleDefaultTools(config.roleId);
+    const current = config.allowedTools;
+    if (defaultTools.length === 0 && current.length === 0) return false;
+    if (defaultTools.length !== current.length) return true;
+    return !defaultTools.every((t) => current.includes(t));
   }
 
   if (!config) {
@@ -360,8 +384,36 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
         identity={config.identity}
         onChange={(identity) => updateConfig({ identity })}
         agentName={agentName}
+        roleInstructions={config.roleSystemInstructions}
         showPreview
       />
+
+      {/* Role */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h4 className="text-sm font-semibold text-white">Role</h4>
+            <p className="text-xs text-muted mt-1">
+              Pre-configures tools and injects role-specific instructions into the system prompt.
+            </p>
+          </div>
+          {isRoleDefaultsDirty() && (
+            <button
+              onClick={() => {
+                if (!config.roleId) return;
+                updateConfig({
+                  allowedTools: getRoleDefaultTools(config.roleId),
+                  roleSystemInstructions: getRoleSystemInstructions(config.roleId),
+                });
+              }}
+              className="shrink-0 px-2.5 py-1 rounded-lg border border-edge text-xs text-muted hover:text-white hover:border-edge-hover transition-colors"
+            >
+              Reset to defaults
+            </button>
+          )}
+        </div>
+        <RoleSelector selected={config.roleId} onSelect={handleRoleChange} mode="compact" />
+      </section>
 
       {/* Behavior / Temperature */}
       <section className="space-y-3">

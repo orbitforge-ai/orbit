@@ -238,6 +238,7 @@ pub fn run() {
         commands::workspace::delete_workspace_file,
         commands::workspace::get_agent_config,
         commands::workspace::update_agent_config,
+        commands::workspace::list_agent_role_ids,
         // LLM
         commands::llm::set_api_key,
         commands::llm::has_api_key,

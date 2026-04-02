@@ -75,6 +75,8 @@ pub async fn create_agent(
     let pool = db.0.clone();
     let agent: Agent = tokio::task::spawn_blocking(move || -> Result<Agent, String> {
         let initial_identity = payload.identity.clone();
+        let initial_role_id = payload.role_id.clone();
+        let initial_role_instructions = payload.role_system_instructions.clone();
         let conn = pool.get().map_err(|e| e.to_string())?;
         let base_slug = workspace::slugify(&payload.name);
         let base_slug = if base_slug.is_empty() { "agent".to_string() } else { base_slug };
@@ -123,9 +125,17 @@ pub async fn create_agent(
         .map_err(|e| e.to_string())?;
 
         workspace::init_agent_workspace(&agent.id)?;
-        if let Some(identity) = initial_identity {
+        if initial_identity.is_some() || initial_role_id.is_some() {
             let mut config = workspace::load_agent_config(&agent.id)?;
-            config.identity = workspace::normalize_agent_identity(&identity);
+            if let Some(identity) = initial_identity {
+                config.identity = workspace::normalize_agent_identity(&identity);
+            }
+            if let Some(role_id) = initial_role_id {
+                config.role_id = Some(role_id);
+            }
+            if let Some(ri) = initial_role_instructions {
+                config.role_system_instructions = Some(ri);
+            }
             workspace::save_agent_config(&agent.id, &config)?;
         }
 

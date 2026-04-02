@@ -5,6 +5,8 @@ import {
   Activity,
   Bot,
   Brain,
+  Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -44,7 +46,15 @@ import { SkillsTab } from './SkillsTab';
 import { AgentRunDialog } from './AgentRunDialog';
 import { AgentRunView } from './AgentRunView';
 import { AgentIdentitySection } from './AgentIdentitySection';
+import { RoleSelector, ROLE_ICON_MAP } from './RoleSelector';
 import { getDefaultAgentIdentity } from '../../lib/agentIdentity';
+import {
+  AGENT_ROLES,
+  DEFAULT_ROLE_ID,
+  getRoleDefaultTools,
+  getRoleSystemInstructions,
+  resolveRole,
+} from '../../lib/agentRoles';
 import { SessionList } from '../Chat/SessionList';
 import { ChatPanel } from '../Chat/ChatPanel';
 
@@ -91,6 +101,7 @@ function NewAgentView() {
   const [description, setDescription] = useState('');
   const [maxConcurrent, setMaxConcurrent] = useState(5);
   const [identity, setIdentity] = useState(getDefaultAgentIdentity());
+  const [roleId, setRoleId] = useState(DEFAULT_ROLE_ID);
   const [saving, setSaving] = useState(false);
 
   async function handleSave() {
@@ -102,6 +113,8 @@ function NewAgentView() {
         description: description.trim() || undefined,
         maxConcurrentRuns: maxConcurrent,
         identity,
+        roleId,
+        roleSystemInstructions: getRoleSystemInstructions(roleId),
       };
       const created = await agentsApi.create(payload);
       queryClient.invalidateQueries({ queryKey: ['agents'] });
@@ -112,8 +125,8 @@ function NewAgentView() {
   }
 
   return (
-    <div className="flex items-center justify-center h-full">
-      <div className="w-full max-w-md rounded-xl border border-edge bg-surface p-6 space-y-4">
+    <div className="flex items-center justify-center h-full overflow-y-auto py-6">
+      <div className="w-full max-w-lg rounded-xl border border-edge bg-surface p-6 space-y-4">
         <h3 className="text-base font-semibold text-white">Create New Agent</h3>
         <input
           type="text"
@@ -130,6 +143,10 @@ function NewAgentView() {
           onChange={(e) => setDescription(e.target.value)}
           className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
         />
+        <div className="space-y-2">
+          <label className="text-xs text-muted">Role</label>
+          <RoleSelector selected={roleId} onSelect={setRoleId} mode="full" />
+        </div>
         <div className="flex items-center gap-2">
           <label className="text-xs text-muted">Max concurrent runs:</label>
           <input
@@ -214,6 +231,12 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
     refetchInterval: 5_000,
   });
 
+  const { data: agentConfig } = useQuery({
+    queryKey: ['agent-config', agentId],
+    queryFn: () => workspaceApi.getConfig(agentId),
+    staleTime: 60_000,
+  });
+
   const agentDraft = drafts[agentId] ?? null;
   const visibleDraft = pendingInitialSend?.agentId === agentId ? null : agentDraft;
   const draftSession = visibleDraft ? draftToChatSession(visibleDraft) : null;
@@ -272,6 +295,19 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
   async function handleInlineSave(field: 'name' | 'description', value: string) {
     await agentsApi.update(agentId, { [field]: value || undefined });
     queryClient.invalidateQueries({ queryKey: ['agents'] });
+  }
+
+  async function handleRoleChange(newRoleId: string) {
+    if (!agentConfig) return;
+    const updated = {
+      ...agentConfig,
+      roleId: newRoleId,
+      roleSystemInstructions: getRoleSystemInstructions(newRoleId),
+      allowedTools: getRoleDefaultTools(newRoleId),
+    };
+    await workspaceApi.updateConfig(agentId, updated);
+    queryClient.invalidateQueries({ queryKey: ['agent-config', agentId] });
+    queryClient.invalidateQueries({ queryKey: ['agent-role-ids'] });
   }
 
   function handleDirtyChange(tab: string, isDirty: boolean) {
@@ -409,9 +445,15 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
       <div className="border-b border-edge">
         <div className="flex items-start justify-between gap-4 px-6 pt-4 pb-3">
           <div className="flex min-w-0 items-start gap-3">
-            <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent/20">
-              <Bot size={18} className="text-accent-hover" />
-            </div>
+            {(() => {
+              const role = resolveRole(agentConfig?.roleId);
+              const AgentIcon = ROLE_ICON_MAP[role.icon] ?? Bot;
+              return (
+                <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent/20">
+                  <AgentIcon size={18} className={agentConfig?.roleId ? role.color : 'text-accent-hover'} />
+                </div>
+              );
+            })()}
             <div className="min-w-0">
               <InlineEdit
                 value={agent.name}
@@ -431,6 +473,48 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
                 />
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
+                {(() => {
+                  const currentRole = resolveRole(agentConfig?.roleId);
+                  const CurrentRoleIcon = ROLE_ICON_MAP[currentRole.icon] ?? Bot;
+                  const isDefault = !agentConfig?.roleId || agentConfig.roleId === DEFAULT_ROLE_ID;
+                  return (
+                    <DropdownMenu.Root>
+                      <DropdownMenu.Trigger asChild>
+                        <button className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors hover:border-edge-hover hover:bg-surface/60 ${isDefault ? 'border-edge bg-surface text-muted' : `border-edge bg-surface ${currentRole.color}`}`}>
+                          <CurrentRoleIcon size={10} />
+                          {currentRole.label}
+                          <ChevronDown size={9} className="opacity-60" />
+                        </button>
+                      </DropdownMenu.Trigger>
+                      <DropdownMenu.Portal>
+                        <DropdownMenu.Content
+                          align="start"
+                          sideOffset={6}
+                          className="z-50 w-56 rounded-xl border border-edge bg-surface p-1.5 shadow-xl"
+                        >
+                          <p className="px-2 py-1 text-[10px] uppercase tracking-wide text-muted">Role</p>
+                          {AGENT_ROLES.map((role) => {
+                            const Icon = ROLE_ICON_MAP[role.icon] ?? Bot;
+                            const active = (agentConfig?.roleId ?? DEFAULT_ROLE_ID) === role.roleId;
+                            return (
+                              <DropdownMenu.Item
+                                key={role.roleId}
+                                onSelect={() => handleRoleChange(role.roleId)}
+                                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10"
+                              >
+                                <Icon size={14} className={active ? 'text-accent-light' : role.color} />
+                                <span className={`flex-1 ${active ? 'text-accent-light font-medium' : 'text-white'}`}>
+                                  {role.label}
+                                </span>
+                                {active && <Check size={12} className="text-accent-light" />}
+                              </DropdownMenu.Item>
+                            );
+                          })}
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Portal>
+                    </DropdownMenu.Root>
+                  );
+                })()}
                 <HeaderStatChip
                   label="Active"
                   value={activeRuns.length.toString()}

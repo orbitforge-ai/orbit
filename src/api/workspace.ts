@@ -21,4 +21,7 @@ export const workspaceApi = {
 
   updateConfig: (agentId: string, config: AgentWorkspaceConfig): Promise<void> =>
     invoke('update_agent_config', { agentId, config }),
+
+  listAgentRoleIds: (): Promise<Record<string, string>> =>
+    invoke('list_agent_role_ids'),
 };

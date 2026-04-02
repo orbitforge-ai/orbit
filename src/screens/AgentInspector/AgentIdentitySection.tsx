@@ -20,6 +20,7 @@ interface AgentIdentitySectionProps {
   onChange: (identity: AgentIdentityConfig) => void;
   agentName: string;
   showPreview?: boolean;
+  roleInstructions?: string;
 }
 
 export function AgentIdentitySection({
@@ -27,6 +28,7 @@ export function AgentIdentitySection({
   onChange,
   agentName,
   showPreview = false,
+  roleInstructions,
 }: AgentIdentitySectionProps) {
   const resolved = sanitizeIdentity(identity);
   const isCustom = resolved.presetId === 'custom';
@@ -174,9 +176,14 @@ export function AgentIdentitySection({
           </div>
 
           {showPreview && (
-            <div className="rounded-lg border border-edge bg-background px-3 py-3">
+            <div className="rounded-lg border border-edge bg-background px-3 py-3 space-y-2">
               <p className="text-[11px] uppercase tracking-wide text-secondary">Prompt Preview</p>
-              <p className="text-sm text-muted mt-1 leading-relaxed">
+              {roleInstructions && roleInstructions.trim() && (
+                <p className="text-sm text-muted leading-relaxed border-b border-edge pb-2">
+                  {roleInstructions.trim()}
+                </p>
+              )}
+              <p className="text-sm text-muted leading-relaxed">
                 {buildIdentityPromptPreview(agentName || 'this agent', resolved)}
               </p>
             </div>

@@ -259,6 +259,8 @@ export interface CreateAgent {
   description?: string;
   maxConcurrentRuns?: number;
   identity?: AgentIdentityConfig;
+  roleId?: string;
+  roleSystemInstructions?: string;
 }
 
 export interface UpdateAgent {
@@ -323,6 +325,8 @@ export interface AgentWorkspaceConfig {
   permissionMode: 'normal' | 'strict' | 'permissive';
   memoryEnabled: boolean;
   memoryStalenessThresholdDays: number;
+  roleId?: string;
+  roleSystemInstructions?: string;
 }
 
 // ─── Agent Skills types ────────────────────────────────────────────────────

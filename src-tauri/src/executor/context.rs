@@ -350,6 +350,7 @@ impl ContextStage for MemoryStage {
 
 fn compose_system_prompt(
     base_prompt: &str,
+    role_instructions: Option<&str>,
     identity_summary: Option<&str>,
     context_section: &str,
 ) -> String {
@@ -358,6 +359,13 @@ fn compose_system_prompt(
     let trimmed_base = base_prompt.trim();
     if !trimmed_base.is_empty() {
         parts.push(trimmed_base.to_string());
+    }
+
+    if let Some(ri) = role_instructions {
+        let trimmed = ri.trim();
+        if !trimmed.is_empty() {
+            parts.push(trimmed.to_string());
+        }
     }
 
     if let Some(summary) = identity_summary {
@@ -548,8 +556,9 @@ impl ContextStage for BasePromptStage {
 
         context_section.push_str(&format!("- Date: {}\n", today));
 
+        let role_instructions = request.ws_config.role_system_instructions.as_deref();
         snapshot.system_prompt =
-            compose_system_prompt(&base_prompt, Some(&identity_summary), &context_section);
+            compose_system_prompt(&base_prompt, role_instructions, Some(&identity_summary), &context_section);
         Ok(snapshot)
     }
 
@@ -566,6 +575,7 @@ mod tests {
     fn compose_system_prompt_inserts_identity_once_before_current_context() {
         let prompt = compose_system_prompt(
             "Base prompt",
+            None,
             Some("Identity summary"),
             "## Current Context\n- Agent: Default",
         );

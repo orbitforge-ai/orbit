@@ -116,6 +116,10 @@ pub struct AgentWorkspaceConfig {
     pub memory_enabled: bool,
     #[serde(default = "default_staleness_days")]
     pub memory_staleness_threshold_days: u32,
+    #[serde(default)]
+    pub role_id: Option<String>,
+    #[serde(default)]
+    pub role_system_instructions: Option<String>,
 }
 
 fn default_permission_mode() -> String {
@@ -199,6 +203,8 @@ impl Default for AgentWorkspaceConfig {
             permission_mode: default_permission_mode(),
             memory_enabled: true,
             memory_staleness_threshold_days: default_staleness_days(),
+            role_id: None,
+            role_system_instructions: None,
         }
     }
 }

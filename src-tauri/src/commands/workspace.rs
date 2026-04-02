@@ -66,3 +66,31 @@ pub async fn update_agent_config(
         .await
         .map_err(|e| e.to_string())?
 }
+
+/// Returns a map of agentId → roleId for all agents that have a role configured.
+/// Used by the sidebar to show role icons without fetching full configs.
+#[tauri::command]
+pub async fn list_agent_role_ids() -> Result<std::collections::HashMap<String, String>, String> {
+    tokio::task::spawn_blocking(|| {
+        let agents_root = workspace::agents_root();
+        let mut map = std::collections::HashMap::new();
+        let entries = match std::fs::read_dir(&agents_root) {
+            Ok(e) => e,
+            Err(_) => return Ok(map),
+        };
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let agent_id = entry.file_name().to_string_lossy().to_string();
+            if let Ok(config) = workspace::load_agent_config(&agent_id) {
+                if let Some(role_id) = config.role_id {
+                    map.insert(agent_id, role_id);
+                }
+            }
+        }
+        Ok(map)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}

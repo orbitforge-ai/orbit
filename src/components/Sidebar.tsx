@@ -14,10 +14,13 @@ import {
 import { cn } from '../lib/cn';
 import { useUiStore } from '../store/uiStore';
 import { agentsApi } from '../api/agents';
+import { workspaceApi } from '../api/workspace';
 import { Agent } from '../types';
 import { usePermissionStore } from '../store/permissionStore';
 import { onPermissionRequest, onPermissionCancelled } from '../events/permissionEvents';
 import { SyncIndicator } from './SyncIndicator';
+import { resolveRole } from '../lib/agentRoles';
+import { ROLE_ICON_MAP } from '../screens/AgentInspector/RoleSelector';
 
 const NAV_ITEMS = [
   { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard },
@@ -53,6 +56,12 @@ export function Sidebar() {
     queryKey: ['agents'],
     queryFn: agentsApi.list,
     refetchInterval: 10_000,
+  });
+
+  const { data: agentRoleIds = {} } = useQuery<Record<string, string>>({
+    queryKey: ['agent-role-ids'],
+    queryFn: workspaceApi.listAgentRoleIds,
+    staleTime: 30_000,
   });
 
   return (
@@ -102,12 +111,17 @@ export function Sidebar() {
 
           {agentsOpen && (
             <div className="ml-3 mt-0.5 space-y-0.5 border-l border-edge pl-2">
-              {agents.map((agent) => (
+              {agents.map((agent) => {
+                const roleId = agentRoleIds[agent.id];
+                const role = resolveRole(roleId);
+                const RoleIcon = ROLE_ICON_MAP[role.icon] ?? Bot;
+                const isSelected = screen === 'agents' && selectedAgentId === agent.id;
+                return (
                 <div
                   key={agent.id}
                   className={cn(
                     'group flex items-center gap-1 rounded-md transition-colors',
-                    screen === 'agents' && selectedAgentId === agent.id
+                    isSelected
                       ? 'bg-accent/10 text-accent-hover'
                       : 'text-secondary hover:bg-surface hover:text-white'
                   )}
@@ -116,11 +130,9 @@ export function Sidebar() {
                     onClick={() => selectAgent(agent.id)}
                     className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-xs font-medium truncate"
                   >
-                    <span
-                      className={cn(
-                        'w-1.5 h-1.5 rounded-full shrink-0',
-                        agent.state === 'idle' ? 'bg-emerald-400' : 'bg-text-muted'
-                      )}
+                    <RoleIcon
+                      size={12}
+                      className={cn('shrink-0', isSelected ? 'text-accent-hover' : role.color)}
                     />
                     <span className="truncate">{agent.name}</span>
                   </button>
@@ -136,7 +148,8 @@ export function Sidebar() {
                     <MessageSquare size={12} />
                   </button>
                 </div>
-              ))}
+                );
+              })}
 
               {/* New Agent link */}
               <button
