@@ -155,6 +155,21 @@ impl SupabaseClient {
     // cannot use serde_json::to_value() directly — Supabase expects snake_case.
     // -----------------------------------------------------------------------
 
+    pub async fn upsert_project(&self, p: &crate::models::project::Project) -> Result<(), String> {
+        self.upsert_single(
+            "projects",
+            serde_json::json!({
+                "user_id": self.user_id,
+                "id": p.id,
+                "name": p.name,
+                "description": p.description,
+                "created_at": p.created_at,
+                "updated_at": p.updated_at,
+            }),
+        )
+        .await
+    }
+
     pub async fn upsert_agent(&self, a: &crate::models::agent::Agent) -> Result<(), String> {
         self.upsert_single(
             "agents",

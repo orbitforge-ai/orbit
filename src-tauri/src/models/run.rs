@@ -20,6 +20,7 @@ pub struct Run {
     pub metadata: serde_json::Value,
     pub is_sub_agent: bool,
     pub created_at: String,
+    pub project_id: Option<String>,
 }
 
 /// All valid run states
@@ -91,4 +92,5 @@ pub struct RunSummary {
     pub is_sub_agent: bool,
     pub created_at: String,
     pub chat_session_id: Option<String>,
+    pub project_id: Option<String>,
 }

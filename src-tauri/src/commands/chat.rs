@@ -42,7 +42,7 @@ pub async fn list_chat_sessions(
                 cs.chain_depth, cs.execution_state, cs.finish_summary, cs.terminal_error,
                 bm.from_agent_id, a.name,
                 src.id, src.title,
-                cs.created_at, cs.updated_at
+                cs.created_at, cs.updated_at, cs.project_id
              FROM chat_sessions cs
              LEFT JOIN bus_messages bm ON bm.id = cs.source_bus_message_id
              LEFT JOIN agents a ON a.id = bm.from_agent_id
@@ -88,6 +88,7 @@ pub async fn list_chat_sessions(
             source_session_title: row.get(14)?,
             created_at: row.get(15)?,
             updated_at: row.get(16)?,
+            project_id: row.get(17)?,
           })
         })
         .map_err(|e| e.to_string())?
@@ -104,6 +105,7 @@ pub async fn create_chat_session(
   agent_id: String,
   title: Option<String>,
   session_type: Option<String>,
+  project_id: Option<String>,
   db: tauri::State<'_, DbPool>,
   cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<ChatSession, String> {
@@ -122,9 +124,9 @@ pub async fn create_chat_session(
         .execute(
           "INSERT INTO chat_sessions (
              id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
-             chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at
-           ) VALUES (?1, ?2, ?3, 0, ?4, NULL, NULL, 0, NULL, NULL, NULL, ?5, ?5)",
-          rusqlite::params![id, agent_id, title, session_type, now]
+             chain_depth, execution_state, finish_summary, terminal_error, project_id, created_at, updated_at
+           ) VALUES (?1, ?2, ?3, 0, ?4, NULL, NULL, 0, NULL, NULL, NULL, ?5, ?6, ?6)",
+          rusqlite::params![id, agent_id, title, session_type, project_id, now]
         )
         .map_err(|e| e.to_string())?;
 
@@ -146,6 +148,7 @@ pub async fn create_chat_session(
         source_session_title: None,
         created_at: now.clone(),
         updated_at: now,
+        project_id,
       })
     }).await
     .map_err(|e| e.to_string())??;

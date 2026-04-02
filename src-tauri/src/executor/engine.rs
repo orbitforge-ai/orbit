@@ -840,7 +840,7 @@ async fn evaluate_bus_subscriptions(
     let task = match tokio::task::spawn_blocking(move || -> Result<Task, String> {
       let conn = pool.get().map_err(|e| e.to_string())?;
       let row = conn.query_row(
-        "SELECT id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, enabled, created_at, updated_at
+        "SELECT id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, enabled, created_at, updated_at, project_id
          FROM tasks WHERE id = ?1",
         rusqlite::params![tid],
         |row| {
@@ -863,6 +863,7 @@ async fn evaluate_bus_subscriptions(
             enabled: row.get(11)?,
             created_at: row.get(12)?,
             updated_at: row.get(13)?,
+            project_id: row.get(14)?,
           })
         },
       ).map_err(|e| format!("task {} not found: {}", tid, e))?;

@@ -1,6 +1,6 @@
 import { useEffect, useState, useImperativeHandle, forwardRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Key, Trash2, Check, ChevronDown } from 'lucide-react';
+import { Key, Trash2, Check, ChevronDown, FolderOpen, X } from 'lucide-react';
 import * as Select from '@radix-ui/react-select';
 import * as Slider from '@radix-ui/react-slider';
 import * as Switch from '@radix-ui/react-switch';
@@ -8,7 +8,8 @@ import * as Switch from '@radix-ui/react-switch';
 import { workspaceApi } from '../../api/workspace';
 import { llmApi } from '../../api/llm';
 import { permissionsApi } from '../../api/permissions';
-import { AgentWorkspaceConfig } from '../../types';
+import { projectsApi } from '../../api/projects';
+import { AgentWorkspaceConfig, Project } from '../../types';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { CollapsibleSection } from '../../components/CollapsibleSection';
 import { AgentIdentitySection } from './AgentIdentitySection';
@@ -789,9 +790,121 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
           </div>
         </div>
       </CollapsibleSection>
+
+      {/* Projects */}
+      <AgentProjectsSection agentId={agentId} />
     </div>
   );
 });
+
+// ─── Agent Projects Section ───────────────────────────────────────────────────
+
+function AgentProjectsSection({ agentId }: { agentId: string }) {
+  const queryClient = useQueryClient();
+  const [adding, setAdding] = useState(false);
+
+  const { data: agentProjects = [] } = useQuery<Project[]>({
+    queryKey: ['agent-projects', agentId],
+    queryFn: () => projectsApi.listAgentProjects(agentId),
+  });
+
+  const { data: allProjects = [] } = useQuery<Project[]>({
+    queryKey: ['projects'],
+    queryFn: projectsApi.list,
+    enabled: adding,
+  });
+
+  const memberIds = new Set(agentProjects.map((p) => p.id));
+  const addableProjects = allProjects.filter((p) => !memberIds.has(p.id));
+
+  async function handleAdd(projectId: string) {
+    await projectsApi.addAgent(projectId, agentId, agentProjects.length === 0);
+    queryClient.invalidateQueries({ queryKey: ['agent-projects', agentId] });
+    queryClient.invalidateQueries({ queryKey: ['project-agents', projectId] });
+    setAdding(false);
+  }
+
+  async function handleRemove(projectId: string) {
+    await projectsApi.removeAgent(projectId, agentId);
+    queryClient.invalidateQueries({ queryKey: ['agent-projects', agentId] });
+    queryClient.invalidateQueries({ queryKey: ['project-agents', projectId] });
+  }
+
+  return (
+    <CollapsibleSection
+      title="Projects"
+      description="Projects this agent is assigned to"
+    >
+      <div className="space-y-3">
+        {agentProjects.length === 0 ? (
+          <p className="text-xs text-muted italic">Not assigned to any projects.</p>
+        ) : (
+          <ul className="space-y-2">
+            {agentProjects.map((project) => (
+              <li
+                key={project.id}
+                className="flex items-center gap-3 px-3 py-2 rounded-lg border border-edge bg-panel"
+              >
+                <FolderOpen size={13} className="text-muted shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-white truncate">{project.name}</p>
+                  {project.description && (
+                    <p className="text-xs text-muted truncate">{project.description}</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleRemove(project.id)}
+                  className="p-1 rounded text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                  title="Remove from project"
+                >
+                  <X size={12} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {adding ? (
+          <div className="rounded-lg border border-edge bg-surface p-3 space-y-2">
+            <p className="text-xs text-muted font-medium">Add to project:</p>
+            {addableProjects.length === 0 ? (
+              <p className="text-xs text-muted italic">All projects already assigned.</p>
+            ) : (
+              addableProjects.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => handleAdd(p.id)}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg border border-edge bg-panel hover:border-accent hover:bg-accent/10 transition-colors text-left"
+                >
+                  <FolderOpen size={13} className="text-muted shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-white">{p.name}</p>
+                    {p.description && (
+                      <p className="text-xs text-muted truncate">{p.description}</p>
+                    )}
+                  </div>
+                </button>
+              ))
+            )}
+            <button
+              onClick={() => setAdding(false)}
+              className="text-xs text-muted hover:text-white transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setAdding(true)}
+            className="text-xs text-accent-hover hover:underline transition-colors"
+          >
+            + Add to project
+          </button>
+        )}
+      </div>
+    </CollapsibleSection>
+  );
+}
 
 function SearchKeyStatus({ provider }: { provider: string }) {
   const [hasKey, setHasKey] = useState(false);

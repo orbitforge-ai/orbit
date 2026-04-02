@@ -6,6 +6,7 @@ export interface ListRunsParams {
   offset?: number;
   taskId?: string;
   stateFilter?: string;
+  projectId?: string;
 }
 
 export const runsApi = {
@@ -15,6 +16,7 @@ export const runsApi = {
       offset: params.offset ?? 0,
       taskId: params.taskId ?? null,
       stateFilter: params.stateFilter && params.stateFilter !== 'all' ? params.stateFilter : null,
+      projectId: params.projectId ?? null,
     }),
 
   getActive: (): Promise<RunSummary[]> => invoke('get_active_runs'),

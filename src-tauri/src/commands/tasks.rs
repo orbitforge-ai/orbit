@@ -3,6 +3,7 @@ use ulid::Ulid;
 use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
 use crate::executor::engine::{ ExecutorTx, RunRequest };
+use crate::executor::workspace;
 use crate::models::task::{ CreateTask, Task, UpdateTask };
 
 macro_rules! cloud_upsert_task {
@@ -41,7 +42,7 @@ pub async fn list_tasks(db: tauri::State<'_, DbPool>) -> Result<Vec<Task>, Strin
         .prepare(
           "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
                         retry_delay_seconds, concurrency_policy, tags, agent_id,
-                        enabled, created_at, updated_at
+                        enabled, created_at, updated_at, project_id
                  FROM tasks ORDER BY created_at DESC"
         )
         .map_err(|e| e.to_string())?;
@@ -65,6 +66,7 @@ pub async fn list_tasks(db: tauri::State<'_, DbPool>) -> Result<Vec<Task>, Strin
             enabled: row.get::<_, bool>(11)?,
             created_at: row.get(12)?,
             updated_at: row.get(13)?,
+            project_id: row.get(14)?,
           })
         })
         .map_err(|e| e.to_string())?
@@ -86,7 +88,7 @@ pub async fn get_task(id: String, db: tauri::State<'_, DbPool>) -> Result<Task, 
         .query_row(
           "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
                     retry_delay_seconds, concurrency_policy, tags, agent_id,
-                    enabled, created_at, updated_at
+                    enabled, created_at, updated_at, project_id
              FROM tasks WHERE id = ?1",
           rusqlite::params![id],
           |row| {
@@ -107,6 +109,7 @@ pub async fn get_task(id: String, db: tauri::State<'_, DbPool>) -> Result<Task, 
               enabled: row.get::<_, bool>(11)?,
               created_at: row.get(12)?,
               updated_at: row.get(13)?,
+              project_id: row.get(14)?,
             })
           }
         )
@@ -142,11 +145,11 @@ pub async fn create_task(
         .execute(
           "INSERT INTO tasks (id, name, description, kind, config, max_duration_seconds,
                                 max_retries, retry_delay_seconds, concurrency_policy, tags,
-                                agent_id, enabled, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?12)",
+                                agent_id, enabled, created_at, updated_at, project_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?12, ?13)",
           rusqlite::params![
             id, payload.name, payload.description, payload.kind, config_str, max_duration,
-            max_retries, retry_delay, concurrency, tags_str, agent_id, now
+            max_retries, retry_delay, concurrency, tags_str, agent_id, now, payload.project_id
           ]
         )
         .map_err(|e| e.to_string())?;
@@ -155,7 +158,7 @@ pub async fn create_task(
         .query_row(
           "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
                     retry_delay_seconds, concurrency_policy, tags, agent_id,
-                    enabled, created_at, updated_at
+                    enabled, created_at, updated_at, project_id
              FROM tasks WHERE id = ?1",
           rusqlite::params![id],
           |row| {
@@ -176,6 +179,7 @@ pub async fn create_task(
               enabled: row.get::<_, bool>(11)?,
               created_at: row.get(12)?,
               updated_at: row.get(13)?,
+              project_id: row.get(14)?,
             })
           }
         )
@@ -243,12 +247,17 @@ pub async fn update_task(
         conn.execute("UPDATE tasks SET tags = ?1, updated_at = ?2 WHERE id = ?3",
           rusqlite::params![t, now, id]).map_err(|e| e.to_string())?;
       }
+      if let Some(project_id) = &payload.project_id {
+        let pid: Option<&str> = if project_id.is_empty() { None } else { Some(project_id.as_str()) };
+        conn.execute("UPDATE tasks SET project_id = ?1, updated_at = ?2 WHERE id = ?3",
+          rusqlite::params![pid, now, id]).map_err(|e| e.to_string())?;
+      }
 
       conn
         .query_row(
           "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
                     retry_delay_seconds, concurrency_policy, tags, agent_id,
-                    enabled, created_at, updated_at FROM tasks WHERE id = ?1",
+                    enabled, created_at, updated_at, project_id FROM tasks WHERE id = ?1",
           rusqlite::params![id],
           |row| {
             let cfg: String = row.get(4)?;
@@ -268,6 +277,7 @@ pub async fn update_task(
               enabled: row.get::<_, bool>(11)?,
               created_at: row.get(12)?,
               updated_at: row.get(13)?,
+              project_id: row.get(14)?,
             })
           }
         )
@@ -315,11 +325,11 @@ pub async fn trigger_task(
     ::spawn_blocking(move || {
       let conn = pool.get().map_err(|e| e.to_string())?;
 
-      let task = conn
+      let mut task = conn
         .query_row(
           "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
                         retry_delay_seconds, concurrency_policy, tags, agent_id,
-                        enabled, created_at, updated_at FROM tasks WHERE id = ?1 AND enabled = 1",
+                        enabled, created_at, updated_at, project_id FROM tasks WHERE id = ?1 AND enabled = 1",
           rusqlite::params![task_id],
           |row| {
             let cfg: String = row.get(4)?;
@@ -339,10 +349,34 @@ pub async fn trigger_task(
               enabled: row.get::<_, bool>(11)?,
               created_at: row.get(12)?,
               updated_at: row.get(13)?,
+              project_id: row.get(14)?,
             })
           }
         )
         .map_err(|e| format!("task not found: {}", e))?;
+
+      // If the task belongs to a project, inject the project workspace as the default CWD
+      // for shell_command and script_file tasks that don't already have a working directory.
+      if let Some(ref project_id) = task.project_id.clone() {
+        let project_cwd = workspace::project_workspace_dir(project_id)
+          .to_string_lossy()
+          .to_string();
+        match task.kind.as_str() {
+          "shell_command" | "script_file" => {
+            if let Some(cfg_obj) = task.config.as_object_mut() {
+              if !cfg_obj.contains_key("workingDirectory")
+                || cfg_obj["workingDirectory"].is_null()
+              {
+                cfg_obj.insert(
+                  "workingDirectory".to_string(),
+                  serde_json::Value::String(project_cwd),
+                );
+              }
+            }
+          }
+          _ => {}
+        }
+      }
 
       let run_id = Ulid::new().to_string();
       let now = chrono::Utc::now().to_rfc3339();
@@ -354,9 +388,9 @@ pub async fn trigger_task(
 
       conn
         .execute(
-          "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, metadata, created_at)
-             VALUES (?1, ?2, NULL, ?3, 'pending', 'manual', ?4, 0, '{}', ?5)",
-          rusqlite::params![run_id, task_id, task.agent_id, log_path, now]
+          "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, metadata, project_id, created_at)
+             VALUES (?1, ?2, NULL, ?3, 'pending', 'manual', ?4, 0, '{}', ?5, ?6)",
+          rusqlite::params![run_id, task_id, task.agent_id, log_path, task.project_id, now]
         )
         .map_err(|e| e.to_string())?;
 

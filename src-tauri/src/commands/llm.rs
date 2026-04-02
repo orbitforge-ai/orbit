@@ -84,7 +84,7 @@ pub async fn trigger_agent_loop(
         // Load task back for the RunRequest
         let task = conn
           .query_row(
-            "SELECT id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, enabled, created_at, updated_at
+            "SELECT id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, enabled, created_at, updated_at, project_id
                      FROM tasks WHERE id = ?1",
             rusqlite::params![task_id],
             |row| {
@@ -105,6 +105,7 @@ pub async fn trigger_agent_loop(
                 enabled: row.get(11)?,
                 created_at: row.get(12)?,
                 updated_at: row.get(13)?,
+                project_id: row.get(14)?,
               })
             }
           )

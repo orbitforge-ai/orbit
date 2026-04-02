@@ -6,6 +6,7 @@ type Screen =
   | 'history'
   | 'agents'
   | 'schedules'
+  | 'projects'
   | 'task-builder'
   | 'schedule-builder'
   | 'task-edit';
@@ -27,6 +28,14 @@ function getPersistedAgentId(): string | null {
 }
 
 type AgentTab = 'chat' | 'workspace' | 'config' | 'memory' | 'skills' | 'schedules' | 'bus';
+type ProjectTab = 'workspace' | 'agents' | 'tasks' | 'history';
+
+function getPersistedProjectId(): string | null {
+  try {
+    return localStorage.getItem('orbit:lastProjectId');
+  } catch {}
+  return null;
+}
 
 interface UiStore {
   screen: Screen;
@@ -34,19 +43,23 @@ interface UiStore {
   selectedTaskId: string | null;
   editingTaskId: string | null;
   selectedAgentId: string | null;
+  selectedProjectId: string | null;
   pendingChatSessionId: string | null;
   logPanelOpen: boolean;
   agentTab: AgentTab;
+  projectTab: ProjectTab;
 
   navigate: (screen: Screen) => void;
   selectRun: (id: string | null) => void;
   selectTask: (id: string | null) => void;
   editTask: (id: string) => void;
   selectAgent: (id: string) => void;
+  selectProject: (id: string | null) => void;
   openAgentChat: (agentId: string, sessionId?: string | null) => void;
   clearPendingChatSession: () => void;
   setLogPanelOpen: (open: boolean) => void;
   setAgentTab: (tab: AgentTab) => void;
+  setProjectTab: (tab: ProjectTab) => void;
 }
 
 export const useUiStore = create<UiStore>((set) => ({
@@ -55,9 +68,11 @@ export const useUiStore = create<UiStore>((set) => ({
   selectedTaskId: null,
   editingTaskId: null,
   selectedAgentId: getPersistedAgentId(),
+  selectedProjectId: getPersistedProjectId(),
   pendingChatSessionId: null,
   logPanelOpen: false,
   agentTab: 'chat' as AgentTab,
+  projectTab: 'workspace' as ProjectTab,
 
   navigate: (screen) => {
     try {
@@ -87,7 +102,19 @@ export const useUiStore = create<UiStore>((set) => ({
       agentTab: 'chat',
     });
   },
+  selectProject: (id) => {
+    try {
+      if (id) {
+        localStorage.setItem('orbit:lastProjectId', id);
+        localStorage.setItem('orbit:lastScreen', 'projects');
+      } else {
+        localStorage.removeItem('orbit:lastProjectId');
+      }
+    } catch {}
+    set({ selectedProjectId: id, screen: id ? 'projects' : 'dashboard' });
+  },
   clearPendingChatSession: () => set({ pendingChatSessionId: null }),
   setLogPanelOpen: (open) => set({ logPanelOpen: open }),
   setAgentTab: (tab) => set({ agentTab: tab }),
+  setProjectTab: (tab) => set({ projectTab: tab }),
 }));

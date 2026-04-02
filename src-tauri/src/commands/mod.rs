@@ -5,6 +5,7 @@ pub mod chat;
 pub mod memory;
 pub mod llm;
 pub mod permissions;
+pub mod projects;
 pub mod pulse;
 pub mod runs;
 pub mod schedules;

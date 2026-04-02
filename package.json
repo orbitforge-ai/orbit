@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "db:push": "supabase db push"
   },
   "dependencies": {
     "@fltsci/tauri-plugin-tracing": "^0.3.2",

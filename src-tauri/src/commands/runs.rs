@@ -7,6 +7,7 @@ pub async fn list_runs(
     offset: Option<i64>,
     task_id: Option<String>,
     state_filter: Option<String>,
+    project_id: Option<String>,
     db: tauri::State<'_, DbPool>,
 ) -> Result<Vec<RunSummary>, String> {
     let pool = db.0.clone();
@@ -27,7 +28,8 @@ pub async fn list_runs(
                     r.state, r.trigger, r.exit_code,
                     r.started_at, r.finished_at, r.duration_ms, r.retry_count, r.is_sub_agent,
                     r.created_at,
-                    json_extract(r.metadata, '$.chat_session_id') as chat_session_id
+                    json_extract(r.metadata, '$.chat_session_id') as chat_session_id,
+                    r.project_id
              FROM runs r
              LEFT JOIN tasks t ON t.id = r.task_id
              LEFT JOIN agents a ON a.id = r.agent_id
@@ -46,6 +48,12 @@ pub async fn list_runs(
             let n = extra_params.len() + 1;
             sql.push_str(&format!(" AND r.state = ?{n}"));
             extra_params.push(Box::new(state_filter.clone().unwrap()));
+        }
+
+        if let Some(ref pid) = project_id {
+            let n = extra_params.len() + 1;
+            sql.push_str(&format!(" AND r.project_id = ?{n}"));
+            extra_params.push(Box::new(pid.clone()));
         }
 
         sql.push_str(" ORDER BY r.created_at DESC LIMIT ?1 OFFSET ?2");
@@ -85,6 +93,7 @@ fn map_row_to_run_summary(row: &rusqlite::Row) -> rusqlite::Result<RunSummary> {
         is_sub_agent: row.get::<_, i64>(13)? != 0,
         created_at: row.get(14)?,
         chat_session_id: row.get(15)?,
+        project_id: row.get(16)?,
     })
 }
 
@@ -96,7 +105,7 @@ pub async fn get_run(id: String, db: tauri::State<'_, DbPool>) -> Result<Run, St
         conn.query_row(
             "SELECT id, task_id, schedule_id, agent_id, state, trigger, exit_code, pid,
                     log_path, started_at, finished_at, duration_ms, retry_count,
-                    parent_run_id, metadata, is_sub_agent, created_at
+                    parent_run_id, metadata, is_sub_agent, created_at, project_id
              FROM runs WHERE id = ?1",
             rusqlite::params![id],
             |row| {
@@ -119,6 +128,7 @@ pub async fn get_run(id: String, db: tauri::State<'_, DbPool>) -> Result<Run, St
                     metadata: serde_json::from_str(&meta_str).unwrap_or(serde_json::Value::Null),
                     is_sub_agent: row.get::<_, i64>(15)? != 0,
                     created_at: row.get(16)?,
+                    project_id: row.get(17)?,
                 })
             },
         )

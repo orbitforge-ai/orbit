@@ -88,6 +88,38 @@ create policy "users manage own agents" on agents for all
   using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create index if not exists idx_agents_user_id on agents(user_id);
 
+-- projects
+create table if not exists projects (
+  user_id uuid references auth.users not null,
+  id text not null,
+  name text not null,
+  description text,
+  created_at text not null,
+  updated_at text not null,
+  primary key (user_id, id)
+);
+
+alter table projects enable row level security;
+create policy "users manage own projects" on projects for all
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create index if not exists idx_projects_user_id on projects(user_id);
+
+-- project_agents (many-to-many: agents assigned to projects)
+create table if not exists project_agents (
+  user_id uuid references auth.users not null,
+  project_id text not null,
+  agent_id text not null,
+  is_default boolean not null default false,
+  added_at text not null,
+  primary key (user_id, project_id, agent_id)
+);
+
+alter table project_agents enable row level security;
+create policy "users manage own project_agents" on project_agents for all
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create index if not exists idx_project_agents_user on project_agents(user_id);
+create index if not exists idx_project_agents_agent on project_agents(user_id, agent_id);
+
 -- tasks
 create table if not exists tasks (
   user_id uuid references auth.users not null,
@@ -103,6 +135,7 @@ create table if not exists tasks (
   tags jsonb not null default '[]',
   agent_id text,
   enabled boolean not null default true,
+  project_id text,
   created_at text not null,
   updated_at text not null,
   primary key (user_id, id)
@@ -113,6 +146,7 @@ create policy "users manage own tasks" on tasks for all
   using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create index if not exists idx_tasks_user_id on tasks(user_id);
 create index if not exists idx_tasks_agent_id on tasks(user_id, agent_id);
+create index if not exists idx_tasks_project_id on tasks(user_id, project_id);
 
 -- schedules
 create table if not exists schedules (
@@ -156,6 +190,7 @@ create table if not exists runs (
   chain_depth bigint not null default 0,
   source_bus_message_id text,
   is_sub_agent boolean not null default false,
+  project_id text,
   created_at text not null,
   primary key (user_id, id)
 );
@@ -167,6 +202,7 @@ create index if not exists idx_runs_user_id on runs(user_id);
 create index if not exists idx_runs_state on runs(user_id, state);
 create index if not exists idx_runs_created_at on runs(user_id, created_at desc);
 create index if not exists idx_runs_task_id on runs(user_id, task_id);
+create index if not exists idx_runs_project_id on runs(user_id, project_id);
 
 -- agent_conversations
 create table if not exists agent_conversations (
@@ -203,6 +239,7 @@ create table if not exists chat_sessions (
   execution_state text,
   finish_summary text,
   terminal_error text,
+  project_id text,
   created_at text not null,
   updated_at text not null,
   primary key (user_id, id)
@@ -214,6 +251,7 @@ create policy "users manage own chat sessions" on chat_sessions for all
 create index if not exists idx_chat_sessions_user_id on chat_sessions(user_id);
 create index if not exists idx_chat_sessions_agent_id on chat_sessions(user_id, agent_id);
 create index if not exists idx_chat_sessions_updated_at on chat_sessions(user_id, updated_at desc);
+create index if not exists idx_chat_sessions_project_id on chat_sessions(user_id, project_id);
 
 -- chat_messages
 create table if not exists chat_messages (

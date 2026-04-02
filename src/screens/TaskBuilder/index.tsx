@@ -5,6 +5,7 @@ import * as Slider from '@radix-ui/react-slider';
 import { tasksApi } from '../../api/tasks';
 import { schedulesApi } from '../../api/schedules';
 import { agentsApi } from '../../api/agents';
+import { projectsApi } from '../../api/projects';
 import { useUiStore } from '../../store/uiStore';
 import { RecurringPicker } from '../ScheduleBuilder/RecurringPicker';
 import { humanSchedule } from '../../lib/humanSchedule';
@@ -32,7 +33,7 @@ const STEPS = ['What', 'Who', 'When', 'Review'] as const;
 type Step = (typeof STEPS)[number];
 
 export function TaskBuilder() {
-  const { navigate } = useUiStore();
+  const { navigate, selectedProjectId } = useUiStore();
   const queryClient = useQueryClient();
 
   // Step
@@ -55,6 +56,7 @@ export function TaskBuilder() {
     httpBody, httpExpectedCodes } = configState;
 
   // Step 2 — Who
+  const [projectId, setProjectId] = useState<string | null>(selectedProjectId);
   const [agentId, setAgentId] = useState('default');
   const [concurrencyPolicy, setConcurrencyPolicy] =
     useState<CreateTask['concurrencyPolicy']>('allow');
@@ -79,6 +81,11 @@ export function TaskBuilder() {
   const { data: agents = [] } = useQuery({
     queryKey: ['agents'],
     queryFn: agentsApi.list,
+  });
+
+  const { data: projects = [] } = useQuery({
+    queryKey: ['projects'],
+    queryFn: projectsApi.list,
   });
 
   // Validation per step
@@ -146,6 +153,7 @@ export function TaskBuilder() {
         kind,
         config: buildConfig(),
         agentId,
+        projectId: projectId ?? undefined,
         concurrencyPolicy,
         maxDurationSeconds: maxDurationMinutes * 60,
         maxRetries,
@@ -298,6 +306,42 @@ export function TaskBuilder() {
                       <p className="text-xs text-muted">Max {agent.maxConcurrentRuns} concurrent</p>
                     </div>
                     {agent.id === agentId && <Check size={14} className="text-accent" />}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            <Field label="Project (optional)">
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => setProjectId(null)}
+                  className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl border transition-colors text-left ${
+                    projectId === null
+                      ? 'border-accent bg-accent/10'
+                      : 'border-edge bg-surface hover:border-edge-hover'
+                  }`}
+                >
+                  <div className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 ${projectId === null ? 'border-accent bg-accent' : 'border-edge-hover'}`} />
+                  <span className="text-sm font-medium text-white">No project (global)</span>
+                </button>
+                {projects.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setProjectId(p.id)}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl border transition-colors text-left ${
+                      p.id === projectId
+                        ? 'border-accent bg-accent/10'
+                        : 'border-edge bg-surface hover:border-edge-hover'
+                    }`}
+                  >
+                    <div className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 ${p.id === projectId ? 'border-accent bg-accent' : 'border-edge-hover'}`} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-white">{p.name}</p>
+                      {p.description && <p className="text-xs text-muted truncate">{p.description}</p>}
+                    </div>
+                    {p.id === projectId && <Check size={14} className="text-accent shrink-0" />}
                   </button>
                 ))}
               </div>
@@ -462,6 +506,7 @@ export function TaskBuilder() {
                   </>
                 )}
                 <Row label="Agent" value={agents.find((a) => a.id === agentId)?.name ?? agentId} />
+                {projectId && <Row label="Project" value={projects.find((p) => p.id === projectId)?.name ?? projectId} />}
                 <Row
                   label="Concurrency"
                   value={

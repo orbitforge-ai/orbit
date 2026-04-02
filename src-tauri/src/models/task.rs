@@ -18,6 +18,7 @@ pub struct Task {
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +34,7 @@ pub struct CreateTask {
     pub concurrency_policy: Option<String>,
     pub tags: Option<Vec<String>>,
     pub agent_id: Option<String>,
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +50,7 @@ pub struct UpdateTask {
     pub tags: Option<Vec<String>>,
     pub agent_id: Option<String>,
     pub enabled: Option<bool>,
+    pub project_id: Option<String>,
 }
 
 /// Typed shell command config (stored as JSON in tasks.config)

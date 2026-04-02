@@ -38,6 +38,99 @@ pub fn agent_dir(agent_id: &str) -> PathBuf {
     agents_root().join(agent_id)
 }
 
+/// Root directory for all project workspaces.
+pub fn projects_root() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    PathBuf::from(home).join(".orbit").join("projects")
+}
+
+/// Workspace directory for a specific project (the shared files directory).
+pub fn project_workspace_dir(project_id: &str) -> PathBuf {
+    projects_root().join(project_id).join("workspace")
+}
+
+/// Create the project workspace directory on disk.
+pub fn init_project_workspace(project_id: &str) -> Result<(), String> {
+    let workspace = project_workspace_dir(project_id);
+    fs::create_dir_all(&workspace)
+        .map_err(|e| format!("failed to create project workspace: {}", e))?;
+    info!(project_id = project_id, path = %workspace.display(), "Initialised project workspace");
+    Ok(())
+}
+
+/// List files in a project workspace directory (path-sandboxed to the workspace).
+pub fn list_project_workspace_files(
+    project_id: &str,
+    relative_path: &str,
+) -> Result<Vec<FileEntry>, String> {
+    let root = project_workspace_dir(project_id);
+    if !root.exists() {
+        fs::create_dir_all(&root)
+            .map_err(|e| format!("failed to create project workspace: {}", e))?;
+    }
+    let path = validate_path(&root, relative_path)?;
+    if !path.is_dir() {
+        return Err(format!("not a directory: {}", relative_path));
+    }
+    let mut entries = Vec::new();
+    let read_dir = fs::read_dir(&path).map_err(|e| format!("failed to read directory: {}", e))?;
+    for entry in read_dir {
+        let entry = entry.map_err(|e| format!("failed to read entry: {}", e))?;
+        let metadata = entry
+            .metadata()
+            .map_err(|e| format!("failed to read metadata: {}", e))?;
+        let modified_at = metadata
+            .modified()
+            .ok()
+            .and_then(|t| {
+                let dt: chrono::DateTime<chrono::Utc> = t.into();
+                Some(dt.to_rfc3339())
+            })
+            .unwrap_or_default();
+        entries.push(FileEntry {
+            name: entry.file_name().to_string_lossy().to_string(),
+            is_dir: metadata.is_dir(),
+            size_bytes: metadata.len(),
+            modified_at,
+        });
+    }
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
+    Ok(entries)
+}
+
+/// Read a file from a project workspace (path-sandboxed).
+pub fn read_project_workspace_file(project_id: &str, relative_path: &str) -> Result<String, String> {
+    let root = project_workspace_dir(project_id);
+    let path = validate_path(&root, relative_path)?;
+    fs::read_to_string(&path).map_err(|e| format!("failed to read file: {}", e))
+}
+
+/// Write a file to a project workspace (path-sandboxed).
+pub fn write_project_workspace_file(
+    project_id: &str,
+    relative_path: &str,
+    content: &str,
+) -> Result<(), String> {
+    let root = project_workspace_dir(project_id);
+    let path = validate_path(&root, relative_path)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create parent directories: {}", e))?;
+    }
+    fs::write(&path, content).map_err(|e| format!("failed to write file: {}", e))
+}
+
+/// Delete a file from a project workspace (path-sandboxed).
+pub fn delete_project_workspace_file(project_id: &str, relative_path: &str) -> Result<(), String> {
+    let root = project_workspace_dir(project_id);
+    let path = validate_path(&root, relative_path)?;
+    if path.is_dir() {
+        fs::remove_dir_all(&path).map_err(|e| format!("failed to delete directory: {}", e))
+    } else {
+        fs::remove_file(&path).map_err(|e| format!("failed to delete file: {}", e))
+    }
+}
+
 /// Agent workspace configuration stored in config.json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

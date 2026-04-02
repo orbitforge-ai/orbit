@@ -234,7 +234,7 @@ fn load_task(conn: &rusqlite::Connection, task_id: &str) -> Option<Task> {
     .query_row(
       "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
                 retry_delay_seconds, concurrency_policy, tags, agent_id,
-                enabled, created_at, updated_at
+                enabled, created_at, updated_at, project_id
          FROM tasks WHERE id = ?1",
       rusqlite::params![task_id],
       |row| {
@@ -255,6 +255,7 @@ fn load_task(conn: &rusqlite::Connection, task_id: &str) -> Option<Task> {
           enabled: row.get::<_, bool>(11)?,
           created_at: row.get(12)?,
           updated_at: row.get(13)?,
+          project_id: row.get(14)?,
         })
       }
     )

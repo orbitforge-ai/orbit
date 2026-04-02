@@ -1,0 +1,373 @@
+use crate::db::cloud::CloudClientState;
+use crate::db::DbPool;
+use crate::executor::workspace;
+use crate::models::agent::Agent;
+use crate::models::project::{CreateProject, Project, ProjectAgent, UpdateProject};
+
+macro_rules! cloud_upsert_project {
+    ($cloud:expr, $project:expr) => {
+        if let Some(client) = $cloud.get() {
+            let p = $project.clone();
+            tokio::spawn(async move {
+                if let Err(e) = client.upsert_project(&p).await {
+                    tracing::warn!("cloud upsert project: {}", e);
+                }
+            });
+        }
+    };
+}
+
+macro_rules! cloud_delete {
+    ($cloud:expr, $table:expr, $id:expr) => {
+        if let Some(client) = $cloud.get() {
+            let id = $id.to_string();
+            tokio::spawn(async move {
+                if let Err(e) = client.delete_by_id($table, &id).await {
+                    tracing::warn!("cloud delete {}: {}", $table, e);
+                }
+            });
+        }
+    };
+}
+
+fn map_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
+    Ok(Project {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        description: row.get(2)?,
+        created_at: row.get(3)?,
+        updated_at: row.get(4)?,
+    })
+}
+
+#[tauri::command]
+pub async fn list_projects(db: tauri::State<'_, DbPool>) -> Result<Vec<Project>, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, description, created_at, updated_at
+                 FROM projects ORDER BY created_at ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let projects = stmt
+            .query_map([], map_project)
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(projects)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_project(
+    id: String,
+    db: tauri::State<'_, DbPool>,
+) -> Result<Project, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?1",
+            rusqlite::params![id],
+            map_project,
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn create_project(
+    payload: CreateProject,
+    db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
+) -> Result<Project, String> {
+    let cloud = cloud.inner().clone();
+    let pool = db.0.clone();
+    let project: Project = tokio::task::spawn_blocking(move || -> Result<Project, String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let base_slug = workspace::slugify(&payload.name);
+        let base_slug = if base_slug.is_empty() { "project".to_string() } else { base_slug };
+
+        let id = {
+            let mut candidate = base_slug.clone();
+            let mut suffix = 1;
+            while conn
+                .query_row(
+                    "SELECT 1 FROM projects WHERE id = ?1",
+                    rusqlite::params![candidate],
+                    |_| Ok(()),
+                )
+                .is_ok()
+            {
+                suffix += 1;
+                candidate = format!("{}-{}", base_slug, suffix);
+            }
+            candidate
+        };
+
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO projects (id, name, description, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?4)",
+            rusqlite::params![id, payload.name, payload.description, now],
+        )
+        .map_err(|e| e.to_string())?;
+
+        let project = conn
+            .query_row(
+                "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?1",
+                rusqlite::params![id],
+                map_project,
+            )
+            .map_err(|e| e.to_string())?;
+
+        workspace::init_project_workspace(&project.id)?;
+
+        Ok(project)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    cloud_upsert_project!(cloud, project);
+    Ok(project)
+}
+
+#[tauri::command]
+pub async fn update_project(
+    id: String,
+    payload: UpdateProject,
+    db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
+) -> Result<Project, String> {
+    let cloud = cloud.inner().clone();
+    let pool = db.0.clone();
+    let project: Project = tokio::task::spawn_blocking(move || -> Result<Project, String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let now = chrono::Utc::now().to_rfc3339();
+        if let Some(name) = &payload.name {
+            conn.execute(
+                "UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![name, now, id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if let Some(desc) = &payload.description {
+            conn.execute(
+                "UPDATE projects SET description = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![desc, now, id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        conn.query_row(
+            "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?1",
+            rusqlite::params![id],
+            map_project,
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    cloud_upsert_project!(cloud, project);
+    Ok(project)
+}
+
+#[tauri::command]
+pub async fn delete_project(
+    id: String,
+    db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
+) -> Result<(), String> {
+    let cloud = cloud.inner().clone();
+    let pool = db.0.clone();
+    let id_clone = id.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id_clone])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    cloud_delete!(cloud, "projects", id);
+    Ok(())
+}
+
+// ─── Project Agent Membership ────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn list_project_agents(
+    project_id: String,
+    db: tauri::State<'_, DbPool>,
+) -> Result<Vec<Agent>, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT a.id, a.name, a.description, a.state, a.max_concurrent_runs,
+                        a.heartbeat_at, a.created_at, a.updated_at
+                 FROM agents a
+                 JOIN project_agents pa ON pa.agent_id = a.id
+                 WHERE pa.project_id = ?1
+                 ORDER BY a.created_at ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let agents = stmt
+            .query_map(rusqlite::params![project_id], |row| {
+                Ok(Agent {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    state: row.get(3)?,
+                    max_concurrent_runs: row.get(4)?,
+                    heartbeat_at: row.get(5)?,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(agents)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_agent_projects(
+    agent_id: String,
+    db: tauri::State<'_, DbPool>,
+) -> Result<Vec<Project>, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT p.id, p.name, p.description, p.created_at, p.updated_at
+                 FROM projects p
+                 JOIN project_agents pa ON pa.project_id = p.id
+                 WHERE pa.agent_id = ?1
+                 ORDER BY pa.added_at ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let projects = stmt
+            .query_map(rusqlite::params![agent_id], map_project)
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(projects)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn add_agent_to_project(
+    project_id: String,
+    agent_id: String,
+    is_default: bool,
+    db: tauri::State<'_, DbPool>,
+) -> Result<ProjectAgent, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT OR REPLACE INTO project_agents (project_id, agent_id, is_default, added_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![project_id, agent_id, is_default as i64, now],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(ProjectAgent { project_id, agent_id, is_default, added_at: now })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn remove_agent_from_project(
+    project_id: String,
+    agent_id: String,
+    db: tauri::State<'_, DbPool>,
+) -> Result<(), String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM project_agents WHERE project_id = ?1 AND agent_id = ?2",
+            rusqlite::params![project_id, agent_id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ─── Project Workspace File Operations ───────────────────────────────────────
+
+#[tauri::command]
+pub fn get_project_workspace_path(project_id: String) -> String {
+    workspace::project_workspace_dir(&project_id)
+        .to_string_lossy()
+        .to_string()
+}
+
+#[tauri::command]
+pub async fn list_project_workspace_files(
+    project_id: String,
+    path: Option<String>,
+) -> Result<Vec<workspace::FileEntry>, String> {
+    let rel = path.unwrap_or_else(|| ".".to_string());
+    tokio::task::spawn_blocking(move || {
+        workspace::list_project_workspace_files(&project_id, &rel)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn read_project_workspace_file(
+    project_id: String,
+    path: String,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        workspace::read_project_workspace_file(&project_id, &path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn write_project_workspace_file(
+    project_id: String,
+    path: String,
+    content: String,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        workspace::write_project_workspace_file(&project_id, &path, &content)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn delete_project_workspace_file(
+    project_id: String,
+    path: String,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        workspace::delete_project_workspace_file(&project_id, &path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}

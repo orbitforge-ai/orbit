@@ -1,5 +1,22 @@
 // ─── Core domain types — mirror Rust structs (camelCase from serde) ──────────
 
+// ─── Projects ────────────────────────────────────────────────────────────────
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectAgent {
+  projectId: string;
+  agentId: string;
+  isDefault: boolean;
+  addedAt: string;
+}
+
 // ─── Memory ──────────────────────────────────────────────────────────────────
 
 export type MemoryType = 'user' | 'feedback' | 'project' | 'reference';
@@ -64,6 +81,7 @@ export interface Task {
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
+  projectId: string | null;
 }
 
 export interface ShellCommandConfig {
@@ -147,6 +165,7 @@ export interface RunSummary {
   isSubAgent: boolean;
   createdAt: string;
   chatSessionId: string | null;
+  projectId: string | null;
 }
 
 export interface Schedule {
@@ -197,6 +216,7 @@ export interface ChatSession {
   sourceSessionTitle?: string | null;
   createdAt: string;
   updatedAt: string;
+  projectId?: string | null;
 }
 
 export interface ChatDraft {
@@ -246,6 +266,7 @@ export interface CreateTask {
   concurrencyPolicy?: Task['concurrencyPolicy'];
   tags?: string[];
   agentId?: string;
+  projectId?: string;
 }
 
 export interface CreateSchedule {

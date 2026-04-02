@@ -20,4 +20,5 @@ pub struct ChatSession {
     pub source_session_title: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub project_id: Option<String>,
 }
