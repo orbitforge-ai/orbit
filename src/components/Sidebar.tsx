@@ -29,8 +29,8 @@ import { ROLE_ICON_MAP } from '../screens/AgentInspector/RoleSelector';
 
 const GLOBAL_NAV = [
   { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard },
-  { id: 'tasks' as const, label: 'Tasks', icon: ListChecks },
-  { id: 'history' as const, label: 'Run History', icon: History },
+  { id: 'tasks' as const, label: 'All Tasks', icon: ListChecks },
+  { id: 'history' as const, label: 'All History', icon: History },
   { id: 'schedules' as const, label: 'Schedules', icon: Clock },
 ];
 
@@ -89,7 +89,7 @@ export function Sidebar() {
   const { data: agentRoleIds = {} } = useQuery<Record<string, string>>({
     queryKey: ['agent-role-ids'],
     queryFn: workspaceApi.listAgentRoleIds,
-    staleTime: 30_000,
+    refetchInterval: 10_000,
   });
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;

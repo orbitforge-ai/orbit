@@ -4,6 +4,7 @@ import { Play, Pencil, Trash2, ToggleLeft, ToggleRight, Clock } from 'lucide-rea
 import { tasksApi } from '../../api/tasks';
 import { schedulesApi } from '../../api/schedules';
 import { runsApi } from '../../api/runs';
+import { projectsApi } from '../../api/projects';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useUiStore } from '../../store/uiStore';
 import { KIND_OPTIONS } from '../../lib/taskConstants';
@@ -30,6 +31,11 @@ export function TasksScreen() {
   const { data: recentRuns = [] } = useQuery({
     queryKey: ['runs', 'recent-for-tasks'],
     queryFn: () => runsApi.list({ limit: 100 }),
+  });
+
+  const { data: projects = [] } = useQuery({
+    queryKey: ['projects'],
+    queryFn: projectsApi.list,
   });
 
   // Index: taskId -> first matching schedule
@@ -130,6 +136,11 @@ export function TasksScreen() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-medium text-white truncate">{task.name}</p>
+                    {task.projectId && (
+                      <span className="px-1.5 py-0.5 rounded bg-accent/20 border border-accent/30 text-accent-light text-[10px] font-medium shrink-0">
+                        {projects.find((p) => p.id === task.projectId)?.name ?? 'Project'}
+                      </span>
+                    )}
                     {!task.enabled && <StatusBadge state="cancelled" />}
                   </div>
                   {task.description && (

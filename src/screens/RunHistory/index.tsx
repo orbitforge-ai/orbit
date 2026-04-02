@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download } from 'lucide-react';
 import { runsApi } from '../../api/runs';
+import { projectsApi } from '../../api/projects';
 import { StatusBadge } from '../../components/StatusBadge';
 import { SplitPane } from '../../components/SplitPane';
 import { TerminalPane } from '../../components/TerminalPane';
@@ -9,7 +10,7 @@ import { onRunLogChunk, onRunStateChanged } from '../../events/runEvents';
 import { useLiveRunStore } from '../../store/liveRunStore';
 import { useUiStore } from '../../store/uiStore';
 import { formatDuration } from '../../lib/formatDuration';
-import { LogLine, RunSummary } from '../../types';
+import { LogLine, RunSummary, Project } from '../../types';
 
 export function RunHistory() {
   const { selectedRunId, selectRun } = useUiStore();
@@ -24,6 +25,11 @@ export function RunHistory() {
     queryKey: ['runs', stateFilter],
     queryFn: () => runsApi.list({ limit: 200, stateFilter }),
     refetchInterval: 10_000,
+  });
+
+  const { data: projects = [] } = useQuery({
+    queryKey: ['projects'],
+    queryFn: projectsApi.list,
   });
 
   const liveStore = useLiveRunStore();
@@ -131,6 +137,7 @@ export function RunHistory() {
                       <RunRow
                         key={run.id}
                         run={run}
+                        projects={projects}
                         selected={run.id === selectedRunId}
                         onClick={() => selectRun(run.id)}
                       />
@@ -171,10 +178,12 @@ export function RunHistory() {
 
 function RunRow({
   run,
+  projects,
   selected,
   onClick,
 }: {
   run: RunSummary;
+  projects: Project[];
   selected: boolean;
   onClick: () => void;
 }) {
@@ -185,7 +194,16 @@ function RunRow({
         selected ? 'bg-accent/10' : 'hover:bg-surface'
       }`}
     >
-      <td className="px-4 py-2.5 font-medium text-white truncate max-w-[200px]">{run.taskName}</td>
+      <td className="px-4 py-2.5 font-medium text-white max-w-[200px]">
+        <div className="flex items-center gap-2 overflow-hidden">
+          <span className="truncate">{run.taskName}</span>
+          {run.projectId && (
+            <span className="px-1.5 py-0.5 rounded bg-accent/20 border border-accent/30 text-accent-light text-[10px] font-medium shrink-0">
+              {projects.find((p) => p.id === run.projectId)?.name ?? 'Project'}
+            </span>
+          )}
+        </div>
+      </td>
       <td className="px-4 py-2.5">
         <StatusBadge state={run.state} />
       </td>
