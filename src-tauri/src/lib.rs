@@ -13,14 +13,16 @@ use tauri::Manager;
 use tauri::menu::{ Menu, MenuItem };
 use tauri::tray::TrayIconBuilder;
 
-use auth::{load_auth_state, AuthState};
+use auth::{load_auth_state, supabase_credentials, AuthMode, AuthState};
 use commands::users::ActiveUser;
+use db::cloud::{CloudClientState, SupabaseClient};
 use db::connection::init as init_db;
 use executor::engine::{ AgentSemaphores, ExecutorEngine, ExecutorTx, SessionExecutionRegistry };
 use executor::permissions::PermissionRegistry;
 use scheduler::SchedulerEngine;
 use tauri_plugin_log::{ Builder, Target, TargetKind };
 use tracing::info;
+use std::sync::Arc;
 
 pub fn data_dir() -> PathBuf {
   let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
@@ -51,7 +53,40 @@ pub fn run() {
     )
     .setup(|app| {
       let db_pool = init_db(data_dir())?;
-      let auth_state = AuthState::new(load_auth_state(&data_dir()));
+      let initial_auth = load_auth_state(&data_dir());
+
+      // If the persisted auth state is Cloud, restore the Supabase client and
+      // trigger a background sync to pick up changes from other devices.
+      let cloud_client_opt: Option<Arc<SupabaseClient>> =
+        if let AuthMode::Cloud(ref session) = initial_auth {
+          if let Ok((url, anon_key)) = supabase_credentials() {
+            Some(Arc::new(SupabaseClient::new(
+              url,
+              anon_key,
+              session.access_token.clone(),
+              session.user_id.clone(),
+            )))
+          } else {
+            None
+          }
+        } else {
+          None
+        };
+
+      let cloud_state = CloudClientState::empty();
+      cloud_state.set(cloud_client_opt.clone());
+
+      // Background startup sync (pull only — no need to push on restart)
+      if let Some(client) = cloud_client_opt.clone() {
+        let pool = db_pool.0.clone();
+        tauri::async_runtime::spawn(async move {
+          if let Err(e) = client.pull_all_data(&pool).await {
+            tracing::warn!("Startup cloud pull failed: {}", e);
+          }
+        });
+      }
+
+      let auth_state = AuthState::new(initial_auth);
       let log_dir = log_dir();
       std::fs::create_dir_all(&log_dir)?;
 
@@ -80,6 +115,7 @@ pub fn run() {
 
       // Register managed state
       app.manage(auth_state);
+      app.manage(cloud_state);
       app.manage(db_pool.clone());
       app.manage(executor_tx_state);
       app.manage(agent_semaphores.clone());
@@ -148,6 +184,7 @@ pub fn run() {
         commands::auth::get_auth_state,
         commands::auth::set_offline_mode,
         commands::auth::login,
+        commands::auth::register,
         commands::auth::logout,
         // Tasks
         commands::tasks::list_tasks,

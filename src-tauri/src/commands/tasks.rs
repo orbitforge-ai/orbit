@@ -1,8 +1,35 @@
 use ulid::Ulid;
 
+use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
 use crate::executor::engine::{ ExecutorTx, RunRequest };
 use crate::models::task::{ CreateTask, Task, UpdateTask };
+
+macro_rules! cloud_upsert_task {
+    ($cloud:expr, $task:expr) => {
+        if let Some(client) = $cloud.get() {
+            let t = $task.clone();
+            tokio::spawn(async move {
+                if let Err(e) = client.upsert_task(&t).await {
+                    tracing::warn!("cloud upsert task: {}", e);
+                }
+            });
+        }
+    };
+}
+
+macro_rules! cloud_delete {
+    ($cloud:expr, $table:expr, $id:expr) => {
+        if let Some(client) = $cloud.get() {
+            let id = $id.to_string();
+            tokio::spawn(async move {
+                if let Err(e) = client.delete_by_id($table, &id).await {
+                    tracing::warn!("cloud delete {}: {}", $table, e);
+                }
+            });
+        }
+    };
+}
 
 #[tauri::command]
 pub async fn list_tasks(db: tauri::State<'_, DbPool>) -> Result<Vec<Task>, String> {
@@ -91,11 +118,13 @@ pub async fn get_task(id: String, db: tauri::State<'_, DbPool>) -> Result<Task, 
 #[tauri::command]
 pub async fn create_task(
   payload: CreateTask,
-  db: tauri::State<'_, DbPool>
+  db: tauri::State<'_, DbPool>,
+  cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<Task, String> {
+  let cloud = cloud.inner().clone();
   let pool = db.0.clone();
-  tokio::task
-    ::spawn_blocking(move || {
+  let task: Task = tokio::task
+    ::spawn_blocking(move || -> Result<Task, String> {
       let conn = pool.get().map_err(|e| e.to_string())?;
       let id = Ulid::new().to_string();
       let now = chrono::Utc::now().to_rfc3339();
@@ -116,18 +145,8 @@ pub async fn create_task(
                                 agent_id, enabled, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?12)",
           rusqlite::params![
-            id,
-            payload.name,
-            payload.description,
-            payload.kind,
-            config_str,
-            max_duration,
-            max_retries,
-            retry_delay,
-            concurrency,
-            tags_str,
-            agent_id,
-            now
+            id, payload.name, payload.description, payload.kind, config_str, max_duration,
+            max_retries, retry_delay, concurrency, tags_str, agent_id, now
           ]
         )
         .map_err(|e| e.to_string())?;
@@ -162,102 +181,67 @@ pub async fn create_task(
         )
         .map_err(|e| e.to_string())
     }).await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+  cloud_upsert_task!(cloud, task);
+  Ok(task)
 }
 
 #[tauri::command]
 pub async fn update_task(
   id: String,
   payload: UpdateTask,
-  db: tauri::State<'_, DbPool>
+  db: tauri::State<'_, DbPool>,
+  cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<Task, String> {
+  let cloud = cloud.inner().clone();
   let pool = db.0.clone();
-  tokio::task
-    ::spawn_blocking(move || {
+  let task: Task = tokio::task
+    ::spawn_blocking(move || -> Result<Task, String> {
       let conn = pool.get().map_err(|e| e.to_string())?;
       let now = chrono::Utc::now().to_rfc3339();
 
       if let Some(name) = &payload.name {
-        conn
-          .execute(
-            "UPDATE tasks SET name = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![name, now, id]
-          )
-          .map_err(|e| e.to_string())?;
+        conn.execute("UPDATE tasks SET name = ?1, updated_at = ?2 WHERE id = ?3",
+          rusqlite::params![name, now, id]).map_err(|e| e.to_string())?;
       }
       if let Some(desc) = &payload.description {
-        conn
-          .execute(
-            "UPDATE tasks SET description = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![desc, now, id]
-          )
-          .map_err(|e| e.to_string())?;
+        conn.execute("UPDATE tasks SET description = ?1, updated_at = ?2 WHERE id = ?3",
+          rusqlite::params![desc, now, id]).map_err(|e| e.to_string())?;
       }
       if let Some(cfg) = &payload.config {
         let s = serde_json::to_string(cfg).map_err(|e| e.to_string())?;
-        conn
-          .execute(
-            "UPDATE tasks SET config = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![s, now, id]
-          )
-          .map_err(|e| e.to_string())?;
+        conn.execute("UPDATE tasks SET config = ?1, updated_at = ?2 WHERE id = ?3",
+          rusqlite::params![s, now, id]).map_err(|e| e.to_string())?;
       }
       if let Some(enabled) = payload.enabled {
-        conn
-          .execute(
-            "UPDATE tasks SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![enabled as i64, now, id]
-          )
-          .map_err(|e| e.to_string())?;
+        conn.execute("UPDATE tasks SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
+          rusqlite::params![enabled as i64, now, id]).map_err(|e| e.to_string())?;
       }
       if let Some(agent_id) = &payload.agent_id {
-        conn
-          .execute(
-            "UPDATE tasks SET agent_id = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![agent_id, now, id]
-          )
-          .map_err(|e| e.to_string())?;
+        conn.execute("UPDATE tasks SET agent_id = ?1, updated_at = ?2 WHERE id = ?3",
+          rusqlite::params![agent_id, now, id]).map_err(|e| e.to_string())?;
       }
       if let Some(max_duration) = payload.max_duration_seconds {
-        conn
-          .execute(
-            "UPDATE tasks SET max_duration_seconds = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![max_duration, now, id]
-          )
-          .map_err(|e| e.to_string())?;
+        conn.execute("UPDATE tasks SET max_duration_seconds = ?1, updated_at = ?2 WHERE id = ?3",
+          rusqlite::params![max_duration, now, id]).map_err(|e| e.to_string())?;
       }
       if let Some(max_retries) = payload.max_retries {
-        conn
-          .execute(
-            "UPDATE tasks SET max_retries = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![max_retries, now, id]
-          )
-          .map_err(|e| e.to_string())?;
+        conn.execute("UPDATE tasks SET max_retries = ?1, updated_at = ?2 WHERE id = ?3",
+          rusqlite::params![max_retries, now, id]).map_err(|e| e.to_string())?;
       }
       if let Some(retry_delay) = payload.retry_delay_seconds {
-        conn
-          .execute(
-            "UPDATE tasks SET retry_delay_seconds = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![retry_delay, now, id]
-          )
-          .map_err(|e| e.to_string())?;
+        conn.execute("UPDATE tasks SET retry_delay_seconds = ?1, updated_at = ?2 WHERE id = ?3",
+          rusqlite::params![retry_delay, now, id]).map_err(|e| e.to_string())?;
       }
       if let Some(policy) = &payload.concurrency_policy {
-        conn
-          .execute(
-            "UPDATE tasks SET concurrency_policy = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![policy, now, id]
-          )
-          .map_err(|e| e.to_string())?;
+        conn.execute("UPDATE tasks SET concurrency_policy = ?1, updated_at = ?2 WHERE id = ?3",
+          rusqlite::params![policy, now, id]).map_err(|e| e.to_string())?;
       }
       if let Some(tags) = &payload.tags {
         let t = serde_json::to_string(tags).map_err(|e| e.to_string())?;
-        conn
-          .execute(
-            "UPDATE tasks SET tags = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![t, now, id]
-          )
-          .map_err(|e| e.to_string())?;
+        conn.execute("UPDATE tasks SET tags = ?1, updated_at = ?2 WHERE id = ?3",
+          rusqlite::params![t, now, id]).map_err(|e| e.to_string())?;
       }
 
       conn
@@ -289,21 +273,33 @@ pub async fn update_task(
         )
         .map_err(|e| e.to_string())
     }).await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+  cloud_upsert_task!(cloud, task);
+  Ok(task)
 }
 
 #[tauri::command]
-pub async fn delete_task(id: String, db: tauri::State<'_, DbPool>) -> Result<(), String> {
+pub async fn delete_task(
+  id: String,
+  db: tauri::State<'_, DbPool>,
+  cloud: tauri::State<'_, CloudClientState>,
+) -> Result<(), String> {
+  let cloud = cloud.inner().clone();
   let pool = db.0.clone();
+  let id_clone = id.clone();
   tokio::task
-    ::spawn_blocking(move || {
+    ::spawn_blocking(move || -> Result<(), String> {
       let conn = pool.get().map_err(|e| e.to_string())?;
       conn
-        .execute("DELETE FROM tasks WHERE id = ?1", rusqlite::params![id])
+        .execute("DELETE FROM tasks WHERE id = ?1", rusqlite::params![id_clone])
         .map_err(|e| e.to_string())?;
       Ok(())
     }).await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+  cloud_delete!(cloud, "tasks", id);
+  Ok(())
 }
 
 #[tauri::command]

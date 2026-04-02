@@ -1,3 +1,4 @@
+use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
 use crate::models::user::User;
 
@@ -42,9 +43,14 @@ pub async fn list_users(db: tauri::State<'_, DbPool>) -> Result<Vec<User>, Strin
 }
 
 #[tauri::command]
-pub async fn create_user(name: String, db: tauri::State<'_, DbPool>) -> Result<User, String> {
+pub async fn create_user(
+    name: String,
+    db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
+) -> Result<User, String> {
+    let cloud = cloud.inner().clone();
     let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
+    let user: User = tokio::task::spawn_blocking(move || -> Result<User, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let id = ulid::Ulid::new().to_string();
         let now = chrono::Utc::now().to_rfc3339();
@@ -61,7 +67,17 @@ pub async fn create_user(name: String, db: tauri::State<'_, DbPool>) -> Result<U
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    if let Some(client) = cloud.get() {
+        let u = user.clone();
+        tokio::spawn(async move {
+            if let Err(e) = client.upsert_user(&u).await {
+                tracing::warn!("cloud upsert user: {}", e);
+            }
+        });
+    }
+    Ok(user)
 }
 
 #[tauri::command]

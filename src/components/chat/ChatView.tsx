@@ -75,7 +75,7 @@ export function ChatView({ messages, liveRunId, className = '' }: ChatViewProps)
     );
 
     return () => {
-      unsubs.forEach((p) => p.then((unsub) => unsub()));
+      unsubs.forEach((p) => p.then((unsub) => unsub()).catch(() => {}));
     };
   }, [liveRunId]);
 

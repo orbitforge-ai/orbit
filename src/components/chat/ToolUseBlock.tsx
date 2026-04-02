@@ -190,7 +190,7 @@ function SubAgentTracker({ tasks }: { tasks?: SubAgentTask[] }) {
       });
     });
     return () => {
-      unsub.then((fn) => fn());
+      unsub.then((fn) => fn()).catch(() => {});
     };
   }, []);
 

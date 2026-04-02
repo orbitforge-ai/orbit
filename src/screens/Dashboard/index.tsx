@@ -57,7 +57,7 @@ export function Dashboard() {
       queryClient.invalidateQueries({ queryKey: ['runs'] });
     });
     return () => {
-      unlisten.then((fn) => fn());
+      unlisten.then((fn) => fn()).catch(() => {});
     };
   }, [queryClient, updateRunState]);
 

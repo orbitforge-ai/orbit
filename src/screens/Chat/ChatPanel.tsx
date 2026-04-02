@@ -281,7 +281,7 @@ export function ChatPanel({
     );
 
     return () => {
-      unsubs.forEach((p) => p.then((unsub) => unsub()));
+      unsubs.forEach((p) => p.then((unsub) => unsub()).catch(() => {}));
     };
   }, [queryClient, sessionId, streamId]);
 

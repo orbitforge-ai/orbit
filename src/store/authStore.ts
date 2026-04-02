@@ -8,6 +8,7 @@ interface AuthStore {
 
   load: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   continueOffline: () => Promise<void>;
 }
@@ -31,6 +32,17 @@ export const useAuthStore = create<AuthStore>((set) => ({
     set({ isLoading: true, error: null });
     try {
       const state = await authApi.login(email, password);
+      set({ state, isLoading: false });
+    } catch (e) {
+      set({ isLoading: false, error: String(e) });
+      throw e;
+    }
+  },
+
+  register: async (email, password) => {
+    set({ isLoading: true, error: null });
+    try {
+      const state = await authApi.register(email, password);
       set({ state, isLoading: false });
     } catch (e) {
       set({ isLoading: false, error: String(e) });

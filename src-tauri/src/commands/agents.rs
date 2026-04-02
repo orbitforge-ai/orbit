@@ -1,6 +1,34 @@
+use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
 use crate::executor::workspace;
 use crate::models::agent::{Agent, CreateAgent, UpdateAgent};
+
+/// Fire-and-forget helper: clone the Arc, spawn, log failures.
+macro_rules! cloud_upsert_agent {
+    ($cloud:expr, $agent:expr) => {
+        if let Some(client) = $cloud.get() {
+            let a = $agent.clone();
+            tokio::spawn(async move {
+                if let Err(e) = client.upsert_agent(&a).await {
+                    tracing::warn!("cloud upsert agent: {}", e);
+                }
+            });
+        }
+    };
+}
+
+macro_rules! cloud_delete {
+    ($cloud:expr, $table:expr, $id:expr) => {
+        if let Some(client) = $cloud.get() {
+            let id = $id.to_string();
+            tokio::spawn(async move {
+                if let Err(e) = client.delete_by_id($table, &id).await {
+                    tracing::warn!("cloud delete {}: {}", $table, e);
+                }
+            });
+        }
+    };
+}
 
 #[tauri::command]
 pub async fn list_agents(db: tauri::State<'_, DbPool>) -> Result<Vec<Agent>, String> {
@@ -41,15 +69,16 @@ pub async fn list_agents(db: tauri::State<'_, DbPool>) -> Result<Vec<Agent>, Str
 pub async fn create_agent(
     payload: CreateAgent,
     db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<Agent, String> {
+    let cloud = cloud.inner().clone();
     let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
+    let agent: Agent = tokio::task::spawn_blocking(move || -> Result<Agent, String> {
         let initial_identity = payload.identity.clone();
         let conn = pool.get().map_err(|e| e.to_string())?;
         let base_slug = workspace::slugify(&payload.name);
         let base_slug = if base_slug.is_empty() { "agent".to_string() } else { base_slug };
 
-        // Ensure unique ID by appending a number suffix if needed
         let id = {
             let mut candidate = base_slug.clone();
             let mut suffix = 1;
@@ -93,7 +122,6 @@ pub async fn create_agent(
         )
         .map_err(|e| e.to_string())?;
 
-        // Initialise workspace directory for the new agent
         workspace::init_agent_workspace(&agent.id)?;
         if let Some(identity) = initial_identity {
             let mut config = workspace::load_agent_config(&agent.id)?;
@@ -104,7 +132,10 @@ pub async fn create_agent(
         Ok(agent)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    cloud_upsert_agent!(cloud, agent);
+    Ok(agent)
 }
 
 #[tauri::command]
@@ -112,9 +143,11 @@ pub async fn update_agent(
     id: String,
     payload: UpdateAgent,
     db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<Agent, String> {
+    let cloud = cloud.inner().clone();
     let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
+    let agent: Agent = tokio::task::spawn_blocking(move || -> Result<Agent, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
 
@@ -160,33 +193,43 @@ pub async fn update_agent(
         .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    cloud_upsert_agent!(cloud, agent);
+    Ok(agent)
 }
 
 #[tauri::command]
-pub async fn delete_agent(id: String, db: tauri::State<'_, DbPool>) -> Result<(), String> {
+pub async fn delete_agent(
+    id: String,
+    db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
+) -> Result<(), String> {
     if id == "default" {
         return Err("cannot delete the default agent".to_string());
     }
+    let cloud = cloud.inner().clone();
     let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
+    let id_clone = id.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM agents WHERE id = ?1", rusqlite::params![id])
+        conn.execute("DELETE FROM agents WHERE id = ?1", rusqlite::params![id_clone])
             .map_err(|e| e.to_string())?;
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    cloud_delete!(cloud, "agents", id);
+    Ok(())
 }
 
-/// Cancel a specific run by its ID. Sends a cancellation signal via the executor registry.
 #[tauri::command]
 pub async fn cancel_run(run_id: String, db: tauri::State<'_, DbPool>) -> Result<(), String> {
     let pool = db.0.clone();
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
-        // Mark as cancelled in DB — the executor will check this if it hasn't already been signalled
         conn.execute(
             "UPDATE runs SET state = 'cancelled', finished_at = ?1 WHERE id = ?2 AND state IN ('pending', 'queued', 'running')",
             rusqlite::params![now, run_id],

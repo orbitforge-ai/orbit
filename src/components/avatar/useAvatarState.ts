@@ -71,7 +71,7 @@ export function useAvatarState(streamId: string | null): {
     );
 
     return () => {
-      unsubs.forEach((p) => p.then((unsub) => unsub()));
+      unsubs.forEach((p) => p.then((unsub) => unsub()).catch(() => {}));
     };
   }, [streamId]);
 

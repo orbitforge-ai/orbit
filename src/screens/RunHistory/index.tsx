@@ -66,8 +66,8 @@ export function RunHistory() {
       queryClient.invalidateQueries({ queryKey: ['runs'] });
     });
     return () => {
-      unlistenLog.then((fn) => fn());
-      unlistenState.then((fn) => fn());
+      unlistenLog.then((fn) => fn()).catch(() => {});
+      unlistenState.then((fn) => fn()).catch(() => {});
     };
   }, [appendLogChunk, updateRunState, queryClient]);
 

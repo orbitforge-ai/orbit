@@ -120,7 +120,7 @@ export function BusMessagePanel({ agentId }: BusMessagePanelProps) {
       }
     });
     return () => {
-      unsub.then((fn) => fn());
+      unsub.then((fn) => fn()).catch(() => {});
     };
   }, [agentId, queryClient]);
 
@@ -132,7 +132,7 @@ export function BusMessagePanel({ agentId }: BusMessagePanelProps) {
       }
     });
     return () => {
-      unsub.then((fn) => fn());
+      unsub.then((fn) => fn()).catch(() => {});
     };
   }, [agentId, queryClient]);
 

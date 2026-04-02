@@ -45,7 +45,7 @@ export function Sidebar() {
       })
     );
     return () => {
-      unsubs.forEach((p) => p.then((fn) => fn()));
+      unsubs.forEach((p) => p.then((fn) => fn()).catch(() => {}));
     };
   }, []);
 

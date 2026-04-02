@@ -3,6 +3,7 @@ use tracing::{ debug, info, warn };
 use ulid::Ulid;
 
 use crate::auth::{ AuthMode, AuthState };
+use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
 use crate::events::emitter::{ emit_agent_iteration, emit_agent_tool_result, emit_chat_context_update };
 use crate::executor::agent_tools::{ self, ToolExecutionContext };
@@ -103,12 +104,14 @@ pub async fn create_chat_session(
   agent_id: String,
   title: Option<String>,
   session_type: Option<String>,
-  db: tauri::State<'_, DbPool>
+  db: tauri::State<'_, DbPool>,
+  cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<ChatSession, String> {
+  let cloud = cloud.inner().clone();
   let pool = db.0.clone();
 
-  tokio::task
-    ::spawn_blocking(move || {
+  let session: ChatSession = tokio::task
+    ::spawn_blocking(move || -> Result<ChatSession, String> {
       let conn = pool.get().map_err(|e| e.to_string())?;
       let id = Ulid::new().to_string();
       let now = chrono::Utc::now().to_rfc3339();
@@ -145,43 +148,69 @@ pub async fn create_chat_session(
         updated_at: now,
       })
     }).await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+  if let Some(client) = cloud.get() {
+    let s = session.clone();
+    tokio::spawn(async move {
+      if let Err(e) = client.upsert_chat_session(&s).await {
+        tracing::warn!("cloud upsert chat_session: {}", e);
+      }
+    });
+  }
+  Ok(session)
 }
 
 #[tauri::command]
 pub async fn rename_chat_session(
   session_id: String,
   title: String,
-  db: tauri::State<'_, DbPool>
+  db: tauri::State<'_, DbPool>,
+  cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
+  let cloud = cloud.inner().clone();
   let pool = db.0.clone();
+  let sid = session_id.clone();
+  let now = chrono::Utc::now().to_rfc3339();
+  let now2 = now.clone();
+  let title2 = title.clone();
   tokio::task
-    ::spawn_blocking(move || {
+    ::spawn_blocking(move || -> Result<(), String> {
       let conn = pool.get().map_err(|e| e.to_string())?;
-      let now = chrono::Utc::now().to_rfc3339();
       conn
         .execute(
           "UPDATE chat_sessions SET title = ?1, updated_at = ?2 WHERE id = ?3",
-          rusqlite::params![title, now, session_id]
+          rusqlite::params![title2, now2, sid]
         )
         .map_err(|e| e.to_string())?;
       Ok(())
     }).await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+  if let Some(client) = cloud.get() {
+    let id = session_id.clone();
+    tokio::spawn(async move {
+      let _ = client.patch_by_id("chat_sessions", &id,
+        serde_json::json!({"title": title, "updated_at": now})).await;
+    });
+  }
+  Ok(())
 }
 
 #[tauri::command]
 pub async fn archive_chat_session(
   session_id: String,
-  db: tauri::State<'_, DbPool>
+  db: tauri::State<'_, DbPool>,
+  cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
+  let cloud = cloud.inner().clone();
   let pool = db.0.clone();
+  let sid = session_id.clone();
   tokio::task
-    ::spawn_blocking(move || {
+    ::spawn_blocking(move || -> Result<(), String> {
       let conn = pool.get().map_err(|e| e.to_string())?;
       let active_execution: Option<String> = conn.query_row(
         "SELECT execution_state FROM chat_sessions WHERE id = ?1",
-        rusqlite::params![session_id],
+        rusqlite::params![sid],
         |row| row.get(0)
       ).ok();
       if matches!(active_execution.as_deref(), Some("queued") | Some("running")) {
@@ -191,88 +220,115 @@ pub async fn archive_chat_session(
       conn
         .execute(
           "UPDATE chat_sessions SET archived = 1, updated_at = ?1 WHERE id = ?2",
-          rusqlite::params![now, session_id]
+          rusqlite::params![now, sid]
         )
         .map_err(|e| e.to_string())?;
-      // Cascade: archive direct children (sub_agent sessions)
       conn
         .execute(
           "UPDATE chat_sessions SET archived = 1, updated_at = ?1 WHERE parent_session_id = ?2",
-          rusqlite::params![now, session_id]
+          rusqlite::params![now, sid]
         )
         .map_err(|e| e.to_string())?;
-      // Cascade: archive bus_message child sessions
       conn
         .execute(
           "UPDATE chat_sessions SET archived = 1, updated_at = ?1 \
            WHERE id IN (SELECT bm.to_session_id FROM bus_messages bm WHERE bm.from_session_id = ?2 AND bm.to_session_id IS NOT NULL)",
-          rusqlite::params![now, session_id]
+          rusqlite::params![now, sid]
         )
         .map_err(|e| e.to_string())?;
       Ok(())
     }).await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+  if let Some(client) = cloud.get() {
+    let id = session_id.clone();
+    let now = chrono::Utc::now().to_rfc3339();
+    tokio::spawn(async move {
+      let _ = client.patch_by_id("chat_sessions", &id,
+        serde_json::json!({"archived": true, "updated_at": now})).await;
+    });
+  }
+  Ok(())
 }
 
 #[tauri::command]
 pub async fn unarchive_chat_session(
   session_id: String,
-  db: tauri::State<'_, DbPool>
+  db: tauri::State<'_, DbPool>,
+  cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
+  let cloud = cloud.inner().clone();
   let pool = db.0.clone();
+  let sid = session_id.clone();
   tokio::task
-    ::spawn_blocking(move || {
+    ::spawn_blocking(move || -> Result<(), String> {
       let conn = pool.get().map_err(|e| e.to_string())?;
       let now = chrono::Utc::now().to_rfc3339();
       conn
         .execute(
           "UPDATE chat_sessions SET archived = 0, updated_at = ?1 WHERE id = ?2",
-          rusqlite::params![now, session_id]
+          rusqlite::params![now, sid]
         )
         .map_err(|e| e.to_string())?;
-      // Cascade: unarchive direct children (sub_agent sessions)
       conn
         .execute(
           "UPDATE chat_sessions SET archived = 0, updated_at = ?1 WHERE parent_session_id = ?2",
-          rusqlite::params![now, session_id]
+          rusqlite::params![now, sid]
         )
         .map_err(|e| e.to_string())?;
-      // Cascade: unarchive bus_message child sessions
       conn
         .execute(
           "UPDATE chat_sessions SET archived = 0, updated_at = ?1 \
            WHERE id IN (SELECT bm.to_session_id FROM bus_messages bm WHERE bm.from_session_id = ?2 AND bm.to_session_id IS NOT NULL)",
-          rusqlite::params![now, session_id]
+          rusqlite::params![now, sid]
         )
         .map_err(|e| e.to_string())?;
       Ok(())
     }).await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+  if let Some(client) = cloud.get() {
+    let id = session_id.clone();
+    let now = chrono::Utc::now().to_rfc3339();
+    tokio::spawn(async move {
+      let _ = client.patch_by_id("chat_sessions", &id,
+        serde_json::json!({"archived": false, "updated_at": now})).await;
+    });
+  }
+  Ok(())
 }
 
 #[tauri::command]
 pub async fn delete_chat_session(
   session_id: String,
-  db: tauri::State<'_, DbPool>
+  db: tauri::State<'_, DbPool>,
+  cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
+  let cloud = cloud.inner().clone();
   let pool = db.0.clone();
+  let sid = session_id.clone();
   tokio::task
-    ::spawn_blocking(move || {
+    ::spawn_blocking(move || -> Result<(), String> {
       let conn = pool.get().map_err(|e| e.to_string())?;
       let active_execution: Option<String> = conn.query_row(
         "SELECT execution_state FROM chat_sessions WHERE id = ?1",
-        rusqlite::params![session_id],
+        rusqlite::params![sid],
         |row| row.get(0)
       ).ok();
       if matches!(active_execution.as_deref(), Some("queued") | Some("running")) {
         return Err("cannot delete an active agent session".to_string());
       }
       conn
-        .execute("DELETE FROM chat_sessions WHERE id = ?1", rusqlite::params![session_id])
+        .execute("DELETE FROM chat_sessions WHERE id = ?1", rusqlite::params![sid])
         .map_err(|e| e.to_string())?;
       Ok(())
     }).await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+  if let Some(client) = cloud.get() {
+    let id = session_id.clone();
+    tokio::spawn(async move {
+      let _ = client.delete_by_id("chat_sessions", &id).await;
+    });
+  }
+  Ok(())
 }
 
 // ─── Messages ───────────────────────────────────────────────────────────────

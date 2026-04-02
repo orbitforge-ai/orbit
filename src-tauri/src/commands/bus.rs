@@ -1,5 +1,6 @@
 use ulid::Ulid;
 
+use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
 use crate::models::bus::{BusMessage, BusSubscription, BusThreadMessage, CreateBusSubscription, PaginatedBusThread};
 
@@ -192,9 +193,11 @@ pub async fn list_bus_subscriptions(
 pub async fn create_bus_subscription(
     payload: CreateBusSubscription,
     db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<BusSubscription, String> {
+    let cloud = cloud.inner().clone();
     let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
+    let sub: BusSubscription = tokio::task::spawn_blocking(move || -> Result<BusSubscription, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let id = Ulid::new().to_string();
         let now = chrono::Utc::now().to_rfc3339();
@@ -203,14 +206,9 @@ pub async fn create_bus_subscription(
             "INSERT INTO bus_subscriptions (id, subscriber_agent_id, source_agent_id, event_type, task_id, payload_template, enabled, max_chain_depth, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?8)",
             rusqlite::params![
-                id,
-                payload.subscriber_agent_id,
-                payload.source_agent_id,
-                payload.event_type,
-                payload.task_id,
-                payload.payload_template,
-                payload.max_chain_depth,
-                now,
+                id, payload.subscriber_agent_id, payload.source_agent_id,
+                payload.event_type, payload.task_id, payload.payload_template,
+                payload.max_chain_depth, now,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -229,7 +227,17 @@ pub async fn create_bus_subscription(
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    if let Some(client) = cloud.get() {
+        let s = sub.clone();
+        tokio::spawn(async move {
+            if let Err(e) = client.upsert_bus_subscription(&s).await {
+                tracing::warn!("cloud upsert bus_subscription: {}", e);
+            }
+        });
+    }
+    Ok(sub)
 }
 
 #[tauri::command]
@@ -237,34 +245,57 @@ pub async fn toggle_bus_subscription(
     id: String,
     enabled: bool,
     db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
+    let cloud = cloud.inner().clone();
     let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
+    let id_clone = id.clone();
+    let now = chrono::Utc::now().to_rfc3339();
+    let now2 = now.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE bus_subscriptions SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![enabled, now, id],
+            rusqlite::params![enabled, now2, id_clone],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    if let Some(client) = cloud.get() {
+        let id = id.clone();
+        tokio::spawn(async move {
+            let _ = client.patch_by_id("bus_subscriptions", &id,
+                serde_json::json!({"enabled": enabled, "updated_at": now})).await;
+        });
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn delete_bus_subscription(
     id: String,
     db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
+    let cloud = cloud.inner().clone();
     let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
+    let id_clone = id.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM bus_subscriptions WHERE id = ?1", rusqlite::params![id])
+        conn.execute("DELETE FROM bus_subscriptions WHERE id = ?1", rusqlite::params![id_clone])
             .map_err(|e| e.to_string())?;
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    if let Some(client) = cloud.get() {
+        tokio::spawn(async move {
+            let _ = client.delete_by_id("bus_subscriptions", &id).await;
+        });
+    }
+    Ok(())
 }

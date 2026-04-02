@@ -82,7 +82,7 @@ export function AgentRunView({ runId, onBack }: AgentRunViewProps) {
     );
 
     return () => {
-      unsubs.forEach((p) => p.then((unsub) => unsub()));
+      unsubs.forEach((p) => p.then((unsub) => unsub()).catch(() => {}));
     };
   }, [runId]);
 

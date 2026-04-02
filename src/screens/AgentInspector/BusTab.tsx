@@ -294,7 +294,7 @@ function ActivitySection({ agentId }: { agentId: string }) {
       queryClient.invalidateQueries({ queryKey: ['bus-messages', agentId] });
     });
     return () => {
-      unlisten.then((fn) => fn());
+      unlisten.then((fn) => fn()).catch(() => {});
     };
   }, [agentId, queryClient]);
 

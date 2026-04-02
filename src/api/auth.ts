@@ -11,6 +11,9 @@ export const authApi = {
   login: (email: string, password: string): Promise<AuthStateDto> =>
     invoke('login', { email, password }),
 
+  register: (email: string, password: string): Promise<AuthStateDto> =>
+    invoke('register', { email, password }),
+
   logout: (): Promise<void> => invoke('logout'),
 
   setOfflineMode: (): Promise<void> => invoke('set_offline_mode'),

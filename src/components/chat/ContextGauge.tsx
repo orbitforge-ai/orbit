@@ -50,7 +50,7 @@ export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
     });
 
     return () => {
-      unsub.then((fn) => fn());
+      unsub.then((fn) => fn()).catch(() => {});
     };
   }, [sessionId]);
 
