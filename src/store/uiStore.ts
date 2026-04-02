@@ -111,7 +111,7 @@ export const useUiStore = create<UiStore>((set) => ({
         localStorage.removeItem('orbit:lastProjectId');
       }
     } catch {}
-    set({ selectedProjectId: id, screen: id ? 'projects' : 'dashboard' });
+    set({ selectedProjectId: id, screen: 'projects' });
   },
   clearPendingChatSession: () => set({ pendingChatSessionId: null }),
   setLogPanelOpen: (open) => set({ logPanelOpen: open }),

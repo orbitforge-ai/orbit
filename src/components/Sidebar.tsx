@@ -176,10 +176,7 @@ export function Sidebar() {
               {/* New Project */}
               <button
                 onClick={() => {
-                  // Navigate to projects screen with a flag to open the create dialog
-                  useUiStore.getState().navigate('projects');
-                  useUiStore.getState().selectProject(null);
-                  // Use a small timeout so the screen renders first
+                  useUiStore.setState({ screen: 'projects', selectedProjectId: null });
                   setTimeout(() => {
                     window.dispatchEvent(new CustomEvent('orbit:new-project'));
                   }, 50);
