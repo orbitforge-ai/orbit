@@ -13,12 +13,6 @@ import { AgentWorkspaceConfig, Project } from '../../types';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { CollapsibleSection } from '../../components/CollapsibleSection';
 import { AgentIdentitySection } from './AgentIdentitySection';
-import { RoleSelector } from './RoleSelector';
-import {
-  getRoleDefaultTools,
-  getRoleSystemInstructions,
-  DEFAULT_ROLE_ID,
-} from '../../lib/agentRoles';
 
 const PERMISSION_MODES = [
   { value: 'normal', label: 'Normal', description: 'Prompt for writes/exec, auto-allow reads' },
@@ -211,23 +205,6 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
       // Disable all except finish (which is always on)
       updateConfig({ allowedTools: ['finish'] });
     }
-  }
-
-  function handleRoleChange(newRoleId: string) {
-    updateConfig({
-      roleId: newRoleId,
-      roleSystemInstructions: getRoleSystemInstructions(newRoleId),
-      allowedTools: getRoleDefaultTools(newRoleId),
-    });
-  }
-
-  function isRoleDefaultsDirty(): boolean {
-    if (!config?.roleId || config.roleId === DEFAULT_ROLE_ID) return false;
-    const defaultTools = getRoleDefaultTools(config.roleId);
-    const current = config.allowedTools;
-    if (defaultTools.length === 0 && current.length === 0) return false;
-    if (defaultTools.length !== current.length) return true;
-    return !defaultTools.every((t) => current.includes(t));
   }
 
   if (!config) {

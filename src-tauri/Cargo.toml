@@ -50,7 +50,14 @@ cron = "0.12"
 
 # Async helpers
 futures = "0.3"
+futures-util = "0.3"
 async-trait = "0.1"
+
+# WebSocket (Supabase Realtime)
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+
+# Hashing (workspace sync)
+sha2 = "0.10"
 
 # Logging
 tauri-plugin-log = "2"

@@ -83,6 +83,7 @@ pub async fn perform_compaction(
     db: &DbPool,
     memory_client: Option<MemoryClient>,
     memory_user_id: &str,
+    cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<(), String> {
     let pool = db.0.clone();
     let sid = session_id.to_string();
@@ -245,6 +246,11 @@ pub async fn perform_compaction(
     let summary_msg_id = Ulid::new().to_string();
     let compaction_id = Ulid::new().to_string();
 
+    // Clone before the closure so they remain available for cloud sync below.
+    let compaction_id_post = compaction_id.clone();
+    let summary_msg_id_post = summary_msg_id.clone();
+    let compacted_ids_json_post = compacted_ids_json.clone();
+
     let original_token_count = compact_count as u32; // approximate; we don't have per-message counts yet
 
     let estimated_tokens = tokio::task::spawn_blocking(move || -> Result<u32, String> {
@@ -319,6 +325,27 @@ pub async fn perform_compaction(
     .await
     .map_err(|e| e.to_string())??;
 
+    // Cloud sync: compaction summary
+    if let Some(client) = &cloud_client {
+      let client = client.clone();
+      let uid = client.user_id.clone();
+      let cid = compaction_id_post;
+      let sid2 = session_id.to_string();
+      let smid = summary_msg_id_post;
+      let cids = compacted_ids_json_post;
+      let otc = original_token_count;
+      let stc = summary_token_count;
+      let now = chrono::Utc::now().to_rfc3339();
+      tokio::spawn(async move {
+        let _ = client.upsert_chat_compaction_summary_json(serde_json::json!({
+          "user_id": uid, "id": cid, "session_id": sid2,
+          "summary_message_id": smid, "compacted_message_ids": cids,
+          "original_token_count": otc, "summary_token_count": stc,
+          "created_at": now,
+        })).await;
+      });
+    }
+
     // 5. Emit updated context info
     let context_window = effective_context_window(ws_config);
 
@@ -339,6 +366,7 @@ pub async fn perform_compaction(
             let user_id = memory_user_id.to_string();
             let db_clone = DbPool(db.0.clone());
             let extract_text = summary_text.clone();
+            let cloud_cl = cloud_client.clone();
             tauri::async_runtime::spawn(async move {
                 let log_id = Ulid::new().to_string();
                 let now = chrono::Utc::now().to_rfc3339();
@@ -348,6 +376,7 @@ pub async fn perform_compaction(
                     let sid = session_id.clone();
                     let aid = agent_id.clone();
                     let now = now.clone();
+                    let cloud_cl2 = cloud_cl.clone();
                     let _ = tokio::task::spawn_blocking(move || {
                         if let Ok(conn) = pool.get() {
                             let _ = conn.execute(
@@ -355,6 +384,16 @@ pub async fn perform_compaction(
                                  VALUES (?1, ?2, ?3, 0, 'running', ?4)",
                                 rusqlite::params![log_id, sid, aid, now],
                             );
+                        }
+                        if let Some(cl) = cloud_cl2 {
+                            let uid = cl.user_id.clone();
+                            tokio::spawn(async move {
+                                let _ = cl.upsert_memory_extraction_log_json(serde_json::json!({
+                                    "user_id": uid, "id": log_id, "session_id": sid,
+                                    "agent_id": aid, "memories_extracted": 0,
+                                    "status": "running", "created_at": now,
+                                })).await;
+                            });
                         }
                     })
                     .await;
@@ -367,6 +406,10 @@ pub async fn perform_compaction(
                     }
                 };
                 let pool = db_clone.0.clone();
+                let log_id_cl = log_id.clone();
+                let cloud_cl3 = cloud_cl.clone();
+                let count_cl = count;
+                let status_cl = status.clone();
                 let _ = tokio::task::spawn_blocking(move || {
                     if let Ok(conn) = pool.get() {
                         let _ = conn.execute(
@@ -376,6 +419,11 @@ pub async fn perform_compaction(
                     }
                 })
                 .await;
+                if let Some(cl) = cloud_cl3 {
+                    let _ = cl.patch_memory_extraction_log(&log_id_cl, serde_json::json!({
+                        "memories_extracted": count_cl, "status": status_cl,
+                    })).await;
+                }
             });
         }
     }

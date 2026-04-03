@@ -372,6 +372,7 @@ export type ContentBlock =
   | { type: 'image'; media_type: string; data: string };
 
 export interface ChatMessage {
+  id?: string;
   role: 'user' | 'assistant';
   content: ContentBlock[];
   created_at?: string;

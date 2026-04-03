@@ -4,6 +4,7 @@ use tracing::{info, warn};
 use std::sync::Arc;
 use crate::auth::{self, AuthMode, AuthSession, AuthState};
 use crate::db::cloud::{CloudClientState, SupabaseClient};
+use crate::db::realtime::{RealtimeSyncState, start_realtime_sync};
 use crate::db::DbPool;
 use crate::executor::keychain;
 
@@ -89,6 +90,8 @@ pub async fn login(
     auth: tauri::State<'_, AuthState>,
     cloud_state: tauri::State<'_, CloudClientState>,
     db: tauri::State<'_, DbPool>,
+    realtime: tauri::State<'_, RealtimeSyncState>,
+    app: tauri::AppHandle,
 ) -> Result<AuthStateDto, String> {
     let (supabase_url, anon_key) = auth::supabase_credentials()?;
 
@@ -143,6 +146,9 @@ pub async fn login(
     // Sync API keys from Supabase Vault to local Keychain (best-effort)
     sync_api_keys_from_vault(&http, &supabase_url, &anon_key, &session.access_token).await;
 
+    // Start Realtime sync (replaces any existing task)
+    start_realtime_sync(cloud_client.clone(), db.0.clone(), app, &realtime).await;
+
     // Bi-directional data sync: push local → cloud, then pull cloud → local
     // Both are best-effort: login succeeds even if sync fails.
     let pool = db.0.clone();
@@ -177,6 +183,8 @@ pub async fn register(
     auth: tauri::State<'_, AuthState>,
     cloud_state: tauri::State<'_, CloudClientState>,
     db: tauri::State<'_, DbPool>,
+    realtime: tauri::State<'_, RealtimeSyncState>,
+    app: tauri::AppHandle,
 ) -> Result<AuthStateDto, String> {
     let (supabase_url, anon_key) = auth::supabase_credentials()?;
 
@@ -229,6 +237,9 @@ pub async fn register(
     ));
     cloud_state.set(Some(cloud_client.clone()));
 
+    // Start Realtime sync
+    start_realtime_sync(cloud_client.clone(), db.0.clone(), app, &realtime).await;
+
     // Push local data to the new account, then pull (no-op on fresh account)
     let pool = db.0.clone();
     let client_for_sync = cloud_client.clone();
@@ -259,7 +270,11 @@ pub async fn register(
 pub async fn logout(
     auth: tauri::State<'_, AuthState>,
     cloud_state: tauri::State<'_, CloudClientState>,
+    realtime: tauri::State<'_, RealtimeSyncState>,
 ) -> Result<(), String> {
+    // Stop Realtime sync before clearing the cloud client
+    realtime.stop().await;
+
     // Best-effort: call Supabase signout endpoint
     if let AuthMode::Cloud(session) = auth.get().await {
         if let Ok((supabase_url, anon_key)) = auth::supabase_credentials() {

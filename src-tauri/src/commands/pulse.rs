@@ -107,12 +107,18 @@ pub async fn update_pulse(
     schedule_config: RecurringConfig,
     enabled: bool,
     db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, crate::db::cloud::CloudClientState>,
 ) -> Result<PulseConfig, String> {
     let pool = db.0.clone();
     let aid = agent_id.clone();
 
     // Write pulse.md content to workspace
     workspace::write_workspace_file(&agent_id, "pulse.md", &content)?;
+
+    // Sync model_config (includes pulse.md) to cloud
+    let _ = crate::commands::workspace::sync_model_config_to_cloud(
+        &agent_id, db.0.clone(), cloud.inner().clone(),
+    ).await;
 
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;

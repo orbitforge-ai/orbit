@@ -339,6 +339,7 @@ pub async fn delete_chat_session(
 /// A chat message with compaction metadata for the UI.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessageWithMeta {
+  pub id: String,
   pub role: String,
   pub content: Vec<ContentBlock>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -382,8 +383,8 @@ pub async fn get_chat_messages(
       let messages: Vec<ChatMessageWithMeta> = if limit_val > 0 {
         let mut stmt = conn
           .prepare(
-            "SELECT role, content, created_at, is_compacted FROM (
-               SELECT role, content, created_at, is_compacted
+            "SELECT id, role, content, created_at, is_compacted FROM (
+               SELECT id, role, content, created_at, is_compacted
                FROM chat_messages WHERE session_id = ?1
                ORDER BY created_at DESC
                LIMIT ?2 OFFSET ?3
@@ -393,41 +394,43 @@ pub async fn get_chat_messages(
 
         let rows: Vec<ChatMessageWithMeta> = stmt
           .query_map(rusqlite::params![session_id, limit_val, offset_val], |row| {
-            let role: String = row.get(0)?;
-            let content_json: String = row.get(1)?;
-            let created_at: Option<String> = row.get(2)?;
-            let is_compacted: bool = row.get(3)?;
-            Ok((role, content_json, created_at, is_compacted))
+            let id: String = row.get(0)?;
+            let role: String = row.get(1)?;
+            let content_json: String = row.get(2)?;
+            let created_at: Option<String> = row.get(3)?;
+            let is_compacted: bool = row.get(4)?;
+            Ok((id, role, content_json, created_at, is_compacted))
           })
           .map_err(|e| e.to_string())?
           .filter_map(|r| r.ok())
-          .map(|(role, content_json, created_at, is_compacted)| {
+          .map(|(id, role, content_json, created_at, is_compacted)| {
             let content: Vec<ContentBlock> = serde_json::from_str(&content_json).unwrap_or_default();
-            ChatMessageWithMeta { role, content, created_at, is_compacted }
+            ChatMessageWithMeta { id, role, content, created_at, is_compacted }
           })
           .collect();
         rows
       } else {
         let mut stmt = conn
           .prepare(
-            "SELECT role, content, created_at, is_compacted FROM chat_messages
+            "SELECT id, role, content, created_at, is_compacted FROM chat_messages
                    WHERE session_id = ?1 ORDER BY created_at ASC"
           )
           .map_err(|e| e.to_string())?;
 
         let rows: Vec<ChatMessageWithMeta> = stmt
           .query_map(rusqlite::params![session_id], |row| {
-            let role: String = row.get(0)?;
-            let content_json: String = row.get(1)?;
-            let created_at: Option<String> = row.get(2)?;
-            let is_compacted: bool = row.get(3)?;
-            Ok((role, content_json, created_at, is_compacted))
+            let id: String = row.get(0)?;
+            let role: String = row.get(1)?;
+            let content_json: String = row.get(2)?;
+            let created_at: Option<String> = row.get(3)?;
+            let is_compacted: bool = row.get(4)?;
+            Ok((id, role, content_json, created_at, is_compacted))
           })
           .map_err(|e| e.to_string())?
           .filter_map(|r| r.ok())
-          .map(|(role, content_json, created_at, is_compacted)| {
+          .map(|(id, role, content_json, created_at, is_compacted)| {
             let content: Vec<ContentBlock> = serde_json::from_str(&content_json).unwrap_or_default();
-            ChatMessageWithMeta { role, content, created_at, is_compacted }
+            ChatMessageWithMeta { id, role, content, created_at, is_compacted }
           })
           .collect();
         rows
@@ -470,14 +473,12 @@ pub async fn send_chat_message(
     .map_err(|e| format!("invalid content: {}", e))?;
 
   // Load session + history in blocking task
-  let (agent_id, history, _session_title, chain_depth) = {
+  let (agent_id, mut history, session_title, chain_depth) = {
     let pool = pool.clone();
     let sid = session_id.clone();
-    let uc = user_content.clone();
 
     tokio::task
-      ::spawn_blocking(
-        move || -> Result<(String, Vec<ChatMessage>, String, i64), String> {
+      ::spawn_blocking(move || -> Result<(String, Vec<ChatMessage>, String, i64), String> {
           let conn = pool.get().map_err(|e| e.to_string())?;
 
           // Get session
@@ -497,7 +498,7 @@ pub async fn send_chat_message(
             )
             .map_err(|e| e.to_string())?;
 
-          let mut messages: Vec<ChatMessage> = stmt
+          let messages: Vec<ChatMessage> = stmt
             .query_map(rusqlite::params![sid], |row| {
               let role: String = row.get(0)?;
               let content_json: String = row.get(1)?;
@@ -512,57 +513,69 @@ pub async fn send_chat_message(
               ChatMessage { role, content, created_at: None }
             })
             .collect();
-
-          // Save user message to DB
-          let msg_id = Ulid::new().to_string();
-          let now = chrono::Utc::now().to_rfc3339();
-          let content_json = serde_json::to_string(&uc).map_err(|e| e.to_string())?;
-
-          conn
-            .execute(
-              "INSERT INTO chat_messages (id, session_id, role, content, created_at)
-                 VALUES (?1, ?2, 'user', ?3, ?4)",
-              rusqlite::params![msg_id, sid, content_json, now]
-            )
-            .map_err(|e| e.to_string())?;
-
-          // Update session timestamp
-          conn
-            .execute(
-              "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
-              rusqlite::params![now, sid]
-            )
-            .map_err(|e| e.to_string())?;
-
-          // Auto-title: if still "New Chat", use first text content
-          if title == "New Chat" {
-            let first_text = uc.iter().find_map(|b| {
-              if let ContentBlock::Text { text } = b {
-                Some(text.chars().take(60).collect::<String>())
-              } else {
-                None
-              }
-            });
-            if let Some(t) = first_text {
-              let _ = conn.execute(
-                "UPDATE chat_sessions SET title = ?1 WHERE id = ?2",
-                rusqlite::params![t, sid]
-              );
-            }
-          }
-
-          // Append user message to history
-          messages.push(ChatMessage {
-            role: "user".to_string(),
-            content: uc,
-            created_at: None,
-          });
-
           Ok((agent_id, messages, title, chain_depth))
         }
       ).await
       .map_err(|e| e.to_string())??
   };
+
+  let cloud_client = cloud.get();
+  save_chat_message(&pool, &session_id, "user", &user_content, cloud_client.clone()).await?;
+
+  if session_title == "New Chat" {
+    let first_text = user_content.iter().find_map(|b| {
+      if let ContentBlock::Text { text } = b {
+        Some(text.chars().take(60).collect::<String>())
+      } else {
+        None
+      }
+    });
+
+    if let Some(title) = first_text {
+      let pool_for_title = pool.clone();
+      let session_id_for_title = session_id.clone();
+      let title_for_cloud = title.clone();
+      let updated_at = chrono::Utc::now().to_rfc3339();
+      let updated_at_for_cloud = updated_at.clone();
+
+      tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let conn = pool_for_title.get().map_err(|e| e.to_string())?;
+        conn
+          .execute(
+            "UPDATE chat_sessions SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![title, updated_at, session_id_for_title]
+          )
+          .map_err(|e| e.to_string())?;
+        Ok(())
+      })
+      .await
+      .map_err(|e| e.to_string())??;
+
+      if let Some(client) = cloud_client.clone() {
+        let session_id_for_cloud = session_id.clone();
+        tokio::spawn(async move {
+          if let Err(e) = client
+            .patch_chat_session(
+              &session_id_for_cloud,
+              serde_json::json!({
+                "title": title_for_cloud,
+                "updated_at": updated_at_for_cloud,
+              }),
+            )
+            .await
+          {
+            warn!("cloud patch chat_session title: {}", e);
+          }
+        });
+      }
+    }
+  }
+
+  history.push(ChatMessage {
+    role: "user".to_string(),
+    content: user_content.clone(),
+    created_at: None,
+  });
 
   // Resolve memory user_id from auth state
   let memory_user_id = match auth.get().await {
@@ -578,8 +591,6 @@ pub async fn send_chat_message(
   let registry = session_registry.inner().clone();
   let perm_registry = permission_registry.inner().clone();
   let mem_client = memory_state.as_ref().map(|s| s.client.clone());
-  let cloud_client = cloud.get();
-
   tauri::async_runtime::spawn(async move {
     if let Err(e) = do_llm_chat(
       &agent_id,
@@ -877,7 +888,7 @@ async fn do_llm_chat(
     tauri::async_runtime::spawn(async move {
       match compaction::perform_compaction(
         &agent_id, &session_id, compact_provider.as_ref(),
-        &ws_config, &app, &db, None, &compaction_user_id,
+        &ws_config, &app, &db, None, &compaction_user_id, cloud_client.clone(),
       ).await {
         Ok(()) => info!(session_id = %session_id, "Background compaction completed"),
         Err(e) => warn!(session_id = %session_id, "Background compaction failed: {}", e),
@@ -950,6 +961,7 @@ pub async fn cancel_agent_session(
     "cancelled",
     None,
     Some("Cancelled".to_string()),
+    None,
   ).await
 }
 
@@ -1013,6 +1025,7 @@ pub async fn compact_chat_session(
   app: tauri::AppHandle,
   db: tauri::State<'_, DbPool>,
   auth: tauri::State<'_, AuthState>,
+  cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
   let pool = db.0.clone();
 
@@ -1056,6 +1069,7 @@ pub async fn compact_chat_session(
     &db_pool,
     None,
     &memory_user_id,
+    cloud.get(),
   ).await?;
 
   // Refetch and emit updated context usage

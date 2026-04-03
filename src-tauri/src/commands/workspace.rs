@@ -76,19 +76,48 @@ pub async fn write_workspace_file(
     agent_id: String,
     path: String,
     content: String,
+    cloud: tauri::State<'_, CloudClientState>,
+    db: tauri::State<'_, DbPool>,
 ) -> Result<(), String> {
+    let path_clone = path.clone();
+    let agent_id_clone = agent_id.clone();
+    let content_clone = content.clone();
     tokio::task::spawn_blocking(move || {
-        workspace::write_workspace_file(&agent_id, &path, &content)
+        workspace::write_workspace_file(&agent_id_clone, &path_clone, &content_clone)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    // Fire-and-forget workspace file sync
+    if let Some(client) = cloud.get() {
+        let pool = db.0.clone();
+        tokio::spawn(async move {
+            crate::db::workspace_sync::push_agent_file(&client, &pool, &agent_id, &path).await;
+        });
+    }
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn delete_workspace_file(agent_id: String, path: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || workspace::delete_workspace_file(&agent_id, &path))
+pub async fn delete_workspace_file(
+    agent_id: String,
+    path: String,
+    cloud: tauri::State<'_, CloudClientState>,
+    db: tauri::State<'_, DbPool>,
+) -> Result<(), String> {
+    let agent_id_clone = agent_id.clone();
+    let path_clone = path.clone();
+    tokio::task::spawn_blocking(move || workspace::delete_workspace_file(&agent_id_clone, &path_clone))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())??;
+
+    if let Some(client) = cloud.get() {
+        let pool = db.0.clone();
+        tokio::spawn(async move {
+            crate::db::workspace_sync::delete_agent_file(&client, &pool, &agent_id, &path).await;
+        });
+    }
+    Ok(())
 }
 
 #[tauri::command]
