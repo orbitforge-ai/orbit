@@ -22,6 +22,9 @@ export const workspaceApi = {
   updateConfig: (agentId: string, config: AgentWorkspaceConfig): Promise<void> =>
     invoke('update_agent_config', { agentId, config }),
 
+  updateSystemPrompt: (agentId: string, content: string): Promise<void> =>
+    invoke('update_system_prompt', { agentId, content }),
+
   listAgentRoleIds: (): Promise<Record<string, string>> =>
     invoke('list_agent_role_ids'),
 };

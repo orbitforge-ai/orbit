@@ -134,7 +134,9 @@ pub async fn login(
         supabase_url.clone(),
         anon_key.clone(),
         access_token,
+        session.refresh_token.clone(),
         session.user_id.clone(),
+        session.email.clone(),
     ));
     cloud_state.set(Some(cloud_client.clone()));
 
@@ -221,7 +223,9 @@ pub async fn register(
         supabase_url.clone(),
         anon_key.clone(),
         access_token,
+        session.refresh_token.clone(),
         session.user_id.clone(),
+        session.email.clone(),
     ));
     cloud_state.set(Some(cloud_client.clone()));
 

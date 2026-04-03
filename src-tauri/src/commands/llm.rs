@@ -1,15 +1,35 @@
 use ulid::Ulid;
 
+use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
 use crate::executor::engine::{ ExecutorTx, RunRequest };
 use crate::executor::keychain;
 use crate::models::task::Task;
 
 #[tauri::command]
-pub async fn set_api_key(provider: String, key: String) -> Result<(), String> {
-  tokio::task
-    ::spawn_blocking(move || keychain::store_api_key(&provider, &key)).await
-    .map_err(|e| e.to_string())?
+pub async fn set_api_key(
+  provider: String,
+  key: String,
+  cloud: tauri::State<'_, CloudClientState>,
+) -> Result<(), String> {
+  let cloud = cloud.inner().clone();
+  let prov = provider.clone();
+  let k = key.clone();
+  tokio::task::spawn_blocking(move || keychain::store_api_key(&prov, &k))
+    .await
+    .map_err(|e| e.to_string())??;
+  // Also push to Supabase Vault so other devices can sync.
+  // Awaited (not fire-and-forget) so the call completes before the command returns.
+  // Best-effort: a vault failure still returns Ok so the local key is usable.
+  match cloud.get() {
+    Some(client) => {
+      if let Err(e) = client.upsert_api_key_in_vault(&provider, &key).await {
+        tracing::warn!("vault upsert_api_key '{}': {}", provider, e);
+      }
+    }
+    None => tracing::debug!("set_api_key: no cloud client, skipping vault sync"),
+  }
+  Ok(())
 }
 
 #[tauri::command]

@@ -112,7 +112,11 @@ export function WorkspaceTab({ agentId }: { agentId: string }) {
     setSaving(true);
     try {
       const content = editorRef.current?.getValue() ?? fileContent;
-      await workspaceApi.writeFile(agentId, editingFile, content);
+      if (editingFile === 'system_prompt.md') {
+        await workspaceApi.updateSystemPrompt(agentId, content);
+      } else {
+        await workspaceApi.writeFile(agentId, editingFile, content);
+      }
       queryClient.invalidateQueries({ queryKey: ['workspace-files', agentId] });
     } catch (err) {
       console.error('Failed to save file:', err);

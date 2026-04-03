@@ -537,10 +537,45 @@ fn validate_path(base: &Path, requested: &str) -> Result<PathBuf, String> {
     Ok(parent_canonical.join(filename))
 }
 
-const DEFAULT_SYSTEM_PROMPT: &str = r#"You are a helpful autonomous agent. Follow the user's goal and use the available tools to accomplish it.
+pub const DEFAULT_SYSTEM_PROMPT: &str = r#"You are a helpful autonomous agent. Follow the user's goal and use the available tools to accomplish it.
 
 When you are done, call the `finish` tool with a summary of what you accomplished.
 "#;
+
+/// Versioned blob stored in the `model_config` SQLite column and synced to Supabase.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredModelConfig {
+    pub version: u32,
+    pub config: AgentWorkspaceConfig,
+    pub system_prompt: String,
+}
+
+/// Serialize the agent's on-disk config.json + system_prompt.md into the model_config blob.
+pub fn serialize_model_config(agent_id: &str) -> Result<String, String> {
+    let config = load_agent_config(agent_id).unwrap_or_default();
+    let system_prompt = read_workspace_file(agent_id, "system_prompt.md")
+        .unwrap_or_else(|_| DEFAULT_SYSTEM_PROMPT.to_string());
+    let stored = StoredModelConfig { version: 1, config, system_prompt };
+    serde_json::to_string(&stored)
+        .map_err(|e| format!("failed to serialize model_config: {}", e))
+}
+
+/// Deserialize a model_config blob and write config.json + system_prompt.md to disk.
+/// No-op for empty or legacy "{}" blobs.
+pub fn apply_model_config_to_disk(agent_id: &str, model_config_json: &str) -> Result<(), String> {
+    if model_config_json.is_empty() || model_config_json == "{}" {
+        return Ok(());
+    }
+    let stored: StoredModelConfig = serde_json::from_str(model_config_json)
+        .map_err(|e| format!("failed to parse model_config: {}", e))?;
+    let dir = agent_dir(agent_id);
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("failed to create agent dir: {}", e))?;
+    save_agent_config(agent_id, &stored.config)?;
+    fs::write(dir.join("system_prompt.md"), &stored.system_prompt)
+        .map_err(|e| format!("failed to write system_prompt.md: {}", e))
+}
 
 const DEFAULT_PULSE_PROMPT: &str = r#"# Agent Pulse
 
@@ -769,6 +804,9 @@ mod tests {
                 directness: 45,
                 humor: 60,
                 custom_note: Some("Keep the energy grounded.".to_string()),
+                avatar_enabled: false,
+                avatar_archetype: "auto".to_string(),
+                avatar_speak_aloud: false,
             },
         );
 

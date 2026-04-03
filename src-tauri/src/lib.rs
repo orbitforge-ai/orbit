@@ -64,7 +64,9 @@ pub fn run() {
               url,
               anon_key,
               session.access_token.clone(),
+              session.refresh_token.clone(),
               session.user_id.clone(),
+              session.email.clone(),
             )))
           } else {
             None
@@ -239,6 +241,7 @@ pub fn run() {
         commands::workspace::delete_workspace_file,
         commands::workspace::get_agent_config,
         commands::workspace::update_agent_config,
+        commands::workspace::update_system_prompt,
         commands::workspace::list_agent_role_ids,
         // LLM
         commands::llm::set_api_key,

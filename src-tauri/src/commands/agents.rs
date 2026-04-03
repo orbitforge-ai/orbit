@@ -10,7 +10,7 @@ macro_rules! cloud_upsert_agent {
         if let Some(client) = $cloud.get() {
             let a = $agent.clone();
             tokio::spawn(async move {
-                if let Err(e) = client.upsert_agent(&a).await {
+                if let Err(e) = client.upsert_agent(&a, None).await {
                     tracing::warn!("cloud upsert agent: {}", e);
                 }
             });
@@ -76,7 +76,7 @@ pub async fn create_agent(
     let role_id = payload.role_id.clone();
     let cloud = cloud.inner().clone();
     let pool = db.0.clone();
-    let agent: Agent = tokio::task::spawn_blocking(move || -> Result<Agent, String> {
+    let (agent, model_config_json): (Agent, String) = tokio::task::spawn_blocking(move || -> Result<(Agent, String), String> {
         let initial_identity = payload.identity.clone();
         let initial_role_id = payload.role_id.clone();
         let initial_role_instructions = payload.role_system_instructions.clone();
@@ -142,13 +142,31 @@ pub async fn create_agent(
             workspace::save_agent_config(&agent.id, &config)?;
         }
 
-        Ok(agent)
+        // Persist the initial model_config blob to SQLite so push_local_data is current
+        let model_config_json = workspace::serialize_model_config(&agent.id)
+            .unwrap_or_else(|_| "{}".to_string());
+        conn.execute(
+            "UPDATE agents SET model_config = ?1 WHERE id = ?2",
+            rusqlite::params![model_config_json, agent.id],
+        )
+        .map_err(|e| e.to_string())?;
+
+        Ok((agent, model_config_json))
     })
     .await
     .map_err(|e| e.to_string())??;
 
     emit_agent_created(&app, agent.clone(), role_id);
-    cloud_upsert_agent!(cloud, agent);
+    // Include model_config in the initial upsert to avoid a race with a separate PATCH
+    if let Some(client) = cloud.get() {
+        let a = agent.clone();
+        let mcj = model_config_json.clone();
+        tokio::spawn(async move {
+            if let Err(e) = client.upsert_agent(&a, Some(&mcj)).await {
+                tracing::warn!("cloud upsert agent on create: {}", e);
+            }
+        });
+    }
     Ok(agent)
 }
 

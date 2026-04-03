@@ -21,9 +21,16 @@ pub struct SupabaseClient {
     /// https://yourproject.supabase.co  (no trailing slash)
     base_url: String,
     anon_key: String,
-    /// JWT — wrapped in Arc so the token can be refreshed in place.
+    /// JWT access token — refreshed in place on 401.
     access_token: Arc<std::sync::RwLock<String>>,
+    /// Supabase refresh token — used to obtain a new access token when expired.
+    refresh_token: Arc<std::sync::RwLock<String>>,
     pub user_id: String,
+    /// Stored so we can persist the refreshed session back to auth_state.json.
+    email: String,
+    data_dir: std::path::PathBuf,
+    /// Prevents concurrent token refreshes (only one at a time).
+    refresh_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl SupabaseClient {
@@ -31,19 +38,104 @@ impl SupabaseClient {
         base_url: String,
         anon_key: String,
         access_token: String,
+        refresh_token: String,
         user_id: String,
+        email: String,
     ) -> Self {
         Self {
             http: reqwest::Client::new(),
             base_url,
             anon_key,
             access_token: Arc::new(std::sync::RwLock::new(access_token)),
+            refresh_token: Arc::new(std::sync::RwLock::new(refresh_token)),
             user_id,
+            email,
+            data_dir: crate::data_dir(),
+            refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
     fn token(&self) -> String {
         self.access_token.read().unwrap().clone()
+    }
+
+    /// Refresh the Supabase session using the stored refresh_token.
+    /// Updates both tokens in-place and persists them to auth_state.json.
+    async fn try_refresh(&self) -> Result<(), String> {
+        let _guard = self.refresh_lock.lock().await;
+
+        let refresh_token = self.refresh_token.read().unwrap().clone();
+        if refresh_token.is_empty() {
+            return Err("No refresh token available — please log in again".to_string());
+        }
+
+        let url = format!("{}/auth/v1/token?grant_type=refresh_token", self.base_url);
+        let resp = self
+            .http
+            .post(&url)
+            .header("apikey", &self.anon_key)
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({ "refresh_token": refresh_token }))
+            .send()
+            .await
+            .map_err(|e| format!("token refresh request: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("token refresh {status}: {body}"));
+        }
+
+        #[derive(serde::Deserialize)]
+        struct RefreshResponse {
+            access_token: String,
+            refresh_token: String,
+        }
+
+        let data: RefreshResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("parse refresh response: {e}"))?;
+
+        *self.access_token.write().unwrap() = data.access_token.clone();
+        *self.refresh_token.write().unwrap() = data.refresh_token.clone();
+
+        let session = crate::auth::AuthSession {
+            user_id: self.user_id.clone(),
+            email: self.email.clone(),
+            access_token: data.access_token,
+            refresh_token: data.refresh_token,
+        };
+        crate::auth::persist_auth_state(
+            &self.data_dir,
+            &crate::auth::AuthMode::Cloud(session),
+        );
+
+        tracing::info!("Supabase access token refreshed successfully");
+        Ok(())
+    }
+
+    /// Send a request built by `build(token, anon_key)`.
+    /// On 401, refreshes the session and retries once.
+    async fn authed_send<F>(&self, build: F) -> Result<reqwest::Response, String>
+    where
+        F: Fn(&str, &str) -> reqwest::RequestBuilder,
+    {
+        let resp = build(&self.token(), &self.anon_key)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            tracing::debug!("Got 401 — attempting token refresh");
+            self.try_refresh().await?;
+            build(&self.token(), &self.anon_key)
+                .send()
+                .await
+                .map_err(|e| e.to_string())
+        } else {
+            Ok(resp)
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -56,15 +148,15 @@ impl SupabaseClient {
             "{}/rest/v1/{}?order=created_at.asc&limit=10000",
             self.base_url, table
         );
+        let http = self.http.clone();
         let resp = self
-            .http
-            .get(&url)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {}", self.token()))
-            .header("Accept", "application/json")
-            .send()
-            .await
-            .map_err(|e| format!("GET {table}: {e}"))?;
+            .authed_send(move |token, ak| {
+                http.get(&url)
+                    .header("apikey", ak)
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Accept", "application/json")
+            })
+            .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -87,17 +179,17 @@ impl SupabaseClient {
             return Ok(());
         }
         let url = format!("{}/rest/v1/{}", self.base_url, table);
+        let http = self.http.clone();
         let resp = self
-            .http
-            .post(&url)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {}", self.token()))
-            .header("Content-Type", "application/json")
-            .header("Prefer", "resolution=merge-duplicates")
-            .json(&rows)
-            .send()
-            .await
-            .map_err(|e| format!("POST {table}: {e}"))?;
+            .authed_send(move |token, ak| {
+                http.post(&url)
+                    .header("apikey", ak)
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .header("Prefer", "resolution=merge-duplicates")
+                    .json(&rows)
+            })
+            .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -110,16 +202,16 @@ impl SupabaseClient {
     /// PATCH a row by its `id` column (partial update).
     pub async fn patch_by_id(&self, table: &str, id: &str, updates: Value) -> Result<(), String> {
         let url = format!("{}/rest/v1/{}?id=eq.{}", self.base_url, table, id);
+        let http = self.http.clone();
         let resp = self
-            .http
-            .patch(&url)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {}", self.token()))
-            .header("Content-Type", "application/json")
-            .json(&updates)
-            .send()
-            .await
-            .map_err(|e| format!("PATCH {table} {id}: {e}"))?;
+            .authed_send(move |token, ak| {
+                http.patch(&url)
+                    .header("apikey", ak)
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .json(&updates)
+            })
+            .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -132,19 +224,46 @@ impl SupabaseClient {
     /// DELETE a row by its `id` column.  RLS protects against cross-user deletes.
     pub async fn delete_by_id(&self, table: &str, id: &str) -> Result<(), String> {
         let url = format!("{}/rest/v1/{}?id=eq.{}", self.base_url, table, id);
+        let http = self.http.clone();
         let resp = self
-            .http
-            .delete(&url)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {}", self.token()))
-            .send()
-            .await
-            .map_err(|e| format!("DELETE {table} {id}: {e}"))?;
+            .authed_send(move |token, ak| {
+                http.delete(&url)
+                    .header("apikey", ak)
+                    .header("Authorization", format!("Bearer {token}"))
+            })
+            .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
             return Err(format!("DELETE {table} {id} {status}: {text}"));
+        }
+        Ok(())
+    }
+
+    /// Push an API key to Supabase Vault via the `upsert_api_key` RPC.
+    pub async fn upsert_api_key_in_vault(
+        &self,
+        provider: &str,
+        key: &str,
+    ) -> Result<(), String> {
+        let url = format!("{}/rest/v1/rpc/upsert_api_key", self.base_url);
+        let body = serde_json::json!({ "p_provider": provider, "p_key": key });
+        let http = self.http.clone();
+        let resp = self
+            .authed_send(move |token, ak| {
+                http.post(&url)
+                    .header("apikey", ak)
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+            })
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("upsert_api_key {provider} {status}: {text}"));
         }
         Ok(())
     }
@@ -170,21 +289,41 @@ impl SupabaseClient {
         .await
     }
 
-    pub async fn upsert_agent(&self, a: &crate::models::agent::Agent) -> Result<(), String> {
-        self.upsert_single(
+    pub async fn upsert_agent(
+        &self,
+        a: &crate::models::agent::Agent,
+        model_config: Option<&str>,
+    ) -> Result<(), String> {
+        let mut body = serde_json::json!({
+            "user_id": self.user_id,
+            "id": a.id,
+            "name": a.name,
+            "description": a.description,
+            "state": a.state,
+            "max_concurrent_runs": a.max_concurrent_runs,
+            "heartbeat_at": a.heartbeat_at,
+            "created_at": a.created_at,
+            "updated_at": a.updated_at,
+        });
+        // Include model_config when provided (e.g. on create) to avoid a race
+        // between the INSERT and a subsequent PATCH. On plain metadata updates
+        // pass None so the stored config is never silently overwritten.
+        if let Some(mc) = model_config {
+            body["model_config"] = serde_json::Value::String(mc.to_string());
+        }
+        self.upsert_single("agents", body).await
+    }
+
+    /// PATCH only the model_config column for an agent (does not touch other fields).
+    pub async fn patch_agent_model_config(
+        &self,
+        agent_id: &str,
+        model_config_json: &str,
+    ) -> Result<(), String> {
+        self.patch_by_id(
             "agents",
-            serde_json::json!({
-                "user_id": self.user_id,
-                "id": a.id,
-                "name": a.name,
-                "description": a.description,
-                "state": a.state,
-                "max_concurrent_runs": a.max_concurrent_runs,
-                "heartbeat_at": a.heartbeat_at,
-                "model_config": "{}",
-                "created_at": a.created_at,
-                "updated_at": a.updated_at,
-            }),
+            agent_id,
+            serde_json::json!({ "model_config": model_config_json }),
         )
         .await
     }
@@ -327,14 +466,14 @@ impl SupabaseClient {
             "{}/rest/v1/project_agents?project_id=eq.{}&agent_id=eq.{}",
             self.base_url, project_id, agent_id
         );
+        let http = self.http.clone();
         let resp = self
-            .http
-            .delete(&url)
-            .header("apikey", &self.anon_key)
-            .header("Authorization", format!("Bearer {}", self.token()))
-            .send()
-            .await
-            .map_err(|e| format!("DELETE project_agents: {e}"))?;
+            .authed_send(move |token, ak| {
+                http.delete(&url)
+                    .header("apikey", ak)
+                    .header("Authorization", format!("Bearer {token}"))
+            })
+            .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -540,10 +679,16 @@ fn read_agents(
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
-            let model_config: String = row.get(6)?;
+            let agent_id: String = row.get(0)?;
+            let mut model_config: String = row.get(6)?;
+            // Migrate legacy empty model_config by reading from disk before pushing
+            if model_config.is_empty() || model_config == "{}" {
+                model_config = crate::executor::workspace::serialize_model_config(&agent_id)
+                    .unwrap_or_else(|_| "{}".to_string());
+            }
             Ok(serde_json::json!({
                 "user_id": user_id,
-                "id": row.get::<_, String>(0)?,
+                "id": agent_id,
                 "name": row.get::<_, String>(1)?,
                 "description": row.get::<_, Option<String>>(2)?,
                 "state": row.get::<_, String>(3)?,
@@ -988,24 +1133,33 @@ fn json_str(row: &Value, key: &str, default: &str) -> String {
 
 fn write_agents(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
+        let agent_id = str_val(&r, "id");
+        let model_config_str = json_str(&r, "model_config", "{}");
         conn.execute(
             "INSERT OR REPLACE INTO agents
              (id, name, description, state, max_concurrent_runs, heartbeat_at,
               model_config, created_at, updated_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             rusqlite::params![
-                str_val(&r, "id"),
+                agent_id,
                 str_val(&r, "name"),
                 opt_str(&r, "description"),
                 str_val(&r, "state"),
                 int_val(&r, "max_concurrent_runs", 5),
                 opt_str(&r, "heartbeat_at"),
-                str_val(&r, "model_config"),
+                model_config_str,
                 str_val(&r, "created_at"),
                 str_val(&r, "updated_at"),
             ],
         )
         .map_err(|e| e.to_string())?;
+        // Apply config.json + system_prompt.md to disk from the pulled model_config
+        if let Err(e) = crate::executor::workspace::apply_model_config_to_disk(
+            &agent_id,
+            &model_config_str,
+        ) {
+            warn!("apply model_config to disk for agent {}: {}", agent_id, e);
+        }
     }
     Ok(())
 }
