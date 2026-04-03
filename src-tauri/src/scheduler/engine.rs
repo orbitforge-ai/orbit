@@ -16,15 +16,23 @@ pub struct SchedulerEngine {
   executor_tx: ExecutorTx,
   _app: tauri::AppHandle,
   log_dir: PathBuf,
+  cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 }
 
 impl SchedulerEngine {
-  pub fn new(db: DbPool, executor_tx: ExecutorTx, app: tauri::AppHandle, log_dir: PathBuf) -> Self {
+  pub fn new(
+    db: DbPool,
+    executor_tx: ExecutorTx,
+    app: tauri::AppHandle,
+    log_dir: PathBuf,
+    cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+  ) -> Self {
     Self {
       db,
       executor_tx,
       _app: app,
       log_dir,
+      cloud_client,
     }
   }
 
@@ -100,6 +108,27 @@ impl SchedulerEngine {
           ]
         )
         .map_err(|e| e.to_string())?;
+
+      // Cloud sync: scheduled run INSERT
+      if let Some(client) = &self.cloud_client {
+        let client = client.clone();
+        let uid = client.user_id.clone();
+        let rid = run_id.clone();
+        let tid = task_id.clone();
+        let sid = schedule_id.clone();
+        let aid = task.agent_id.clone();
+        let now2 = now.clone();
+        tokio::spawn(async move {
+          if let Err(e) = client.upsert_run_json(serde_json::json!({
+            "user_id": uid, "id": rid, "task_id": tid, "schedule_id": sid,
+            "agent_id": aid, "state": "pending", "trigger": "scheduled",
+            "log_path": "", "retry_count": 0, "metadata": "{}",
+            "created_at": now2,
+          })).await {
+            tracing::warn!("cloud upsert scheduled run {}: {}", rid, e);
+          }
+        });
+      }
 
       let _ = self.executor_tx.0.send(RunRequest {
         run_id: run_id.clone(),

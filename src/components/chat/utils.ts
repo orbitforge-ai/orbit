@@ -55,7 +55,7 @@ export function chatMessagesToDisplay(messages: ChatMessage[]): DisplayMessage[]
       msg.content[0].text.startsWith('[Conversation Summary]');
 
     result.push({
-      id: nextId(),
+      id: msg.id ?? nextId(),
       role: msg.role,
       blocks,
       isStreaming: false,

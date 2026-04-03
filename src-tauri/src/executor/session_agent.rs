@@ -60,10 +60,10 @@ pub async fn run_agent_session(
   session_registry.clear_cancelled(session_id).await;
 
   if is_session_cancelled(session_id, db, session_registry).await {
-    return Err(finalize_cancelled_session(db, session_id).await);
+    return Err(finalize_cancelled_session(db, session_id, cloud_client.clone()).await);
   }
 
-  update_session_execution_state(db, session_id, "running", None, None).await?;
+  update_session_execution_state(db, session_id, "running", None, None, cloud_client.clone()).await?;
 
   let provider_name = &ws_config.provider;
   let api_key = keychain
@@ -147,9 +147,9 @@ pub async fn run_agent_session(
 
   match result {
     Ok(summary) => Ok(summary),
-    Err(reason) if reason == "cancelled" => Err(finalize_cancelled_session(db, session_id).await),
+    Err(reason) if reason == "cancelled" => Err(finalize_cancelled_session(db, session_id, cloud_client.clone()).await),
     Err(reason) => {
-      finalize_failed_session(db, session_id, &reason).await?;
+      finalize_failed_session(db, session_id, &reason, cloud_client.clone()).await?;
       Err(reason)
     }
   }
@@ -339,6 +339,7 @@ pub async fn run_session_loop(
     "success",
     finish_summary.clone(),
     None,
+    tool_ctx.cloud_client.clone(),
   ).await?;
   update_last_input_tokens(db, session_id, cumulative_input_tokens).await;
 
@@ -350,8 +351,9 @@ pub async fn run_session_loop(
       let conversation_text = build_conversation_text(&messages);
       let db_clone = DbPool(db.0.clone());
       let session_id_str = session_id.to_string();
+      let cloud_for_mem = tool_ctx.cloud_client.clone();
       tauri::async_runtime::spawn(async move {
-        extract_session_memories(client, conversation_text, &user_id, &agent_id, &session_id_str, &db_clone).await;
+        extract_session_memories(client, conversation_text, &user_id, &agent_id, &session_id_str, &db_clone, cloud_for_mem).await;
       });
     }
   }
@@ -365,6 +367,7 @@ pub async fn run_session_loop(
     let db = DbPool(db.0.clone());
     let mem_client = tool_ctx.memory_client.clone();
     let compaction_user_id = tool_ctx.memory_user_id.clone();
+    let cloud_cl = tool_ctx.cloud_client.clone();
     if let Ok(api_key) = keychain::retrieve_api_key(&ws_config.provider) {
       if let Ok(provider) = llm_provider::create_provider(&ws_config.provider, api_key) {
         tauri::async_runtime::spawn(async move {
@@ -377,6 +380,7 @@ pub async fn run_session_loop(
             &db,
             mem_client,
             &compaction_user_id,
+            cloud_cl,
           ).await {
             warn!(session_id = %session_id, "Session compaction failed: {}", e);
           }
@@ -440,10 +444,13 @@ pub async fn update_session_execution_state(
   execution_state: &str,
   finish_summary: Option<String>,
   terminal_error: Option<String>,
+  cloud: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<(), String> {
   let pool = db.0.clone();
-  let session_id = session_id.to_string();
-  let execution_state = execution_state.to_string();
+  let sid = session_id.to_string();
+  let es = execution_state.to_string();
+  let fs = finish_summary.clone();
+  let te = terminal_error.clone();
   tokio::task::spawn_blocking(move || -> Result<(), String> {
     let conn = pool.get().map_err(|e| e.to_string())?;
     let now = chrono::Utc::now().to_rfc3339();
@@ -454,26 +461,49 @@ pub async fn update_session_execution_state(
            terminal_error = CASE WHEN ?3 IS NULL THEN terminal_error ELSE ?3 END,
            updated_at = ?4
        WHERE id = ?5 AND COALESCE(execution_state, '') != 'cancelled'",
-      rusqlite::params![execution_state, finish_summary, terminal_error, now, session_id],
+      rusqlite::params![es, fs, te, now, sid],
     ).map_err(|e| e.to_string())?;
     Ok(())
   }).await.map_err(|e| e.to_string())??;
 
+  if let Some(client) = cloud {
+    let sid = session_id.to_string();
+    let es = execution_state.to_string();
+    tokio::spawn(async move {
+      let mut updates = serde_json::json!({ "execution_state": es });
+      if let Some(fs) = finish_summary { updates["finish_summary"] = serde_json::json!(fs); }
+      if let Some(te) = terminal_error { updates["terminal_error"] = serde_json::json!(te); }
+      if let Err(e) = client.patch_chat_session(&sid, updates).await {
+        warn!("cloud patch chat_session {}: {}", sid, e);
+      }
+    });
+  }
+
   Ok(())
 }
 
-pub async fn finalize_failed_session(db: &DbPool, session_id: &str, reason: &str) -> Result<(), String> {
+pub async fn finalize_failed_session(
+  db: &DbPool,
+  session_id: &str,
+  reason: &str,
+  cloud: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+) -> Result<(), String> {
   update_session_execution_state(
     db,
     session_id,
     if reason == "timed out" { "timed_out" } else { "failure" },
     None,
     Some(reason.to_string()),
+    cloud,
   ).await
 }
 
-pub async fn finalize_cancelled_session(db: &DbPool, session_id: &str) -> String {
-  let _ = update_session_execution_state(db, session_id, "cancelled", None, Some("Cancelled".to_string())).await;
+pub async fn finalize_cancelled_session(
+  db: &DbPool,
+  session_id: &str,
+  cloud: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+) -> String {
+  let _ = update_session_execution_state(db, session_id, "cancelled", None, Some("Cancelled".to_string()), cloud).await;
   "cancelled".to_string()
 }
 
@@ -581,6 +611,7 @@ async fn extract_session_memories(
   agent_id: &str,
   session_id: &str,
   db: &DbPool,
+  cloud: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) {
   if conversation_text.trim().is_empty() {
     return;
@@ -606,6 +637,22 @@ async fn extract_session_memories(
     .await;
   }
 
+  if let Some(cl) = &cloud {
+    let cl = cl.clone();
+    let uid = cl.user_id.clone();
+    let lid = log_id.clone();
+    let sid = session_id.to_string();
+    let aid = agent_id.to_string();
+    let now = now.clone();
+    tokio::spawn(async move {
+      let _ = cl.upsert_memory_extraction_log_json(serde_json::json!({
+        "user_id": uid, "id": lid, "session_id": sid,
+        "agent_id": aid, "memories_extracted": 0,
+        "status": "running", "created_at": now,
+      })).await;
+    });
+  }
+
   let (count, status) = match client.extract_memories(&conversation_text, user_id, agent_id).await {
     Ok(entries) => (entries.len() as i64, "success".to_string()),
     Err(e) => {
@@ -615,6 +662,9 @@ async fn extract_session_memories(
   };
 
   let pool = db.0.clone();
+  let log_id_cl = log_id.clone();
+  let count_cl = count;
+  let status_cl = status.clone();
   let _ = tokio::task::spawn_blocking(move || {
     if let Ok(conn) = pool.get() {
       let _ = conn.execute(
@@ -624,6 +674,12 @@ async fn extract_session_memories(
     }
   })
   .await;
+
+  if let Some(cl) = &cloud {
+    let _ = cl.patch_memory_extraction_log(&log_id_cl, serde_json::json!({
+      "memories_extracted": count_cl, "status": status_cl,
+    })).await;
+  }
 }
 
 fn extract_text_summary(content: &[ContentBlock]) -> Option<String> {

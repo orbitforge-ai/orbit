@@ -549,6 +549,9 @@ pub struct StoredModelConfig {
     pub version: u32,
     pub config: AgentWorkspaceConfig,
     pub system_prompt: String,
+    /// Added in v2: pulse prompt content, synced across devices.
+    #[serde(default)]
+    pub pulse_prompt: Option<String>,
 }
 
 /// Serialize the agent's on-disk config.json + system_prompt.md into the model_config blob.
@@ -556,7 +559,8 @@ pub fn serialize_model_config(agent_id: &str) -> Result<String, String> {
     let config = load_agent_config(agent_id).unwrap_or_default();
     let system_prompt = read_workspace_file(agent_id, "system_prompt.md")
         .unwrap_or_else(|_| DEFAULT_SYSTEM_PROMPT.to_string());
-    let stored = StoredModelConfig { version: 1, config, system_prompt };
+    let pulse_prompt = read_workspace_file(agent_id, "pulse.md").ok();
+    let stored = StoredModelConfig { version: 1, config, system_prompt, pulse_prompt };
     serde_json::to_string(&stored)
         .map_err(|e| format!("failed to serialize model_config: {}", e))
 }
@@ -574,7 +578,12 @@ pub fn apply_model_config_to_disk(agent_id: &str, model_config_json: &str) -> Re
         .map_err(|e| format!("failed to create agent dir: {}", e))?;
     save_agent_config(agent_id, &stored.config)?;
     fs::write(dir.join("system_prompt.md"), &stored.system_prompt)
-        .map_err(|e| format!("failed to write system_prompt.md: {}", e))
+        .map_err(|e| format!("failed to write system_prompt.md: {}", e))?;
+    if let Some(ref pulse_prompt) = stored.pulse_prompt {
+        fs::write(dir.join("pulse.md"), pulse_prompt)
+            .map_err(|e| format!("failed to write pulse.md: {}", e))?;
+    }
+    Ok(())
 }
 
 const DEFAULT_PULSE_PROMPT: &str = r#"# Agent Pulse

@@ -81,7 +81,12 @@ impl ActiveRunRegistry {
   }
 
   /// Cancel all active runs for a given agent. Returns the run IDs that were cancelled.
-  pub async fn cancel_agent_runs(&self, agent_id: &str, db: &DbPool) -> Vec<String> {
+  pub async fn cancel_agent_runs(
+    &self,
+    agent_id: &str,
+    db: &DbPool,
+    cloud_client: &Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+  ) -> Vec<String> {
     let active = self.active_runs.lock().await;
     let run_ids: Vec<String> = active
       .get(agent_id)
@@ -97,7 +102,7 @@ impl ActiveRunRegistry {
       if let Some(tx) = senders.remove(run_id) {
         let _ = tx.send(());
         // Mark as cancelled in DB immediately
-        let _ = mark_run_cancelled(db, run_id);
+        let _ = mark_run_cancelled(db, run_id, cloud_client);
         cancelled.push(run_id.clone());
       }
     }
@@ -313,14 +318,14 @@ impl ExecutorEngine {
                 drop(permit);
 
                 // Evaluate bus subscriptions
-                evaluate_bus_subscriptions(&db, &req.run_id, &agent_id, req.chain_depth, &tx, &app).await;
+                evaluate_bus_subscriptions(&db, &req.run_id, &agent_id, req.chain_depth, &tx, &app, &cloud_client).await;
                 // Schedule retry if needed
-                schedule_retry_if_needed(req, &db, &tx, &app).await;
+                schedule_retry_if_needed(req, &db, &tx, &app, &cloud_client).await;
               });
             }
             Err(_) => {
               warn!(run_id = req.run_id, "skipping run — agent at capacity");
-              let _ = mark_run_skipped(&db, &req.run_id);
+              let _ = mark_run_skipped(&db, &req.run_id, &cloud_client);
               emit_run_state_changed(
                 &app,
                 &req.run_id,
@@ -332,7 +337,7 @@ impl ExecutorEngine {
         }
         "cancel_previous" => {
           // Cancel currently active runs for this agent
-          let cancelled = registry.cancel_agent_runs(&agent_id, &db).await;
+          let cancelled = registry.cancel_agent_runs(&agent_id, &db, &cloud_client).await;
           for run_id in &cancelled {
             emit_run_state_changed(
               &app,
@@ -373,8 +378,8 @@ impl ExecutorEngine {
             update_agent_heartbeat(&db, &agent_id);
             drop(permit);
 
-            evaluate_bus_subscriptions(&db, &req.run_id, &agent_id, req.chain_depth, &tx, &app).await;
-            schedule_retry_if_needed(req, &db, &tx, &app).await;
+            evaluate_bus_subscriptions(&db, &req.run_id, &agent_id, req.chain_depth, &tx, &app, &cloud_client).await;
+            schedule_retry_if_needed(req, &db, &tx, &app, &cloud_client).await;
           });
         }
         // "allow" | "queue" — natural semaphore behavior
@@ -407,8 +412,8 @@ impl ExecutorEngine {
             update_agent_heartbeat(&db, &agent_id);
             drop(permit);
 
-            evaluate_bus_subscriptions(&db, &req.run_id, &agent_id, req.chain_depth, &tx, &app).await;
-            schedule_retry_if_needed(req, &db, &tx, &app).await;
+            evaluate_bus_subscriptions(&db, &req.run_id, &agent_id, req.chain_depth, &tx, &app, &cloud_client).await;
+            schedule_retry_if_needed(req, &db, &tx, &app, &cloud_client).await;
           });
         }
       }
@@ -434,7 +439,7 @@ async fn run_one(
   let run_id = req.run_id.clone();
   let task = req.task;
 
-  update_run_state(&db, &run_id, &RunState::Running, None, None, None)?;
+  update_run_state(&db, &run_id, &RunState::Running, None, None, None, &cloud_client)?;
   emit_run_state_changed(&app, &run_id, RunState::Pending.as_str(), RunState::Running.as_str());
 
   let log_path = log_dir.join(format!("{}.log", run_id));
@@ -563,13 +568,14 @@ async fn run_one(
         &next_state,
         Some(proc_result.exit_code),
         Some(proc_result.duration_ms),
-        None
+        None,
+        &cloud_client,
       )?;
 
       emit_run_state_changed(&app, &run_id, RunState::Running.as_str(), next_state.as_str());
     }
     Err(reason) if reason == "cancelled" => {
-      update_run_state(&db, &run_id, &RunState::Cancelled, Some(-1), None, None)?;
+      update_run_state(&db, &run_id, &RunState::Cancelled, Some(-1), None, None, &cloud_client)?;
       emit_run_state_changed(
         &app,
         &run_id,
@@ -581,7 +587,7 @@ async fn run_one(
       let next_state = if reason == "timed out" { RunState::TimedOut } else { RunState::Failure };
 
       let metadata = serde_json::json!({ "error": reason });
-      update_run_state(&db, &run_id, &next_state, Some(-1), None, Some(metadata))?;
+      update_run_state(&db, &run_id, &next_state, Some(-1), None, Some(metadata), &cloud_client)?;
       emit_run_state_changed(&app, &run_id, RunState::Running.as_str(), next_state.as_str());
     }
   }
@@ -596,7 +602,8 @@ async fn schedule_retry_if_needed(
   req: RunRequest,
   db: &DbPool,
   tx: &mpsc::UnboundedSender<RunRequest>,
-  app: &tauri::AppHandle
+  app: &tauri::AppHandle,
+  cloud_client: &Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) {
   let conn = match db.get() {
     Ok(c) => c,
@@ -663,6 +670,28 @@ async fn schedule_retry_if_needed(
     return;
   }
 
+  if let Some(client) = cloud_client {
+    let client = client.clone();
+    let uid = client.user_id.clone();
+    let rid = retry_run_id.clone();
+    let tid = req.task.id.clone();
+    let sid = req.schedule_id.clone();
+    let aid = req.task.agent_id.clone();
+    let now = now.clone();
+    let rc = req.retry_count + 1;
+    let parent = req.run_id.clone();
+    tokio::spawn(async move {
+      if let Err(e) = client.upsert_run_json(serde_json::json!({
+        "user_id": uid, "id": rid, "task_id": tid, "schedule_id": sid,
+        "agent_id": aid, "state": "pending", "trigger": "retry",
+        "log_path": "", "retry_count": rc, "parent_run_id": parent,
+        "metadata": "{}", "created_at": now,
+      })).await {
+        tracing::warn!("cloud upsert retry run {}: {}", rid, e);
+      }
+    });
+  }
+
   let retry_req = RunRequest {
     run_id: retry_run_id.clone(),
     task: req.task,
@@ -690,7 +719,8 @@ fn update_run_state(
   state: &RunState,
   exit_code: Option<i32>,
   duration_ms: Option<i64>,
-  metadata: Option<serde_json::Value>
+  metadata: Option<serde_json::Value>,
+  cloud_client: &Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<(), String> {
   let conn = db.get().map_err(|e| e.to_string())?;
   let now = chrono::Utc::now().to_rfc3339();
@@ -723,16 +753,40 @@ fn update_run_state(
         duration_ms,
         started_at,
         finished_at,
-        metadata.map(|m| m.to_string()),
+        metadata.as_ref().map(|m| m.to_string()),
         run_id
       ]
     )
     .map_err(|e| e.to_string())?;
 
+  if let Some(client) = cloud_client {
+    let client = client.clone();
+    let rid = run_id.to_string();
+    let state_str = state.as_str().to_string();
+    let started = started_at.clone();
+    let finished = finished_at.clone();
+    let meta = metadata.clone();
+    tokio::spawn(async move {
+      let mut updates = serde_json::json!({ "state": state_str });
+      if let Some(ec) = exit_code { updates["exit_code"] = serde_json::json!(ec); }
+      if let Some(d) = duration_ms { updates["duration_ms"] = serde_json::json!(d); }
+      if let Some(s) = started { updates["started_at"] = serde_json::json!(s); }
+      if let Some(f) = finished { updates["finished_at"] = serde_json::json!(f); }
+      if let Some(m) = meta { updates["metadata"] = serde_json::json!(m.to_string()); }
+      if let Err(e) = client.patch_run(&rid, updates).await {
+        tracing::warn!("cloud patch run {}: {}", rid, e);
+      }
+    });
+  }
+
   Ok(())
 }
 
-fn mark_run_skipped(db: &DbPool, run_id: &str) -> Result<(), String> {
+fn mark_run_skipped(
+  db: &DbPool,
+  run_id: &str,
+  cloud_client: &Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+) -> Result<(), String> {
   let conn = db.get().map_err(|e| e.to_string())?;
   let now = chrono::Utc::now().to_rfc3339();
   let metadata = serde_json::json!({ "skip_reason": "agent at capacity" }).to_string();
@@ -742,10 +796,28 @@ fn mark_run_skipped(db: &DbPool, run_id: &str) -> Result<(), String> {
       rusqlite::params![now, metadata, run_id]
     )
     .map_err(|e| e.to_string())?;
+
+  if let Some(client) = cloud_client {
+    let client = client.clone();
+    let rid = run_id.to_string();
+    let now = now.clone();
+    tokio::spawn(async move {
+      if let Err(e) = client.patch_run(&rid, serde_json::json!({
+        "state": "cancelled", "finished_at": now,
+        "metadata": serde_json::json!({ "skip_reason": "agent at capacity" }).to_string(),
+      })).await {
+        tracing::warn!("cloud patch run (skipped) {}: {}", rid, e);
+      }
+    });
+  }
   Ok(())
 }
 
-fn mark_run_cancelled(db: &DbPool, run_id: &str) -> Result<(), String> {
+fn mark_run_cancelled(
+  db: &DbPool,
+  run_id: &str,
+  cloud_client: &Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+) -> Result<(), String> {
   let conn = db.get().map_err(|e| e.to_string())?;
   let now = chrono::Utc::now().to_rfc3339();
   conn
@@ -754,6 +826,19 @@ fn mark_run_cancelled(db: &DbPool, run_id: &str) -> Result<(), String> {
       rusqlite::params![now, run_id]
     )
     .map_err(|e| e.to_string())?;
+
+  if let Some(client) = cloud_client {
+    let client = client.clone();
+    let rid = run_id.to_string();
+    let now = now.clone();
+    tokio::spawn(async move {
+      if let Err(e) = client.patch_run(&rid, serde_json::json!({
+        "state": "cancelled", "finished_at": now,
+      })).await {
+        tracing::warn!("cloud patch run (cancelled) {}: {}", rid, e);
+      }
+    });
+  }
   Ok(())
 }
 
@@ -775,6 +860,7 @@ async fn evaluate_bus_subscriptions(
   chain_depth: i64,
   tx: &mpsc::UnboundedSender<RunRequest>,
   app: &tauri::AppHandle,
+  cloud_client: &Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) {
   // Load the run's final state
   let final_state = {
@@ -935,6 +1021,36 @@ async fn evaluate_bus_subscriptions(
     if let Err(e) = insert_ok.as_ref().map_err(|e| e.to_string()).and_then(|r| r.as_ref().map_err(|e| e.clone())) {
       error!("bus subscription {} failed to create records: {}", sub_id, e);
       continue;
+    }
+
+    // Cloud sync: bus_message + run
+    if let Some(client) = cloud_client {
+      let client = client.clone();
+      let uid = client.user_id.clone();
+      let mid = msg_id.clone();
+      let aid_from = agent_id.to_string();
+      let rid_from = run_id.to_string();
+      let aid_to = subscriber_agent_id.clone();
+      let nrid = new_run_id.clone();
+      let et = event_type.clone();
+      let now2 = now.clone();
+      let tid = task_id.clone();
+      tokio::spawn(async move {
+        let _ = client.upsert_bus_message_json(serde_json::json!({
+          "user_id": uid, "id": mid, "from_agent_id": aid_from,
+          "from_run_id": rid_from, "to_agent_id": aid_to,
+          "to_run_id": nrid, "kind": "event",
+          "event_type": et, "payload": "{}", "status": "delivered",
+          "created_at": now2,
+        })).await;
+        let _ = client.upsert_run_json(serde_json::json!({
+          "user_id": uid, "id": nrid, "task_id": tid,
+          "agent_id": aid_to, "state": "pending", "trigger": "bus",
+          "log_path": "", "retry_count": 0, "metadata": "{}",
+          "chain_depth": next_depth, "source_bus_message_id": mid,
+          "created_at": now2,
+        })).await;
+      });
     }
 
     // Emit event

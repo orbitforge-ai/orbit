@@ -59,6 +59,24 @@ impl SupabaseClient {
         self.access_token.read().unwrap().clone()
     }
 
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    pub fn anon_key(&self) -> &str {
+        &self.anon_key
+    }
+
+    pub fn current_token(&self) -> String {
+        self.access_token.read().unwrap().clone()
+    }
+
+    /// Refresh the token if needed and return a fresh access token.
+    pub async fn fresh_token(&self) -> Result<String, String> {
+        // Try current token first; if it fails the authed_send will refresh.
+        Ok(self.current_token())
+    }
+
     /// Refresh the Supabase session using the stored refresh_token.
     /// Updates both tokens in-place and persists them to auth_state.json.
     async fn try_refresh(&self) -> Result<(), String> {
@@ -264,6 +282,85 @@ impl SupabaseClient {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
             return Err(format!("upsert_api_key {provider} {status}: {text}"));
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Supabase Storage helpers
+    // -----------------------------------------------------------------------
+
+    /// Upload bytes to Supabase Storage (upsert semantics via x-upsert header).
+    pub async fn storage_upload(
+        &self,
+        bucket: &str,
+        path: &str,
+        bytes: &[u8],
+    ) -> Result<(), String> {
+        let url = format!("{}/storage/v1/object/{}/{}", self.base_url, bucket, path);
+        let body = bytes.to_vec();
+        let http = self.http.clone();
+        let resp = self
+            .authed_send(move |token, ak| {
+                http.post(&url)
+                    .header("apikey", ak)
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/octet-stream")
+                    .header("x-upsert", "true")
+                    .body(body.clone())
+            })
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Storage upload {bucket}/{path} {status}: {text}"));
+        }
+        Ok(())
+    }
+
+    /// Download bytes from Supabase Storage.
+    pub async fn storage_download(&self, bucket: &str, path: &str) -> Result<Vec<u8>, String> {
+        let url = format!("{}/storage/v1/object/{}/{}", self.base_url, bucket, path);
+        let http = self.http.clone();
+        let resp = self
+            .authed_send(move |token, ak| {
+                http.get(&url)
+                    .header("apikey", ak)
+                    .header("Authorization", format!("Bearer {token}"))
+            })
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Storage download {bucket}/{path} {status}: {text}"));
+        }
+        resp.bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|e| format!("Storage read body: {e}"))
+    }
+
+    /// Delete one or more objects from Supabase Storage by prefix list.
+    pub async fn storage_delete(&self, bucket: &str, prefixes: Vec<String>) -> Result<(), String> {
+        if prefixes.is_empty() {
+            return Ok(());
+        }
+        let url = format!("{}/storage/v1/object/{}", self.base_url, bucket);
+        let body = serde_json::json!({ "prefixes": prefixes });
+        let http = self.http.clone();
+        let resp = self
+            .authed_send(move |token, ak| {
+                http.delete(&url)
+                    .header("apikey", ak)
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+            })
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Storage delete {bucket} {status}: {text}"));
         }
         Ok(())
     }
@@ -503,6 +600,42 @@ impl SupabaseClient {
             }),
         )
         .await
+    }
+
+    pub async fn upsert_run_json(&self, body: Value) -> Result<(), String> {
+        self.upsert_single("runs", body).await
+    }
+
+    pub async fn patch_run(&self, run_id: &str, updates: Value) -> Result<(), String> {
+        self.patch_by_id("runs", run_id, updates).await
+    }
+
+    pub async fn upsert_bus_message_json(&self, body: Value) -> Result<(), String> {
+        self.upsert_single("bus_messages", body).await
+    }
+
+    pub async fn upsert_agent_conversation_json(&self, body: Value) -> Result<(), String> {
+        self.upsert_single("agent_conversations", body).await
+    }
+
+    pub async fn upsert_chat_compaction_summary_json(&self, body: Value) -> Result<(), String> {
+        self.upsert_single("chat_compaction_summaries", body).await
+    }
+
+    pub async fn upsert_memory_extraction_log_json(&self, body: Value) -> Result<(), String> {
+        self.upsert_single("memory_extraction_log", body).await
+    }
+
+    pub async fn patch_memory_extraction_log(
+        &self,
+        id: &str,
+        updates: Value,
+    ) -> Result<(), String> {
+        self.patch_by_id("memory_extraction_log", id, updates).await
+    }
+
+    pub async fn patch_chat_session(&self, id: &str, updates: Value) -> Result<(), String> {
+        self.patch_by_id("chat_sessions", id, updates).await
     }
 
     // -----------------------------------------------------------------------
@@ -1107,23 +1240,23 @@ fn read_project_agents(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec
 // Supabase → SQLite (pull): write cloud rows into local tables
 // ---------------------------------------------------------------------------
 
-fn str_val(row: &Value, key: &str) -> String {
+pub(crate) fn str_val(row: &Value, key: &str) -> String {
     row[key].as_str().unwrap_or("").to_string()
 }
 
-fn opt_str(row: &Value, key: &str) -> Option<String> {
+pub(crate) fn opt_str(row: &Value, key: &str) -> Option<String> {
     row[key].as_str().map(String::from)
 }
 
-fn int_val(row: &Value, key: &str, default: i64) -> i64 {
+pub(crate) fn int_val(row: &Value, key: &str, default: i64) -> i64 {
     row[key].as_i64().unwrap_or(default)
 }
 
-fn bool_val(row: &Value, key: &str) -> i64 {
+pub(crate) fn bool_val(row: &Value, key: &str) -> i64 {
     if row[key].as_bool().unwrap_or(false) { 1 } else { 0 }
 }
 
-fn json_str(row: &Value, key: &str, default: &str) -> String {
+pub(crate) fn json_str(row: &Value, key: &str, default: &str) -> String {
     if row[key].is_null() || row[key].is_object() || row[key].is_array() {
         serde_json::to_string(&row[key]).unwrap_or_else(|_| default.to_string())
     } else {
@@ -1131,7 +1264,7 @@ fn json_str(row: &Value, key: &str, default: &str) -> String {
     }
 }
 
-fn write_agents(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+pub(crate) fn write_agents(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         let agent_id = str_val(&r, "id");
         let model_config_str = json_str(&r, "model_config", "{}");
@@ -1164,7 +1297,7 @@ fn write_agents(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), Str
     Ok(())
 }
 
-fn write_tasks(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+pub(crate) fn write_tasks(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO tasks
@@ -1195,7 +1328,7 @@ fn write_tasks(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), Stri
     Ok(())
 }
 
-fn write_schedules(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+pub(crate) fn write_schedules(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO schedules
@@ -1219,7 +1352,7 @@ fn write_schedules(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), 
     Ok(())
 }
 
-fn write_runs(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+pub(crate) fn write_runs(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO runs
@@ -1256,7 +1389,7 @@ fn write_runs(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), Strin
     Ok(())
 }
 
-fn write_agent_conversations(
+pub(crate) fn write_agent_conversations(
     conn: &rusqlite::Connection,
     rows: Vec<Value>,
 ) -> Result<(), String> {
@@ -1283,7 +1416,7 @@ fn write_agent_conversations(
     Ok(())
 }
 
-fn write_chat_sessions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+pub(crate) fn write_chat_sessions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO chat_sessions
@@ -1315,7 +1448,7 @@ fn write_chat_sessions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<
     Ok(())
 }
 
-fn write_chat_messages(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+pub(crate) fn write_chat_messages(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO chat_messages
@@ -1336,7 +1469,7 @@ fn write_chat_messages(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<
     Ok(())
 }
 
-fn write_chat_compaction_summaries(
+pub(crate) fn write_chat_compaction_summaries(
     conn: &rusqlite::Connection,
     rows: Vec<Value>,
 ) -> Result<(), String> {
@@ -1361,7 +1494,7 @@ fn write_chat_compaction_summaries(
     Ok(())
 }
 
-fn write_bus_messages(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+pub(crate) fn write_bus_messages(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO bus_messages
@@ -1389,7 +1522,7 @@ fn write_bus_messages(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(
     Ok(())
 }
 
-fn write_bus_subscriptions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+pub(crate) fn write_bus_subscriptions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO bus_subscriptions
@@ -1414,7 +1547,7 @@ fn write_bus_subscriptions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Res
     Ok(())
 }
 
-fn write_users(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+pub(crate) fn write_users(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO users (id, name, is_default, created_at)
@@ -1431,7 +1564,7 @@ fn write_users(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), Stri
     Ok(())
 }
 
-fn write_memory_extraction_log(
+pub(crate) fn write_memory_extraction_log(
     conn: &rusqlite::Connection,
     rows: Vec<Value>,
 ) -> Result<(), String> {
@@ -1454,7 +1587,7 @@ fn write_memory_extraction_log(
     Ok(())
 }
 
-fn write_projects(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+pub(crate) fn write_projects(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO projects (id, name, description, created_at, updated_at)
@@ -1472,7 +1605,7 @@ fn write_projects(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), S
     Ok(())
 }
 
-fn write_project_agents(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+pub(crate) fn write_project_agents(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO project_agents (project_id, agent_id, is_default, added_at)

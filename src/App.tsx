@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Sidebar } from './components/Sidebar';
 import { useUiStore } from './store/uiStore';
 import { useAuthStore } from './store/authStore';
+import { useSyncEvents } from './hooks/useSyncEvents';
 import { Dashboard } from './screens/Dashboard';
 import { RunHistory } from './screens/RunHistory';
 import { TaskBuilder } from './screens/TaskBuilder';
@@ -30,6 +31,9 @@ function AppContent() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Listen for remote Realtime sync events and invalidate React Query caches
+  useSyncEvents();
 
   // Not yet loaded — render nothing (avoids flash)
   if (state === null) return null;

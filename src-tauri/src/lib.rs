@@ -17,6 +17,7 @@ use auth::{load_auth_state, supabase_credentials, AuthMode, AuthState};
 use commands::users::ActiveUser;
 use db::cloud::{CloudClientState, SupabaseClient};
 use db::connection::init as init_db;
+use db::realtime::{RealtimeSyncState, start_realtime_sync};
 use executor::engine::{ AgentSemaphores, ExecutorEngine, ExecutorTx, SessionExecutionRegistry };
 use executor::permissions::PermissionRegistry;
 use scheduler::SchedulerEngine;
@@ -78,13 +79,21 @@ pub fn run() {
       let cloud_state = CloudClientState::empty();
       cloud_state.set(cloud_client_opt.clone());
 
-      // Background startup sync (pull only — no need to push on restart)
+      // Realtime sync state (shared across login/logout/startup)
+      let realtime_state = RealtimeSyncState::new();
+
+      // Background startup sync + Realtime for restored cloud sessions
       if let Some(client) = cloud_client_opt.clone() {
         let pool = db_pool.0.clone();
+        let rt_state = realtime_state.clone();
+        let app_handle = app.handle().clone();
         tauri::async_runtime::spawn(async move {
           if let Err(e) = client.pull_all_data(&pool).await {
             tracing::warn!("Startup cloud pull failed: {}", e);
           }
+          // Start Realtime after initial pull so the catch-up pull inside Realtime
+          // has a baseline to compare against.
+          start_realtime_sync(client, pool, app_handle, &rt_state).await;
         });
       }
 
@@ -118,6 +127,7 @@ pub fn run() {
       // Register managed state
       app.manage(auth_state);
       app.manage(cloud_state);
+      app.manage(realtime_state);
       app.manage(db_pool.clone());
       app.manage(executor_tx_state);
       app.manage(agent_semaphores.clone());
@@ -146,7 +156,8 @@ pub fn run() {
         db_pool,
         ExecutorTx(executor_tx),
         app.handle().clone(),
-        log_dir
+        log_dir,
+        cloud_client_opt.clone(),
       );
       tauri::async_runtime::spawn(async move { scheduler.run().await });
 

@@ -114,7 +114,9 @@ export function ChatPanel({
     const all = reversed.flatMap((page) => page.messages);
     const seen = new Set<string>();
     return all.filter((msg) => {
-      const key = `${msg.created_at}:${msg.role}`;
+      const key =
+        msg.id ??
+        `${msg.created_at ?? 'unknown'}:${msg.role}:${JSON.stringify(msg.content)}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;

@@ -522,7 +522,8 @@ pub async fn run_agent_loop(
     &conversation_json,
     cumulative_input_tokens,
     cumulative_output_tokens,
-    iteration
+    iteration,
+    &cloud_client,
   );
 
   // Write log file to disk
@@ -554,7 +555,7 @@ pub async fn run_agent_prompt(
   _session_registry: &SessionExecutionRegistry,
   memory_client: Option<&MemoryClient>,
   memory_user_id: &str,
-  _cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+  cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -705,7 +706,8 @@ pub async fn run_agent_prompt(
     &conversation_json,
     response.usage.input_tokens,
     response.usage.output_tokens,
-    1
+    1,
+    &cloud_client,
   );
 
   // Write log file to disk
@@ -918,11 +920,11 @@ pub async fn run_pulse(
       );
     }
     Err(reason) if reason == "cancelled" => {
-      session_agent::finalize_cancelled_session(db, &session_id).await;
+      session_agent::finalize_cancelled_session(db, &session_id, cloud_client.clone()).await;
       log.log(app, run_id, vec![("stderr".to_string(), "Pulse cancelled".to_string())]);
     }
     Err(reason) => {
-      let _ = session_agent::finalize_failed_session(db, &session_id, reason).await;
+      let _ = session_agent::finalize_failed_session(db, &session_id, reason, cloud_client.clone()).await;
       log.log(app, run_id, vec![("stderr".to_string(), format!("Pulse failed: {}", reason))]);
     }
   }
@@ -1044,7 +1046,8 @@ fn save_conversation_to_db(
   messages_json: &str,
   input_tokens: u32,
   output_tokens: u32,
-  iterations: u32
+  iterations: u32,
+  cloud_client: &Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) {
   if let Ok(conn) = db.get() {
     let id = ulid::Ulid::new().to_string();
@@ -1063,5 +1066,25 @@ fn save_conversation_to_db(
         now
       ]
     );
+
+    if let Some(client) = cloud_client {
+      let client = client.clone();
+      let uid = client.user_id.clone();
+      let id = id.clone();
+      let aid = agent_id.to_string();
+      let rid = run_id.to_string();
+      let msgs = messages_json.to_string();
+      let now = now.clone();
+      tokio::spawn(async move {
+        if let Err(e) = client.upsert_agent_conversation_json(serde_json::json!({
+          "user_id": uid, "id": id, "agent_id": aid, "run_id": rid,
+          "messages": msgs, "total_input_tokens": input_tokens,
+          "total_output_tokens": output_tokens, "iterations": iterations,
+          "created_at": now, "updated_at": now,
+        })).await {
+          tracing::warn!("cloud upsert agent_conversation: {}", e);
+        }
+      });
+    }
   }
 }

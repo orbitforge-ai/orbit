@@ -375,22 +375,44 @@ pub async fn write_project_workspace_file(
     project_id: String,
     path: String,
     content: String,
+    cloud: tauri::State<'_, CloudClientState>,
+    db: tauri::State<'_, DbPool>,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        workspace::write_project_workspace_file(&project_id, &path, &content)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let pid = project_id.clone();
+    let p = path.clone();
+    let c = content.clone();
+    tokio::task::spawn_blocking(move || workspace::write_project_workspace_file(&pid, &p, &c))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    if let Some(client) = cloud.get() {
+        let pool = db.0.clone();
+        tokio::spawn(async move {
+            crate::db::workspace_sync::push_project_file(&client, &pool, &project_id, &path).await;
+        });
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn delete_project_workspace_file(
     project_id: String,
     path: String,
+    cloud: tauri::State<'_, CloudClientState>,
+    db: tauri::State<'_, DbPool>,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        workspace::delete_project_workspace_file(&project_id, &path)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let pid = project_id.clone();
+    let p = path.clone();
+    tokio::task::spawn_blocking(move || workspace::delete_project_workspace_file(&pid, &p))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    if let Some(client) = cloud.get() {
+        let pool = db.0.clone();
+        tokio::spawn(async move {
+            crate::db::workspace_sync::delete_project_file(&client, &pool, &project_id, &path)
+                .await;
+        });
+    }
+    Ok(())
 }

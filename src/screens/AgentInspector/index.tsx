@@ -5,14 +5,11 @@ import {
   Activity,
   Bot,
   Brain,
-  Check,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
   FolderOpen,
   GitBranch,
-  Globe,
   History,
   MessageSquare,
   Play,
@@ -39,7 +36,6 @@ import {
 import { useUiStore } from '../../store/uiStore';
 import {
   Agent,
-  AgentWorkspaceConfig,
   ChatSession,
   ContentBlock,
   CreateAgent,
@@ -57,7 +53,6 @@ import { AgentIdentitySection } from './AgentIdentitySection';
 import { RoleSelector, ROLE_ICON_MAP } from './RoleSelector';
 import { getDefaultAgentIdentity } from '../../lib/agentIdentity';
 import {
-  AGENT_ROLES,
   DEFAULT_ROLE_ID,
   getRoleDefaultTools,
   getRoleSystemInstructions,
@@ -121,7 +116,6 @@ export function AgentInspector() {
 }
 
 function NewAgentView() {
-  const queryClient = useQueryClient();
   const { navigate, selectAgent } = useUiStore();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -265,6 +259,8 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
   const agentDraft = drafts[agentId] ?? null;
   const visibleDraft = pendingInitialSend?.agentId === agentId ? null : agentDraft;
   const draftSession = visibleDraft ? draftToChatSession(visibleDraft) : null;
+  const pendingInitialSessionId =
+    pendingInitialSend?.agentId === agentId ? pendingInitialSend.sessionId : null;
 
   useEffect(() => {
     if (!chatSessionsFetched) return;
@@ -277,6 +273,13 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
         setAgentTab('chat');
         return;
       }
+    }
+
+    if (pendingInitialSessionId) {
+      if (activeSessionId !== pendingInitialSessionId) {
+        setActiveSessionId(pendingInitialSessionId);
+      }
+      return;
     }
 
     if (activeSessionId && chatSessions.some((session) => session.id === activeSessionId)) {
@@ -313,6 +316,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
     chatSessions,
     chatSessionsFetched,
     clearPendingChatSession,
+    pendingInitialSessionId,
     pendingChatSessionId,
     setAgentTab,
   ]);

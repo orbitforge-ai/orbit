@@ -682,6 +682,40 @@ pub async fn execute_tool(
         .map_err(|e| e.to_string())?;
       }
 
+      // Cloud sync: chat_session + bus_message
+      if let Some(client) = &ctx.cloud_client {
+        let client = client.clone();
+        let uid = client.user_id.clone();
+        let sid = new_session_id.clone();
+        let tid = to_agent_id.clone();
+        let title = payload_str.chars().take(60).collect::<String>();
+        let mid = msg_id.clone();
+        let fa = from_agent.to_string();
+        let fr = from_run.clone();
+        let fs = from_session.clone();
+        let ps = payload_str.to_string();
+        let now2 = now.clone();
+        let nd = next_depth;
+        tokio::spawn(async move {
+          let _ = client.upsert_chat_session(&crate::models::chat::ChatSession {
+            id: sid.clone(), agent_id: tid.clone(), title, archived: false,
+            session_type: "bus_message".to_string(), parent_session_id: None,
+            source_bus_message_id: Some(mid.clone()), chain_depth: nd,
+            execution_state: Some("queued".to_string()), finish_summary: None,
+            terminal_error: None, source_agent_id: None, source_agent_name: None,
+            source_session_id: None, source_session_title: None,
+            created_at: now2.clone(), updated_at: now2.clone(), project_id: None,
+          }).await;
+          let _ = client.upsert_bus_message_json(serde_json::json!({
+            "user_id": uid, "id": mid, "from_agent_id": fa,
+            "from_run_id": fr, "from_session_id": fs,
+            "to_agent_id": tid, "to_session_id": sid,
+            "kind": "direct", "payload": ps, "status": "delivered",
+            "created_at": now2,
+          })).await;
+        });
+      }
+
       let db_clone = db.clone();
       let app_clone = bus_app.clone();
       let tx_clone = ctx.executor_tx.as_ref().ok_or("send_message: executor channel not available")?.clone();
@@ -836,6 +870,9 @@ pub async fn execute_tool(
         let agent_id = agent_id.to_string();
         let parent_session_id = parent_session_id.clone();
         let now = now.clone();
+        // Keep copies for cloud sync after the spawn_blocking moves the originals.
+        let agent_id_post = agent_id.clone();
+        let parent_session_id_post = parent_session_id.clone();
 
         tokio::task::spawn_blocking(move || {
           let conn = pool.get().map_err(|e| e.to_string())?;
@@ -861,6 +898,27 @@ pub async fn execute_tool(
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
+
+        // Cloud sync: sub-agent chat_session
+        if let Some(client) = &ctx.cloud_client {
+          let client = client.clone();
+          let sid = st.session_id.clone();
+          let aid = agent_id_post;
+          let title = st.id.clone();
+          let psid = parent_session_id_post;
+          let now = chrono::Utc::now().to_rfc3339();
+          tokio::spawn(async move {
+            let _ = client.upsert_chat_session(&crate::models::chat::ChatSession {
+              id: sid, agent_id: aid, title, archived: false,
+              session_type: "sub_agent".to_string(), parent_session_id: psid,
+              source_bus_message_id: None, chain_depth: next_depth,
+              execution_state: Some("queued".to_string()), finish_summary: None,
+              terminal_error: None, source_agent_id: None, source_agent_name: None,
+              source_session_id: None, source_session_title: None,
+              created_at: now.clone(), updated_at: now, project_id: None,
+            }).await;
+          });
+        }
       }
 
       // Emit event so UI can track sub-agents
@@ -955,6 +1013,7 @@ pub async fn execute_tool(
               "timed_out",
               None,
               Some(format!("Sub-agent timed out after {}s.", timeout_secs)),
+              None,
             ).await;
           }
           break;
