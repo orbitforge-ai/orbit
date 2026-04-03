@@ -73,14 +73,29 @@ struct CloudUpdateBody {
 }
 
 #[derive(Debug, Deserialize)]
-struct CloudResponse {
-    results: Vec<CloudMemoryItem>,
+#[serde(untagged)]
+enum CloudResponse {
+    Wrapped { results: Vec<CloudMemoryItem> },
+    Bare(Vec<CloudMemoryItem>),
+}
+
+impl CloudResponse {
+    fn into_results(self) -> Vec<CloudMemoryItem> {
+        match self {
+            Self::Wrapped { results } => results,
+            Self::Bare(results) => results,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
 struct CloudMemoryItem {
     id: String,
     memory: String,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
     #[serde(default)]
     score: Option<f64>,
     #[serde(default)]
@@ -93,8 +108,15 @@ struct CloudMemoryItem {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum CloudUpdateResult {
-    Wrapped { results: Vec<CloudMemoryItem> },
-    Direct { id: String, memory: String, #[serde(default)] metadata: serde_json::Value },
+    Wrapped {
+        results: Vec<CloudMemoryItem>,
+    },
+    Direct {
+        id: String,
+        memory: String,
+        #[serde(default)]
+        metadata: serde_json::Value,
+    },
 }
 
 // ─── Client implementation ───────────────────────────────────────────────────
@@ -170,13 +192,14 @@ impl MemoryClient {
             return Err(format!("add_memory failed ({}): {}", status, text));
         }
 
-        let cloud: CloudResponse = resp
-            .json()
+        let body = resp
+            .text()
             .await
-            .map_err(|e| format!("add_memory parse failed: {}", e))?;
+            .map_err(|e| format!("add_memory body read failed: {}", e))?;
+        let cloud = parse_cloud_response(&body, "add_memory")?;
 
         let entries = cloud
-            .results
+            .into_results()
             .into_iter()
             .filter(|item| {
                 // Keep ADD, UPDATE, and items with no event field (some API versions omit it)
@@ -223,13 +246,14 @@ impl MemoryClient {
             return Err(format!("search_memories failed ({}): {}", status, text));
         }
 
-        let cloud: CloudResponse = resp
-            .json()
+        let body = resp
+            .text()
             .await
-            .map_err(|e| format!("search_memories parse failed: {}", e))?;
+            .map_err(|e| format!("search_memories body read failed: {}", e))?;
+        let cloud = parse_cloud_response(&body, "search_memories")?;
 
         let mut entries: Vec<MemoryEntry> = cloud
-            .results
+            .into_results()
             .into_iter()
             .map(|item| cloud_item_to_entry(item, user_id))
             .collect();
@@ -277,13 +301,14 @@ impl MemoryClient {
             return Err(format!("list_memories failed ({}): {}", status, text));
         }
 
-        let cloud: CloudResponse = resp
-            .json()
+        let body = resp
+            .text()
             .await
-            .map_err(|e| format!("list_memories parse failed: {}", e))?;
+            .map_err(|e| format!("list_memories body read failed: {}", e))?;
+        let cloud = parse_cloud_response(&body, "list_memories")?;
 
         let mut entries: Vec<MemoryEntry> = cloud
-            .results
+            .into_results()
             .into_iter()
             .map(|item| cloud_item_to_entry(item, user_id))
             .collect();
@@ -352,9 +377,15 @@ impl MemoryClient {
                 .into_iter()
                 .next()
                 .ok_or_else(|| "update_memory: empty results".to_string())?,
-            CloudUpdateResult::Direct { id, memory, metadata } => CloudMemoryItem {
+            CloudUpdateResult::Direct {
                 id,
                 memory,
+                metadata,
+            } => CloudMemoryItem {
+                id,
+                memory,
+                created_at: None,
+                updated_at: None,
                 score: None,
                 metadata,
                 event: None,
@@ -408,13 +439,14 @@ impl MemoryClient {
             return Err(format!("extract_memories failed ({}): {}", status, text));
         }
 
-        let cloud: CloudResponse = resp
-            .json()
+        let body = resp
+            .text()
             .await
-            .map_err(|e| format!("extract_memories parse failed: {}", e))?;
+            .map_err(|e| format!("extract_memories body read failed: {}", e))?;
+        let cloud = parse_cloud_response(&body, "extract_memories")?;
 
         let entries = cloud
-            .results
+            .into_results()
             .into_iter()
             .filter(|item| {
                 matches!(
@@ -430,6 +462,13 @@ impl MemoryClient {
 }
 
 // ─── Mapping helper ──────────────────────────────────────────────────────────
+
+fn parse_cloud_response(body: &str, operation: &str) -> Result<CloudResponse, String> {
+    serde_json::from_str::<CloudResponse>(body).map_err(|e| {
+        let snippet: String = body.chars().take(240).collect();
+        format!("{operation} parse failed: {e}. response body starts with: {snippet}")
+    })
+}
 
 fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> MemoryEntry {
     let meta = &item.metadata;
@@ -452,11 +491,13 @@ fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> MemoryEntry {
     let created_at = meta
         .get("created_at")
         .and_then(|v| v.as_str())
+        .or(item.created_at.as_deref())
         .unwrap_or("")
         .to_string();
     let updated_at = meta
         .get("updated_at")
         .and_then(|v| v.as_str())
+        .or(item.updated_at.as_deref())
         .unwrap_or("")
         .to_string();
 
@@ -489,5 +530,59 @@ fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> MemoryEntry {
         source,
         score: item.score,
         metadata: residual_metadata,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cloud_item_to_entry, parse_cloud_response};
+
+    #[test]
+    fn parses_wrapped_cloud_response() {
+        let body = r#"{
+            "results": [
+                {
+                    "id": "mem_1",
+                    "memory": "Wrapped response",
+                    "metadata": {
+                        "memory_type": "project",
+                        "created_at": "2026-04-03T12:00:00Z",
+                        "updated_at": "2026-04-03T12:00:00Z"
+                    }
+                }
+            ]
+        }"#;
+
+        let parsed =
+            parse_cloud_response(body, "search_memories").expect("wrapped response should parse");
+        let results = parsed.into_results();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "mem_1");
+    }
+
+    #[test]
+    fn parses_bare_array_response_and_uses_top_level_timestamps() {
+        let body = r#"[
+            {
+                "id": "mem_2",
+                "memory": "Bare response",
+                "created_at": "2026-04-03T12:00:00Z",
+                "updated_at": "2026-04-03T13:00:00Z",
+                "metadata": {
+                    "memory_type": "reference"
+                }
+            }
+        ]"#;
+
+        let parsed =
+            parse_cloud_response(body, "search_memories").expect("bare response should parse");
+        let results = parsed.into_results();
+        let entry = cloud_item_to_entry(results.into_iter().next().expect("result"), "user_1");
+
+        assert_eq!(entry.text, "Bare response");
+        assert_eq!(entry.created_at, "2026-04-03T12:00:00Z");
+        assert_eq!(entry.updated_at, "2026-04-03T13:00:00Z");
+        assert_eq!(entry.memory_type, "reference");
     }
 }
