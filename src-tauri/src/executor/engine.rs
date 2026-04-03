@@ -229,6 +229,8 @@ pub struct ExecutorEngine {
   log_dir: PathBuf,
   /// Optional memory client for long-term memory integration.
   memory_client: Option<MemoryClient>,
+  /// Optional cloud client for syncing data to Supabase.
+  cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 }
 
 impl ExecutorEngine {
@@ -242,6 +244,7 @@ impl ExecutorEngine {
     permission_registry: PermissionRegistry,
     log_dir: PathBuf,
     memory_client: Option<MemoryClient>,
+    cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
   ) -> Self {
     Self {
       db,
@@ -254,6 +257,7 @@ impl ExecutorEngine {
       registry: ActiveRunRegistry::new(),
       log_dir,
       memory_client,
+      cloud_client,
     }
   }
 
@@ -275,6 +279,7 @@ impl ExecutorEngine {
       let permission_registry = self.permission_registry.clone();
       let tx = self.tx.clone();
       let memory_client = self.memory_client.clone();
+      let cloud_client = self.cloud_client.clone();
 
       match policy.as_str() {
         "skip" => {
@@ -297,6 +302,7 @@ impl ExecutorEngine {
                     session_registry.clone(),
                     permission_registry.clone(),
                     memory_client.clone(),
+                    cloud_client.clone(),
                   ).await
                 {
                   error!("run failed: {}", e);
@@ -357,6 +363,7 @@ impl ExecutorEngine {
                 session_registry.clone(),
                 permission_registry.clone(),
                 memory_client.clone(),
+                cloud_client.clone(),
               ).await
             {
               error!("run failed: {}", e);
@@ -390,6 +397,7 @@ impl ExecutorEngine {
                 session_registry.clone(),
                 permission_registry.clone(),
                 memory_client.clone(),
+                cloud_client.clone(),
               ).await
             {
               error!("run failed: {}", e);
@@ -421,6 +429,7 @@ async fn run_one(
   session_registry: SessionExecutionRegistry,
   permission_registry: PermissionRegistry,
   memory_client: Option<MemoryClient>,
+  cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<(), String> {
   let run_id = req.run_id.clone();
   let task = req.task;
@@ -475,6 +484,7 @@ async fn run_one(
         &session_registry,
         memory_client.as_ref(),
         "default_user",
+        cloud_client.clone(),
       ).await
     }
     "agent_loop" => {
@@ -503,6 +513,7 @@ async fn run_one(
           &permission_registry,
           memory_client.as_ref(),
           "default_user",
+          cloud_client.clone(),
         ).await
       } else {
         agent_loop::run_agent_loop(
@@ -522,6 +533,7 @@ async fn run_one(
           &permission_registry,
           memory_client.as_ref(),
           "default_user",
+          cloud_client.clone(),
         ).await
       }
     }

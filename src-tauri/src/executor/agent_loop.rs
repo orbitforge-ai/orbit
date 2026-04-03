@@ -92,6 +92,7 @@ pub async fn run_agent_loop(
   permission_registry: &PermissionRegistry,
   memory_client: Option<&MemoryClient>,
   memory_user_id: &str,
+  cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -179,6 +180,7 @@ pub async fn run_agent_loop(
     ).with_permission_registry(permission_registry.clone())
      .with_memory_client(memory_client.cloned())
      .with_memory_user_id(memory_user_id.to_string())
+     .with_cloud_client(cloud_client.clone())
   } else {
     ToolExecutionContext::new_with_bus(
       agent_id,
@@ -193,6 +195,7 @@ pub async fn run_agent_loop(
     ).with_permission_registry(permission_registry.clone())
      .with_memory_client(memory_client.cloned())
      .with_memory_user_id(memory_user_id.to_string())
+     .with_cloud_client(cloud_client.clone())
   };
 
   // ── Init conversation ────────────────────────────────────────────────
@@ -551,6 +554,7 @@ pub async fn run_agent_prompt(
   _session_registry: &SessionExecutionRegistry,
   memory_client: Option<&MemoryClient>,
   memory_user_id: &str,
+  _cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -736,6 +740,7 @@ pub async fn run_pulse(
   permission_registry: &PermissionRegistry,
   memory_client: Option<&MemoryClient>,
   memory_user_id: &str,
+  cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<ProcessResult, String> {
   let start = std::time::Instant::now();
   let log = AgentLog::new();
@@ -878,7 +883,8 @@ pub async fn run_pulse(
     session_registry.clone(),
   ).with_permission_registry(permission_registry.clone())
    .with_memory_client(memory_client.cloned())
-   .with_memory_user_id(memory_user_id.to_string());
+   .with_memory_user_id(memory_user_id.to_string())
+   .with_cloud_client(cloud_client.clone());
 
   // ── Run session loop (LLM + tool execution) ─────────────────────────
   let result = session_agent::run_session_loop(

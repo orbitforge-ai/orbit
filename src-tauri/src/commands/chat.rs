@@ -458,6 +458,7 @@ pub async fn send_chat_message(
   permission_registry: tauri::State<'_, PermissionRegistry>,
   memory_state: tauri::State<'_, Option<MemoryServiceState>>,
   auth: tauri::State<'_, AuthState>,
+  cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<String, String> {
   let pool = db.0.clone();
   let stream_id = format!("chat:{}", session_id);
@@ -577,6 +578,7 @@ pub async fn send_chat_message(
   let registry = session_registry.inner().clone();
   let perm_registry = permission_registry.inner().clone();
   let mem_client = memory_state.as_ref().map(|s| s.client.clone());
+  let cloud_client = cloud.get();
 
   tauri::async_runtime::spawn(async move {
     if let Err(e) = do_llm_chat(
@@ -593,6 +595,7 @@ pub async fn send_chat_message(
       perm_registry,
       mem_client.as_ref(),
       &memory_user_id,
+      cloud_client.clone(),
     ).await {
       warn!("Chat LLM error: {}", e);
       // Emit finished with error info
@@ -611,13 +614,18 @@ async fn save_chat_message(
   session_id: &str,
   role: &str,
   content: &[ContentBlock],
+  cloud: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<(), String> {
   let pool = pool.clone();
   let sid = session_id.to_string();
   let role = role.to_string();
   let content_json = serde_json::to_string(content).map_err(|e| e.to_string())?;
 
-  tokio::task::spawn_blocking(move || -> Result<(), String> {
+  let content_json_clone = content_json.clone();
+  let sid_clone = sid.clone();
+  let role_clone = role.clone();
+
+  let (msg_id, now) = tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
     let conn = pool.get().map_err(|e| e.to_string())?;
     let msg_id = Ulid::new().to_string();
     let now = chrono::Utc::now().to_rfc3339();
@@ -633,8 +641,16 @@ async fn save_chat_message(
       rusqlite::params![now, sid],
     ).map_err(|e| e.to_string())?;
 
-    Ok(())
+    Ok((msg_id, now))
   }).await.map_err(|e| e.to_string())??;
+
+  if let Some(client) = cloud {
+    tokio::spawn(async move {
+      if let Err(e) = client.upsert_chat_message(&msg_id, &sid_clone, &role_clone, &content_json_clone, &now).await {
+        warn!("cloud upsert chat_message: {}", e);
+      }
+    });
+  }
 
   Ok(())
 }
@@ -654,6 +670,7 @@ async fn do_llm_chat(
   permission_registry: PermissionRegistry,
   memory_client: Option<&MemoryClient>,
   memory_user_id: &str,
+  cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<(), String> {
   // Load agent config
   let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
@@ -703,7 +720,8 @@ async fn do_llm_chat(
     session_registry,
   ).with_permission_registry(permission_registry.clone())
    .with_memory_client(memory_client.cloned())
-   .with_memory_user_id(memory_user_id.to_string());
+   .with_memory_user_id(memory_user_id.to_string())
+   .with_cloud_client(cloud_client.clone());
   let pool = db.0.clone();
 
   let mut cumulative_input_tokens: u32 = 0;
@@ -737,7 +755,7 @@ async fn do_llm_chat(
     cumulative_output_tokens += response.usage.output_tokens;
 
     // Save assistant response to DB
-    save_chat_message(&pool, session_id, "assistant", &response.content).await?;
+    save_chat_message(&pool, session_id, "assistant", &response.content, cloud_client.clone()).await?;
 
     match response.stop_reason {
       llm_provider::StopReason::EndTurn | llm_provider::StopReason::MaxTokens => {
@@ -797,7 +815,7 @@ async fn do_llm_chat(
         }
 
         // Save tool results to DB and add to conversation
-        save_chat_message(&pool, session_id, "user", &tool_results).await?;
+        save_chat_message(&pool, session_id, "user", &tool_results, cloud_client.clone()).await?;
 
         messages.push(ChatMessage {
           role: "user".to_string(),

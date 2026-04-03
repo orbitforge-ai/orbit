@@ -135,6 +135,7 @@ pub fn run() {
         permission_registry.clone(),
         log_dir.clone(),
         memory_client,
+        cloud_client_opt.clone(),
       );
       tauri::async_runtime::spawn(async move { engine.run().await });
 

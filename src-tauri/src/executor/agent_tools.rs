@@ -52,6 +52,8 @@ pub struct ToolExecutionContext {
   pub memory_client: Option<MemoryClient>,
   /// User ID used for scoping memory operations (Supabase user_id when cloud, else "default_user").
   pub memory_user_id: String,
+  /// Optional cloud client for syncing data to Supabase.
+  pub cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 }
 
 impl ToolExecutionContext {
@@ -88,6 +90,7 @@ impl ToolExecutionContext {
       permission_registry: None,
       memory_client: None,
       memory_user_id: "default_user".to_string(),
+      cloud_client: None,
     }
   }
 
@@ -106,6 +109,12 @@ impl ToolExecutionContext {
   /// Set the user ID for memory scoping (builder pattern).
   pub fn with_memory_user_id(mut self, user_id: String) -> Self {
     self.memory_user_id = user_id;
+    self
+  }
+
+  /// Set the cloud client for syncing (builder pattern).
+  pub fn with_cloud_client(mut self, client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>) -> Self {
+    self.cloud_client = client;
     self
   }
 
@@ -681,6 +690,7 @@ pub async fn execute_tool(
       let perm_registry = ctx.permission_registry.clone().unwrap_or_else(PermissionRegistry::new);
       let mem_client = ctx.memory_client.clone();
       let mem_user_id = ctx.memory_user_id.clone();
+      let cloud_cl = ctx.cloud_client.clone();
       let target_agent_id = to_agent_id.clone();
       let target_session_id = new_session_id.clone();
       tokio::task::spawn_blocking(move || {
@@ -698,6 +708,7 @@ pub async fn execute_tool(
             &perm_registry,
             mem_client.as_ref(),
             &mem_user_id,
+            cloud_cl,
           ).await {
             warn!(session_id = %target_session_id, "send_message session failed: {}", e);
           }
@@ -871,6 +882,7 @@ pub async fn execute_tool(
         let perm_registry = ctx.permission_registry.clone().unwrap_or_else(PermissionRegistry::new);
         let mem_client = ctx.memory_client.clone();
         let mem_user_id = ctx.memory_user_id.clone();
+        let cloud_cl = ctx.cloud_client.clone();
         let sub_agent_id = agent_id.to_string();
         let sub_session_id = st.session_id.clone();
         tokio::task::spawn_blocking(move || {
@@ -888,6 +900,7 @@ pub async fn execute_tool(
               &perm_registry,
               mem_client.as_ref(),
               &mem_user_id,
+              cloud_cl,
             ).await {
               warn!(session_id = %sub_session_id, "sub-agent session failed: {}", e);
             }

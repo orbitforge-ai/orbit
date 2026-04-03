@@ -206,6 +206,7 @@ impl SupabaseClient {
                 "tags": t.tags,
                 "agent_id": t.agent_id,
                 "enabled": t.enabled,
+                "project_id": t.project_id,
                 "created_at": t.created_at,
                 "updated_at": t.updated_at,
             }),
@@ -255,6 +256,7 @@ impl SupabaseClient {
                 "execution_state": cs.execution_state,
                 "finish_summary": cs.finish_summary,
                 "terminal_error": cs.terminal_error,
+                "project_id": cs.project_id,
                 "created_at": cs.created_at,
                 "updated_at": cs.updated_at,
             }),
@@ -299,6 +301,71 @@ impl SupabaseClient {
         .await
     }
 
+    pub async fn upsert_project_agent(
+        &self,
+        pa: &crate::models::project::ProjectAgent,
+    ) -> Result<(), String> {
+        self.upsert_single(
+            "project_agents",
+            serde_json::json!({
+                "user_id": self.user_id,
+                "project_id": pa.project_id,
+                "agent_id": pa.agent_id,
+                "is_default": pa.is_default,
+                "added_at": pa.added_at,
+            }),
+        )
+        .await
+    }
+
+    pub async fn delete_project_agent(
+        &self,
+        project_id: &str,
+        agent_id: &str,
+    ) -> Result<(), String> {
+        let url = format!(
+            "{}/rest/v1/project_agents?project_id=eq.{}&agent_id=eq.{}",
+            self.base_url, project_id, agent_id
+        );
+        let resp = self
+            .http
+            .delete(&url)
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", self.token()))
+            .send()
+            .await
+            .map_err(|e| format!("DELETE project_agents: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("DELETE project_agents {status}: {text}"));
+        }
+        Ok(())
+    }
+
+    pub async fn upsert_chat_message(
+        &self,
+        id: &str,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        created_at: &str,
+    ) -> Result<(), String> {
+        self.upsert_single(
+            "chat_messages",
+            serde_json::json!({
+                "user_id": self.user_id,
+                "id": id,
+                "session_id": session_id,
+                "role": role,
+                "content": content,
+                "created_at": created_at,
+            }),
+        )
+        .await
+    }
+
     // -----------------------------------------------------------------------
     // Full bi-directional sync (called on login)
     // -----------------------------------------------------------------------
@@ -334,6 +401,19 @@ impl SupabaseClient {
 
         let (agents, tasks, scheds, runs, convos, sessions, msgs, summaries, bus_msgs, bus_subs, users, mem_log) = rows;
 
+        // Read project tables separately to keep tuple sizes manageable
+        let user_id2 = self.user_id.clone();
+        let p2 = pool.clone();
+        let (projects, project_agents) = tokio::task::spawn_blocking(move || {
+            let conn = p2.get().map_err(|e| e.to_string())?;
+            Ok::<_, String>((
+                read_projects(&conn, &user_id2)?,
+                read_project_agents(&conn, &user_id2)?,
+            ))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+
         // Batch upsert each table; log failures but don't abort
         macro_rules! push {
             ($table:expr, $data:expr) => {
@@ -354,6 +434,8 @@ impl SupabaseClient {
         push!("bus_subscriptions", bus_subs);
         push!("users", users);
         push!("memory_extraction_log", mem_log);
+        push!("projects", projects);
+        push!("project_agents", project_agents);
 
         info!("Pushed local data to Supabase");
         Ok(())
@@ -386,6 +468,8 @@ impl SupabaseClient {
         let bus_subs = fetch!("bus_subscriptions");
         let users = fetch!("users");
         let mem_log = fetch!("memory_extraction_log");
+        let projects = fetch!("projects");
+        let project_agents = fetch!("project_agents");
 
         let p = pool.clone();
         tokio::task::spawn_blocking(move || {
@@ -402,6 +486,8 @@ impl SupabaseClient {
             write_bus_subscriptions(&conn, bus_subs)?;
             write_users(&conn, users)?;
             write_memory_extraction_log(&conn, mem_log)?;
+            write_projects(&conn, projects)?;
+            write_project_agents(&conn, project_agents)?;
             Ok::<(), String>(())
         })
         .await
@@ -479,7 +565,7 @@ fn read_tasks(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, 
         .prepare(
             "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
                     retry_delay_seconds, concurrency_policy, tags, agent_id, enabled,
-                    created_at, updated_at FROM tasks",
+                    created_at, updated_at, project_id FROM tasks",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -503,6 +589,7 @@ fn read_tasks(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, 
                 "enabled": enabled,
                 "created_at": row.get::<_, String>(12)?,
                 "updated_at": row.get::<_, String>(13)?,
+                "project_id": row.get::<_, Option<String>>(14)?,
             }))
         })
         .map_err(|e| e.to_string())?
@@ -547,7 +634,7 @@ fn read_runs(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, S
             "SELECT id, task_id, schedule_id, agent_id, state, trigger, exit_code, pid,
                     log_path, started_at, finished_at, duration_ms, retry_count,
                     parent_run_id, metadata, chain_depth, source_bus_message_id,
-                    is_sub_agent, created_at FROM runs",
+                    is_sub_agent, created_at, project_id FROM runs",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -575,6 +662,7 @@ fn read_runs(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, S
                 "source_bus_message_id": row.get::<_, Option<String>>(16)?,
                 "is_sub_agent": is_sub_agent,
                 "created_at": row.get::<_, String>(18)?,
+                "project_id": row.get::<_, Option<String>>(19)?,
             }))
         })
         .map_err(|e| e.to_string())?
@@ -622,7 +710,7 @@ fn read_chat_sessions(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<
             "SELECT id, agent_id, title, archived, last_input_tokens, session_type,
                     parent_session_id, source_bus_message_id, chain_depth,
                     execution_state, finish_summary, terminal_error,
-                    created_at, updated_at FROM chat_sessions",
+                    created_at, updated_at, project_id FROM chat_sessions",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -644,6 +732,7 @@ fn read_chat_sessions(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<
                 "terminal_error": row.get::<_, Option<String>>(11)?,
                 "created_at": row.get::<_, String>(12)?,
                 "updated_at": row.get::<_, String>(13)?,
+                "project_id": row.get::<_, Option<String>>(14)?,
             }))
         })
         .map_err(|e| e.to_string())?
@@ -827,6 +916,48 @@ fn read_memory_extraction_log(
     Ok(rows)
 }
 
+fn read_projects(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, name, description, created_at, updated_at FROM projects")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(serde_json::json!({
+                "user_id": user_id,
+                "id": row.get::<_, String>(0)?,
+                "name": row.get::<_, String>(1)?,
+                "description": row.get::<_, Option<String>>(2)?,
+                "created_at": row.get::<_, String>(3)?,
+                "updated_at": row.get::<_, String>(4)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
+fn read_project_agents(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, String> {
+    let mut stmt = conn
+        .prepare("SELECT project_id, agent_id, is_default, added_at FROM project_agents")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            let is_default: bool = row.get(2)?;
+            Ok(serde_json::json!({
+                "user_id": user_id,
+                "project_id": row.get::<_, String>(0)?,
+                "agent_id": row.get::<_, String>(1)?,
+                "is_default": is_default,
+                "added_at": row.get::<_, String>(3)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
 // ---------------------------------------------------------------------------
 // Supabase → SQLite (pull): write cloud rows into local tables
 // ---------------------------------------------------------------------------
@@ -885,8 +1016,8 @@ fn write_tasks(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), Stri
             "INSERT OR REPLACE INTO tasks
              (id, name, description, kind, config, max_duration_seconds, max_retries,
               retry_delay_seconds, concurrency_policy, tags, agent_id, enabled,
-              created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+              created_at, updated_at, project_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "name"),
@@ -902,6 +1033,7 @@ fn write_tasks(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), Stri
                 bool_val(&r, "enabled"),
                 str_val(&r, "created_at"),
                 str_val(&r, "updated_at"),
+                opt_str(&r, "project_id"),
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -940,8 +1072,8 @@ fn write_runs(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), Strin
              (id, task_id, schedule_id, agent_id, state, trigger, exit_code, pid,
               log_path, started_at, finished_at, duration_ms, retry_count,
               parent_run_id, metadata, chain_depth, source_bus_message_id,
-              is_sub_agent, created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+              is_sub_agent, created_at, project_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "task_id"),
@@ -962,6 +1094,7 @@ fn write_runs(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), Strin
                 opt_str(&r, "source_bus_message_id"),
                 bool_val(&r, "is_sub_agent"),
                 str_val(&r, "created_at"),
+                opt_str(&r, "project_id"),
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -1003,8 +1136,8 @@ fn write_chat_sessions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<
              (id, agent_id, title, archived, last_input_tokens, session_type,
               parent_session_id, source_bus_message_id, chain_depth,
               execution_state, finish_summary, terminal_error,
-              created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+              created_at, updated_at, project_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "agent_id"),
@@ -1020,6 +1153,7 @@ fn write_chat_sessions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<
                 opt_str(&r, "terminal_error"),
                 str_val(&r, "created_at"),
                 str_val(&r, "updated_at"),
+                opt_str(&r, "project_id"),
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -1159,6 +1293,41 @@ fn write_memory_extraction_log(
                 int_val(&r, "memories_extracted", 0),
                 str_val(&r, "status"),
                 str_val(&r, "created_at"),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn write_projects(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+    for r in rows {
+        conn.execute(
+            "INSERT OR REPLACE INTO projects (id, name, description, created_at, updated_at)
+             VALUES (?1,?2,?3,?4,?5)",
+            rusqlite::params![
+                str_val(&r, "id"),
+                str_val(&r, "name"),
+                opt_str(&r, "description"),
+                str_val(&r, "created_at"),
+                str_val(&r, "updated_at"),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn write_project_agents(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+    for r in rows {
+        conn.execute(
+            "INSERT OR REPLACE INTO project_agents (project_id, agent_id, is_default, added_at)
+             VALUES (?1,?2,?3,?4)",
+            rusqlite::params![
+                str_val(&r, "project_id"),
+                str_val(&r, "agent_id"),
+                bool_val(&r, "is_default"),
+                str_val(&r, "added_at"),
             ],
         )
         .map_err(|e| e.to_string())?;

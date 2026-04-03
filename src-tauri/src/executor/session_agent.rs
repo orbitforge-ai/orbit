@@ -39,6 +39,7 @@ pub async fn run_agent_session(
   permission_registry: &PermissionRegistry,
   memory_client: Option<&MemoryClient>,
   memory_user_id: &str,
+  cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<String, String> {
   let stream_id = format!("chat:{}", session_id);
   let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
@@ -108,6 +109,7 @@ pub async fn run_agent_session(
     ).with_permission_registry(permission_registry.clone())
      .with_memory_client(memory_client.cloned())
      .with_memory_user_id(memory_user_id.to_string())
+     .with_cloud_client(cloud_client.clone())
   } else {
     ToolExecutionContext::new_with_bus(
       agent_id,
@@ -122,6 +124,7 @@ pub async fn run_agent_session(
     ).with_permission_registry(permission_registry.clone())
      .with_memory_client(memory_client.cloned())
      .with_memory_user_id(memory_user_id.to_string())
+     .with_cloud_client(cloud_client.clone())
   };
 
   let result = run_session_loop(
@@ -193,7 +196,7 @@ pub async fn run_session_loop(
       if let Some(summary) = extract_text_summary(&response.content) {
         finish_summary = Some(summary);
       }
-      save_chat_message(&db.0, session_id, "assistant", &response.content).await?;
+      save_chat_message(&db.0, session_id, "assistant", &response.content, tool_ctx.cloud_client.clone()).await?;
       break;
     }
 
@@ -213,7 +216,7 @@ pub async fn run_session_loop(
       return Err("cancelled".to_string());
     }
 
-    save_chat_message(&db.0, session_id, "assistant", &response.content).await?;
+    save_chat_message(&db.0, session_id, "assistant", &response.content, tool_ctx.cloud_client.clone()).await?;
 
     match response.stop_reason {
       llm_provider::StopReason::EndTurn => {
@@ -282,7 +285,7 @@ pub async fn run_session_loop(
         }
 
         if !tool_results.is_empty() {
-          save_chat_message(&db.0, session_id, "user", &tool_results).await?;
+          save_chat_message(&db.0, session_id, "user", &tool_results, tool_ctx.cloud_client.clone()).await?;
           messages.push(ChatMessage {
             role: "user".to_string(),
             content: tool_results,
@@ -308,7 +311,7 @@ pub async fn run_session_loop(
         }
 
         if !tool_error_results.is_empty() {
-          save_chat_message(&db.0, session_id, "user", &tool_error_results).await?;
+          save_chat_message(&db.0, session_id, "user", &tool_error_results, tool_ctx.cloud_client.clone()).await?;
           messages.push(ChatMessage {
             role: "user".to_string(),
             content: tool_error_results,
@@ -390,13 +393,18 @@ pub async fn save_chat_message(
   session_id: &str,
   role: &str,
   content: &[ContentBlock],
+  cloud: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<(), String> {
   let pool = pool.clone();
   let sid = session_id.to_string();
   let role = role.to_string();
   let content_json = serde_json::to_string(content).map_err(|e| e.to_string())?;
 
-  tokio::task::spawn_blocking(move || -> Result<(), String> {
+  let content_json_clone = content_json.clone();
+  let sid_clone = sid.clone();
+  let role_clone = role.clone();
+
+  let (msg_id, now) = tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
     let conn = pool.get().map_err(|e| e.to_string())?;
     let msg_id = ulid::Ulid::new().to_string();
     let now = chrono::Utc::now().to_rfc3339();
@@ -412,8 +420,16 @@ pub async fn save_chat_message(
       rusqlite::params![now, sid],
     ).map_err(|e| e.to_string())?;
 
-    Ok(())
+    Ok((msg_id, now))
   }).await.map_err(|e| e.to_string())??;
+
+  if let Some(client) = cloud {
+    tokio::spawn(async move {
+      if let Err(e) = client.upsert_chat_message(&msg_id, &sid_clone, &role_clone, &content_json_clone, &now).await {
+        warn!("cloud upsert chat_message: {}", e);
+      }
+    });
+  }
 
   Ok(())
 }

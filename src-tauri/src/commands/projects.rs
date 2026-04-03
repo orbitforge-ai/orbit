@@ -276,9 +276,10 @@ pub async fn add_agent_to_project(
     agent_id: String,
     is_default: bool,
     db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<ProjectAgent, String> {
     let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
+    let pa = tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
@@ -287,10 +288,20 @@ pub async fn add_agent_to_project(
             rusqlite::params![project_id, agent_id, is_default as i64, now],
         )
         .map_err(|e| e.to_string())?;
-        Ok(ProjectAgent { project_id, agent_id, is_default, added_at: now })
+        Ok::<ProjectAgent, String>(ProjectAgent { project_id, agent_id, is_default, added_at: now })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    if let Some(client) = cloud.get() {
+        let pa_clone = pa.clone();
+        tokio::spawn(async move {
+            if let Err(e) = client.upsert_project_agent(&pa_clone).await {
+                tracing::warn!("cloud upsert project_agent: {}", e);
+            }
+        });
+    }
+    Ok(pa)
 }
 
 #[tauri::command]
@@ -298,8 +309,11 @@ pub async fn remove_agent_from_project(
     project_id: String,
     agent_id: String,
     db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
     let pool = db.0.clone();
+    let pid = project_id.clone();
+    let aid = agent_id.clone();
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.execute(
@@ -307,10 +321,19 @@ pub async fn remove_agent_from_project(
             rusqlite::params![project_id, agent_id],
         )
         .map_err(|e| e.to_string())?;
-        Ok(())
+        Ok::<(), String>(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    if let Some(client) = cloud.get() {
+        tokio::spawn(async move {
+            if let Err(e) = client.delete_project_agent(&pid, &aid).await {
+                tracing::warn!("cloud delete project_agent: {}", e);
+            }
+        });
+    }
+    Ok(())
 }
 
 // ─── Project Workspace File Operations ───────────────────────────────────────
