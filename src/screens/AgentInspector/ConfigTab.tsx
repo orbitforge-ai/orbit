@@ -70,11 +70,6 @@ const TOOL_CATEGORIES = [
 
 const ALL_TOOL_IDS = TOOL_CATEGORIES.flatMap((c) => c.tools.map((t) => t.id));
 
-const SEARCH_PROVIDERS = [
-  { value: 'brave', label: 'Brave Search' },
-  { value: 'tavily', label: 'Tavily' },
-];
-
 const MODEL_OPTIONS: Record<string, { label: string; value: string }[]> = {
   anthropic: [
     { label: 'Claude Opus 4.6', value: 'claude-opus-4-20250415' },
@@ -388,33 +383,6 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
         showPreview
       />
 
-      {/* Role */}
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h4 className="text-sm font-semibold text-white">Role</h4>
-            <p className="text-xs text-muted mt-1">
-              Pre-configures tools and injects role-specific instructions into the system prompt.
-            </p>
-          </div>
-          {isRoleDefaultsDirty() && (
-            <button
-              onClick={() => {
-                if (!config.roleId) return;
-                updateConfig({
-                  allowedTools: getRoleDefaultTools(config.roleId),
-                  roleSystemInstructions: getRoleSystemInstructions(config.roleId),
-                });
-              }}
-              className="shrink-0 px-2.5 py-1 rounded-lg border border-edge text-xs text-muted hover:text-white hover:border-edge-hover transition-colors"
-            >
-              Reset to defaults
-            </button>
-          )}
-        </div>
-        <RoleSelector selected={config.roleId} onSelect={handleRoleChange} mode="compact" />
-      </section>
-
       {/* Behavior / Temperature */}
       <section className="space-y-3">
         <div>
@@ -451,22 +419,6 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
               </button>
             );
           })}
-          <div className="flex flex-col items-center gap-1">
-            <label className="text-[11px] text-muted">Custom</label>
-            <input
-              type="number"
-              min={0}
-              max={2}
-              step={0.05}
-              value={config.temperature}
-              onChange={(e) => {
-                const v = parseFloat(e.target.value);
-                if (!isNaN(v) && v >= 0 && v <= 2) updateConfig({ temperature: v });
-              }}
-              className="w-16 px-2 py-1.5 rounded-lg bg-background border border-edge text-white text-sm font-mono text-center focus:outline-none focus:border-accent"
-            />
-            <span className="text-[10px] text-muted">0 – 2</span>
-          </div>
         </div>
       </section>
 
@@ -562,48 +514,6 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
             </div>
           </div>
 
-          {/* Web Search */}
-          <div className="space-y-3">
-            <h5 className="text-xs font-semibold text-secondary uppercase tracking-wide">
-              Web Search
-            </h5>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs text-muted mb-1 block">Provider</label>
-                <Select.Root
-                  value={config.webSearchProvider}
-                  onValueChange={(value) => updateConfig({ webSearchProvider: value })}
-                >
-                  <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent">
-                    <Select.Value />
-                    <Select.Icon>
-                      <ChevronDown size={14} className="text-muted" />
-                    </Select.Icon>
-                  </Select.Trigger>
-                  <Select.Portal>
-                    <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
-                      <Select.Viewport className="p-1">
-                        {SEARCH_PROVIDERS.map((p) => (
-                          <Select.Item
-                            key={p.value}
-                            value={p.value}
-                            className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
-                          >
-                            <Select.ItemText>{p.label}</Select.ItemText>
-                          </Select.Item>
-                        ))}
-                      </Select.Viewport>
-                    </Select.Content>
-                  </Select.Portal>
-                </Select.Root>
-              </div>
-              <div>
-                <label className="text-xs text-muted mb-1 block">API Key</label>
-                <SearchKeyStatus provider={config.webSearchProvider} />
-              </div>
-            </div>
-          </div>
-
           {/* Allowed Tools */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
@@ -657,10 +567,7 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
       </CollapsibleSection>
 
       {/* Memory — collapsed by default */}
-      <CollapsibleSection
-        title="Memory"
-        description="Long-term memory across sessions"
-      >
+      <CollapsibleSection title="Memory" description="Long-term memory across sessions">
         <div className="space-y-4">
           {/* Enable / disable */}
           <div className="flex items-center justify-between">
@@ -830,10 +737,7 @@ function AgentProjectsSection({ agentId }: { agentId: string }) {
   }
 
   return (
-    <CollapsibleSection
-      title="Projects"
-      description="Projects this agent is assigned to"
-    >
+    <CollapsibleSection title="Projects" description="Projects this agent is assigned to">
       <div className="space-y-3">
         {agentProjects.length === 0 ? (
           <p className="text-xs text-muted italic">Not assigned to any projects.</p>
@@ -902,83 +806,5 @@ function AgentProjectsSection({ agentId }: { agentId: string }) {
         )}
       </div>
     </CollapsibleSection>
-  );
-}
-
-function SearchKeyStatus({ provider }: { provider: string }) {
-  const [hasKey, setHasKey] = useState(false);
-  const [keyInput, setKeyInput] = useState('');
-  const [showInput, setShowInput] = useState(false);
-
-  useEffect(() => {
-    llmApi
-      .hasApiKey(provider)
-      .then(setHasKey)
-      .catch(() => setHasKey(false));
-  }, [provider]);
-
-  async function handleSet() {
-    if (!keyInput.trim()) return;
-    try {
-      await llmApi.setApiKey(provider, keyInput.trim());
-      setHasKey(true);
-      setKeyInput('');
-      setShowInput(false);
-    } catch (err) {
-      console.error('Failed to set search API key:', err);
-    }
-  }
-
-  if (hasKey) {
-    return (
-      <div className="flex items-center gap-2 h-[38px]">
-        <Check size={14} className="text-emerald-400" />
-        <span className="text-sm text-emerald-400">Configured</span>
-        <button
-          onClick={async () => {
-            await llmApi.deleteApiKey(provider);
-            setHasKey(false);
-          }}
-          className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-xs text-red-400 hover:bg-red-500/10"
-        >
-          <Trash2 size={11} /> Remove
-        </button>
-      </div>
-    );
-  }
-
-  if (showInput) {
-    return (
-      <div className="flex gap-2">
-        <input
-          type="password"
-          placeholder={`${provider} API key...`}
-          value={keyInput}
-          onChange={(e) => setKeyInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleSet()}
-          autoFocus
-          className="flex-1 px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm font-mono focus:outline-none focus:border-accent"
-        />
-        <button
-          onClick={handleSet}
-          className="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium"
-        >
-          Save
-        </button>
-        <button onClick={() => setShowInput(false)} className="px-2 py-1.5 text-muted text-xs">
-          Cancel
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <button
-      onClick={() => setShowInput(true)}
-      className="flex items-center gap-2 w-full px-3 py-2 rounded-lg border border-dashed border-edge-hover text-secondary hover:text-white hover:border-accent text-sm transition-colors"
-    >
-      <Key size={14} />
-      Set {provider} API key
-    </button>
   );
 }

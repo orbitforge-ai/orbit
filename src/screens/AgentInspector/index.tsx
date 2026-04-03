@@ -12,6 +12,7 @@ import {
   Clock,
   FolderOpen,
   GitBranch,
+  Globe,
   History,
   MessageSquare,
   Play,
@@ -36,7 +37,14 @@ import {
   useChatDraftStore,
 } from '../../store/chatDraftStore';
 import { useUiStore } from '../../store/uiStore';
-import { Agent, ChatSession, ContentBlock, CreateAgent, RunSummary } from '../../types';
+import {
+  Agent,
+  AgentWorkspaceConfig,
+  ChatSession,
+  ContentBlock,
+  CreateAgent,
+  RunSummary,
+} from '../../types';
 import { WorkspaceTab } from './WorkspaceTab';
 import { ConfigTab } from './ConfigTab';
 import { SchedulesTab } from './SchedulesTab';
@@ -57,6 +65,24 @@ import {
 } from '../../lib/agentRoles';
 import { SessionList } from '../Chat/SessionList';
 import { ChatPanel } from '../Chat/ChatPanel';
+import { WebSearchChip } from './Header/WebSearchChip';
+import { AgentRoleSelect } from './Header/AgentRoleSelect';
+
+// Mirrors ConfigTab.tsx TOOL_CATEGORIES — keep in sync if tools change
+const ALL_TOOL_IDS = [
+  'read_file',
+  'write_file',
+  'list_files',
+  'shell_command',
+  'send_message',
+  'web_search',
+  'spawn_sub_agents',
+  'activate_skill',
+  'remember',
+  'search_memory',
+  'forget',
+  'list_memories',
+];
 
 type ActivityItem =
   | { key: string; kind: 'session'; timestamp: number; session: ChatSession }
@@ -308,6 +334,29 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
     queryClient.invalidateQueries({ queryKey: ['agent-config', agentId] });
   }
 
+  async function handleWebSearchToggle() {
+    if (!agentConfig) return;
+    const isEnabled =
+      agentConfig.allowedTools.length === 0 || agentConfig.allowedTools.includes('web_search');
+    let updatedTools: string[];
+    if (isEnabled) {
+      const current =
+        agentConfig.allowedTools.length === 0 ? [...ALL_TOOL_IDS] : agentConfig.allowedTools;
+      updatedTools = current.filter((t) => t !== 'web_search');
+    } else {
+      updatedTools =
+        agentConfig.allowedTools.length === 0 ? [] : [...agentConfig.allowedTools, 'web_search'];
+    }
+    await workspaceApi.updateConfig(agentId, { ...agentConfig, allowedTools: updatedTools });
+    queryClient.invalidateQueries({ queryKey: ['agent-config', agentId] });
+  }
+
+  async function handleWebSearchProviderChange(provider: string) {
+    if (!agentConfig) return;
+    await workspaceApi.updateConfig(agentId, { ...agentConfig, webSearchProvider: provider });
+    queryClient.invalidateQueries({ queryKey: ['agent-config', agentId] });
+  }
+
   function handleDirtyChange(tab: string, isDirty: boolean) {
     setDirtyTabs((prev) => ({ ...prev, [tab]: isDirty }));
   }
@@ -448,7 +497,10 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
               const AgentIcon = ROLE_ICON_MAP[role.icon] ?? Bot;
               return (
                 <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent/20">
-                  <AgentIcon size={18} className={agentConfig?.roleId ? role.color : 'text-accent-hover'} />
+                  <AgentIcon
+                    size={18}
+                    className={agentConfig?.roleId ? role.color : 'text-accent-hover'}
+                  />
                 </div>
               );
             })()}
@@ -471,48 +523,20 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
                 />
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
-                {(() => {
-                  const currentRole = resolveRole(agentConfig?.roleId);
-                  const CurrentRoleIcon = ROLE_ICON_MAP[currentRole.icon] ?? Bot;
-                  const isDefault = !agentConfig?.roleId || agentConfig.roleId === DEFAULT_ROLE_ID;
-                  return (
-                    <DropdownMenu.Root>
-                      <DropdownMenu.Trigger asChild>
-                        <button className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors hover:border-edge-hover hover:bg-surface/60 ${isDefault ? 'border-edge bg-surface text-muted' : `border-edge bg-surface ${currentRole.color}`}`}>
-                          <CurrentRoleIcon size={10} />
-                          {currentRole.label}
-                          <ChevronDown size={9} className="opacity-60" />
-                        </button>
-                      </DropdownMenu.Trigger>
-                      <DropdownMenu.Portal>
-                        <DropdownMenu.Content
-                          align="start"
-                          sideOffset={6}
-                          className="z-50 w-56 rounded-xl border border-edge bg-surface p-1.5 shadow-xl"
-                        >
-                          <p className="px-2 py-1 text-[10px] uppercase tracking-wide text-muted">Role</p>
-                          {AGENT_ROLES.map((role) => {
-                            const Icon = ROLE_ICON_MAP[role.icon] ?? Bot;
-                            const active = (agentConfig?.roleId ?? DEFAULT_ROLE_ID) === role.roleId;
-                            return (
-                              <DropdownMenu.Item
-                                key={role.roleId}
-                                onSelect={() => handleRoleChange(role.roleId)}
-                                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10"
-                              >
-                                <Icon size={14} className={active ? 'text-accent-light' : role.color} />
-                                <span className={`flex-1 ${active ? 'text-accent-light font-medium' : 'text-white'}`}>
-                                  {role.label}
-                                </span>
-                                {active && <Check size={12} className="text-accent-light" />}
-                              </DropdownMenu.Item>
-                            );
-                          })}
-                        </DropdownMenu.Content>
-                      </DropdownMenu.Portal>
-                    </DropdownMenu.Root>
-                  );
-                })()}
+                {agentConfig && (
+                  <>
+                    <AgentRoleSelect
+                      agentConfig={agentConfig}
+                      handleRoleChange={handleRoleChange}
+                    />
+                    <WebSearchChip
+                      allowedTools={agentConfig.allowedTools}
+                      webSearchProvider={agentConfig.webSearchProvider}
+                      onToggle={handleWebSearchToggle}
+                      onProviderChange={handleWebSearchProviderChange}
+                    />
+                  </>
+                )}
                 <HeaderStatChip
                   label="Active"
                   value={activeRuns.length.toString()}
@@ -796,36 +820,36 @@ function ChatWorkspace({
           </div>
         )}
         <div className="flex-1 min-h-0 relative">
-        {draftSession && activeSessionId === draftSession.id ? (
-          <ChatPanel
-            draft={{
-              id: draftSession.id,
-              agentId,
-              text: draftText,
-              createdAt: draftSession.createdAt,
-              updatedAt: draftSession.updatedAt,
-            }}
-            onDraftTextChange={onDraftTextChange}
-            onDraftSend={onDraftSend}
-            agentIdentity={agentConfig?.identity}
-          />
-        ) : activeSessionId && !isDraftSessionId(activeSessionId) ? (
-          <ChatPanel
-            sessionId={activeSessionId}
-            initialQueuedMessage={
-              initialQueuedMessage?.sessionId === activeSessionId
-                ? { key: initialQueuedMessage.key, content: initialQueuedMessage.content }
-                : null
-            }
-            onInitialMessageHandled={onInitialMessageHandled}
-            onInitialMessageFailed={onInitialMessageFailed}
-            agentIdentity={agentConfig?.identity}
-          />
-        ) : (
-          <div className="flex h-full items-center justify-center text-sm text-muted">
-            Select or start a chat
-          </div>
-        )}
+          {draftSession && activeSessionId === draftSession.id ? (
+            <ChatPanel
+              draft={{
+                id: draftSession.id,
+                agentId,
+                text: draftText,
+                createdAt: draftSession.createdAt,
+                updatedAt: draftSession.updatedAt,
+              }}
+              onDraftTextChange={onDraftTextChange}
+              onDraftSend={onDraftSend}
+              agentIdentity={agentConfig?.identity}
+            />
+          ) : activeSessionId && !isDraftSessionId(activeSessionId) ? (
+            <ChatPanel
+              sessionId={activeSessionId}
+              initialQueuedMessage={
+                initialQueuedMessage?.sessionId === activeSessionId
+                  ? { key: initialQueuedMessage.key, content: initialQueuedMessage.content }
+                  : null
+              }
+              onInitialMessageHandled={onInitialMessageHandled}
+              onInitialMessageFailed={onInitialMessageFailed}
+              agentIdentity={agentConfig?.identity}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center text-sm text-muted">
+              Select or start a chat
+            </div>
+          )}
         </div>
       </div>
     </div>
