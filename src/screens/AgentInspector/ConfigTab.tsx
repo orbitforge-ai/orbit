@@ -1,24 +1,24 @@
 import { useEffect, useState, useImperativeHandle, forwardRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Key, Trash2, Check, ChevronDown, FolderOpen, X } from 'lucide-react';
+import { Check, ChevronDown, FolderOpen, X, ExternalLink, AlertTriangle, Trash2 } from 'lucide-react';
 import * as Select from '@radix-ui/react-select';
 import * as Slider from '@radix-ui/react-slider';
 import * as Switch from '@radix-ui/react-switch';
 
 import { workspaceApi } from '../../api/workspace';
-import { llmApi } from '../../api/llm';
 import { permissionsApi } from '../../api/permissions';
 import { projectsApi } from '../../api/projects';
 import { AgentWorkspaceConfig, Project } from '../../types';
-import { confirm } from '@tauri-apps/plugin-dialog';
 import { CollapsibleSection } from '../../components/CollapsibleSection';
 import { AgentIdentitySection } from './AgentIdentitySection';
-import { RoleSelector } from './RoleSelector';
 import {
   getRoleDefaultTools,
   getRoleSystemInstructions,
   DEFAULT_ROLE_ID,
 } from '../../lib/agentRoles';
+import { MODEL_OPTIONS, LLM_PROVIDERS, DEFAULT_MODEL_BY_PROVIDER } from '../../constants/providers';
+import { useApiKeyStatus } from '../../hooks/useApiKeyStatus';
+import { useUiStore } from '../../store/uiStore';
 
 const PERMISSION_MODES = [
   { value: 'normal', label: 'Normal', description: 'Prompt for writes/exec, auto-allow reads' },
@@ -70,19 +70,6 @@ const TOOL_CATEGORIES = [
 
 const ALL_TOOL_IDS = TOOL_CATEGORIES.flatMap((c) => c.tools.map((t) => t.id));
 
-const MODEL_OPTIONS: Record<string, { label: string; value: string }[]> = {
-  anthropic: [
-    { label: 'Claude Opus 4.6', value: 'claude-opus-4-20250415' },
-    { label: 'Claude Sonnet 4.6', value: 'claude-sonnet-4-20250514' },
-    { label: 'Claude Haiku 3.5', value: 'claude-haiku-4-5-20251001' },
-  ],
-  minimax: [
-    { label: 'MiniMax M2.7', value: 'MiniMax-M2.7' },
-    { label: 'MiniMax M2.7 Highspeed', value: 'MiniMax-M2.7-highspeed' },
-    { label: 'MiniMax M2.5', value: 'MiniMax-M2.5' },
-    { label: 'MiniMax M2.5 Highspeed', value: 'MiniMax-M2.5-highspeed' },
-  ],
-};
 
 interface ConfigTabProps {
   agentId: string;
@@ -122,10 +109,7 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
     markDirty();
   }
 
-  // API key state
-  const [hasKey, setHasKey] = useState(false);
-  const [keyInput, setKeyInput] = useState('');
-  const [showKeyInput, setShowKeyInput] = useState(false);
+  const { navigate } = useUiStore();
 
   const { data: loadedConfig } = useQuery({
     queryKey: ['agent-config', agentId],
@@ -135,13 +119,10 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
   useEffect(() => {
     if (loadedConfig) {
       setConfig(loadedConfig);
-      // Check API key status for the provider
-      llmApi
-        .hasApiKey(loadedConfig.provider)
-        .then(setHasKey)
-        .catch(() => setHasKey(false));
     }
   }, [loadedConfig]);
+
+  const { data: hasKey = false } = useApiKeyStatus(config?.provider ?? '');
 
   async function handleSave() {
     if (!config) return;
@@ -158,29 +139,6 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
       setSaveError(String(err));
     }
     setSaving(false);
-  }
-
-  async function handleSetApiKey() {
-    if (!config || !keyInput.trim()) return;
-    try {
-      await llmApi.setApiKey(config.provider, keyInput.trim());
-      setHasKey(true);
-      setKeyInput('');
-      setShowKeyInput(false);
-    } catch (err) {
-      console.error('Failed to set API key:', err);
-    }
-  }
-
-  async function handleDeleteApiKey() {
-    if (!config) return;
-    if (!(await confirm('Remove API key?'))) return;
-    try {
-      await llmApi.deleteApiKey(config.provider);
-      setHasKey(false);
-    } catch (err) {
-      console.error('Failed to delete API key:', err);
-    }
   }
 
   function toggleTool(toolId: string) {
@@ -238,7 +196,7 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
 
   return (
     <div className="p-6 space-y-6 h-full overflow-y-auto">
-      {/* Provider, Model & API Key — merged */}
+      {/* Provider & Model */}
       <section className="space-y-3">
         <h4 className="text-sm font-semibold text-white">Model</h4>
         <div className="grid grid-cols-2 gap-3">
@@ -247,11 +205,12 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
             <Select.Root
               value={config.provider}
               onValueChange={(value) => {
-                updateConfig({ provider: value });
-                llmApi
-                  .hasApiKey(value)
-                  .then(setHasKey)
-                  .catch(() => setHasKey(false));
+                const newModels = MODEL_OPTIONS[value] ?? [];
+                const currentModelValid = newModels.some((m) => m.value === config.model);
+                updateConfig({
+                  provider: value,
+                  ...(!currentModelValid && { model: DEFAULT_MODEL_BY_PROVIDER[value] ?? newModels[0]?.value ?? config.model }),
+                });
               }}
             >
               <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent">
@@ -263,18 +222,15 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
               <Select.Portal>
                 <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
                   <Select.Viewport className="p-1">
-                    <Select.Item
-                      value="anthropic"
-                      className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
-                    >
-                      <Select.ItemText>Anthropic</Select.ItemText>
-                    </Select.Item>
-                    <Select.Item
-                      value="minimax"
-                      className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
-                    >
-                      <Select.ItemText>MiniMax</Select.ItemText>
-                    </Select.Item>
+                    {LLM_PROVIDERS.map((p) => (
+                      <Select.Item
+                        key={p.value}
+                        value={p.value}
+                        className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
+                      >
+                        <Select.ItemText>{p.label}</Select.ItemText>
+                      </Select.Item>
+                    ))}
                   </Select.Viewport>
                 </Select.Content>
               </Select.Portal>
@@ -319,58 +275,26 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
           </div>
         </div>
 
-        {/* Inline API key status */}
+        {/* API key status */}
         <div className="rounded-lg border border-edge bg-background px-3 py-2">
           {hasKey ? (
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Check size={14} className="text-emerald-400" />
-                <span className="text-sm text-emerald-400">
-                  {config.provider} API key configured
-                </span>
-              </div>
-              <button
-                onClick={handleDeleteApiKey}
-                className="flex items-center gap-1 px-2 py-1 rounded text-xs text-red-400 hover:bg-red-500/10"
-              >
-                <Trash2 size={11} /> Remove
-              </button>
-            </div>
-          ) : showKeyInput ? (
-            <div className="space-y-2">
-              <input
-                type="password"
-                placeholder={`Enter ${config.provider} API key...`}
-                value={keyInput}
-                onChange={(e) => setKeyInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSetApiKey()}
-                autoFocus
-                className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm font-mono focus:outline-none focus:border-accent"
-              />
-              <div className="flex gap-2">
-                <button
-                  onClick={handleSetApiKey}
-                  disabled={!keyInput.trim()}
-                  className="px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-xs font-medium"
-                >
-                  Save Key
-                </button>
-                <button
-                  onClick={() => setShowKeyInput(false)}
-                  className="px-3 py-1.5 rounded-lg text-muted hover:text-white text-xs"
-                >
-                  Cancel
-                </button>
-              </div>
+            <div className="flex items-center gap-2">
+              <Check size={13} className="text-emerald-400" />
+              <span className="text-xs text-emerald-400">API key configured in Settings</span>
             </div>
           ) : (
-            <button
-              onClick={() => setShowKeyInput(true)}
-              className="flex items-center gap-2 text-secondary hover:text-white text-sm transition-colors"
-            >
-              <Key size={14} />
-              Set {config.provider} API key
-            </button>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AlertTriangle size={13} className="text-amber-400" />
+                <span className="text-xs text-amber-400">No API key for {config.provider}</span>
+              </div>
+              <button
+                onClick={() => navigate('settings')}
+                className="flex items-center gap-1 text-xs text-accent-hover hover:underline transition-colors"
+              >
+                Open Settings <ExternalLink size={11} />
+              </button>
+            </div>
           )}
         </div>
       </section>

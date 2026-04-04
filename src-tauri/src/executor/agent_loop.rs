@@ -119,7 +119,7 @@ pub async fn run_agent_loop(
   let provider_name = &ws_config.provider;
   let api_key = keychain::retrieve_api_key(provider_name).map_err(|_| {
     let msg =
-      format!("No API key configured for provider '{}'. Set it in the Agent Config tab.", provider_name);
+      format!("No API key configured for provider '{}'. Set it in Settings.", provider_name);
     log.log(app, run_id, vec![("stderr".to_string(), msg.clone())]);
     log.flush_to_file(log_path);
     msg
@@ -567,7 +567,7 @@ pub async fn run_agent_prompt(
   let provider_name = &ws_config.provider;
   let api_key = keychain::retrieve_api_key(provider_name).map_err(|_| {
     let msg =
-      format!("No API key configured for provider '{}'. Set it in the Agent Config tab.", provider_name);
+      format!("No API key configured for provider '{}'. Set it in Settings.", provider_name);
     log.log(app, run_id, vec![("stderr".to_string(), msg.clone())]);
     log.flush_to_file(log_path);
     msg

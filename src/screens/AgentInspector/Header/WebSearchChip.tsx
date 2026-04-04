@@ -1,13 +1,9 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import { Globe, ChevronDown } from "lucide-react";
+import { Globe, ChevronDown, Check, AlertTriangle, ExternalLink } from "lucide-react";
 import * as Select from '@radix-ui/react-select';
-import { SearchKeyStatus } from '../SearchKeyStatus';
-
-
-const SEARCH_PROVIDERS = [
-  { value: 'brave', label: 'Brave Search' },
-  { value: 'tavily', label: 'Tavily' },
-];
+import { SEARCH_PROVIDERS } from '../../../constants/providers';
+import { useApiKeyStatus } from '../../../hooks/useApiKeyStatus';
+import { useUiStore } from '../../../store/uiStore';
 
 
 export function WebSearchChip({
@@ -21,7 +17,8 @@ export function WebSearchChip({
   onToggle: () => void;
   onProviderChange: (provider: string) => void;
 }) {
-    
+  const { data: hasKey = false } = useApiKeyStatus(webSearchProvider);
+  const { navigate } = useUiStore();
   const enabled = allowedTools.length === 0 || allowedTools.includes('web_search');
   return (
     <DropdownMenu.Root>
@@ -80,9 +77,26 @@ export function WebSearchChip({
               </Select.Portal>
             </Select.Root>
           </div>
-          <div className="space-y-1">
-            <label className="text-xs text-muted block">API Key</label>
-            <SearchKeyStatus provider={webSearchProvider} />
+          <div className="rounded-lg border border-edge bg-background px-3 py-2">
+            {hasKey ? (
+              <div className="flex items-center gap-1.5">
+                <Check size={12} className="text-emerald-400" />
+                <span className="text-xs text-emerald-400">API key configured</span>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <AlertTriangle size={12} className="text-amber-400" />
+                  <span className="text-xs text-amber-400">No API key</span>
+                </div>
+                <button
+                  onClick={() => navigate('settings')}
+                  className="flex items-center gap-1 text-xs text-accent-hover hover:underline transition-colors"
+                >
+                  Open Settings <ExternalLink size={10} />
+                </button>
+              </div>
+            )}
           </div>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>

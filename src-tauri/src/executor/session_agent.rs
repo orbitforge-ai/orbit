@@ -65,7 +65,7 @@ pub async fn run_agent_session(
     let provider_name = &ws_config.provider;
     let api_key = keychain::retrieve_api_key(provider_name).map_err(|_| {
         format!(
-            "No API key configured for provider '{}'. Set it in the Agent Config tab.",
+            "No API key configured for provider '{}'. Set it in Settings.",
             provider_name
         )
     })?;

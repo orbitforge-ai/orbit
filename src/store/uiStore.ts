@@ -9,7 +9,8 @@ type Screen =
   | 'projects'
   | 'task-builder'
   | 'schedule-builder'
-  | 'task-edit';
+  | 'task-edit'
+  | 'settings';
 
 function getPersistedScreen(): Screen {
   try {

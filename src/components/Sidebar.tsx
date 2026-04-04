@@ -14,6 +14,7 @@ import {
   FolderOpen,
   HardDrive,
   Users,
+  Settings,
 } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { useUiStore } from '../store/uiStore';
@@ -348,8 +349,21 @@ export function Sidebar() {
         </div>
       </nav>
 
-      <div className="px-2 pt-2 border-t border-edge">
+      <div className="px-2 pt-2 border-t border-edge flex items-center gap-1">
         <SyncIndicator />
+        <button
+          onClick={() => navigate('settings')}
+          className={cn(
+            'ml-auto p-1.5 rounded-lg transition-colors',
+            screen === 'settings'
+              ? 'bg-accent/15 text-accent-hover'
+              : 'text-muted hover:bg-surface hover:text-white'
+          )}
+          title="Settings"
+          aria-label="Settings"
+        >
+          <Settings size={15} />
+        </button>
       </div>
 
       <div className="px-2 pb-2">

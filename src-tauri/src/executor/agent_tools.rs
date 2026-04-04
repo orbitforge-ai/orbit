@@ -1151,7 +1151,7 @@ async fn execute_web_search(provider: &str, query: &str, count: u32) -> Result<S
 
 async fn brave_search(query: &str, count: u32) -> Result<String, String> {
   let api_key = super::keychain::retrieve_api_key("brave")
-    .map_err(|_| "No API key for Brave Search. Set it in the Agent Config tab (provider: brave).".to_string())?;
+    .map_err(|_| "No API key for Brave Search. Set it in Settings.".to_string())?;
 
   let client = reqwest::Client::new();
   let resp = client
@@ -1194,7 +1194,7 @@ async fn brave_search(query: &str, count: u32) -> Result<String, String> {
 
 async fn tavily_search(query: &str, count: u32) -> Result<String, String> {
   let api_key = super::keychain::retrieve_api_key("tavily")
-    .map_err(|_| "No API key for Tavily. Set it in the Agent Config tab (provider: tavily).".to_string())?;
+    .map_err(|_| "No API key for Tavily. Set it in Settings.".to_string())?;
 
   let client = reqwest::Client::new();
   let body = json!({

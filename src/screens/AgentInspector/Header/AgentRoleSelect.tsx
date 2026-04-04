@@ -18,7 +18,7 @@ export function AgentRoleSelect({
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
         <button
-          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors hover:border-edge-hover hover:bg-surface/60 ${isDefault ? 'border-edge bg-surface text-muted' : `border-edge bg-surface ${currentRole.color}`}`}
+          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-[border-color,background-color] hover:border-edge-hover hover:bg-surface/60 ${isDefault ? 'border-edge bg-surface text-muted' : `border-edge bg-surface ${currentRole.color}`}`}
         >
           <CurrentRoleIcon size={10} />
           {currentRole.label}
