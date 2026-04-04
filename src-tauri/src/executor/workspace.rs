@@ -434,18 +434,29 @@ pub fn identity_score_descriptor(value: u8) -> &'static str {
 
 pub fn build_identity_prompt_summary(agent_name: &str, identity: &AgentIdentityConfig) -> String {
     let resolved = normalize_agent_identity(identity);
+    let resolved_agent_name = sanitize_text(agent_name, 80)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "this agent".to_string());
     let mut summary = format!(
-        "You are {}. Use the '{}' identity: {}. Speak with a {} voice style, {} warmth, {} directness, and {} humor.",
-        sanitize_text(agent_name, 80)
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "this agent".to_string()),
-        resolved.identity_name,
-        resolved.vibe,
+        "You are {}. These identity settings shape only your tone and conversational style, not your name, role, or self-description. If asked who you are, identify yourself as {}, not as an identity preset or style label.",
+        resolved_agent_name, resolved_agent_name
+    );
+
+    if resolved.preset_id == "custom" && !resolved.identity_name.is_empty() {
+        summary.push_str(&format!(
+            " Internal style label: '{}'.",
+            resolved.identity_name
+        ));
+    }
+
+    summary.push_str(&format!(
+        " Communicate in a {} voice that feels {}, with {} warmth, {} directness, and {} humor.",
         resolved.voice,
+        resolved.vibe,
         identity_score_descriptor(resolved.warmth),
         identity_score_descriptor(resolved.directness),
         identity_score_descriptor(resolved.humor)
-    );
+    ));
 
     if let Some(custom_note) = resolved.custom_note.as_deref() {
         if !custom_note.is_empty() {
@@ -811,10 +822,26 @@ mod tests {
         );
 
         assert!(summary.contains("You are Orbit."));
-        assert!(summary.contains("Use the 'Studio Host' identity"));
+        assert!(summary.contains("If asked who you are, identify yourself as Orbit"));
+        assert!(summary.contains("Internal style label: 'Studio Host'."));
         assert!(summary.contains("high warmth"));
         assert!(summary.contains("medium directness"));
         assert!(summary.contains("Additional identity note: Keep the energy grounded."));
+    }
+
+    #[test]
+    fn built_in_identity_prompt_summary_does_not_expose_preset_name() {
+        let summary = build_identity_prompt_summary(
+            "Orbit",
+            &AgentIdentityConfig {
+                preset_id: "warm_guide".to_string(),
+                ..default_agent_identity()
+            },
+        );
+
+        assert!(summary.contains("tone and conversational style"));
+        assert!(summary.contains("identify yourself as Orbit"));
+        assert!(!summary.contains("Warm Guide"));
     }
 
     #[test]

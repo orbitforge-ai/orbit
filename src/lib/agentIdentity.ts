@@ -195,7 +195,14 @@ export function buildIdentityPromptPreview(
   identity: AgentIdentityConfig
 ): string {
   const resolved = sanitizeIdentity(identity);
-  let preview = `You are ${agentName || 'this agent'}. Use the '${resolved.identityName}' identity: ${resolved.vibe}. Speak with a ${resolved.voice} voice style, ${scoreDescriptor(resolved.warmth)} warmth, ${scoreDescriptor(resolved.directness)} directness, and ${scoreDescriptor(resolved.humor)} humor.`;
+  const resolvedAgentName = agentName || 'this agent';
+  let preview = `You are ${resolvedAgentName}. These identity settings shape only your tone and conversational style, not your name, role, or self-description. If asked who you are, identify yourself as ${resolvedAgentName}, not as an identity preset or style label.`;
+
+  if (resolved.presetId === 'custom' && resolved.identityName) {
+    preview += ` Internal style label: '${resolved.identityName}'.`;
+  }
+
+  preview += ` Communicate in a ${resolved.voice} voice that feels ${resolved.vibe}, with ${scoreDescriptor(resolved.warmth)} warmth, ${scoreDescriptor(resolved.directness)} directness, and ${scoreDescriptor(resolved.humor)} humor.`;
 
   if (resolved.customNote) {
     preview += ` Additional identity note: ${resolved.customNote}`;
