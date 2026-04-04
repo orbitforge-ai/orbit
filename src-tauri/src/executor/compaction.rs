@@ -2,7 +2,7 @@ use tracing::{debug, info, warn};
 use ulid::Ulid;
 
 use crate::db::connection::DbPool;
-use crate::events::emitter::emit_chat_context_update;
+use crate::events::emitter::{emit_chat_context_update, emit_compaction_status};
 use crate::executor::llm_provider::{
     model_context_window, ChatMessage, ContentBlock, LlmConfig, LlmProvider,
 };
@@ -11,15 +11,40 @@ use crate::executor::workspace::AgentWorkspaceConfig;
 
 const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.65;
 const DEFAULT_COMPACTION_RETAIN_COUNT: u32 = 12;
-const COMPACTION_MAX_TOKENS: u32 = 1024;
+const COMPACTION_MAX_TOKENS: u32 = 4096;
+const MIN_MESSAGES_TO_COMPACT: usize = 5;
 
-const COMPACTION_SYSTEM_PROMPT: &str = r#"You are a conversation summarizer. Summarize the following conversation into a concise but comprehensive summary. Preserve:
-- Key facts, decisions, and conclusions
-- Code snippets, file paths, and technical details that were discussed
-- Any pending questions or tasks
-- The user's goals and preferences expressed during the conversation
+/// Max consecutive auto-compaction failures before the circuit breaker opens.
+const CIRCUIT_BREAKER_MAX_FAILURES: i64 = 3;
+
+const COMPACTION_SYSTEM_PROMPT: &str = r#"You are a conversation summarizer. Your job is to produce a structured summary that will replace the original messages in context. Organize your summary using the following sections. Omit any section that has no relevant content.
+
+## Goal
+The user's primary objective or task in this conversation.
+
+## Decisions Made
+Key choices, trade-offs, or agreements reached.
+
+## Key Technical Details
+Code snippets, file paths, function names, configuration values, error messages, and other concrete details that were discussed.
+
+## Completed Work
+What has been accomplished so far.
+
+## Pending / In Progress
+Open questions, unfinished tasks, or next steps.
+
+## User Preferences
+Communication style, tooling preferences, or constraints the user expressed.
 
 Be thorough but concise. The summary will replace these messages in the conversation context, so include everything needed to continue the conversation coherently."#;
+
+#[derive(Debug, Clone)]
+struct StoredChatMessage {
+    id: String,
+    created_at: String,
+    message: ChatMessage,
+}
 
 /// Returns true if the current context usage exceeds the compaction threshold.
 pub fn should_compact(input_tokens: u32, context_window: u32, threshold: f64) -> bool {
@@ -70,7 +95,172 @@ pub fn select_messages_for_compaction(
         return None;
     }
 
+    // Minimum message guard — don't waste an LLM call for tiny sets
+    if to_compact.len() < MIN_MESSAGES_TO_COMPACT {
+        return None;
+    }
+
     Some((to_compact, to_keep))
+}
+
+// ─── Circuit breaker helpers ────────────────────────────────────────────────
+
+/// Returns true if the circuit breaker is open (too many recent auto-compaction failures).
+pub fn is_circuit_open(db: &DbPool, session_id: &str) -> Result<bool, String> {
+    let conn = db.get().map_err(|e| e.to_string())?;
+    let count: i64 = conn
+        .query_row(
+            "SELECT compaction_failure_count FROM chat_sessions WHERE id = ?1",
+            rusqlite::params![session_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    Ok(count >= CIRCUIT_BREAKER_MAX_FAILURES)
+}
+
+/// Increments the compaction failure counter for a session.
+pub fn record_compaction_failure(db: &DbPool, session_id: &str) -> Result<(), String> {
+    let conn = db.get().map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE chat_sessions SET compaction_failure_count = compaction_failure_count + 1, compaction_last_failure_at = ?1, updated_at = ?1 WHERE id = ?2",
+        rusqlite::params![now, session_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Resets the compaction failure counter (called inside the compaction transaction on success).
+fn reset_compaction_failures_in_tx(
+    tx: &rusqlite::Transaction,
+    session_id: &str,
+) -> Result<(), String> {
+    tx.execute(
+        "UPDATE chat_sessions SET compaction_failure_count = 0, compaction_last_failure_at = NULL WHERE id = ?1",
+        rusqlite::params![session_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Estimate token count from text length (~4 chars per token).
+fn estimate_tokens_from_text(text: &str) -> u32 {
+    (text.len() as u32) / 4
+}
+
+fn summary_message_token_count(summary_content: &str, provider_output_tokens: u32) -> u32 {
+    if provider_output_tokens > 0 {
+        provider_output_tokens
+    } else {
+        estimate_tokens_from_text(summary_content)
+    }
+}
+
+/// Extract plain text from a list of ChatMessages for token estimation.
+fn extract_plain_text(messages: &[ChatMessage]) -> String {
+    let mut text = String::new();
+    for msg in messages {
+        for block in &msg.content {
+            match block {
+                ContentBlock::Text { text: t } => {
+                    text.push_str(t);
+                    text.push('\n');
+                }
+                ContentBlock::Thinking { thinking } => {
+                    text.push_str(thinking);
+                    text.push('\n');
+                }
+                ContentBlock::ToolUse { name, input, .. } => {
+                    text.push_str(name);
+                    text.push_str(&input.to_string());
+                    text.push('\n');
+                }
+                ContentBlock::ToolResult { content, .. } => {
+                    text.push_str(content);
+                    text.push('\n');
+                }
+                ContentBlock::Image { .. } => {}
+            }
+        }
+    }
+    text
+}
+
+fn summary_created_at(first_retained_created_at: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(first_retained_created_at)
+        .map(|dt| (dt - chrono::Duration::milliseconds(1)).to_rfc3339())
+        .unwrap_or_else(|_| first_retained_created_at.to_string())
+}
+
+async fn sync_compaction_to_cloud(
+    client: std::sync::Arc<crate::db::cloud::SupabaseClient>,
+    session_id: String,
+    compacted_msg_ids: Vec<String>,
+    summary_msg_id: String,
+    summary_content_json: String,
+    summary_created_at: String,
+    summary_message_token_count: u32,
+    compaction_id: String,
+    compacted_ids_json: String,
+    estimated_tokens: u32,
+    updated_at: String,
+) {
+    if let Err(e) = client
+        .upsert_chat_message_with_metadata(
+            &summary_msg_id,
+            &session_id,
+            "assistant",
+            &summary_content_json,
+            Some(summary_message_token_count as i64),
+            false,
+            &summary_created_at,
+        )
+        .await
+    {
+        warn!(session_id = %session_id, "cloud upsert summary chat_message: {}", e);
+    }
+
+    for message_id in compacted_msg_ids {
+        if let Err(e) = client
+            .patch_by_id(
+                "chat_messages",
+                &message_id,
+                serde_json::json!({ "is_compacted": true }),
+            )
+            .await
+        {
+            warn!(session_id = %session_id, message_id = %message_id, "cloud patch compacted chat_message: {}", e);
+        }
+    }
+
+    if let Err(e) = client
+        .upsert_chat_compaction_summary(
+            &compaction_id,
+            &session_id,
+            &summary_msg_id,
+            &compacted_ids_json,
+            None,
+            summary_message_token_count as i64,
+            &updated_at,
+        )
+        .await
+    {
+        warn!(session_id = %session_id, "cloud upsert chat_compaction_summary: {}", e);
+    }
+
+    if let Err(e) = client
+        .patch_by_id(
+            "chat_sessions",
+            &session_id,
+            serde_json::json!({
+                "last_input_tokens": estimated_tokens,
+                "updated_at": updated_at,
+            }),
+        )
+        .await
+    {
+        warn!(session_id = %session_id, "cloud patch chat_session after compaction: {}", e);
+    }
 }
 
 /// Performs the full compaction flow for a chat session.
@@ -83,6 +273,42 @@ pub async fn perform_compaction(
     db: &DbPool,
     memory_client: Option<MemoryClient>,
     memory_user_id: &str,
+    cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+) -> Result<(), String> {
+    // Emit compaction started
+    emit_compaction_status(app, session_id, "started");
+
+    let result = perform_compaction_inner(
+        agent_id,
+        session_id,
+        provider,
+        ws_config,
+        app,
+        db,
+        memory_client,
+        memory_user_id,
+        cloud_client,
+    )
+    .await;
+
+    match &result {
+        Ok(()) => emit_compaction_status(app, session_id, "completed"),
+        Err(_) => emit_compaction_status(app, session_id, "failed"),
+    }
+
+    result
+}
+
+async fn perform_compaction_inner(
+    agent_id: &str,
+    session_id: &str,
+    provider: &dyn LlmProvider,
+    ws_config: &AgentWorkspaceConfig,
+    app: &tauri::AppHandle,
+    db: &DbPool,
+    memory_client: Option<MemoryClient>,
+    memory_user_id: &str,
+    cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<(), String> {
     let pool = db.0.clone();
     let sid = session_id.to_string();
@@ -91,11 +317,11 @@ pub async fn perform_compaction(
     let messages = {
         let pool = pool.clone();
         let sid = sid.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<(String, ChatMessage)>, String> {
+        tokio::task::spawn_blocking(move || -> Result<Vec<StoredChatMessage>, String> {
             let conn = pool.get().map_err(|e| e.to_string())?;
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, role, content FROM chat_messages
+                    "SELECT id, role, content, created_at FROM chat_messages
                      WHERE session_id = ?1 AND is_compacted = 0
                      ORDER BY created_at ASC",
                 )
@@ -106,21 +332,23 @@ pub async fn perform_compaction(
                     let id: String = row.get(0)?;
                     let role: String = row.get(1)?;
                     let content_json: String = row.get(2)?;
-                    Ok((id, role, content_json))
+                    let created_at: String = row.get(3)?;
+                    Ok((id, role, content_json, created_at))
                 })
                 .map_err(|e| e.to_string())?
                 .filter_map(|r| r.ok())
-                .map(|(id, role, content_json)| {
+                .map(|(id, role, content_json, created_at)| {
                     let content: Vec<ContentBlock> =
                         serde_json::from_str(&content_json).unwrap_or_default();
-                    (
+                    StoredChatMessage {
                         id,
-                        ChatMessage {
+                        created_at: created_at.clone(),
+                        message: ChatMessage {
                             role,
                             content,
-                            created_at: None,
+                            created_at: Some(created_at),
                         },
-                    )
+                    }
                 })
                 .collect();
 
@@ -131,12 +359,11 @@ pub async fn perform_compaction(
     };
 
     let retain_count = effective_retain_count(ws_config);
-    let msg_ids: Vec<String> = messages.iter().map(|(id, _)| id.clone()).collect();
-    let chat_messages: Vec<ChatMessage> = messages.into_iter().map(|(_, msg)| msg).collect();
+    let msg_ids: Vec<String> = messages.iter().map(|msg| msg.id.clone()).collect();
+    let chat_messages: Vec<ChatMessage> = messages.iter().map(|msg| msg.message.clone()).collect();
 
     // 2. Determine what to compact
-    let (to_compact, _to_keep) = match select_messages_for_compaction(&chat_messages, retain_count)
-    {
+    let (to_compact, to_keep) = match select_messages_for_compaction(&chat_messages, retain_count) {
         Some(split) => split,
         None => {
             debug!("Not enough messages to compact for session {}", session_id);
@@ -146,6 +373,10 @@ pub async fn perform_compaction(
 
     let compact_count = to_compact.len();
     let compacted_msg_ids: Vec<String> = msg_ids[..compact_count].to_vec();
+    let summary_created_at = messages
+        .get(compact_count)
+        .map(|msg| summary_created_at(&msg.created_at))
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
     info!(
         session_id = session_id,
@@ -235,9 +466,14 @@ pub async fn perform_compaction(
     }
 
     let summary_content = format!("[Conversation Summary]\n{}", summary_text);
-    let summary_token_count = response.usage.input_tokens + response.usage.output_tokens;
+    let summary_message_token_count =
+        summary_message_token_count(&summary_content, response.usage.output_tokens);
 
-    // 4. Persist: insert summary message, flag compacted messages, record compaction
+    // Bug 4 fix: compute retained-text estimate from deserialized messages, not JSON LENGTH()
+    let retained_text = extract_plain_text(&to_keep);
+    let retained_text_tokens = estimate_tokens_from_text(&retained_text);
+
+    // 4. Persist in a single transaction: insert summary, flag compacted, record compaction, update session
     let pool = db.0.clone();
     let sid = sid.clone();
     let compacted_ids_json =
@@ -245,22 +481,37 @@ pub async fn perform_compaction(
     let summary_msg_id = Ulid::new().to_string();
     let compaction_id = Ulid::new().to_string();
 
-    let original_token_count = compact_count as u32; // approximate; we don't have per-message counts yet
+    let estimated_tokens = retained_text_tokens + summary_message_token_count;
+    let summary_content_json = serde_json::to_string(&vec![ContentBlock::Text {
+        text: summary_content,
+    }])
+    .map_err(|e| e.to_string())?;
+    let cloud_compacted_msg_ids = compacted_msg_ids.clone();
+    let cloud_summary_msg_id = summary_msg_id.clone();
+    let cloud_summary_content_json = summary_content_json.clone();
+    let cloud_summary_created_at = summary_created_at.clone();
+    let cloud_compaction_id = compaction_id.clone();
+    let cloud_compacted_ids_json = compacted_ids_json.clone();
+    let cloud_session_id = sid.clone();
 
-    let estimated_tokens = tokio::task::spawn_blocking(move || -> Result<u32, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
+    let est = estimated_tokens;
+    let updated_at = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let mut conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
 
-        // Insert summary message (as assistant, placed just before the retained messages)
-        let summary_content_json = serde_json::to_string(&vec![ContentBlock::Text {
-            text: summary_content,
-        }])
-        .map_err(|e| e.to_string())?;
+        // Begin transaction — all writes succeed or none do
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
 
-        conn.execute(
+        tx.execute(
             "INSERT INTO chat_messages (id, session_id, role, content, created_at, token_count, is_compacted)
              VALUES (?1, ?2, 'assistant', ?3, ?4, ?5, 0)",
-            rusqlite::params![summary_msg_id, sid, summary_content_json, now, summary_token_count],
+            rusqlite::params![
+                summary_msg_id,
+                sid,
+                summary_content_json,
+                summary_created_at,
+                summary_message_token_count
+            ],
         )
         .map_err(|e| e.to_string())?;
 
@@ -278,46 +529,55 @@ pub async fn perform_compaction(
             .iter()
             .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>)
             .collect();
-        conn.execute(&sql, rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())))
+        tx.execute(&sql, rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())))
             .map_err(|e| e.to_string())?;
 
-        // Record compaction
-        conn.execute(
+        // Record compaction — store NULL for original_token_count (Bug 2)
+        tx.execute(
             "INSERT INTO chat_compaction_summaries (id, session_id, summary_message_id, compacted_message_ids, original_token_count, summary_token_count, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)",
             rusqlite::params![
                 compaction_id,
                 sid,
                 summary_msg_id,
                 compacted_ids_json,
-                original_token_count,
-                summary_token_count,
+                summary_message_token_count,
                 now
             ],
         )
         .map_err(|e| e.to_string())?;
 
-        // Estimate new context size from remaining non-compacted messages (~4 chars/token)
-        let estimated_tokens: u32 = conn
-            .query_row(
-                "SELECT COALESCE(SUM(LENGTH(content)), 0) FROM chat_messages
-                 WHERE session_id = ?1 AND is_compacted = 0",
-                rusqlite::params![sid],
-                |row| row.get::<_, u32>(0),
-            )
-            .unwrap_or(0)
-            / 4;
-
-        conn.execute(
+        // Update session with estimated remaining tokens
+        tx.execute(
             "UPDATE chat_sessions SET last_input_tokens = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![estimated_tokens, now, sid],
+            rusqlite::params![est, now, sid],
         )
         .map_err(|e| e.to_string())?;
 
-        Ok(estimated_tokens)
+        // Reset circuit breaker on success
+        reset_compaction_failures_in_tx(&tx, &sid)?;
+
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(now)
     })
     .await
     .map_err(|e| e.to_string())??;
+
+    if let Some(client) = cloud_client {
+        tauri::async_runtime::spawn(sync_compaction_to_cloud(
+            client,
+            cloud_session_id,
+            cloud_compacted_msg_ids,
+            cloud_summary_msg_id,
+            cloud_summary_content_json,
+            cloud_summary_created_at,
+            summary_message_token_count,
+            cloud_compaction_id,
+            cloud_compacted_ids_json,
+            estimated_tokens,
+            updated_at,
+        ));
+    }
 
     // 5. Emit updated context info
     let context_window = effective_context_window(ws_config);
@@ -359,7 +619,10 @@ pub async fn perform_compaction(
                     })
                     .await;
                 }
-                let (count, status) = match client.extract_memories(&extract_text, &user_id, &agent_id).await {
+                let (count, status) = match client
+                    .extract_memories(&extract_text, &user_id, &agent_id)
+                    .await
+                {
                     Ok(entries) => (entries.len() as i64, "success".to_string()),
                     Err(e) => {
                         warn!(session_id = %session_id, "Post-compaction memory extraction failed: {}", e);
@@ -381,4 +644,64 @@ pub async fn perform_compaction(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{select_messages_for_compaction, summary_created_at, summary_message_token_count};
+    use crate::executor::llm_provider::{ChatMessage, ContentBlock};
+
+    fn text_message(text: &str) -> ChatMessage {
+        ChatMessage {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+            }],
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn compaction_guard_skips_tiny_prefixes() {
+        let messages = vec![
+            text_message("1"),
+            text_message("2"),
+            text_message("3"),
+            text_message("4"),
+            text_message("5"),
+            text_message("6"),
+            text_message("7"),
+            text_message("8"),
+            text_message("9"),
+            text_message("10"),
+            text_message("11"),
+            text_message("12"),
+            text_message("13"),
+            text_message("14"),
+            text_message("15"),
+            text_message("16"),
+        ];
+
+        assert!(select_messages_for_compaction(&messages, 12).is_none());
+        assert!(select_messages_for_compaction(&messages, 10).is_some());
+    }
+
+    #[test]
+    fn summary_timestamp_sorts_before_first_retained_message() {
+        let retained = "2026-04-04T12:00:00Z";
+        let summary = summary_created_at(retained);
+
+        assert!(summary.as_str() < retained);
+    }
+
+    #[test]
+    fn summary_token_count_falls_back_when_provider_reports_zero() {
+        let summary = "[Conversation Summary]\nhello world";
+
+        assert_eq!(
+            summary_message_token_count(summary, 0),
+            (summary.len() as u32) / 4
+        );
+        assert_eq!(summary_message_token_count(summary, 17), 17);
+    }
 }

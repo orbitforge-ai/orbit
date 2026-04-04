@@ -5,10 +5,10 @@
 //! Supabase (PostgREST REST API over reqwest).  On login the user's cloud
 //! data is merged into local SQLite so a new device starts with their history.
 
-use std::sync::Arc;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use serde_json::Value;
+use std::sync::Arc;
 use tracing::{info, warn};
 
 // ---------------------------------------------------------------------------
@@ -106,10 +106,7 @@ impl SupabaseClient {
             access_token: data.access_token,
             refresh_token: data.refresh_token,
         };
-        crate::auth::persist_auth_state(
-            &self.data_dir,
-            &crate::auth::AuthMode::Cloud(session),
-        );
+        crate::auth::persist_auth_state(&self.data_dir, &crate::auth::AuthMode::Cloud(session));
 
         tracing::info!("Supabase access token refreshed successfully");
         Ok(())
@@ -242,11 +239,7 @@ impl SupabaseClient {
     }
 
     /// Push an API key to Supabase Vault via the `upsert_api_key` RPC.
-    pub async fn upsert_api_key_in_vault(
-        &self,
-        provider: &str,
-        key: &str,
-    ) -> Result<(), String> {
+    pub async fn upsert_api_key_in_vault(&self, provider: &str, key: &str) -> Result<(), String> {
         let url = format!("{}/rest/v1/rpc/upsert_api_key", self.base_url);
         let body = serde_json::json!({ "p_provider": provider, "p_key": key });
         let http = self.http.clone();
@@ -505,6 +498,60 @@ impl SupabaseClient {
         .await
     }
 
+    pub async fn upsert_chat_message_with_metadata(
+        &self,
+        id: &str,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        token_count: Option<i64>,
+        is_compacted: bool,
+        created_at: &str,
+    ) -> Result<(), String> {
+        self.upsert_single(
+            "chat_messages",
+            serde_json::json!({
+                "user_id": self.user_id,
+                "id": id,
+                "session_id": session_id,
+                "role": role,
+                "content": content,
+                "token_count": token_count,
+                "is_compacted": is_compacted,
+                "created_at": created_at,
+            }),
+        )
+        .await
+    }
+
+    pub async fn upsert_chat_compaction_summary(
+        &self,
+        id: &str,
+        session_id: &str,
+        summary_message_id: &str,
+        compacted_message_ids: &str,
+        original_token_count: Option<i64>,
+        summary_token_count: i64,
+        created_at: &str,
+    ) -> Result<(), String> {
+        let compacted_ids = serde_json::from_str::<Value>(compacted_message_ids)
+            .unwrap_or_else(|_| serde_json::json!([]));
+        self.upsert_single(
+            "chat_compaction_summaries",
+            serde_json::json!({
+                "user_id": self.user_id,
+                "id": id,
+                "session_id": session_id,
+                "summary_message_id": summary_message_id,
+                "compacted_message_ids": compacted_ids,
+                "original_token_count": original_token_count,
+                "summary_token_count": summary_token_count,
+                "created_at": created_at,
+            }),
+        )
+        .await
+    }
+
     // -----------------------------------------------------------------------
     // Full bi-directional sync (called on login)
     // -----------------------------------------------------------------------
@@ -538,7 +585,20 @@ impl SupabaseClient {
         .await
         .map_err(|e| e.to_string())??;
 
-        let (agents, tasks, scheds, runs, convos, sessions, msgs, summaries, bus_msgs, bus_subs, users, mem_log) = rows;
+        let (
+            agents,
+            tasks,
+            scheds,
+            runs,
+            convos,
+            sessions,
+            msgs,
+            summaries,
+            bus_msgs,
+            bus_subs,
+            users,
+            mem_log,
+        ) = rows;
 
         // Read project tables separately to keep tuple sizes manageable
         let user_id2 = self.user_id.clone();
@@ -582,10 +642,7 @@ impl SupabaseClient {
 
     /// Pull all cloud data into local SQLite (cloud wins on conflict for matching IDs).
     /// Called AFTER push so the device receives data from other devices.
-    pub async fn pull_all_data(
-        &self,
-        pool: &Pool<SqliteConnectionManager>,
-    ) -> Result<(), String> {
+    pub async fn pull_all_data(&self, pool: &Pool<SqliteConnectionManager>) -> Result<(), String> {
         self.pull_all_data_inner(pool).await.map(|_| ())
     }
 
@@ -647,7 +704,12 @@ impl SupabaseClient {
 
         info!(
             "Cloud pull fetched: agents={} tasks={} sessions={} messages={} runs={} projects={}",
-            agents.len(), tasks.len(), sessions.len(), msgs.len(), runs.len(), projects.len()
+            agents.len(),
+            tasks.len(),
+            sessions.len(),
+            msgs.len(),
+            runs.len(),
+            projects.len()
         );
 
         let p = pool.clone();
@@ -721,10 +783,7 @@ fn json_or_null(s: &str) -> Value {
     serde_json::from_str(s).unwrap_or(Value::Null)
 }
 
-fn read_agents(
-    conn: &rusqlite::Connection,
-    user_id: &str,
-) -> Result<Vec<Value>, String> {
+fn read_agents(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, name, description, state, max_concurrent_runs, heartbeat_at,
@@ -987,7 +1046,7 @@ fn read_chat_compaction_summaries(
                 "session_id": row.get::<_, String>(1)?,
                 "summary_message_id": row.get::<_, String>(2)?,
                 "compacted_message_ids": json_or_null(&ids_str),
-                "original_token_count": row.get::<_, i64>(4)?,
+                "original_token_count": row.get::<_, Option<i64>>(4)?,
                 "summary_token_count": row.get::<_, i64>(5)?,
                 "created_at": row.get::<_, String>(6)?,
             }))
@@ -1174,7 +1233,11 @@ fn int_val(row: &Value, key: &str, default: i64) -> i64 {
 }
 
 fn bool_val(row: &Value, key: &str) -> i64 {
-    if row[key].as_bool().unwrap_or(false) { 1 } else { 0 }
+    if row[key].as_bool().unwrap_or(false) {
+        1
+    } else {
+        0
+    }
 }
 
 fn json_str(row: &Value, key: &str, default: &str) -> String {
@@ -1208,10 +1271,9 @@ fn write_agents(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), Str
         )
         .map_err(|e| e.to_string())?;
         // Apply config.json + system_prompt.md to disk from the pulled model_config
-        if let Err(e) = crate::executor::workspace::apply_model_config_to_disk(
-            &agent_id,
-            &model_config_str,
-        ) {
+        if let Err(e) =
+            crate::executor::workspace::apply_model_config_to_disk(&agent_id, &model_config_str)
+        {
             warn!("apply model_config to disk for agent {}: {}", agent_id, e);
         }
     }
@@ -1310,10 +1372,7 @@ fn write_runs(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), Strin
     Ok(())
 }
 
-fn write_agent_conversations(
-    conn: &rusqlite::Connection,
-    rows: Vec<Value>,
-) -> Result<(), String> {
+fn write_agent_conversations(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO agent_conversations
@@ -1395,6 +1454,8 @@ fn write_chat_compaction_summaries(
     rows: Vec<Value>,
 ) -> Result<(), String> {
     for r in rows {
+        // original_token_count is nullable — preserve null instead of coercing to 0
+        let original_token_count: Option<i64> = r["original_token_count"].as_i64();
         conn.execute(
             "INSERT OR REPLACE INTO chat_compaction_summaries
              (id, session_id, summary_message_id, compacted_message_ids,
@@ -1405,7 +1466,7 @@ fn write_chat_compaction_summaries(
                 str_val(&r, "session_id"),
                 str_val(&r, "summary_message_id"),
                 json_str(&r, "compacted_message_ids", "[]"),
-                int_val(&r, "original_token_count", 0),
+                original_token_count,
                 int_val(&r, "summary_token_count", 0),
                 str_val(&r, "created_at"),
             ],

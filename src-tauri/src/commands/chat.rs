@@ -1,19 +1,21 @@
 use serde::Serialize;
-use tracing::{ debug, info, warn };
+use tracing::{debug, info, warn};
 use ulid::Ulid;
 
-use crate::auth::{ AuthMode, AuthState };
+use crate::auth::{AuthMode, AuthState};
 use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
-use crate::events::emitter::{ emit_agent_iteration, emit_agent_tool_result, emit_chat_context_update };
+use crate::events::emitter::{
+    emit_agent_iteration, emit_agent_tool_result, emit_chat_context_update,
+};
 use crate::executor::agent_tools::ToolExecutionContext;
 use crate::executor::compaction;
-use crate::executor::context::{ self, ContextMode, ContextRequest };
-use crate::executor::engine::{ AgentSemaphores, ExecutorTx, SessionExecutionRegistry };
+use crate::executor::context::{self, ContextMode, ContextRequest};
+use crate::executor::engine::{AgentSemaphores, ExecutorTx, SessionExecutionRegistry};
 use crate::executor::keychain;
-use crate::executor::permissions::{ self, PermissionRegistry };
-use crate::executor::llm_provider::{ self, ChatMessage, ContentBlock, LlmConfig };
+use crate::executor::llm_provider::{self, ChatMessage, ContentBlock, LlmConfig};
 use crate::executor::memory::MemoryClient;
+use crate::executor::permissions::{self, PermissionRegistry};
 use crate::executor::session_agent;
 use crate::executor::workspace;
 use crate::memory_service::MemoryServiceState;
@@ -25,16 +27,16 @@ const MAX_TOKENS_PER_CALL: u32 = 4096;
 
 #[tauri::command]
 pub async fn list_chat_sessions(
-  agent_id: String,
-  include_archived: Option<bool>,
-  session_types: Option<Vec<String>>,
-  db: tauri::State<'_, DbPool>
+    agent_id: String,
+    include_archived: Option<bool>,
+    session_types: Option<Vec<String>>,
+    db: tauri::State<'_, DbPool>,
 ) -> Result<Vec<ChatSession>, String> {
-  let pool = db.0.clone();
-  let show_archived = include_archived.unwrap_or(false);
-  let session_types = session_types.unwrap_or_default();
+    let pool = db.0.clone();
+    let show_archived = include_archived.unwrap_or(false);
+    let session_types = session_types.unwrap_or_default();
 
-  tokio::task
+    tokio::task
     ::spawn_blocking(move || {
       let conn = pool.get().map_err(|e| e.to_string())?;
       let mut sql = String::from(
@@ -102,17 +104,17 @@ pub async fn list_chat_sessions(
 
 #[tauri::command]
 pub async fn create_chat_session(
-  agent_id: String,
-  title: Option<String>,
-  session_type: Option<String>,
-  project_id: Option<String>,
-  db: tauri::State<'_, DbPool>,
-  cloud: tauri::State<'_, CloudClientState>,
+    agent_id: String,
+    title: Option<String>,
+    session_type: Option<String>,
+    project_id: Option<String>,
+    db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<ChatSession, String> {
-  let cloud = cloud.inner().clone();
-  let pool = db.0.clone();
+    let cloud = cloud.inner().clone();
+    let pool = db.0.clone();
 
-  let session: ChatSession = tokio::task
+    let session: ChatSession = tokio::task
     ::spawn_blocking(move || -> Result<ChatSession, String> {
       let conn = pool.get().map_err(|e| e.to_string())?;
       let id = Ulid::new().to_string();
@@ -153,62 +155,66 @@ pub async fn create_chat_session(
     }).await
     .map_err(|e| e.to_string())??;
 
-  if let Some(client) = cloud.get() {
-    let s = session.clone();
-    tokio::spawn(async move {
-      if let Err(e) = client.upsert_chat_session(&s).await {
-        tracing::warn!("cloud upsert chat_session: {}", e);
-      }
-    });
-  }
-  Ok(session)
+    if let Some(client) = cloud.get() {
+        let s = session.clone();
+        tokio::spawn(async move {
+            if let Err(e) = client.upsert_chat_session(&s).await {
+                tracing::warn!("cloud upsert chat_session: {}", e);
+            }
+        });
+    }
+    Ok(session)
 }
 
 #[tauri::command]
 pub async fn rename_chat_session(
-  session_id: String,
-  title: String,
-  db: tauri::State<'_, DbPool>,
-  cloud: tauri::State<'_, CloudClientState>,
+    session_id: String,
+    title: String,
+    db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
-  let cloud = cloud.inner().clone();
-  let pool = db.0.clone();
-  let sid = session_id.clone();
-  let now = chrono::Utc::now().to_rfc3339();
-  let now2 = now.clone();
-  let title2 = title.clone();
-  tokio::task
-    ::spawn_blocking(move || -> Result<(), String> {
-      let conn = pool.get().map_err(|e| e.to_string())?;
-      conn
-        .execute(
-          "UPDATE chat_sessions SET title = ?1, updated_at = ?2 WHERE id = ?3",
-          rusqlite::params![title2, now2, sid]
+    let cloud = cloud.inner().clone();
+    let pool = db.0.clone();
+    let sid = session_id.clone();
+    let now = chrono::Utc::now().to_rfc3339();
+    let now2 = now.clone();
+    let title2 = title.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE chat_sessions SET title = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![title2, now2, sid],
         )
         .map_err(|e| e.to_string())?;
-      Ok(())
-    }).await
+        Ok(())
+    })
+    .await
     .map_err(|e| e.to_string())??;
-  if let Some(client) = cloud.get() {
-    let id = session_id.clone();
-    tokio::spawn(async move {
-      let _ = client.patch_by_id("chat_sessions", &id,
-        serde_json::json!({"title": title, "updated_at": now})).await;
-    });
-  }
-  Ok(())
+    if let Some(client) = cloud.get() {
+        let id = session_id.clone();
+        tokio::spawn(async move {
+            let _ = client
+                .patch_by_id(
+                    "chat_sessions",
+                    &id,
+                    serde_json::json!({"title": title, "updated_at": now}),
+                )
+                .await;
+        });
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn archive_chat_session(
-  session_id: String,
-  db: tauri::State<'_, DbPool>,
-  cloud: tauri::State<'_, CloudClientState>,
+    session_id: String,
+    db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
-  let cloud = cloud.inner().clone();
-  let pool = db.0.clone();
-  let sid = session_id.clone();
-  tokio::task
+    let cloud = cloud.inner().clone();
+    let pool = db.0.clone();
+    let sid = session_id.clone();
+    tokio::task
     ::spawn_blocking(move || -> Result<(), String> {
       let conn = pool.get().map_err(|e| e.to_string())?;
       let active_execution: Option<String> = conn.query_row(
@@ -242,27 +248,32 @@ pub async fn archive_chat_session(
       Ok(())
     }).await
     .map_err(|e| e.to_string())??;
-  if let Some(client) = cloud.get() {
-    let id = session_id.clone();
-    let now = chrono::Utc::now().to_rfc3339();
-    tokio::spawn(async move {
-      let _ = client.patch_by_id("chat_sessions", &id,
-        serde_json::json!({"archived": true, "updated_at": now})).await;
-    });
-  }
-  Ok(())
+    if let Some(client) = cloud.get() {
+        let id = session_id.clone();
+        let now = chrono::Utc::now().to_rfc3339();
+        tokio::spawn(async move {
+            let _ = client
+                .patch_by_id(
+                    "chat_sessions",
+                    &id,
+                    serde_json::json!({"archived": true, "updated_at": now}),
+                )
+                .await;
+        });
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn unarchive_chat_session(
-  session_id: String,
-  db: tauri::State<'_, DbPool>,
-  cloud: tauri::State<'_, CloudClientState>,
+    session_id: String,
+    db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
-  let cloud = cloud.inner().clone();
-  let pool = db.0.clone();
-  let sid = session_id.clone();
-  tokio::task
+    let cloud = cloud.inner().clone();
+    let pool = db.0.clone();
+    let sid = session_id.clone();
+    tokio::task
     ::spawn_blocking(move || -> Result<(), String> {
       let conn = pool.get().map_err(|e| e.to_string())?;
       let now = chrono::Utc::now().to_rfc3339();
@@ -288,50 +299,62 @@ pub async fn unarchive_chat_session(
       Ok(())
     }).await
     .map_err(|e| e.to_string())??;
-  if let Some(client) = cloud.get() {
-    let id = session_id.clone();
-    let now = chrono::Utc::now().to_rfc3339();
-    tokio::spawn(async move {
-      let _ = client.patch_by_id("chat_sessions", &id,
-        serde_json::json!({"archived": false, "updated_at": now})).await;
-    });
-  }
-  Ok(())
+    if let Some(client) = cloud.get() {
+        let id = session_id.clone();
+        let now = chrono::Utc::now().to_rfc3339();
+        tokio::spawn(async move {
+            let _ = client
+                .patch_by_id(
+                    "chat_sessions",
+                    &id,
+                    serde_json::json!({"archived": false, "updated_at": now}),
+                )
+                .await;
+        });
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn delete_chat_session(
-  session_id: String,
-  db: tauri::State<'_, DbPool>,
-  cloud: tauri::State<'_, CloudClientState>,
+    session_id: String,
+    db: tauri::State<'_, DbPool>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
-  let cloud = cloud.inner().clone();
-  let pool = db.0.clone();
-  let sid = session_id.clone();
-  tokio::task
-    ::spawn_blocking(move || -> Result<(), String> {
-      let conn = pool.get().map_err(|e| e.to_string())?;
-      let active_execution: Option<String> = conn.query_row(
-        "SELECT execution_state FROM chat_sessions WHERE id = ?1",
-        rusqlite::params![sid],
-        |row| row.get(0)
-      ).ok();
-      if matches!(active_execution.as_deref(), Some("queued") | Some("running")) {
-        return Err("cannot delete an active agent session".to_string());
-      }
-      conn
-        .execute("DELETE FROM chat_sessions WHERE id = ?1", rusqlite::params![sid])
+    let cloud = cloud.inner().clone();
+    let pool = db.0.clone();
+    let sid = session_id.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let active_execution: Option<String> = conn
+            .query_row(
+                "SELECT execution_state FROM chat_sessions WHERE id = ?1",
+                rusqlite::params![sid],
+                |row| row.get(0),
+            )
+            .ok();
+        if matches!(
+            active_execution.as_deref(),
+            Some("queued") | Some("running")
+        ) {
+            return Err("cannot delete an active agent session".to_string());
+        }
+        conn.execute(
+            "DELETE FROM chat_sessions WHERE id = ?1",
+            rusqlite::params![sid],
+        )
         .map_err(|e| e.to_string())?;
-      Ok(())
-    }).await
+        Ok(())
+    })
+    .await
     .map_err(|e| e.to_string())??;
-  if let Some(client) = cloud.get() {
-    let id = session_id.clone();
-    tokio::spawn(async move {
-      let _ = client.delete_by_id("chat_sessions", &id).await;
-    });
-  }
-  Ok(())
+    if let Some(client) = cloud.get() {
+        let id = session_id.clone();
+        tokio::spawn(async move {
+            let _ = client.delete_by_id("chat_sessions", &id).await;
+        });
+    }
+    Ok(())
 }
 
 // ─── Messages ───────────────────────────────────────────────────────────────
@@ -339,108 +362,127 @@ pub async fn delete_chat_session(
 /// A chat message with compaction metadata for the UI.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessageWithMeta {
-  pub role: String,
-  pub content: Vec<ContentBlock>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub created_at: Option<String>,
-  #[serde(rename = "isCompacted")]
-  pub is_compacted: bool,
+    pub role: String,
+    pub content: Vec<ContentBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(rename = "isCompacted")]
+    pub is_compacted: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PaginatedChatMessages {
-  pub messages: Vec<ChatMessageWithMeta>,
-  pub total_count: i64,
-  pub has_more: bool,
+    pub messages: Vec<ChatMessageWithMeta>,
+    pub total_count: i64,
+    pub has_more: bool,
 }
 
 #[tauri::command]
 pub async fn get_chat_messages(
-  session_id: String,
-  limit: Option<i64>,
-  offset: Option<i64>,
-  db: tauri::State<'_, DbPool>
+    session_id: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    db: tauri::State<'_, DbPool>,
 ) -> Result<PaginatedChatMessages, String> {
-  let pool = db.0.clone();
+    let pool = db.0.clone();
 
-  tokio::task
-    ::spawn_blocking(move || {
-      let conn = pool.get().map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
 
-      let total_count: i64 = conn
-        .query_row(
-          "SELECT COUNT(*) FROM chat_messages WHERE session_id = ?1",
-          rusqlite::params![session_id],
-          |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+        let total_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_messages WHERE session_id = ?1",
+                rusqlite::params![session_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
 
-      let limit_val = limit.unwrap_or(0);
-      let offset_val = offset.unwrap_or(0);
+        let limit_val = limit.unwrap_or(0);
+        let offset_val = offset.unwrap_or(0);
 
-      let messages: Vec<ChatMessageWithMeta> = if limit_val > 0 {
-        let mut stmt = conn
-          .prepare(
-            "SELECT role, content, created_at, is_compacted FROM (
+        let messages: Vec<ChatMessageWithMeta> = if limit_val > 0 {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT role, content, created_at, is_compacted FROM (
                SELECT role, content, created_at, is_compacted
                FROM chat_messages WHERE session_id = ?1
                ORDER BY created_at DESC
                LIMIT ?2 OFFSET ?3
-             ) sub ORDER BY created_at ASC"
-          )
-          .map_err(|e| e.to_string())?;
+             ) sub ORDER BY created_at ASC",
+                )
+                .map_err(|e| e.to_string())?;
 
-        let rows: Vec<ChatMessageWithMeta> = stmt
-          .query_map(rusqlite::params![session_id, limit_val, offset_val], |row| {
-            let role: String = row.get(0)?;
-            let content_json: String = row.get(1)?;
-            let created_at: Option<String> = row.get(2)?;
-            let is_compacted: bool = row.get(3)?;
-            Ok((role, content_json, created_at, is_compacted))
-          })
-          .map_err(|e| e.to_string())?
-          .filter_map(|r| r.ok())
-          .map(|(role, content_json, created_at, is_compacted)| {
-            let content: Vec<ContentBlock> = serde_json::from_str(&content_json).unwrap_or_default();
-            ChatMessageWithMeta { role, content, created_at, is_compacted }
-          })
-          .collect();
-        rows
-      } else {
-        let mut stmt = conn
-          .prepare(
-            "SELECT role, content, created_at, is_compacted FROM chat_messages
-                   WHERE session_id = ?1 ORDER BY created_at ASC"
-          )
-          .map_err(|e| e.to_string())?;
+            let rows: Vec<ChatMessageWithMeta> = stmt
+                .query_map(
+                    rusqlite::params![session_id, limit_val, offset_val],
+                    |row| {
+                        let role: String = row.get(0)?;
+                        let content_json: String = row.get(1)?;
+                        let created_at: Option<String> = row.get(2)?;
+                        let is_compacted: bool = row.get(3)?;
+                        Ok((role, content_json, created_at, is_compacted))
+                    },
+                )
+                .map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok())
+                .map(|(role, content_json, created_at, is_compacted)| {
+                    let content: Vec<ContentBlock> =
+                        serde_json::from_str(&content_json).unwrap_or_default();
+                    ChatMessageWithMeta {
+                        role,
+                        content,
+                        created_at,
+                        is_compacted,
+                    }
+                })
+                .collect();
+            rows
+        } else {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT role, content, created_at, is_compacted FROM chat_messages
+                   WHERE session_id = ?1 ORDER BY created_at ASC",
+                )
+                .map_err(|e| e.to_string())?;
 
-        let rows: Vec<ChatMessageWithMeta> = stmt
-          .query_map(rusqlite::params![session_id], |row| {
-            let role: String = row.get(0)?;
-            let content_json: String = row.get(1)?;
-            let created_at: Option<String> = row.get(2)?;
-            let is_compacted: bool = row.get(3)?;
-            Ok((role, content_json, created_at, is_compacted))
-          })
-          .map_err(|e| e.to_string())?
-          .filter_map(|r| r.ok())
-          .map(|(role, content_json, created_at, is_compacted)| {
-            let content: Vec<ContentBlock> = serde_json::from_str(&content_json).unwrap_or_default();
-            ChatMessageWithMeta { role, content, created_at, is_compacted }
-          })
-          .collect();
-        rows
-      };
+            let rows: Vec<ChatMessageWithMeta> = stmt
+                .query_map(rusqlite::params![session_id], |row| {
+                    let role: String = row.get(0)?;
+                    let content_json: String = row.get(1)?;
+                    let created_at: Option<String> = row.get(2)?;
+                    let is_compacted: bool = row.get(3)?;
+                    Ok((role, content_json, created_at, is_compacted))
+                })
+                .map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok())
+                .map(|(role, content_json, created_at, is_compacted)| {
+                    let content: Vec<ContentBlock> =
+                        serde_json::from_str(&content_json).unwrap_or_default();
+                    ChatMessageWithMeta {
+                        role,
+                        content,
+                        created_at,
+                        is_compacted,
+                    }
+                })
+                .collect();
+            rows
+        };
 
-      let has_more = if limit_val > 0 {
-        (offset_val + limit_val) < total_count
-      } else {
-        false
-      };
+        let has_more = if limit_val > 0 {
+            (offset_val + limit_val) < total_count
+        } else {
+            false
+        };
 
-      Ok(PaginatedChatMessages { messages, total_count, has_more })
-    }).await
+        Ok(PaginatedChatMessages {
+            messages,
+            total_count,
+            has_more,
+        })
+    })
+    .await
     .map_err(|e| e.to_string())?
 }
 
@@ -448,37 +490,44 @@ pub async fn get_chat_messages(
 
 #[tauri::command]
 pub async fn send_chat_message(
-  session_id: String,
-  content: String, // JSON-serialized Vec<ContentBlock>
-  app: tauri::AppHandle,
-  db: tauri::State<'_, DbPool>,
-  executor_tx: tauri::State<'_, ExecutorTx>,
-  agent_semaphores: tauri::State<'_, AgentSemaphores>,
-  session_registry: tauri::State<'_, SessionExecutionRegistry>,
-  permission_registry: tauri::State<'_, PermissionRegistry>,
-  memory_state: tauri::State<'_, Option<MemoryServiceState>>,
-  auth: tauri::State<'_, AuthState>,
-  cloud: tauri::State<'_, CloudClientState>,
+    session_id: String,
+    content: String, // JSON-serialized Vec<ContentBlock>
+    app: tauri::AppHandle,
+    db: tauri::State<'_, DbPool>,
+    executor_tx: tauri::State<'_, ExecutorTx>,
+    agent_semaphores: tauri::State<'_, AgentSemaphores>,
+    session_registry: tauri::State<'_, SessionExecutionRegistry>,
+    permission_registry: tauri::State<'_, PermissionRegistry>,
+    memory_state: tauri::State<'_, Option<MemoryServiceState>>,
+    auth: tauri::State<'_, AuthState>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<String, String> {
-  let pool = db.0.clone();
-  let stream_id = format!("chat:{}", session_id);
-  let stream_id_ret = stream_id.clone();
+    let pool = db.0.clone();
+    let stream_id = format!("chat:{}", session_id);
+    let stream_id_ret = stream_id.clone();
 
-  // Parse user content blocks
-  let user_content: Vec<ContentBlock> = serde_json
-    ::from_str(&content)
-    .map_err(|e| format!("invalid content: {}", e))?;
+    // Parse user content blocks
+    let user_content: Vec<ContentBlock> =
+        serde_json::from_str(&content).map_err(|e| format!("invalid content: {}", e))?;
 
-  // Grab the cloud client before the blocking task so we can sync the user message afterwards
-  let cloud_client = cloud.get();
+    // Grab the cloud client before the blocking task so we can sync the user message afterwards
+    let cloud_client = cloud.get();
 
-  // Load session + history in blocking task
-  let (agent_id, history, _session_title, chain_depth, user_msg_id, user_msg_now, user_msg_content_json) = {
-    let pool = pool.clone();
-    let sid = session_id.clone();
-    let uc = user_content.clone();
+    // Load session + history in blocking task
+    let (
+        agent_id,
+        history,
+        _session_title,
+        chain_depth,
+        user_msg_id,
+        user_msg_now,
+        user_msg_content_json,
+    ) = {
+        let pool = pool.clone();
+        let sid = session_id.clone();
+        let uc = user_content.clone();
 
-    tokio::task
+        tokio::task
       ::spawn_blocking(
         move || -> Result<(String, Vec<ChatMessage>, String, i64, String, String, String), String> {
           let conn = pool.get().map_err(|e| e.to_string())?;
@@ -565,366 +614,469 @@ pub async fn send_chat_message(
         }
       ).await
       .map_err(|e| e.to_string())??
-  };
+    };
 
-  // Sync the initial user message to Supabase (was missing — only SQLite was written above)
-  if let Some(client) = cloud_client.clone() {
-    let sid_cloud = session_id.clone();
-    let msg_id_cloud = user_msg_id.clone();
-    let now_cloud = user_msg_now.clone();
-    let content_json_cloud = user_msg_content_json.clone();
-    tokio::spawn(async move {
-      if let Err(e) = client
-        .upsert_chat_message(&msg_id_cloud, &sid_cloud, "user", &content_json_cloud, &now_cloud)
-        .await
-      {
-        warn!("cloud upsert initial user message: {}", e);
-      }
-    });
-  }
-
-  // Resolve memory user_id from auth state
-  let memory_user_id = match auth.get().await {
-    AuthMode::Cloud(session) => session.user_id,
-    _ => "default_user".to_string(),
-  };
-
-  // Spawn the LLM call on a background task so the command returns immediately
-  let db_bg = DbPool(pool.clone());
-  let sid_bg = session_id.clone();
-  let etx = executor_tx.0.clone();
-  let semaphores = agent_semaphores.inner().clone();
-  let registry = session_registry.inner().clone();
-  let perm_registry = permission_registry.inner().clone();
-  let mem_client = memory_state.as_ref().map(|s| s.client.clone());
-
-  tauri::async_runtime::spawn(async move {
-    if let Err(e) = do_llm_chat(
-      &agent_id,
-      history,
-      &stream_id,
-      &app,
-      &db_bg,
-      &sid_bg,
-      &etx,
-      chain_depth,
-      semaphores,
-      registry,
-      perm_registry,
-      mem_client.as_ref(),
-      &memory_user_id,
-      cloud_client.clone(),
-    ).await {
-      warn!("Chat LLM error: {}", e);
-      // Emit finished with error info
-      emit_agent_iteration(&app, &stream_id, 1, "finished", None, 0);
+    // Sync the initial user message to Supabase (was missing — only SQLite was written above)
+    if let Some(client) = cloud_client.clone() {
+        let sid_cloud = session_id.clone();
+        let msg_id_cloud = user_msg_id.clone();
+        let now_cloud = user_msg_now.clone();
+        let content_json_cloud = user_msg_content_json.clone();
+        tokio::spawn(async move {
+            if let Err(e) = client
+                .upsert_chat_message(
+                    &msg_id_cloud,
+                    &sid_cloud,
+                    "user",
+                    &content_json_cloud,
+                    &now_cloud,
+                )
+                .await
+            {
+                warn!("cloud upsert initial user message: {}", e);
+            }
+        });
     }
-  });
 
-  Ok(stream_id_ret)
+    // Resolve memory user_id from auth state
+    let memory_user_id = match auth.get().await {
+        AuthMode::Cloud(session) => session.user_id,
+        _ => "default_user".to_string(),
+    };
+
+    // Spawn the LLM call on a background task so the command returns immediately
+    let db_bg = DbPool(pool.clone());
+    let sid_bg = session_id.clone();
+    let etx = executor_tx.0.clone();
+    let semaphores = agent_semaphores.inner().clone();
+    let registry = session_registry.inner().clone();
+    let perm_registry = permission_registry.inner().clone();
+    let mem_client = memory_state.as_ref().map(|s| s.client.clone());
+
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = do_llm_chat(
+            &agent_id,
+            history,
+            &stream_id,
+            &app,
+            &db_bg,
+            &sid_bg,
+            &etx,
+            chain_depth,
+            semaphores,
+            registry,
+            perm_registry,
+            mem_client.as_ref(),
+            &memory_user_id,
+            cloud_client.clone(),
+        )
+        .await
+        {
+            warn!("Chat LLM error: {}", e);
+            // Emit finished with error info
+            emit_agent_iteration(&app, &stream_id, 1, "finished", None, 0);
+        }
+    });
+
+    Ok(stream_id_ret)
 }
 
 const MAX_CHAT_TOOL_ITERATIONS: u32 = 10;
 
 /// Save a chat message to the DB.
 async fn save_chat_message(
-  pool: &r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>,
-  session_id: &str,
-  role: &str,
-  content: &[ContentBlock],
-  cloud: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+    pool: &r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>,
+    session_id: &str,
+    role: &str,
+    content: &[ContentBlock],
+    cloud: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<(), String> {
-  let pool = pool.clone();
-  let sid = session_id.to_string();
-  let role = role.to_string();
-  let content_json = serde_json::to_string(content).map_err(|e| e.to_string())?;
+    let pool = pool.clone();
+    let sid = session_id.to_string();
+    let role = role.to_string();
+    let content_json = serde_json::to_string(content).map_err(|e| e.to_string())?;
 
-  let content_json_clone = content_json.clone();
-  let sid_clone = sid.clone();
-  let role_clone = role.clone();
+    let content_json_clone = content_json.clone();
+    let sid_clone = sid.clone();
+    let role_clone = role.clone();
 
-  let (msg_id, now) = tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
-    let conn = pool.get().map_err(|e| e.to_string())?;
-    let msg_id = Ulid::new().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
+    let (msg_id, now) = tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let msg_id = Ulid::new().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
 
-    conn.execute(
-      "INSERT INTO chat_messages (id, session_id, role, content, created_at)
+        conn.execute(
+            "INSERT INTO chat_messages (id, session_id, role, content, created_at)
        VALUES (?1, ?2, ?3, ?4, ?5)",
-      rusqlite::params![msg_id, sid, role, content_json, now],
-    ).map_err(|e| e.to_string())?;
+            rusqlite::params![msg_id, sid, role, content_json, now],
+        )
+        .map_err(|e| e.to_string())?;
 
-    conn.execute(
-      "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
-      rusqlite::params![now, sid],
-    ).map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
+            rusqlite::params![now, sid],
+        )
+        .map_err(|e| e.to_string())?;
 
-    Ok((msg_id, now))
-  }).await.map_err(|e| e.to_string())??;
+        Ok((msg_id, now))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
-  if let Some(client) = cloud {
-    tokio::spawn(async move {
-      if let Err(e) = client.upsert_chat_message(&msg_id, &sid_clone, &role_clone, &content_json_clone, &now).await {
-        warn!("cloud upsert chat_message: {}", e);
-      }
-    });
-  }
+    if let Some(client) = cloud {
+        tokio::spawn(async move {
+            if let Err(e) = client
+                .upsert_chat_message(&msg_id, &sid_clone, &role_clone, &content_json_clone, &now)
+                .await
+            {
+                warn!("cloud upsert chat_message: {}", e);
+            }
+        });
+    }
 
-  Ok(())
+    Ok(())
 }
 
 /// Perform the actual LLM streaming call with tool execution support.
 async fn do_llm_chat(
-  agent_id: &str,
-  messages: Vec<ChatMessage>,
-  stream_id: &str,
-  app: &tauri::AppHandle,
-  db: &DbPool,
-  session_id: &str,
-  executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
-  chain_depth: i64,
-  agent_semaphores: AgentSemaphores,
-  session_registry: SessionExecutionRegistry,
-  permission_registry: PermissionRegistry,
-  memory_client: Option<&MemoryClient>,
-  memory_user_id: &str,
-  cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+    agent_id: &str,
+    messages: Vec<ChatMessage>,
+    stream_id: &str,
+    app: &tauri::AppHandle,
+    db: &DbPool,
+    session_id: &str,
+    executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
+    chain_depth: i64,
+    agent_semaphores: AgentSemaphores,
+    session_registry: SessionExecutionRegistry,
+    permission_registry: PermissionRegistry,
+    memory_client: Option<&MemoryClient>,
+    memory_user_id: &str,
+    cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<(), String> {
-  // Load agent config
-  let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
+    // Load agent config
+    let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
 
-  let provider_name = &ws_config.provider;
-  let api_key = keychain
-    ::retrieve_api_key(provider_name)
-    .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
+    let provider_name = &ws_config.provider;
+    let api_key = keychain::retrieve_api_key(provider_name)
+        .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
 
-  let provider = llm_provider::create_provider(provider_name, api_key)?;
+    let provider = llm_provider::create_provider(provider_name, api_key)?;
 
-  // Build context via pipeline (messages already loaded, pass them to avoid re-query)
-  let pipeline = context::default_pipeline(memory_client.cloned());
-  let ctx_request = ContextRequest {
-    agent_id: agent_id.to_string(),
-    mode: ContextMode::Chat,
-    session_id: Some(session_id.to_string()),
-    goal: None,
-    ws_config: ws_config.clone(),
-    existing_messages: Some(messages),
-    is_sub_agent: false,
-    chain_depth: 0,
-    user_id: memory_user_id.to_string(),
-  };
-  let snapshot = pipeline.build(&ctx_request, db).await?;
-  let mut messages = snapshot.messages;
-  let tools = snapshot.tools;
+    // Build context via pipeline (messages already loaded, pass them to avoid re-query)
+    let pipeline = context::default_pipeline(memory_client.cloned());
+    let ctx_request = ContextRequest {
+        agent_id: agent_id.to_string(),
+        mode: ContextMode::Chat,
+        session_id: Some(session_id.to_string()),
+        goal: None,
+        ws_config: ws_config.clone(),
+        existing_messages: Some(messages),
+        is_sub_agent: false,
+        chain_depth: 0,
+        user_id: memory_user_id.to_string(),
+    };
+    let snapshot = pipeline.build(&ctx_request, db).await?;
+    let mut messages = snapshot.messages;
+    let tools = snapshot.tools;
 
-  let context_window = snapshot.token_budget.context_window;
+    let context_window = snapshot.token_budget.context_window;
 
-  let config = LlmConfig {
-    model: ws_config.model.clone(),
-    max_tokens: MAX_TOKENS_PER_CALL,
-    temperature: Some(ws_config.temperature),
-    system_prompt: snapshot.system_prompt,
-  };
+    let config = LlmConfig {
+        model: ws_config.model.clone(),
+        max_tokens: MAX_TOKENS_PER_CALL,
+        temperature: Some(ws_config.temperature),
+        system_prompt: snapshot.system_prompt,
+    };
 
-  let tool_ctx = ToolExecutionContext::new_with_bus(
-    agent_id,
-    stream_id,
-    Some(session_id),
-    chain_depth,
-    db.clone(),
-    executor_tx.clone(),
-    app.clone(),
-    agent_semaphores,
-    session_registry,
-  ).with_permission_registry(permission_registry.clone())
-   .with_memory_client(memory_client.cloned())
-   .with_memory_user_id(memory_user_id.to_string())
-   .with_cloud_client(cloud_client.clone());
-  let pool = db.0.clone();
+    let tool_ctx = ToolExecutionContext::new_with_bus(
+        agent_id,
+        stream_id,
+        Some(session_id),
+        chain_depth,
+        db.clone(),
+        executor_tx.clone(),
+        app.clone(),
+        agent_semaphores,
+        session_registry,
+    )
+    .with_permission_registry(permission_registry.clone())
+    .with_memory_client(memory_client.cloned())
+    .with_memory_user_id(memory_user_id.to_string())
+    .with_cloud_client(cloud_client.clone());
+    let pool = db.0.clone();
 
-  let mut cumulative_input_tokens: u32 = 0;
-  let mut cumulative_output_tokens: u32 = 0;
-  let mut iteration: u32 = 0;
+    let mut cumulative_input_tokens: u32 = 0;
+    let mut cumulative_output_tokens: u32 = 0;
+    let mut iteration: u32 = 0;
 
-  loop {
-    iteration += 1;
+    loop {
+        iteration += 1;
 
-    if iteration > MAX_CHAT_TOOL_ITERATIONS {
-      info!(session_id = session_id, "Chat tool iteration limit reached");
-      break;
-    }
+        if iteration > MAX_CHAT_TOOL_ITERATIONS {
+            info!(session_id = session_id, "Chat tool iteration limit reached");
+            break;
+        }
 
-    debug!(
-      session_id = session_id,
-      message_count = messages.len(),
-      iteration = iteration,
-      "Chat LLM call (iteration {})",
-      iteration,
-    );
+        debug!(
+            session_id = session_id,
+            message_count = messages.len(),
+            iteration = iteration,
+            "Chat LLM call (iteration {})",
+            iteration,
+        );
 
-    emit_agent_iteration(app, stream_id, iteration, "llm_call", None,
-      cumulative_input_tokens + cumulative_output_tokens);
+        emit_agent_iteration(
+            app,
+            stream_id,
+            iteration,
+            "llm_call",
+            None,
+            cumulative_input_tokens + cumulative_output_tokens,
+        );
 
-    let response = provider
-      .chat_streaming(&config, &messages, &tools, app, stream_id, iteration)
-      .await?;
+        let response = provider
+            .chat_streaming(&config, &messages, &tools, app, stream_id, iteration)
+            .await?;
 
-    cumulative_input_tokens += response.usage.input_tokens;
-    cumulative_output_tokens += response.usage.output_tokens;
+        cumulative_input_tokens += response.usage.input_tokens;
+        cumulative_output_tokens += response.usage.output_tokens;
 
-    // Save assistant response to DB
-    save_chat_message(&pool, session_id, "assistant", &response.content, cloud_client.clone()).await?;
+        // Save assistant response to DB
+        save_chat_message(
+            &pool,
+            session_id,
+            "assistant",
+            &response.content,
+            cloud_client.clone(),
+        )
+        .await?;
 
-    match response.stop_reason {
-      llm_provider::StopReason::EndTurn | llm_provider::StopReason::MaxTokens => {
-        // Done — no tool calls, just a normal response
-        messages.push(ChatMessage {
-          role: "assistant".to_string(),
-          content: response.content,
-          created_at: None,
-        });
-        break;
-      }
+        match response.stop_reason {
+            llm_provider::StopReason::EndTurn | llm_provider::StopReason::MaxTokens => {
+                // Done — no tool calls, just a normal response
+                messages.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: response.content,
+                    created_at: None,
+                });
+                break;
+            }
 
-      llm_provider::StopReason::ToolUse => {
-        // Add assistant message with tool_use blocks to conversation
-        messages.push(ChatMessage {
-          role: "assistant".to_string(),
-          content: response.content.clone(),
-          created_at: None,
-        });
+            llm_provider::StopReason::ToolUse => {
+                // Add assistant message with tool_use blocks to conversation
+                messages.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: response.content.clone(),
+                    created_at: None,
+                });
 
-        // Execute each tool and collect results
-        let mut tool_results: Vec<ContentBlock> = Vec::new();
+                // Execute each tool and collect results
+                let mut tool_results: Vec<ContentBlock> = Vec::new();
 
-        for block in &response.content {
-          if let ContentBlock::ToolUse { id, name, input } = block {
-            emit_agent_iteration(
-              app, stream_id, iteration, "tool_exec",
-              Some(name),
-              cumulative_input_tokens + cumulative_output_tokens,
-            );
+                for block in &response.content {
+                    if let ContentBlock::ToolUse { id, name, input } = block {
+                        emit_agent_iteration(
+                            app,
+                            stream_id,
+                            iteration,
+                            "tool_exec",
+                            Some(name),
+                            cumulative_input_tokens + cumulative_output_tokens,
+                        );
 
-            match permissions::execute_tool_with_permissions(&tool_ctx, name, input, app, stream_id, &permission_registry).await {
-              Ok((result, _is_finish)) => {
-                // Wrap tool output in data tags to signal untrusted content
-                let wrapped = format!(
+                        match permissions::execute_tool_with_permissions(
+                            &tool_ctx,
+                            name,
+                            input,
+                            app,
+                            stream_id,
+                            &permission_registry,
+                        )
+                        .await
+                        {
+                            Ok((result, _is_finish)) => {
+                                // Wrap tool output in data tags to signal untrusted content
+                                let wrapped = format!(
                   "<tool_result name=\"{}\" data_source=\"untrusted\">{}</tool_result>",
                   name, result
                 );
-                tool_results.push(ContentBlock::ToolResult {
-                  tool_use_id: id.clone(),
-                  content: wrapped,
-                  is_error: false,
+                                tool_results.push(ContentBlock::ToolResult {
+                                    tool_use_id: id.clone(),
+                                    content: wrapped,
+                                    is_error: false,
+                                });
+                                emit_agent_tool_result(
+                                    app, stream_id, iteration, id, &result, false,
+                                );
+                            }
+                            Err(err) => {
+                                let err_content = format!("Error: {}", err);
+                                tool_results.push(ContentBlock::ToolResult {
+                                    tool_use_id: id.clone(),
+                                    content: err_content.clone(),
+                                    is_error: true,
+                                });
+                                emit_agent_tool_result(
+                                    app,
+                                    stream_id,
+                                    iteration,
+                                    id,
+                                    &err_content,
+                                    true,
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Save tool results to DB and add to conversation
+                save_chat_message(
+                    &pool,
+                    session_id,
+                    "user",
+                    &tool_results,
+                    cloud_client.clone(),
+                )
+                .await?;
+
+                messages.push(ChatMessage {
+                    role: "user".to_string(),
+                    content: tool_results,
+                    created_at: None,
                 });
-                emit_agent_tool_result(app, stream_id, iteration, id, &result, false);
-              }
-              Err(err) => {
-                let err_content = format!("Error: {}", err);
-                tool_results.push(ContentBlock::ToolResult {
-                  tool_use_id: id.clone(),
-                  content: err_content.clone(),
-                  is_error: true,
-                });
-                emit_agent_tool_result(app, stream_id, iteration, id, &err_content, true);
-              }
+
+                // Loop back to call LLM again with tool results
             }
-          }
         }
-
-        // Save tool results to DB and add to conversation
-        save_chat_message(&pool, session_id, "user", &tool_results, cloud_client.clone()).await?;
-
-        messages.push(ChatMessage {
-          role: "user".to_string(),
-          content: tool_results,
-          created_at: None,
-        });
-
-        // Loop back to call LLM again with tool results
-      }
     }
-  }
 
-  let total_tokens = cumulative_input_tokens + cumulative_output_tokens;
-  emit_agent_iteration(app, stream_id, iteration, "finished", None, total_tokens);
+    let total_tokens = cumulative_input_tokens + cumulative_output_tokens;
+    emit_agent_iteration(app, stream_id, iteration, "finished", None, total_tokens);
 
-  // Emit context window usage update
-  emit_chat_context_update(app, session_id, cumulative_input_tokens, cumulative_output_tokens, context_window);
+    // Emit context window usage update
+    emit_chat_context_update(
+        app,
+        session_id,
+        cumulative_input_tokens,
+        cumulative_output_tokens,
+        context_window,
+    );
 
-  // Update last_input_tokens on session
-  {
-    let pool = pool.clone();
-    let sid = session_id.to_string();
-    let input_tokens = cumulative_input_tokens;
-    let _ = tokio::task::spawn_blocking(move || {
-      if let Ok(conn) = pool.get() {
-        let now = chrono::Utc::now().to_rfc3339();
-        let _ = conn.execute(
+    // Update last_input_tokens on session
+    {
+        let pool = pool.clone();
+        let sid = session_id.to_string();
+        let input_tokens = cumulative_input_tokens;
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(conn) = pool.get() {
+                let now = chrono::Utc::now().to_rfc3339();
+                let _ = conn.execute(
           "UPDATE chat_sessions SET last_input_tokens = ?1, updated_at = ?2 WHERE id = ?3",
           rusqlite::params![input_tokens, now, sid],
         );
-      }
-    }).await;
-  }
+            }
+        })
+        .await;
+    }
 
-  info!(session_id = session_id, "Chat complete ({} tokens, {} iterations)", total_tokens, iteration);
-
-  // Check if compaction is needed
-  let threshold = compaction::effective_threshold(&ws_config);
-  if compaction::should_compact(cumulative_input_tokens, context_window, threshold) {
     info!(
-      session_id = session_id,
-      "Context usage {:.1}% exceeds threshold {:.0}%, triggering compaction",
-      ((cumulative_input_tokens as f64) / (context_window as f64)) * 100.0,
-      threshold * 100.0
+        session_id = session_id,
+        "Chat complete ({} tokens, {} iterations)", total_tokens, iteration
     );
 
-    let agent_id = agent_id.to_string();
-    let session_id = session_id.to_string();
-    let ws_config = ws_config.clone();
-    let app = app.clone();
-    let db = DbPool(db.0.clone());
+    // Check if compaction is needed
+    let threshold = compaction::effective_threshold(&ws_config);
+    if compaction::should_compact(cumulative_input_tokens, context_window, threshold) {
+        // Circuit breaker: skip auto-compaction if too many recent failures
+        let db_check = DbPool(db.0.clone());
+        let circuit_open = compaction::is_circuit_open(&db_check, session_id).unwrap_or(false);
+        if circuit_open {
+            warn!(
+                session_id = session_id,
+                "Auto-compaction skipped: circuit breaker open after repeated failures"
+            );
+        } else {
+            info!(
+                session_id = session_id,
+                "Context usage {:.1}% exceeds threshold {:.0}%, triggering compaction",
+                ((cumulative_input_tokens as f64) / (context_window as f64)) * 100.0,
+                threshold * 100.0
+            );
 
-    let compact_api_key = keychain
-      ::retrieve_api_key(provider_name)
-      .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
-    let compact_provider = llm_provider::create_provider(provider_name, compact_api_key)?;
+            let agent_id = agent_id.to_string();
+            let session_id = session_id.to_string();
+            let ws_config = ws_config.clone();
+            let app = app.clone();
+            let db = DbPool(db.0.clone());
+            let compaction_user_id = memory_user_id.to_string();
+            let compact_memory_client = memory_client.cloned();
+            let compact_cloud_client = cloud_client.clone();
+            match keychain::retrieve_api_key(provider_name) {
+                Ok(compact_api_key) => {
+                    match llm_provider::create_provider(provider_name, compact_api_key) {
+                        Ok(compact_provider) => {
+                            tauri::async_runtime::spawn(async move {
+                                match compaction::perform_compaction(
+                                    &agent_id,
+                                    &session_id,
+                                    compact_provider.as_ref(),
+                                    &ws_config,
+                                    &app,
+                                    &db,
+                                    compact_memory_client,
+                                    &compaction_user_id,
+                                    compact_cloud_client,
+                                )
+                                .await
+                                {
+                                    Ok(()) => {
+                                        info!(session_id = %session_id, "Background compaction completed")
+                                    }
+                                    Err(e) => {
+                                        warn!(session_id = %session_id, "Background compaction failed: {}", e);
+                                        let _ =
+                                            compaction::record_compaction_failure(&db, &session_id);
+                                    }
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            warn!(session_id = %session_id, "Background compaction provider setup failed: {}", e);
+                            let _ = compaction::record_compaction_failure(&db, &session_id);
+                        }
+                    }
+                }
+                Err(_) => {
+                    warn!(session_id = %session_id, "Background compaction skipped: no API key for provider '{}'", provider_name);
+                    let _ = compaction::record_compaction_failure(&db, &session_id);
+                }
+            }
+        }
+    }
 
-    let compaction_user_id = memory_user_id.to_string();
-    tauri::async_runtime::spawn(async move {
-      match compaction::perform_compaction(
-        &agent_id, &session_id, compact_provider.as_ref(),
-        &ws_config, &app, &db, None, &compaction_user_id,
-      ).await {
-        Ok(()) => info!(session_id = %session_id, "Background compaction completed"),
-        Err(e) => warn!(session_id = %session_id, "Background compaction failed: {}", e),
-      }
-    });
-  }
-
-  Ok(())
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionExecutionStatus {
-  pub session_id: String,
-  pub execution_state: Option<String>,
-  pub finish_summary: Option<String>,
-  pub terminal_error: Option<String>,
+    pub session_id: String,
+    pub execution_state: Option<String>,
+    pub finish_summary: Option<String>,
+    pub terminal_error: Option<String>,
 }
 
 #[tauri::command]
 pub async fn get_session_execution(
-  session_id: String,
-  db: tauri::State<'_, DbPool>
+    session_id: String,
+    db: tauri::State<'_, DbPool>,
 ) -> Result<SessionExecutionStatus, String> {
-  let pool = db.0.clone();
-  tokio::task::spawn_blocking(move || {
-    let conn = pool.get().map_err(|e| e.to_string())?;
-    let sid = session_id.clone();
-    conn.query_row(
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let sid = session_id.clone();
+        conn.query_row(
       "SELECT execution_state, finish_summary, terminal_error FROM chat_sessions WHERE id = ?1",
       rusqlite::params![session_id],
       |row| {
@@ -936,39 +1088,45 @@ pub async fn get_session_execution(
         })
       },
     ).map_err(|e| e.to_string())
-  }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn cancel_agent_session(
-  session_id: String,
-  db: tauri::State<'_, DbPool>,
-  session_registry: tauri::State<'_, SessionExecutionRegistry>,
+    session_id: String,
+    db: tauri::State<'_, DbPool>,
+    session_registry: tauri::State<'_, SessionExecutionRegistry>,
 ) -> Result<(), String> {
-  let pool = db.0.clone();
-  let sid = session_id.clone();
-  let session_type: String = tokio::task::spawn_blocking(move || {
-    let conn = pool.get().map_err(|e| e.to_string())?;
-    conn.query_row(
-      "SELECT session_type FROM chat_sessions WHERE id = ?1",
-      rusqlite::params![sid],
-      |row| row.get(0),
-    ).map_err(|e| e.to_string())
-  }).await.map_err(|e| e.to_string())??;
+    let pool = db.0.clone();
+    let sid = session_id.clone();
+    let session_type: String = tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT session_type FROM chat_sessions WHERE id = ?1",
+            rusqlite::params![sid],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
-  if !matches!(session_type.as_str(), "bus_message" | "sub_agent" | "pulse") {
-    return Err("only bus_message, sub_agent, and pulse sessions can be cancelled".to_string());
-  }
+    if !matches!(session_type.as_str(), "bus_message" | "sub_agent" | "pulse") {
+        return Err("only bus_message, sub_agent, and pulse sessions can be cancelled".to_string());
+    }
 
-  session_registry.cancel(&session_id).await;
-  let db_pool = DbPool(db.0.clone());
-  session_agent::update_session_execution_state(
-    &db_pool,
-    &session_id,
-    "cancelled",
-    None,
-    Some("Cancelled".to_string()),
-  ).await
+    session_registry.cancel(&session_id).await;
+    let db_pool = DbPool(db.0.clone());
+    session_agent::update_session_execution_state(
+        &db_pool,
+        &session_id,
+        "cancelled",
+        None,
+        Some("Cancelled".to_string()),
+    )
+    .await
 }
 
 // ─── Context Usage Query ────────────────────────────────────────────────────
@@ -976,110 +1134,115 @@ pub async fn cancel_agent_session(
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextUsage {
-  pub input_tokens: u32,
-  pub context_window_size: u32,
-  pub usage_percent: f64,
+    pub input_tokens: u32,
+    pub context_window_size: u32,
+    pub usage_percent: f64,
 }
 
 #[tauri::command]
 pub async fn get_context_usage(
-  session_id: String,
-  db: tauri::State<'_, DbPool>
+    session_id: String,
+    db: tauri::State<'_, DbPool>,
 ) -> Result<ContextUsage, String> {
-  let pool = db.0.clone();
+    let pool = db.0.clone();
 
-  let (last_input_tokens, agent_id) = tokio::task
-    ::spawn_blocking({
-      let pool = pool.clone();
-      let sid = session_id.clone();
-      move || -> Result<(Option<u32>, String), String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let row: (Option<u32>, String) = conn
-          .query_row(
-            "SELECT last_input_tokens, agent_id FROM chat_sessions WHERE id = ?1",
-            rusqlite::params![sid],
-            |row| Ok((row.get(0)?, row.get(1)?))
-          )
-          .map_err(|e| format!("session not found: {}", e))?;
-        Ok(row)
-      }
-    }).await
+    let (last_input_tokens, agent_id) = tokio::task::spawn_blocking({
+        let pool = pool.clone();
+        let sid = session_id.clone();
+        move || -> Result<(Option<u32>, String), String> {
+            let conn = pool.get().map_err(|e| e.to_string())?;
+            let row: (Option<u32>, String) = conn
+                .query_row(
+                    "SELECT last_input_tokens, agent_id FROM chat_sessions WHERE id = ?1",
+                    rusqlite::params![sid],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(|e| format!("session not found: {}", e))?;
+            Ok(row)
+        }
+    })
+    .await
     .map_err(|e| e.to_string())??;
 
-  let ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
-  let context_window = compaction::effective_context_window(&ws_config);
-  let input_tokens = last_input_tokens.unwrap_or(0);
+    let ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
+    let context_window = compaction::effective_context_window(&ws_config);
+    let input_tokens = last_input_tokens.unwrap_or(0);
 
-  let usage_percent = if context_window > 0 {
-    ((input_tokens as f64) / (context_window as f64)) * 100.0
-  } else {
-    0.0
-  };
+    let usage_percent = if context_window > 0 {
+        ((input_tokens as f64) / (context_window as f64)) * 100.0
+    } else {
+        0.0
+    };
 
-  Ok(ContextUsage {
-    input_tokens,
-    context_window_size: context_window,
-    usage_percent,
-  })
+    Ok(ContextUsage {
+        input_tokens,
+        context_window_size: context_window,
+        usage_percent,
+    })
 }
 
 // ─── Manual Compaction ──────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn compact_chat_session(
-  session_id: String,
-  app: tauri::AppHandle,
-  db: tauri::State<'_, DbPool>,
-  auth: tauri::State<'_, AuthState>,
+    session_id: String,
+    app: tauri::AppHandle,
+    db: tauri::State<'_, DbPool>,
+    auth: tauri::State<'_, AuthState>,
+    cloud: tauri::State<'_, CloudClientState>,
+    memory_state: tauri::State<'_, Option<MemoryServiceState>>,
 ) -> Result<(), String> {
-  let pool = db.0.clone();
+    let pool = db.0.clone();
 
-  // Look up agent_id for this session
-  let agent_id: String = tokio::task
-    ::spawn_blocking({
-      let pool = pool.clone();
-      let sid = session_id.clone();
-      move || -> Result<String, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        conn
-          .query_row(
-            "SELECT agent_id FROM chat_sessions WHERE id = ?1",
-            rusqlite::params![sid],
-            |row| row.get(0)
-          )
-          .map_err(|e| format!("session not found: {}", e))
-      }
-    }).await
+    // Look up agent_id for this session
+    let agent_id: String = tokio::task::spawn_blocking({
+        let pool = pool.clone();
+        let sid = session_id.clone();
+        move || -> Result<String, String> {
+            let conn = pool.get().map_err(|e| e.to_string())?;
+            conn.query_row(
+                "SELECT agent_id FROM chat_sessions WHERE id = ?1",
+                rusqlite::params![sid],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("session not found: {}", e))
+        }
+    })
+    .await
     .map_err(|e| e.to_string())??;
 
-  let ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
-  let provider_name = &ws_config.provider;
-  let api_key = keychain
-    ::retrieve_api_key(provider_name)
-    .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
-  let provider = llm_provider::create_provider(provider_name, api_key)?;
+    let ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
+    let provider_name = &ws_config.provider;
+    let api_key = keychain::retrieve_api_key(provider_name)
+        .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
+    let provider = llm_provider::create_provider(provider_name, api_key)?;
 
-  let memory_user_id = match auth.get().await {
-    AuthMode::Cloud(session) => session.user_id,
-    _ => "default_user".to_string(),
-  };
+    let memory_user_id = match auth.get().await {
+        AuthMode::Cloud(session) => session.user_id,
+        _ => "default_user".to_string(),
+    };
 
-  let db_pool = DbPool(pool);
-  compaction::perform_compaction(
-    &agent_id,
-    &session_id,
-    provider.as_ref(),
-    &ws_config,
-    &app,
-    &db_pool,
-    None,
-    &memory_user_id,
-  ).await?;
+    // Manual compaction bypasses the circuit breaker intentionally
+    let mem_client = memory_state.as_ref().map(|s| s.client.clone());
+    let cloud_client = cloud.get();
+    let db_pool = DbPool(pool);
+    compaction::perform_compaction(
+        &agent_id,
+        &session_id,
+        provider.as_ref(),
+        &ws_config,
+        &app,
+        &db_pool,
+        mem_client,
+        &memory_user_id,
+        cloud_client,
+    )
+    .await?;
 
-  // Refetch and emit updated context usage
-  let context_window = compaction::effective_context_window(&ws_config);
-  emit_chat_context_update(&app, &session_id, 0, 0, context_window);
+    // Refetch and emit updated context usage
+    let context_window = compaction::effective_context_window(&ws_config);
+    emit_chat_context_update(&app, &session_id, 0, 0, context_window);
 
-  info!(session_id = %session_id, "Manual compaction completed");
-  Ok(())
+    info!(session_id = %session_id, "Manual compaction completed");
+    Ok(())
 }

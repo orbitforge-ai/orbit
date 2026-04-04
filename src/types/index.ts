@@ -436,6 +436,12 @@ export interface ContextUsage {
   usagePercent: number;
 }
 
+export interface CompactionStatusPayload {
+  sessionId: string;
+  status: 'started' | 'completed' | 'failed';
+  timestamp: string;
+}
+
 // ─── Agent Bus types ───────────────────────────────────────────────────────
 
 export interface BusMessage {

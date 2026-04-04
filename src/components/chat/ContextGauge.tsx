@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Check } from 'lucide-react';
+import { Check, AlertTriangle } from 'lucide-react';
 import { chatApi } from '../../api/chat';
-import { onChatContextUpdate } from '../../events/runEvents';
+import { onChatContextUpdate, onCompactionStatus } from '../../events/runEvents';
 
 interface ContextGaugeProps {
   sessionId: string;
@@ -27,6 +27,7 @@ export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
   const [usagePercent, setUsagePercent] = useState(0);
   const [compacting, setCompacting] = useState(false);
   const [justCompacted, setJustCompacted] = useState(false);
+  const [compactionFailed, setCompactionFailed] = useState(false);
 
   // Load initial context usage on mount
   useEffect(() => {
@@ -54,10 +55,35 @@ export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
     };
   }, [sessionId]);
 
+  // Subscribe to background compaction status events
+  useEffect(() => {
+    const unsub = onCompactionStatus((payload) => {
+      if (payload.sessionId !== sessionId) return;
+      if (payload.status === 'started') {
+        setCompacting(true);
+        setCompactionFailed(false);
+      } else if (payload.status === 'completed') {
+        setCompacting(false);
+        setJustCompacted(true);
+        onCompacted?.();
+        setTimeout(() => setJustCompacted(false), 2000);
+      } else if (payload.status === 'failed') {
+        setCompacting(false);
+        setCompactionFailed(true);
+        setTimeout(() => setCompactionFailed(false), 4000);
+      }
+    });
+
+    return () => {
+      unsub.then((fn) => fn()).catch(() => {});
+    };
+  }, [sessionId, onCompacted]);
+
   async function handleCompact() {
     if (compacting) return;
     setCompacting(true);
     setJustCompacted(false);
+    setCompactionFailed(false);
     try {
       await chatApi.compactSession(sessionId);
       // Refetch updated usage
@@ -71,6 +97,8 @@ export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
       setTimeout(() => setJustCompacted(false), 2000);
     } catch (err) {
       console.error('Compaction failed:', err);
+      setCompactionFailed(true);
+      setTimeout(() => setCompactionFailed(false), 4000);
     }
     setCompacting(false);
   }
@@ -84,20 +112,28 @@ export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
   const circumference = 2 * Math.PI * radius;
   const fillPercent = Math.min(usagePercent, 100);
   const dashOffset = circumference - (fillPercent / 100) * circumference;
-  const color = justCompacted ? 'var(--color-success)' : getColor(usagePercent);
+  const color = justCompacted
+    ? 'var(--color-success)'
+    : compactionFailed
+      ? 'var(--color-failure)'
+      : getColor(usagePercent);
+
+  const tooltip = compacting
+    ? 'Compacting...'
+    : justCompacted
+      ? 'Compaction complete'
+      : compactionFailed
+        ? 'Compaction failed — click to retry'
+        : usagePercent >= 65
+          ? `${formatTokens(inputTokens)} / ${formatTokens(contextWindow)} tokens (${usagePercent.toFixed(1)}%) — auto-compaction may be in progress, or click to compact manually`
+          : `${formatTokens(inputTokens)} / ${formatTokens(contextWindow)} tokens (${usagePercent.toFixed(1)}%) — click to compact`;
 
   return (
     <button
       onClick={handleCompact}
       disabled={compacting}
       className="relative inline-flex items-center justify-center cursor-pointer hover:opacity-80 disabled:opacity-40 transition-opacity"
-      title={
-        compacting
-          ? 'Compacting...'
-          : justCompacted
-            ? 'Compaction complete'
-            : `${formatTokens(inputTokens)} / ${formatTokens(contextWindow)} tokens (${usagePercent.toFixed(1)}%) — click to compact`
-      }
+      title={tooltip}
     >
       <svg
         width={size}
@@ -128,6 +164,8 @@ export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
       </svg>
       {compacting ? null : justCompacted ? (
         <Check size={10} className="absolute text-emerald-400" strokeWidth={3} />
+      ) : compactionFailed ? (
+        <AlertTriangle size={9} className="absolute" style={{ color: 'var(--color-failure)' }} />
       ) : (
         <span
           className="absolute text-[7px] font-mono tabular-nums leading-none"

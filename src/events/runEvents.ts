@@ -7,6 +7,7 @@ import {
   AgentContentBlockPayload,
   AgentToolResultPayload,
   ChatContextUpdatePayload,
+  CompactionStatusPayload,
   BusMessageSentPayload,
   SubAgentsSpawnedPayload,
 } from '../types';
@@ -55,6 +56,12 @@ export function onChatContextUpdate(handler: (payload: ChatContextUpdatePayload)
 
 export function onSubAgentsSpawned(handler: (payload: SubAgentsSpawnedPayload) => void) {
   return listen<SubAgentsSpawnedPayload>('agent:sub_agents_spawned', (event) => {
+    handler(event.payload);
+  });
+}
+
+export function onCompactionStatus(handler: (payload: CompactionStatusPayload) => void) {
+  return listen<CompactionStatusPayload>('compaction:status', (event) => {
     handler(event.payload);
   });
 }
