@@ -143,18 +143,25 @@ pub async fn login(
     // Sync API keys from Supabase Vault to local Keychain (best-effort)
     sync_api_keys_from_vault(&http, &supabase_url, &anon_key, &session.access_token).await;
 
-    // Bi-directional data sync: push local → cloud, then pull cloud → local
-    // Both are best-effort: login succeeds even if sync fails.
-    let pool = db.0.clone();
-    let client_for_sync = cloud_client.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = client_for_sync.push_local_data(&pool).await {
-            warn!("Login push failed: {}", e);
-        }
-        if let Err(e) = client_for_sync.pull_all_data(&pool).await {
+    if !crate::db::cloud::cloud_sync_disabled() {
+        // Push local → cloud in background (best-effort, non-blocking)
+        let pool_for_push = db.0.clone();
+        let client_for_push = cloud_client.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = client_for_push.push_local_data(&pool_for_push).await {
+                warn!("Login push failed: {}", e);
+            }
+        });
+
+        // Pull cloud → local blocking: data must be in SQLite before the frontend
+        // receives the auth state and starts querying.
+        let pool = db.0.clone();
+        if let Err(e) = cloud_client.pull_all_data(&pool).await {
             warn!("Login pull failed: {}", e);
         }
-    });
+    } else {
+        info!("Cloud sync disabled — skipping login push/pull");
+    }
 
     let email_out = session.email.clone();
     let mode = AuthMode::Cloud(session);
@@ -229,17 +236,24 @@ pub async fn register(
     ));
     cloud_state.set(Some(cloud_client.clone()));
 
-    // Push local data to the new account, then pull (no-op on fresh account)
-    let pool = db.0.clone();
-    let client_for_sync = cloud_client.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = client_for_sync.push_local_data(&pool).await {
-            warn!("Registration push failed: {}", e);
-        }
-        if let Err(e) = client_for_sync.pull_all_data(&pool).await {
+    if !crate::db::cloud::cloud_sync_disabled() {
+        // Push local → cloud in background (best-effort, non-blocking)
+        let pool_for_push = db.0.clone();
+        let client_for_push = cloud_client.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = client_for_push.push_local_data(&pool_for_push).await {
+                warn!("Registration push failed: {}", e);
+            }
+        });
+
+        // Pull cloud → local blocking so data is ready before the frontend renders
+        let pool = db.0.clone();
+        if let Err(e) = cloud_client.pull_all_data(&pool).await {
             warn!("Registration pull failed: {}", e);
         }
-    });
+    } else {
+        info!("Cloud sync disabled — skipping registration push/pull");
+    }
 
     let email_out = session.email.clone();
     let mode = AuthMode::Cloud(session);
@@ -359,4 +373,18 @@ async fn sync_api_keys_from_vault(
             Err(e) => warn!("Failed to fetch API key for '{}': {}", provider, e),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// force_cloud_sync — manually trigger a full pull from Supabase
+// Returns row counts per table so the caller can show diagnostic info.
+// ---------------------------------------------------------------------------
+#[tauri::command]
+pub async fn force_cloud_sync(
+    cloud: tauri::State<'_, CloudClientState>,
+    db: tauri::State<'_, DbPool>,
+) -> Result<std::collections::HashMap<String, usize>, String> {
+    let client = cloud.get().ok_or_else(|| "Not signed in to cloud".to_string())?;
+    let pool = db.0.clone();
+    client.pull_all_data_with_counts(&pool).await
 }

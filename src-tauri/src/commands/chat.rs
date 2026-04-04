@@ -469,15 +469,18 @@ pub async fn send_chat_message(
     ::from_str(&content)
     .map_err(|e| format!("invalid content: {}", e))?;
 
+  // Grab the cloud client before the blocking task so we can sync the user message afterwards
+  let cloud_client = cloud.get();
+
   // Load session + history in blocking task
-  let (agent_id, history, _session_title, chain_depth) = {
+  let (agent_id, history, _session_title, chain_depth, user_msg_id, user_msg_now, user_msg_content_json) = {
     let pool = pool.clone();
     let sid = session_id.clone();
     let uc = user_content.clone();
 
     tokio::task
       ::spawn_blocking(
-        move || -> Result<(String, Vec<ChatMessage>, String, i64), String> {
+        move || -> Result<(String, Vec<ChatMessage>, String, i64, String, String, String), String> {
           let conn = pool.get().map_err(|e| e.to_string())?;
 
           // Get session
@@ -558,11 +561,27 @@ pub async fn send_chat_message(
             created_at: None,
           });
 
-          Ok((agent_id, messages, title, chain_depth))
+          Ok((agent_id, messages, title, chain_depth, msg_id, now, content_json))
         }
       ).await
       .map_err(|e| e.to_string())??
   };
+
+  // Sync the initial user message to Supabase (was missing — only SQLite was written above)
+  if let Some(client) = cloud_client.clone() {
+    let sid_cloud = session_id.clone();
+    let msg_id_cloud = user_msg_id.clone();
+    let now_cloud = user_msg_now.clone();
+    let content_json_cloud = user_msg_content_json.clone();
+    tokio::spawn(async move {
+      if let Err(e) = client
+        .upsert_chat_message(&msg_id_cloud, &sid_cloud, "user", &content_json_cloud, &now_cloud)
+        .await
+      {
+        warn!("cloud upsert initial user message: {}", e);
+      }
+    });
+  }
 
   // Resolve memory user_id from auth state
   let memory_user_id = match auth.get().await {
@@ -578,7 +597,6 @@ pub async fn send_chat_message(
   let registry = session_registry.inner().clone();
   let perm_registry = permission_registry.inner().clone();
   let mem_client = memory_state.as_ref().map(|s| s.client.clone());
-  let cloud_client = cloud.get();
 
   tauri::async_runtime::spawn(async move {
     if let Err(e) = do_llm_chat(

@@ -9,7 +9,7 @@ mod models;
 mod scheduler;
 
 use std::path::PathBuf;
-use tauri::Manager;
+use tauri::{ Emitter, Manager };
 use tauri::menu::{ Menu, MenuItem };
 use tauri::tray::TrayIconBuilder;
 
@@ -78,14 +78,21 @@ pub fn run() {
       let cloud_state = CloudClientState::empty();
       cloud_state.set(cloud_client_opt.clone());
 
-      // Background startup sync (pull only — no need to push on restart)
-      if let Some(client) = cloud_client_opt.clone() {
-        let pool = db_pool.0.clone();
-        tauri::async_runtime::spawn(async move {
-          if let Err(e) = client.pull_all_data(&pool).await {
-            tracing::warn!("Startup cloud pull failed: {}", e);
-          }
-        });
+      // Background startup sync (pull only — no need to push on restart).
+      // Emits `cloud:synced` when done so the frontend can invalidate its caches.
+      // Skipped when DISABLE_CLOUD_SYNC=1.
+      if !db::cloud::cloud_sync_disabled() {
+        if let Some(client) = cloud_client_opt.clone() {
+          let pool = db_pool.0.clone();
+          let app_handle = app.handle().clone();
+          tauri::async_runtime::spawn(async move {
+            if let Err(e) = client.pull_all_data(&pool).await {
+              tracing::warn!("Startup cloud pull failed: {}", e);
+            } else {
+              let _ = app_handle.emit("cloud:synced", ());
+            }
+          });
+        }
       }
 
       let auth_state = AuthState::new(initial_auth);
@@ -189,6 +196,7 @@ pub fn run() {
         commands::auth::login,
         commands::auth::register,
         commands::auth::logout,
+        commands::auth::force_cloud_sync,
         // Tasks
         commands::tasks::list_tasks,
         commands::tasks::get_task,

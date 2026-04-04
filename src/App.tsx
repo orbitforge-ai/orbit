@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
+import { listen } from '@tauri-apps/api/event';
 import { Sidebar } from './components/Sidebar';
 import { useUiStore } from './store/uiStore';
 import { useAuthStore } from './store/authStore';
@@ -25,11 +26,21 @@ const queryClient = new QueryClient({
 function AppContent() {
   const { screen } = useUiStore();
   const { state, load } = useAuthStore();
+  const queryClient = useQueryClient();
 
   // Load auth state from Rust backend on first render
   useEffect(() => {
     load();
   }, [load]);
+
+  // When the backend finishes a startup cloud pull, invalidate all cached
+  // queries so every screen refetches with the freshly synced data.
+  useEffect(() => {
+    const unlisten = listen('cloud:synced', () => {
+      queryClient.invalidateQueries();
+    });
+    return () => { unlisten.then(f => f()); };
+  }, [queryClient]);
 
   // Not yet loaded — render nothing (avoids flash)
   if (state === null) return null;

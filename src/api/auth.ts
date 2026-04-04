@@ -17,4 +17,6 @@ export const authApi = {
   logout: (): Promise<void> => invoke('logout'),
 
   setOfflineMode: (): Promise<void> => invoke('set_offline_mode'),
+
+  forceSync: (): Promise<Record<string, number>> => invoke('force_cloud_sync'),
 };

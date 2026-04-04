@@ -1,12 +1,28 @@
 import { useState, useRef, useEffect } from 'react';
-import { Cloud, WifiOff, LogOut, LogIn } from 'lucide-react';
+import { Cloud, WifiOff, LogOut, LogIn, RefreshCw } from 'lucide-react';
 import { cn } from '../lib/cn';
+import { useQueryClient } from '@tanstack/react-query';
+import { authApi } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
 
 export function SyncIndicator() {
   const { state, logout } = useAuthStore();
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSyncCounts, setLastSyncCounts] = useState<Record<string, number> | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+
+  async function handleForceSync() {
+    setSyncing(true);
+    try {
+      const counts = await authApi.forceSync();
+      setLastSyncCounts(counts);
+      queryClient.invalidateQueries();
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   // Close popover on outside click
   useEffect(() => {
@@ -57,7 +73,20 @@ export function SyncIndicator() {
               <div className="px-3 py-2 border-b border-edge">
                 <p className="text-xs text-muted">Signed in as</p>
                 <p className="text-primary font-medium truncate">{email}</p>
+                {lastSyncCounts && (
+                  <p className="text-[10px] text-muted mt-1">
+                    Last sync: {lastSyncCounts['chat_sessions'] ?? 0} sessions, {lastSyncCounts['chat_messages'] ?? 0} messages
+                  </p>
+                )}
               </div>
+              <button
+                onClick={handleForceSync}
+                disabled={syncing}
+                className="w-full flex items-center gap-2 px-3 py-2 text-secondary hover:bg-surface hover:text-primary transition-colors disabled:opacity-50"
+              >
+                <RefreshCw size={13} className={syncing ? 'animate-spin' : ''} />
+                {syncing ? 'Syncing…' : 'Sync now'}
+              </button>
               <button
                 onClick={async () => {
                   setOpen(false);

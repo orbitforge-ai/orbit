@@ -586,13 +586,31 @@ impl SupabaseClient {
         &self,
         pool: &Pool<SqliteConnectionManager>,
     ) -> Result<(), String> {
+        self.pull_all_data_inner(pool).await.map(|_| ())
+    }
+
+    /// Like `pull_all_data` but returns row counts per table for diagnostics.
+    pub async fn pull_all_data_with_counts(
+        &self,
+        pool: &Pool<SqliteConnectionManager>,
+    ) -> Result<std::collections::HashMap<String, usize>, String> {
+        self.pull_all_data_inner(pool).await
+    }
+
+    async fn pull_all_data_inner(
+        &self,
+        pool: &Pool<SqliteConnectionManager>,
+    ) -> Result<std::collections::HashMap<String, usize>, String> {
         macro_rules! fetch {
-            ($table:expr) => {
-                self.get_table($table).await.unwrap_or_else(|e| {
-                    warn!("pull {} failed: {}", $table, e);
-                    vec![]
-                })
-            };
+            ($table:expr) => {{
+                match self.get_table($table).await {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        warn!("pull {} failed: {}", $table, e);
+                        vec![]
+                    }
+                }
+            }};
         }
 
         let agents = fetch!("agents");
@@ -609,6 +627,28 @@ impl SupabaseClient {
         let mem_log = fetch!("memory_extraction_log");
         let projects = fetch!("projects");
         let project_agents = fetch!("project_agents");
+
+        let counts = std::collections::HashMap::from([
+            ("agents".to_string(), agents.len()),
+            ("tasks".to_string(), tasks.len()),
+            ("schedules".to_string(), scheds.len()),
+            ("runs".to_string(), runs.len()),
+            ("agent_conversations".to_string(), convos.len()),
+            ("chat_sessions".to_string(), sessions.len()),
+            ("chat_messages".to_string(), msgs.len()),
+            ("chat_compaction_summaries".to_string(), summaries.len()),
+            ("bus_messages".to_string(), bus_msgs.len()),
+            ("bus_subscriptions".to_string(), bus_subs.len()),
+            ("users".to_string(), users.len()),
+            ("memory_extraction_log".to_string(), mem_log.len()),
+            ("projects".to_string(), projects.len()),
+            ("project_agents".to_string(), project_agents.len()),
+        ]);
+
+        info!(
+            "Cloud pull fetched: agents={} tasks={} sessions={} messages={} runs={} projects={}",
+            agents.len(), tasks.len(), sessions.len(), msgs.len(), runs.len(), projects.len()
+        );
 
         let p = pool.clone();
         tokio::task::spawn_blocking(move || {
@@ -633,7 +673,7 @@ impl SupabaseClient {
         .map_err(|e| e.to_string())??;
 
         info!("Pulled cloud data into local SQLite");
-        Ok(())
+        Ok(counts)
     }
 }
 
@@ -644,13 +684,27 @@ impl SupabaseClient {
 #[derive(Clone)]
 pub struct CloudClientState(pub Arc<std::sync::RwLock<Option<Arc<SupabaseClient>>>>);
 
+/// Returns true when cloud sync is disabled via `DISABLE_CLOUD_SYNC=true|1`
+/// in the .env file (read at compile time) or as a runtime env var.
+pub fn cloud_sync_disabled() -> bool {
+    const BUILD_FLAG: Option<&str> = option_env!("DISABLE_CLOUD_SYNC");
+    let val = BUILD_FLAG
+        .map(String::from)
+        .or_else(|| std::env::var("DISABLE_CLOUD_SYNC").ok());
+    matches!(val.as_deref(), Some("1") | Some("true") | Some("TRUE"))
+}
+
 impl CloudClientState {
     pub fn empty() -> Self {
         Self(Arc::new(std::sync::RwLock::new(None)))
     }
 
-    /// Returns a clone of the current client (if any).  Fast — just clones an Arc.
+    /// Returns a clone of the current client (if any).
+    /// Returns `None` when `DISABLE_CLOUD_SYNC=1` so all sync call-sites no-op.
     pub fn get(&self) -> Option<Arc<SupabaseClient>> {
+        if cloud_sync_disabled() {
+            return None;
+        }
         self.0.read().unwrap().clone()
     }
 
