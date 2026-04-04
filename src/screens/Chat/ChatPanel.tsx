@@ -41,6 +41,16 @@ interface ChatPanelProps {
 
 let msgId = 0;
 
+function contentBlocksToDisplay(content: ContentBlock[]): DisplayBlock[] {
+  return content.map((block): DisplayBlock => {
+    if (block.type === 'text') return { kind: 'text', text: block.text, isStreaming: false };
+    if (block.type === 'image') {
+      return { kind: 'image', mediaType: block.media_type, data: block.data };
+    }
+    return { kind: 'text', text: '[attachment]', isStreaming: false };
+  });
+}
+
 export function ChatPanel({
   sessionId,
   draft,
@@ -126,7 +136,34 @@ export function ChatPanel({
     return chatMessagesToDisplay(allDbMessages);
   }, [allDbMessages, sessionId]);
 
-  const displayMessages = isDraft ? [] : streaming ? streamMessages : historyMessages;
+  const optimisticInitialMessages = useMemo<DisplayMessage[]>(() => {
+    if (isDraft || !initialQueuedMessage) return [];
+
+    return [
+      {
+        id: `queued-user-${initialQueuedMessage.key}`,
+        role: 'user',
+        blocks: contentBlocksToDisplay(initialQueuedMessage.content),
+        isStreaming: false,
+        timestamp: new Date().toISOString(),
+      },
+      {
+        id: `queued-assistant-${initialQueuedMessage.key}`,
+        role: 'assistant',
+        blocks: [],
+        isStreaming: true,
+      },
+    ];
+  }, [initialQueuedMessage, isDraft]);
+
+  const shouldPreferStreamMessages = streaming || streamMessages.length > historyMessages.length;
+  const displayMessages = isDraft
+    ? []
+    : shouldPreferStreamMessages
+      ? streamMessages
+      : historyMessages.length > 0
+        ? historyMessages
+        : optimisticInitialMessages;
 
   useEffect(() => {
     if (!streamId || !sessionId) return;
@@ -339,13 +376,7 @@ export function ChatPanel({
       const userMsg: DisplayMessage = {
         id: `user-${++msgId}`,
         role: 'user',
-        blocks: content.map((block): DisplayBlock => {
-          if (block.type === 'text') return { kind: 'text', text: block.text, isStreaming: false };
-          if (block.type === 'image') {
-            return { kind: 'image', mediaType: block.media_type, data: block.data };
-          }
-          return { kind: 'text', text: '[attachment]', isStreaming: false };
-        }),
+        blocks: contentBlocksToDisplay(content),
         isStreaming: false,
         timestamp: new Date().toISOString(),
       };

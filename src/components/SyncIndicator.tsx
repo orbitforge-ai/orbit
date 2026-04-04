@@ -42,7 +42,7 @@ export function SyncIndicator() {
   const email = isCloud ? state.email : null;
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative flex-1 min-w-0">
       <button
         onClick={() => setOpen(!open)}
         className={cn(

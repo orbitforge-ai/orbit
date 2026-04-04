@@ -349,12 +349,12 @@ export function Sidebar() {
         </div>
       </nav>
 
-      <div className="px-2 pt-2 border-t border-edge flex items-center gap-1">
+      <div className="flex items-center gap-1.5 border-t border-edge px-2 pt-2 min-w-0">
         <SyncIndicator />
         <button
           onClick={() => navigate('settings')}
           className={cn(
-            'ml-auto p-1.5 rounded-lg transition-colors',
+            'shrink-0 rounded-lg p-1.5 transition-colors',
             screen === 'settings'
               ? 'bg-accent/15 text-accent-hover'
               : 'text-muted hover:bg-surface hover:text-white'

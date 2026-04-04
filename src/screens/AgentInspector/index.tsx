@@ -279,6 +279,13 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
       }
     }
 
+    if (pendingInitialSend?.agentId === agentId) {
+      if (activeSessionId !== pendingInitialSend.sessionId) {
+        setActiveSessionId(pendingInitialSend.sessionId);
+      }
+      return;
+    }
+
     if (activeSessionId && chatSessions.some((session) => session.id === activeSessionId)) {
       return;
     }
@@ -313,6 +320,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
     chatSessions,
     chatSessionsFetched,
     clearPendingChatSession,
+    pendingInitialSend,
     pendingChatSessionId,
     setAgentTab,
   ]);
