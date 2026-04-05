@@ -67,11 +67,10 @@ pub fn compute_next_after(cron_expr: &str, after: chrono::DateTime<chrono::Utc>)
 
 /// Computes the next run time after now for a cron expression.
 pub fn compute_next(cron_expr: &str) -> String {
-    compute_next_after(cron_expr, chrono::Utc::now())
-        .unwrap_or_else(|| {
-            // Fallback: advance 1 hour from now
-            (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()
-        })
+    compute_next_after(cron_expr, chrono::Utc::now()).unwrap_or_else(|| {
+        // Fallback: advance 1 hour from now
+        (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()
+    })
 }
 
 /// Returns the next N future run times for a RecurringConfig.

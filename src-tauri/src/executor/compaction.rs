@@ -619,10 +619,7 @@ async fn perform_compaction_inner(
                     })
                     .await;
                 }
-                let (count, status) = match client
-                    .extract_memories(&extract_text, &user_id)
-                    .await
-                {
+                let (count, status) = match client.extract_memories(&extract_text, &user_id).await {
                     Ok(entries) => (entries.len() as i64, "success".to_string()),
                     Err(e) => {
                         warn!(session_id = %session_id, "Post-compaction memory extraction failed: {}", e);

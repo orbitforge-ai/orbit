@@ -49,7 +49,11 @@ impl PermissionRegistry {
     }
 
     /// Register a pending request. Returns a receiver the caller awaits.
-    pub async fn register(&self, request_id: &str, run_id: &str) -> oneshot::Receiver<PermissionResponse> {
+    pub async fn register(
+        &self,
+        request_id: &str,
+        run_id: &str,
+    ) -> oneshot::Receiver<PermissionResponse> {
         let (tx, rx) = oneshot::channel();
         let mut pending = self.pending.lock().await;
         pending.insert(
@@ -63,14 +67,21 @@ impl PermissionRegistry {
     }
 
     /// Resolve a pending request with the user's decision.
-    pub async fn resolve(&self, request_id: &str, response: PermissionResponse) -> Result<(), String> {
+    pub async fn resolve(
+        &self,
+        request_id: &str,
+        response: PermissionResponse,
+    ) -> Result<(), String> {
         let mut pending = self.pending.lock().await;
         match pending.remove(request_id) {
             Some(entry) => {
                 let _ = entry.response_tx.send(response);
                 Ok(())
             }
-            None => Err(format!("No pending permission request with id '{}'", request_id)),
+            None => Err(format!(
+                "No pending permission request with id '{}'",
+                request_id
+            )),
         }
     }
 
@@ -97,74 +108,124 @@ impl PermissionRegistry {
 /// Commands that are read-only / informational and safe to auto-allow
 /// ONLY when they don't reference paths outside the workspace.
 const SAFE_COMMANDS: &[&str] = &[
-    "echo", "printf", "wc", "sort", "uniq",
-    "pwd", "date", "which", "type",
-    "true", "false", "test", "seq",
-    "basename", "dirname",
-    "tr", "cut", "paste", "column", "jq", "yq",
+    "echo", "printf", "wc", "sort", "uniq", "pwd", "date", "which", "type", "true", "false",
+    "test", "seq", "basename", "dirname", "tr", "cut", "paste", "column", "jq", "yq",
 ];
 
 /// Commands that read files/dirs — safe only when args stay within workspace.
 /// If they reference absolute paths or sensitive locations, they get escalated.
 const SAFE_IF_LOCAL_COMMANDS: &[&str] = &[
-    "cat", "head", "tail", "less", "more",
-    "grep", "egrep", "fgrep", "rg", "ag",
-    "find", "fd", "ls", "ll", "la", "tree",
-    "diff", "file", "stat", "du", "df",
-    "md5", "sha256sum", "shasum",
-    "xxd", "hexdump", "strings",
-    "bat", "exa", "eza", "lsd",
-    "readlink", "realpath",
+    "cat",
+    "head",
+    "tail",
+    "less",
+    "more",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "ag",
+    "find",
+    "fd",
+    "ls",
+    "ll",
+    "la",
+    "tree",
+    "diff",
+    "file",
+    "stat",
+    "du",
+    "df",
+    "md5",
+    "sha256sum",
+    "shasum",
+    "xxd",
+    "hexdump",
+    "strings",
+    "bat",
+    "exa",
+    "eza",
+    "lsd",
+    "readlink",
+    "realpath",
 ];
 
 /// Commands that leak system identity / environment info — always prompt.
 /// These have no legitimate use for a sandboxed agent and are commonly
 /// used in reconnaissance or social-engineering attacks.
-const SYSTEM_INFO_COMMANDS: &[&str] = &[
-    "whoami", "id", "hostname", "uname", "env", "printenv",
-];
+const SYSTEM_INFO_COMMANDS: &[&str] = &["whoami", "id", "hostname", "uname", "env", "printenv"];
 
 /// Git subcommands that are read-only and safe.
 const SAFE_GIT_SUBCOMMANDS: &[&str] = &[
-    "status", "log", "diff", "show", "branch", "remote", "describe",
-    "rev-parse", "config", "stash list", "shortlog", "blame", "tag",
+    "status",
+    "log",
+    "diff",
+    "show",
+    "branch",
+    "remote",
+    "describe",
+    "rev-parse",
+    "config",
+    "stash list",
+    "shortlog",
+    "blame",
+    "tag",
 ];
 
 /// Commands that perform writes, builds, or installs — moderate risk.
 const MODERATE_COMMANDS: &[&str] = &[
-    "mkdir", "cp", "mv", "touch", "tee", "sed", "awk", "perl",
-    "npm", "npx", "pnpm", "yarn", "bun",
-    "pip", "pip3", "pipx", "poetry", "uv",
-    "cargo", "rustup",
-    "make", "cmake", "gradle", "mvn",
-    "go", "python", "python3", "node", "ruby", "php",
-    "curl", "wget", "http", "httpie",
+    "mkdir", "cp", "mv", "touch", "tee", "sed", "awk", "perl", "npm", "npx", "pnpm", "yarn", "bun",
+    "pip", "pip3", "pipx", "poetry", "uv", "cargo", "rustup", "make", "cmake", "gradle", "mvn",
+    "go", "python", "python3", "node", "ruby", "php", "curl", "wget", "http", "httpie",
     "git", // git with non-safe subcommands
-    "docker", "podman",
-    "tar", "zip", "unzip", "gzip", "gunzip",
+    "docker", "podman", "tar", "zip", "unzip", "gzip", "gunzip",
 ];
 
 /// Commands that are destructive or affect system state — dangerous.
 const DANGEROUS_COMMANDS: &[&str] = &[
-    "rm", "rmdir", "shred",
-    "chmod", "chown", "chgrp",
-    "sudo", "su", "doas",
-    "kill", "killall", "pkill", "xkill",
-    "shutdown", "reboot", "halt", "poweroff",
-    "dd", "mkfs", "fdisk", "diskutil", "mount", "umount",
-    "systemctl", "launchctl", "service",
-    "iptables", "ufw", "firewall-cmd",
-    "useradd", "userdel", "usermod", "passwd",
+    "rm",
+    "rmdir",
+    "shred",
+    "chmod",
+    "chown",
+    "chgrp",
+    "sudo",
+    "su",
+    "doas",
+    "kill",
+    "killall",
+    "pkill",
+    "xkill",
+    "shutdown",
+    "reboot",
+    "halt",
+    "poweroff",
+    "dd",
+    "mkfs",
+    "fdisk",
+    "diskutil",
+    "mount",
+    "umount",
+    "systemctl",
+    "launchctl",
+    "service",
+    "iptables",
+    "ufw",
+    "firewall-cmd",
+    "useradd",
+    "userdel",
+    "usermod",
+    "passwd",
     "crontab",
 ];
 
 /// Patterns in a command string that indicate dangerous operations.
 const DANGEROUS_PATTERNS: &[&str] = &[
-    ">/dev/",     // writing to device files
-    "| rm",       // piping to rm
-    "| sudo",     // piping to sudo
-    "--force",    // force flags are often dangerous
-    "--hard",     // git reset --hard
+    ">/dev/",  // writing to device files
+    "| rm",    // piping to rm
+    "| sudo",  // piping to sudo
+    "--force", // force flags are often dangerous
+    "--hard",  // git reset --hard
 ];
 
 /// Detect shell command injection patterns in a command string.
@@ -244,32 +305,59 @@ fn contains_unquoted_pattern(command: &str, pattern: &str) -> bool {
 /// Path prefixes that indicate sensitive system locations.
 /// Any command referencing these should never auto-allow.
 const SENSITIVE_PATH_PREFIXES: &[&str] = &[
-    "/etc/", "/etc ",
-    "/var/", "/var ",
-    "/proc/", "/proc ",
-    "/sys/", "/sys ",
-    "/dev/", "/dev ",
-    "/private/etc/",  // macOS
-    "/Library/",      // macOS system
-    "/System/",       // macOS system
-    "~/.ssh", "$HOME/.ssh",
-    "~/.gnupg", "$HOME/.gnupg",
-    "~/.aws", "$HOME/.aws",
-    "~/.config", "$HOME/.config",
-    "~/.kube", "$HOME/.kube",
-    "~/.docker", "$HOME/.docker",
+    "/etc/",
+    "/etc ",
+    "/var/",
+    "/var ",
+    "/proc/",
+    "/proc ",
+    "/sys/",
+    "/sys ",
+    "/dev/",
+    "/dev ",
+    "/private/etc/", // macOS
+    "/Library/",     // macOS system
+    "/System/",      // macOS system
+    "~/.ssh",
+    "$HOME/.ssh",
+    "~/.gnupg",
+    "$HOME/.gnupg",
+    "~/.aws",
+    "$HOME/.aws",
+    "~/.config",
+    "$HOME/.config",
+    "~/.kube",
+    "$HOME/.kube",
+    "~/.docker",
+    "$HOME/.docker",
     "/root/",
-    "/tmp/", "/tmp ",
+    "/tmp/",
+    "/tmp ",
 ];
 
 /// Specific sensitive filenames that should never auto-allow regardless of path.
 const SENSITIVE_FILENAMES: &[&str] = &[
-    "passwd", "shadow", "sudoers", "hosts",
-    ".env", ".env.local", ".env.production",
-    "id_rsa", "id_ed25519", "id_ecdsa", "authorized_keys", "known_hosts",
-    "credentials", "credentials.json", "token", "token.json",
-    ".netrc", ".pgpass", ".my.cnf",
-    "keychain", "keyring",
+    "passwd",
+    "shadow",
+    "sudoers",
+    "hosts",
+    ".env",
+    ".env.local",
+    ".env.production",
+    "id_rsa",
+    "id_ed25519",
+    "id_ecdsa",
+    "authorized_keys",
+    "known_hosts",
+    "credentials",
+    "credentials.json",
+    "token",
+    "token.json",
+    ".netrc",
+    ".pgpass",
+    ".my.cnf",
+    "keychain",
+    "keyring",
 ];
 
 /// Check if a command string references paths outside the workspace or sensitive locations.
@@ -337,7 +425,9 @@ fn classify_shell_command(command: &str) -> (RiskLevel, String) {
     // Check for output redirection (overwrite)
     if trimmed.contains(" > ") || trimmed.starts_with("> ") {
         // But not >> (append) or 2> (stderr redirect) alone
-        let has_overwrite = trimmed.split(">>").any(|part| part.contains(" > ") || part.starts_with("> "));
+        let has_overwrite = trimmed
+            .split(">>")
+            .any(|part| part.contains(" > ") || part.starts_with("> "));
         if has_overwrite {
             return (
                 RiskLevel::PromptDangerous,
@@ -414,26 +504,47 @@ fn classify_single_command(command: &str) -> (RiskLevel, String) {
         // Check if it's a safe git subcommand
         for safe_sub in SAFE_GIT_SUBCOMMANDS {
             if rest.starts_with(safe_sub) {
-                return (RiskLevel::AutoAllow, format!("Safe git subcommand: 'git {}'", safe_sub));
+                return (
+                    RiskLevel::AutoAllow,
+                    format!("Safe git subcommand: 'git {}'", safe_sub),
+                );
             }
         }
         // Check for dangerous git operations
         if rest.starts_with("push --force") || rest.starts_with("push -f") {
-            return (RiskLevel::PromptDangerous, "Dangerous: 'git push --force'".to_string());
+            return (
+                RiskLevel::PromptDangerous,
+                "Dangerous: 'git push --force'".to_string(),
+            );
         }
         if rest.starts_with("reset --hard") {
-            return (RiskLevel::PromptDangerous, "Dangerous: 'git reset --hard'".to_string());
+            return (
+                RiskLevel::PromptDangerous,
+                "Dangerous: 'git reset --hard'".to_string(),
+            );
         }
         if rest.starts_with("clean") {
-            return (RiskLevel::PromptDangerous, "Dangerous: 'git clean'".to_string());
+            return (
+                RiskLevel::PromptDangerous,
+                "Dangerous: 'git clean'".to_string(),
+            );
         }
         // Other git commands are moderate
-        return (RiskLevel::Prompt, format!("Write operation: 'git {}'", rest.split_whitespace().next().unwrap_or("")));
+        return (
+            RiskLevel::Prompt,
+            format!(
+                "Write operation: 'git {}'",
+                rest.split_whitespace().next().unwrap_or("")
+            ),
+        );
     }
 
     // System info commands always prompt — no legitimate use in a sandboxed workspace
     if SYSTEM_INFO_COMMANDS.contains(&base) {
-        return (RiskLevel::Prompt, format!("System info command: '{}' (leaks host identity)", base));
+        return (
+            RiskLevel::Prompt,
+            format!("System info command: '{}' (leaks host identity)", base),
+        );
     }
 
     // Check safe commands (no file arguments, pure data processing)
@@ -450,7 +561,10 @@ fn classify_single_command(command: &str) -> (RiskLevel, String) {
 
     // Check moderate commands
     if MODERATE_COMMANDS.contains(&base) {
-        return (RiskLevel::Prompt, format!("Write/exec operation: '{}'", base));
+        return (
+            RiskLevel::Prompt,
+            format!("Write/exec operation: '{}'", base),
+        );
     }
 
     // Unknown commands default to moderate (prompt)
@@ -472,14 +586,19 @@ pub fn classify_tool_call(
 
     match tool_name {
         // Always auto-allow: read-only and safe tools
-        "read_file" | "list_files" | "web_search" | "activate_skill" | "finish" | "spawn_sub_agents" | "react_to_message" => {
-            (RiskLevel::AutoAllow, String::new())
-        }
+        "read_file" | "list_files" | "web_search" | "activate_skill" | "finish"
+        | "spawn_sub_agents" | "react_to_message" => (RiskLevel::AutoAllow, String::new()),
 
         "shell_command" => {
             let command = input["command"].as_str().unwrap_or("");
             if permission_mode == "strict" {
-                return (RiskLevel::Prompt, format!("Strict mode: shell_command '{}'", truncate_for_display(command, 60)));
+                return (
+                    RiskLevel::Prompt,
+                    format!(
+                        "Strict mode: shell_command '{}'",
+                        truncate_for_display(command, 60)
+                    ),
+                );
             }
             classify_shell_command(command)
         }
@@ -487,7 +606,10 @@ pub fn classify_tool_call(
         "write_file" => {
             let path = input["path"].as_str().unwrap_or("<unknown>");
             if permission_mode == "strict" {
-                return (RiskLevel::Prompt, format!("Strict mode: write_file '{}'", path));
+                return (
+                    RiskLevel::Prompt,
+                    format!("Strict mode: write_file '{}'", path),
+                );
             }
             (RiskLevel::Prompt, format!("File write: '{}'", path))
         }
@@ -500,7 +622,10 @@ pub fn classify_tool_call(
         _ => {
             // Unknown tools default to prompt in strict, auto-allow in normal
             if permission_mode == "strict" {
-                (RiskLevel::Prompt, format!("Strict mode: unknown tool '{}'", tool_name))
+                (
+                    RiskLevel::Prompt,
+                    format!("Strict mode: unknown tool '{}'", tool_name),
+                )
             } else {
                 (RiskLevel::AutoAllow, String::new())
             }
@@ -517,9 +642,9 @@ pub fn find_matching_rule<'a>(
     input: &serde_json::Value,
 ) -> Option<&'a PermissionRule> {
     let match_value = extract_match_value(tool_name, input);
-    rules.iter().find(|rule| {
-        rule.tool == tool_name && glob_match(&rule.pattern, &match_value)
-    })
+    rules
+        .iter()
+        .find(|rule| rule.tool == tool_name && glob_match(&rule.pattern, &match_value))
 }
 
 /// Extract the value to match against from the tool input.
@@ -611,9 +736,7 @@ pub fn generate_always_allow_pattern(tool_name: &str, input: &serde_json::Value)
             }
             path.to_string()
         }
-        "send_message" => {
-            input["target_agent"].as_str().unwrap_or("*").to_string()
-        }
+        "send_message" => input["target_agent"].as_str().unwrap_or("*").to_string(),
         _ => "*".to_string(),
     }
 }
@@ -663,7 +786,10 @@ pub async fn execute_tool_with_permissions(
             return agent_tools::execute_tool(ctx, tool_name, input, app, run_id).await;
         } else {
             return Ok((
-                format!("Permission denied by saved rule: {}", rule.description.as_deref().unwrap_or("denied")),
+                format!(
+                    "Permission denied by saved rule: {}",
+                    rule.description.as_deref().unwrap_or("denied")
+                ),
                 false,
             ));
         }
@@ -879,16 +1005,25 @@ mod tests {
     #[test]
     fn pattern_generation() {
         let input = serde_json::json!({"command": "echo hello world"});
-        assert_eq!(generate_always_allow_pattern("shell_command", &input), "echo *");
+        assert_eq!(
+            generate_always_allow_pattern("shell_command", &input),
+            "echo *"
+        );
 
         let input = serde_json::json!({"command": "git commit -m 'fix'"});
-        assert_eq!(generate_always_allow_pattern("shell_command", &input), "git commit *");
+        assert_eq!(
+            generate_always_allow_pattern("shell_command", &input),
+            "git commit *"
+        );
 
         let input = serde_json::json!({"path": "src/main.rs"});
         assert_eq!(generate_always_allow_pattern("write_file", &input), "*.rs");
 
         let input = serde_json::json!({"target_agent": "research-agent"});
-        assert_eq!(generate_always_allow_pattern("send_message", &input), "research-agent");
+        assert_eq!(
+            generate_always_allow_pattern("send_message", &input),
+            "research-agent"
+        );
     }
 
     #[test]

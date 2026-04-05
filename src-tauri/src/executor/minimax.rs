@@ -251,23 +251,17 @@ impl MiniMaxProvider {
                                 };
                             }
                             if let Some(u) = event["usage"].as_object() {
-                                if let Some(out) =
-                                    u.get("output_tokens").and_then(|v| v.as_u64())
-                                {
+                                if let Some(out) = u.get("output_tokens").and_then(|v| v.as_u64()) {
                                     usage.output_tokens = out as u32;
                                 }
                             }
                         }
                         "message_start" => {
                             if let Some(u) = event["message"]["usage"].as_object() {
-                                if let Some(inp) =
-                                    u.get("input_tokens").and_then(|v| v.as_u64())
-                                {
+                                if let Some(inp) = u.get("input_tokens").and_then(|v| v.as_u64()) {
                                     usage.input_tokens = inp as u32;
                                 }
-                                if let Some(out) =
-                                    u.get("output_tokens").and_then(|v| v.as_u64())
-                                {
+                                if let Some(out) = u.get("output_tokens").and_then(|v| v.as_u64()) {
                                     usage.output_tokens = out as u32;
                                 }
                             }

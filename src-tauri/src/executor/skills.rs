@@ -88,7 +88,11 @@ const BUILTIN_SKILLS: &[BuiltInSkill] = &[
 
 /// Parse a SKILL.md file into metadata + body content.
 /// Uses a lightweight YAML frontmatter parser (no external dep).
-pub fn parse_skill_md(content: &str, source: SkillSource, source_path: Option<PathBuf>) -> Result<(SkillMetadata, String), String> {
+pub fn parse_skill_md(
+    content: &str,
+    source: SkillSource,
+    source_path: Option<PathBuf>,
+) -> Result<(SkillMetadata, String), String> {
     let trimmed = content.trim_start();
 
     // Must start with ---
@@ -125,7 +129,9 @@ pub fn parse_skill_md(content: &str, source: SkillSource, source_path: Option<Pa
             if let Some(pos) = line_trimmed.find(':') {
                 let key = line_trimmed[..pos].trim().to_string();
                 let val = line_trimmed[pos + 1..].trim().trim_matches('"').to_string();
-                extra_metadata.get_or_insert_with(HashMap::new).insert(key, val);
+                extra_metadata
+                    .get_or_insert_with(HashMap::new)
+                    .insert(key, val);
             }
             continue;
         }
@@ -238,16 +244,16 @@ fn scan_skills_dir(dir: &Path, source: SkillSource) -> Vec<SkillMetadata> {
 
 /// Discover all available skills for an agent (Tier 1 — metadata only).
 /// Returns skills in priority order with deduplication: agent-local > global > standard > built-in.
-pub fn discover_skills(
-    agent_id: &str,
-    disabled_skills: &[String],
-) -> SkillCatalog {
+pub fn discover_skills(agent_id: &str, disabled_skills: &[String]) -> SkillCatalog {
     let mut seen: HashMap<String, usize> = HashMap::new();
     let mut all_skills: Vec<SkillMetadata> = Vec::new();
 
     // Scan paths in priority order
     let scan_sources: Vec<(PathBuf, SkillSource)> = vec![
-        (workspace::agent_dir(agent_id).join("skills"), SkillSource::AgentLocal),
+        (
+            workspace::agent_dir(agent_id).join("skills"),
+            SkillSource::AgentLocal,
+        ),
         (global_skills_dir(), SkillSource::OrbitGlobal),
         (standard_skills_dir(), SkillSource::Standard),
     ];
@@ -305,7 +311,10 @@ pub fn load_skill_instructions(
 
     // Scan filesystem sources
     let search_dirs: Vec<(PathBuf, SkillSource)> = vec![
-        (workspace::agent_dir(agent_id).join("skills"), SkillSource::AgentLocal),
+        (
+            workspace::agent_dir(agent_id).join("skills"),
+            SkillSource::AgentLocal,
+        ),
         (global_skills_dir(), SkillSource::OrbitGlobal),
         (standard_skills_dir(), SkillSource::Standard),
     ];
@@ -404,7 +413,10 @@ pub fn create_skill(
     fs::create_dir_all(&skills_dir)
         .map_err(|e| format!("Failed to create skill directory: {}", e))?;
 
-    let content = format!("---\nname: {}\ndescription: {}\n---\n\n{}\n", name, description, body);
+    let content = format!(
+        "---\nname: {}\ndescription: {}\n---\n\n{}\n",
+        name, description, body
+    );
 
     fs::write(skills_dir.join("SKILL.md"), content)
         .map_err(|e| format!("Failed to write SKILL.md: {}", e))?;
@@ -414,9 +426,14 @@ pub fn create_skill(
 
 /// Delete a skill from the agent's local skills directory.
 pub fn delete_skill(agent_id: &str, skill_name: &str) -> Result<(), String> {
-    let skill_dir = workspace::agent_dir(agent_id).join("skills").join(skill_name);
+    let skill_dir = workspace::agent_dir(agent_id)
+        .join("skills")
+        .join(skill_name);
     if !skill_dir.exists() {
-        return Err(format!("Skill '{}' not found in agent-local skills", skill_name));
+        return Err(format!(
+            "Skill '{}' not found in agent-local skills",
+            skill_name
+        ));
     }
 
     // Only allow deleting agent-local skills
@@ -425,8 +442,7 @@ pub fn delete_skill(agent_id: &str, skill_name: &str) -> Result<(), String> {
         return Err(format!("'{}' is not a valid skill directory", skill_name));
     }
 
-    fs::remove_dir_all(&skill_dir)
-        .map_err(|e| format!("Failed to delete skill: {}", e))?;
+    fs::remove_dir_all(&skill_dir).map_err(|e| format!("Failed to delete skill: {}", e))?;
 
     Ok(())
 }
@@ -435,19 +451,15 @@ pub fn delete_skill(agent_id: &str, skill_name: &str) -> Result<(), String> {
 
 /// Stop words excluded from keyword matching (common English words that add noise).
 const STOP_WORDS: &[&str] = &[
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "shall", "can", "need", "must",
-    "i", "me", "my", "we", "our", "you", "your", "he", "she", "it",
-    "they", "them", "this", "that", "these", "those", "what", "which",
-    "who", "whom", "how", "when", "where", "why",
-    "and", "or", "but", "not", "no", "nor", "so", "if", "then",
-    "in", "on", "at", "to", "for", "of", "with", "by", "from", "as",
-    "into", "about", "between", "through", "after", "before", "above",
-    "up", "out", "off", "over", "under", "again", "just", "also",
-    "very", "too", "more", "most", "some", "any", "all", "each", "every",
-    "please", "help", "want", "like", "make", "use", "using", "used",
-    "get", "got", "let", "set",
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "will", "would", "could", "should", "may", "might", "shall", "can",
+    "need", "must", "i", "me", "my", "we", "our", "you", "your", "he", "she", "it", "they", "them",
+    "this", "that", "these", "those", "what", "which", "who", "whom", "how", "when", "where",
+    "why", "and", "or", "but", "not", "no", "nor", "so", "if", "then", "in", "on", "at", "to",
+    "for", "of", "with", "by", "from", "as", "into", "about", "between", "through", "after",
+    "before", "above", "up", "out", "off", "over", "under", "again", "just", "also", "very", "too",
+    "more", "most", "some", "any", "all", "each", "every", "please", "help", "want", "like",
+    "make", "use", "using", "used", "get", "got", "let", "set",
 ];
 
 /// Extract meaningful keywords from text. Lowercase, split on non-alphanumeric,
@@ -537,8 +549,13 @@ fn validate_skill_name(name: &str) -> Result<(), String> {
     if name.contains("--") {
         return Err("Skill name must not contain consecutive hyphens".to_string());
     }
-    if !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
-        return Err("Skill name may only contain lowercase letters, digits, and hyphens".to_string());
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Err(
+            "Skill name may only contain lowercase letters, digits, and hyphens".to_string(),
+        );
     }
     Ok(())
 }

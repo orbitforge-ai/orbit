@@ -1631,7 +1631,10 @@ fn write_project_agents(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result
     Ok(())
 }
 
-fn read_message_reactions(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, String> {
+fn read_message_reactions(
+    conn: &rusqlite::Connection,
+    user_id: &str,
+) -> Result<Vec<Value>, String> {
     let mut stmt = conn
         .prepare("SELECT id, message_id, session_id, emoji, created_at FROM message_reactions")
         .map_err(|e| e.to_string())?;

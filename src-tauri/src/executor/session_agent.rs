@@ -765,10 +765,7 @@ async fn extract_session_memories(
     .await;
     }
 
-    let (count, status) = match client
-        .extract_memories(&conversation_text, user_id)
-        .await
-    {
+    let (count, status) = match client.extract_memories(&conversation_text, user_id).await {
         Ok(entries) => (entries.len() as i64, "success".to_string()),
         Err(e) => {
             warn!(

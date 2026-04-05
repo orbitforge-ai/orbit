@@ -10,10 +10,10 @@ pub struct BusMessage {
     pub to_agent_id: String,
     pub to_run_id: Option<String>,
     pub to_session_id: Option<String>,
-    pub kind: String,               // "direct" | "event"
+    pub kind: String, // "direct" | "event"
     pub event_type: Option<String>,
     pub payload: serde_json::Value,
-    pub status: String,             // "delivered" | "failed" | "depth_exceeded"
+    pub status: String, // "delivered" | "failed" | "depth_exceeded"
     pub created_at: String,
 }
 
@@ -23,7 +23,7 @@ pub struct BusSubscription {
     pub id: String,
     pub subscriber_agent_id: String,
     pub source_agent_id: String,
-    pub event_type: String,         // "run:completed" | "run:failed" | "run:any_terminal"
+    pub event_type: String, // "run:completed" | "run:failed" | "run:any_terminal"
     pub task_id: String,
     pub payload_template: String,
     pub enabled: bool,

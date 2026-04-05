@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use std::sync::Arc;
 use crate::auth::{self, AuthMode, AuthSession, AuthState};
 use crate::db::cloud::{CloudClientState, SupabaseClient};
 use crate::db::DbPool;
 use crate::executor::keychain;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Supabase REST response types
@@ -118,7 +118,8 @@ pub async fn login(
         .await
         .map_err(|e| format!("Failed to parse auth response: {}", e))?;
 
-    let access_token = auth_data.access_token
+    let access_token = auth_data
+        .access_token
         .filter(|t| !t.is_empty())
         .ok_or_else(|| "Login failed: no session returned. Check your credentials.".to_string())?;
 
@@ -213,10 +214,12 @@ pub async fn register(
         .map_err(|e| format!("Failed to parse signup response: {}", e))?;
 
     // If no access_token, Supabase requires email confirmation before issuing a session
-    let access_token = auth_data.access_token
+    let access_token = auth_data
+        .access_token
         .filter(|t| !t.is_empty())
         .ok_or_else(|| {
-            "Account created! Check your email to confirm your address before signing in.".to_string()
+            "Account created! Check your email to confirm your address before signing in."
+                .to_string()
         })?;
 
     let session = AuthSession {
@@ -320,18 +323,16 @@ async fn sync_api_keys_from_vault(
         .await;
 
     let providers: Vec<String> = match providers_response {
-        Ok(r) if r.status().is_success() => {
-            match r.json::<Vec<serde_json::Value>>().await {
-                Ok(rows) => rows
-                    .into_iter()
-                    .filter_map(|v| v.get("provider")?.as_str().map(String::from))
-                    .collect(),
-                Err(e) => {
-                    warn!("Could not parse API key providers from Vault: {}", e);
-                    return;
-                }
+        Ok(r) if r.status().is_success() => match r.json::<Vec<serde_json::Value>>().await {
+            Ok(rows) => rows
+                .into_iter()
+                .filter_map(|v| v.get("provider")?.as_str().map(String::from))
+                .collect(),
+            Err(e) => {
+                warn!("Could not parse API key providers from Vault: {}", e);
+                return;
             }
-        }
+        },
         Ok(r) => {
             warn!(
                 "list_api_key_providers returned {} — Vault may not be configured yet",
@@ -358,17 +359,15 @@ async fn sync_api_keys_from_vault(
             .await;
 
         match result {
-            Ok(r) if r.status().is_success() => {
-                match r.json::<Option<String>>().await {
-                    Ok(Some(key)) if !key.is_empty() => {
-                        match keychain::store_api_key(&provider, &key) {
-                            Ok(_) => info!("Synced API key for provider '{}' from Vault", provider),
-                            Err(e) => warn!("Failed to write '{}' key to Keychain: {}", provider, e),
-                        }
+            Ok(r) if r.status().is_success() => match r.json::<Option<String>>().await {
+                Ok(Some(key)) if !key.is_empty() => {
+                    match keychain::store_api_key(&provider, &key) {
+                        Ok(_) => info!("Synced API key for provider '{}' from Vault", provider),
+                        Err(e) => warn!("Failed to write '{}' key to Keychain: {}", provider, e),
                     }
-                    _ => {}
                 }
-            }
+                _ => {}
+            },
             Ok(r) => warn!("get_api_key for '{}' returned {}", provider, r.status()),
             Err(e) => warn!("Failed to fetch API key for '{}': {}", provider, e),
         }
@@ -384,7 +383,9 @@ pub async fn force_cloud_sync(
     cloud: tauri::State<'_, CloudClientState>,
     db: tauri::State<'_, DbPool>,
 ) -> Result<std::collections::HashMap<String, usize>, String> {
-    let client = cloud.get().ok_or_else(|| "Not signed in to cloud".to_string())?;
+    let client = cloud
+        .get()
+        .ok_or_else(|| "Not signed in to cloud".to_string())?;
     let pool = db.0.clone();
     client.pull_all_data_with_counts(&pool).await
 }

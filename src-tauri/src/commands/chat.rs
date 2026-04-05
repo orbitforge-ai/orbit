@@ -380,6 +380,116 @@ pub struct PaginatedChatMessages {
     pub has_more: bool,
 }
 
+const INTERRUPTED_TOOL_CALL_ERROR: &str =
+    "Error: this tool call did not complete because the previous response was interrupted. Please retry with a shorter input, or break the work into smaller steps.";
+const TOKEN_LIMIT_CONTINUE_PROMPT: &str =
+    "Your response was cut off due to the token limit. Please continue where you left off. If you were writing a file, try breaking the content into smaller pieces.";
+
+#[derive(Debug, Clone)]
+struct LoadedChatState {
+    agent_id: String,
+    history: Vec<ChatMessage>,
+    session_title: String,
+    chain_depth: i64,
+    session_type: String,
+    user_msg_id: String,
+    user_msg_now: String,
+    user_msg_content_json: String,
+}
+
+fn is_tool_result_message(message: &ChatMessage) -> bool {
+    message.role == "user"
+        && !message.content.is_empty()
+        && message
+            .content
+            .iter()
+            .all(|block| matches!(block, ContentBlock::ToolResult { .. }))
+}
+
+fn interrupted_tool_results_for_ids(tool_use_ids: &[String]) -> Vec<ContentBlock> {
+    tool_use_ids
+        .into_iter()
+        .map(|tool_use_id| ContentBlock::ToolResult {
+            tool_use_id: tool_use_id.clone(),
+            content: INTERRUPTED_TOOL_CALL_ERROR.to_string(),
+            is_error: true,
+        })
+        .collect()
+}
+
+fn sanitize_history_for_provider(messages: &[ChatMessage]) -> Vec<ChatMessage> {
+    let mut sanitized: Vec<ChatMessage> = Vec::new();
+    let mut index = 0usize;
+
+    while index < messages.len() {
+        let message = &messages[index];
+
+        if is_tool_result_message(message) {
+            index += 1;
+            continue;
+        }
+
+        sanitized.push(message.clone());
+
+        let tool_use_ids: Vec<String> = message
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+
+        if tool_use_ids.is_empty() {
+            index += 1;
+            continue;
+        }
+
+        let mut combined_results: Vec<ContentBlock> = Vec::new();
+        if let Some(next_message) = messages.get(index + 1) {
+            if is_tool_result_message(next_message) {
+                combined_results.extend(next_message.content.iter().filter_map(
+                    |block| match block {
+                        ContentBlock::ToolResult { tool_use_id, .. }
+                            if tool_use_ids.contains(tool_use_id) =>
+                        {
+                            Some(block.clone())
+                        }
+                        _ => None,
+                    },
+                ));
+                index += 1;
+            }
+        }
+
+        let existing_ids: Vec<String> = combined_results
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+                _ => None,
+            })
+            .collect();
+
+        let missing_ids: Vec<String> = tool_use_ids
+            .into_iter()
+            .filter(|tool_use_id| !existing_ids.contains(tool_use_id))
+            .collect();
+        combined_results.extend(interrupted_tool_results_for_ids(&missing_ids));
+
+        if !combined_results.is_empty() {
+            sanitized.push(ChatMessage {
+                role: "user".to_string(),
+                content: combined_results,
+                created_at: None,
+            });
+        }
+
+        index += 1;
+    }
+
+    sanitized
+}
+
 #[tauri::command]
 pub async fn get_chat_messages(
     session_id: String,
@@ -520,27 +630,16 @@ pub async fn send_chat_message(
     let cloud_client = cloud.get();
 
     // Load session + history in blocking task
-    let (
-        agent_id,
-        history,
-        _session_title,
-        chain_depth,
-        session_type,
-        user_msg_id,
-        user_msg_now,
-        user_msg_content_json,
-    ) = {
+    let loaded = {
         let pool = pool.clone();
         let sid = session_id.clone();
         let uc = user_content.clone();
 
-        tokio::task
-      ::spawn_blocking(
-        move || -> Result<(String, Vec<ChatMessage>, String, i64, String, String, String, String), String> {
-          let conn = pool.get().map_err(|e| e.to_string())?;
+        tokio::task::spawn_blocking(move || -> Result<LoadedChatState, String> {
+            let conn = pool.get().map_err(|e| e.to_string())?;
 
-          // Get session
-          let (agent_id, title, chain_depth, session_type): (String, String, i64, String) = conn
+            // Get session
+            let (agent_id, title, chain_depth, session_type): (String, String, i64, String) = conn
             .query_row(
               "SELECT agent_id, title, chain_depth, session_type FROM chat_sessions WHERE id = ?1",
               rusqlite::params![sid],
@@ -548,80 +647,103 @@ pub async fn send_chat_message(
             )
             .map_err(|e| format!("session not found: {}", e))?;
 
-          // Load existing messages (exclude compacted ones — only active context goes to LLM)
-          let mut stmt = conn
-            .prepare(
-              "SELECT role, content FROM chat_messages
-                     WHERE session_id = ?1 AND is_compacted = 0 ORDER BY created_at ASC"
-            )
-            .map_err(|e| e.to_string())?;
+            // Load existing messages (exclude compacted ones — only active context goes to LLM)
+            let mut stmt = conn
+                .prepare(
+                    "SELECT role, content FROM chat_messages
+                     WHERE session_id = ?1 AND is_compacted = 0 ORDER BY created_at ASC",
+                )
+                .map_err(|e| e.to_string())?;
 
-          let mut messages: Vec<ChatMessage> = stmt
-            .query_map(rusqlite::params![sid], |row| {
-              let role: String = row.get(0)?;
-              let content_json: String = row.get(1)?;
-              Ok((role, content_json))
-            })
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .map(|(role, content_json)| {
-              let content: Vec<ContentBlock> = serde_json
-                ::from_str(&content_json)
-                .unwrap_or_default();
-              ChatMessage { role, content, created_at: None }
-            })
-            .collect();
+            let mut messages: Vec<ChatMessage> = stmt
+                .query_map(rusqlite::params![sid], |row| {
+                    let role: String = row.get(0)?;
+                    let content_json: String = row.get(1)?;
+                    Ok((role, content_json))
+                })
+                .map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok())
+                .map(|(role, content_json)| {
+                    let content: Vec<ContentBlock> =
+                        serde_json::from_str(&content_json).unwrap_or_default();
+                    ChatMessage {
+                        role,
+                        content,
+                        created_at: None,
+                    }
+                })
+                .collect();
 
-          // Save user message to DB
-          let msg_id = Ulid::new().to_string();
-          let now = chrono::Utc::now().to_rfc3339();
-          let content_json = serde_json::to_string(&uc).map_err(|e| e.to_string())?;
+            messages = sanitize_history_for_provider(&messages);
 
-          conn
-            .execute(
-              "INSERT INTO chat_messages (id, session_id, role, content, created_at)
+            // Save user message to DB
+            let msg_id = Ulid::new().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+            let content_json = serde_json::to_string(&uc).map_err(|e| e.to_string())?;
+
+            conn.execute(
+                "INSERT INTO chat_messages (id, session_id, role, content, created_at)
                  VALUES (?1, ?2, 'user', ?3, ?4)",
-              rusqlite::params![msg_id, sid, content_json, now]
+                rusqlite::params![msg_id, sid, content_json, now],
             )
             .map_err(|e| e.to_string())?;
 
-          // Update session timestamp
-          conn
-            .execute(
-              "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
-              rusqlite::params![now, sid]
+            // Update session timestamp
+            conn.execute(
+                "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
+                rusqlite::params![now, sid],
             )
             .map_err(|e| e.to_string())?;
 
-          // Auto-title: if still "New Chat", use first text content
-          if title == "New Chat" {
-            let first_text = uc.iter().find_map(|b| {
-              if let ContentBlock::Text { text } = b {
-                Some(text.chars().take(60).collect::<String>())
-              } else {
-                None
-              }
-            });
-            if let Some(t) = first_text {
-              let _ = conn.execute(
-                "UPDATE chat_sessions SET title = ?1 WHERE id = ?2",
-                rusqlite::params![t, sid]
-              );
+            // Auto-title: if still "New Chat", use first text content
+            if title == "New Chat" {
+                let first_text = uc.iter().find_map(|b| {
+                    if let ContentBlock::Text { text } = b {
+                        Some(text.chars().take(60).collect::<String>())
+                    } else {
+                        None
+                    }
+                });
+                if let Some(t) = first_text {
+                    let _ = conn.execute(
+                        "UPDATE chat_sessions SET title = ?1 WHERE id = ?2",
+                        rusqlite::params![t, sid],
+                    );
+                }
             }
-          }
 
-          // Append user message to history
-          messages.push(ChatMessage {
-            role: "user".to_string(),
-            content: uc,
-            created_at: None,
-          });
+            // Append user message to history
+            messages.push(ChatMessage {
+                role: "user".to_string(),
+                content: uc,
+                created_at: None,
+            });
 
-          Ok((agent_id, messages, title, chain_depth, session_type, msg_id, now, content_json))
-        }
-      ).await
-      .map_err(|e| e.to_string())??
+            Ok(LoadedChatState {
+                agent_id,
+                history: messages,
+                session_title: title,
+                chain_depth,
+                session_type,
+                user_msg_id: msg_id,
+                user_msg_now: now,
+                user_msg_content_json: content_json,
+            })
+        })
+        .await
+        .map_err(|e| e.to_string())??
     };
+
+    let LoadedChatState {
+        agent_id,
+        history,
+        session_title: _session_title,
+        chain_depth,
+        session_type,
+        user_msg_id,
+        user_msg_now,
+        user_msg_content_json,
+    } = loaded;
 
     // Sync the initial user message to Supabase (was missing — only SQLite was written above)
     if let Some(client) = cloud_client.clone() {
@@ -682,6 +804,25 @@ pub async fn send_chat_message(
         .await
         {
             warn!("Chat LLM error: {}", e);
+            if e != "cancelled" {
+                let error_message = vec![ContentBlock::Text {
+                    text: format!(
+                        "I ran into an error while continuing this chat.\n\n{}\n\nIf this happened after a large tool call, please retry with a smaller request or ask me to split the work into smaller steps.",
+                        e
+                    ),
+                }];
+                if let Err(save_err) = save_chat_message(
+                    &db_bg.0,
+                    &sid_bg,
+                    "assistant",
+                    &error_message,
+                    cloud_client.clone(),
+                )
+                .await
+                {
+                    warn!("failed to persist chat error message: {}", save_err);
+                }
+            }
             // Emit finished with error info
             emit_agent_iteration(&app, &stream_id, 1, "finished", None, 0);
         }
@@ -867,14 +1008,70 @@ async fn do_llm_chat(
         .await?;
 
         match response.stop_reason {
-            llm_provider::StopReason::EndTurn | llm_provider::StopReason::MaxTokens => {
-                // Done — no tool calls, just a normal response
+            llm_provider::StopReason::EndTurn => {
                 messages.push(ChatMessage {
                     role: "assistant".to_string(),
                     content: response.content,
                     created_at: None,
                 });
                 break;
+            }
+
+            llm_provider::StopReason::MaxTokens => {
+                messages.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: response.content.clone(),
+                    created_at: None,
+                });
+
+                let mut tool_error_results: Vec<ContentBlock> = Vec::new();
+                for block in &response.content {
+                    if let ContentBlock::ToolUse { id, name, .. } = block {
+                        warn!(
+                            session_id = session_id,
+                            tool = %name,
+                            "chat tool_use truncated by max_tokens"
+                        );
+                        tool_error_results.push(ContentBlock::ToolResult {
+                            tool_use_id: id.clone(),
+                            content: INTERRUPTED_TOOL_CALL_ERROR.to_string(),
+                            is_error: true,
+                        });
+                        emit_agent_tool_result(
+                            app,
+                            stream_id,
+                            iteration,
+                            id,
+                            INTERRUPTED_TOOL_CALL_ERROR,
+                            true,
+                        );
+                    }
+                }
+
+                if !tool_error_results.is_empty() {
+                    save_chat_message(
+                        &pool,
+                        session_id,
+                        "user",
+                        &tool_error_results,
+                        cloud_client.clone(),
+                    )
+                    .await?;
+
+                    messages.push(ChatMessage {
+                        role: "user".to_string(),
+                        content: tool_error_results,
+                        created_at: None,
+                    });
+                }
+
+                messages.push(ChatMessage {
+                    role: "user".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: TOKEN_LIMIT_CONTINUE_PROMPT.to_string(),
+                    }],
+                    created_at: None,
+                });
             }
 
             llm_provider::StopReason::ToolUse => {
@@ -1311,4 +1508,92 @@ pub async fn get_message_reactions(
 pub struct SendChatMessageResponse {
     pub stream_id: String,
     pub user_message_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        sanitize_history_for_provider, ChatMessage, ContentBlock, INTERRUPTED_TOOL_CALL_ERROR,
+    };
+
+    #[test]
+    fn sanitize_history_reinserts_missing_tool_results_after_tool_use() {
+        let messages = vec![
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: vec![
+                    ContentBlock::ToolUse {
+                        id: "tool-1".to_string(),
+                        name: "write_file".to_string(),
+                        input: serde_json::json!({ "path": "a.txt" }),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "tool-2".to_string(),
+                        name: "write_file".to_string(),
+                        input: serde_json::json!({ "path": "b.txt" }),
+                    },
+                ],
+                created_at: None,
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "Can you keep going?".to_string(),
+                }],
+                created_at: None,
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "tool-2".to_string(),
+                    content: INTERRUPTED_TOOL_CALL_ERROR.to_string(),
+                    is_error: true,
+                }],
+                created_at: None,
+            },
+        ];
+
+        let sanitized = sanitize_history_for_provider(&messages);
+
+        assert_eq!(sanitized.len(), 3);
+        assert!(matches!(
+            &sanitized[1],
+            ChatMessage { role, content, .. }
+                if role == "user"
+                    && matches!(
+                        &content[0],
+                        ContentBlock::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error: true,
+                        } if tool_use_id == "tool-1" && content == INTERRUPTED_TOOL_CALL_ERROR
+                    )
+                    && matches!(
+                        &content[1],
+                        ContentBlock::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error: true,
+                        } if tool_use_id == "tool-2" && content == INTERRUPTED_TOOL_CALL_ERROR
+                    )
+        ));
+    }
+
+    #[test]
+    fn sanitize_history_keeps_consistent_history_unchanged() {
+        let messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "All done".to_string(),
+            }],
+            created_at: None,
+        }];
+
+        let sanitized = sanitize_history_for_provider(&messages);
+        assert_eq!(sanitized.len(), 1);
+        assert!(matches!(
+            &sanitized[0].content[0],
+            ContentBlock::Text { text } if text == "All done"
+        ));
+    }
 }

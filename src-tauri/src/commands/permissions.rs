@@ -30,7 +30,9 @@ pub async fn save_permission_rule(
     let agent_id_clone = agent_id.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let mut config = workspace::load_agent_config(&agent_id_clone)?;
-        config.permission_rules.retain(|r| !(r.tool == rule.tool && r.pattern == rule.pattern));
+        config
+            .permission_rules
+            .retain(|r| !(r.tool == rule.tool && r.pattern == rule.pattern));
         config.permission_rules.push(rule);
         workspace::save_agent_config(&agent_id_clone, &config)
     })

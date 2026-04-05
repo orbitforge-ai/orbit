@@ -31,9 +31,7 @@ impl ContextSnapshot {
             system_prompt: String::new(),
             messages: Vec::new(),
             tools: Vec::new(),
-            token_budget: TokenBudget {
-                context_window,
-            },
+            token_budget: TokenBudget { context_window },
         }
     }
 }
@@ -246,22 +244,19 @@ impl ContextStage for MemoryStage {
         }
 
         // Build a search query from the goal or the latest user message
-        let query = request
-            .goal
-            .as_deref()
-            .or_else(|| {
-                snapshot
-                    .messages
-                    .iter()
-                    .rev()
-                    .find(|m| m.role == "user")
-                    .and_then(|m| {
-                        m.content.iter().find_map(|block| match block {
-                            ContentBlock::Text { text } => Some(text.as_str()),
-                            _ => None,
-                        })
+        let query = request.goal.as_deref().or_else(|| {
+            snapshot
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == "user")
+                .and_then(|m| {
+                    m.content.iter().find_map(|block| match block {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
                     })
-            });
+                })
+        });
 
         let query = match query {
             Some(q) if !q.trim().is_empty() => q,
@@ -454,7 +449,11 @@ impl ContextStage for BasePromptStage {
             if request.is_sub_agent {
                 tools.retain(|t| t.name != "spawn_sub_agents");
             }
-            tools.iter().map(|t| t.name.clone()).collect::<Vec<_>>().join(", ")
+            tools
+                .iter()
+                .map(|t| t.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
         };
 
         let identity_summary =
@@ -464,18 +463,30 @@ impl ContextStage for BasePromptStage {
         // Interpolated values are wrapped in <data> tags to prevent prompt injection
         // through user-controlled fields (agent names, file listings, session titles).
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        let mut context_section =
-            format!("## Current Context\n- Agent: <data type=\"agent_name\">{}</data>\n- Mode: {}\n", agent_name, request.mode);
+        let mut context_section = format!(
+            "## Current Context\n- Agent: <data type=\"agent_name\">{}</data>\n- Mode: {}\n",
+            agent_name, request.mode
+        );
 
         if let Some((title, count)) = session_info {
-            context_section.push_str(&format!("- Session: <data type=\"session_title\">{}</data> ({} messages)\n", title, count));
+            context_section.push_str(&format!(
+                "- Session: <data type=\"session_title\">{}</data> ({} messages)\n",
+                title, count
+            ));
         }
 
         if !workspace_files.is_empty() {
-            context_section.push_str(&format!("- Workspace files: <data type=\"file_listing\">{}</data>\n", workspace_files));
+            context_section.push_str(&format!(
+                "- Workspace files: <data type=\"file_listing\">{}</data>\n",
+                workspace_files
+            ));
         }
 
-        if !tool_names.is_empty() && (request.mode == ContextMode::AgentLoop || request.mode == ContextMode::Chat || request.mode == ContextMode::Pulse) {
+        if !tool_names.is_empty()
+            && (request.mode == ContextMode::AgentLoop
+                || request.mode == ContextMode::Chat
+                || request.mode == ContextMode::Pulse)
+        {
             context_section.push_str(&format!("- Available tools: {}\n", tool_names));
 
             // Add tool usage guidance
@@ -503,23 +514,25 @@ impl ContextStage for BasePromptStage {
             if has_send_message {
                 let pool = db.0.clone();
                 let current_agent_id = request.agent_id.clone();
-                let agents_roster = tokio::task::spawn_blocking(move || -> Vec<(String, String, Option<String>)> {
-                    let conn = match pool.get() {
-                        Ok(c) => c,
-                        Err(_) => return Vec::new(),
-                    };
-                    let mut stmt = match conn.prepare(
+                let agents_roster = tokio::task::spawn_blocking(
+                    move || -> Vec<(String, String, Option<String>)> {
+                        let conn = match pool.get() {
+                            Ok(c) => c,
+                            Err(_) => return Vec::new(),
+                        };
+                        let mut stmt = match conn.prepare(
                         "SELECT id, name, description FROM agents WHERE id != ?1 ORDER BY name ASC",
                     ) {
                         Ok(s) => s,
                         Err(_) => return Vec::new(),
                     };
-                    stmt.query_map(rusqlite::params![current_agent_id], |row| {
-                        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-                    })
-                    .map(|rows| rows.filter_map(|r| r.ok()).collect())
-                    .unwrap_or_default()
-                })
+                        stmt.query_map(rusqlite::params![current_agent_id], |row| {
+                            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                        })
+                        .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                        .unwrap_or_default()
+                    },
+                )
                 .await
                 .unwrap_or_default();
 
@@ -531,57 +544,76 @@ impl ContextStage for BasePromptStage {
                     );
                     for (id, name, desc) in &agents_roster {
                         let desc_str = desc.as_deref().unwrap_or("No description");
-                        context_section.push_str(&format!(
-                            "- **{}** (id: `{}`): {}\n", name, id, desc_str
-                        ));
+                        context_section
+                            .push_str(&format!("- **{}** (id: `{}`): {}\n", name, id, desc_str));
                     }
                 }
             }
         }
 
         // Inject message IDs for react_to_message (user_chat sessions only)
-        if request.mode == ContextMode::Chat
-            && request.session_type.as_deref() == Some("user_chat")
+        if request.mode == ContextMode::Chat && request.session_type.as_deref() == Some("user_chat")
         {
             if let Some(ref sid) = request.session_id {
                 let pool = db.0.clone();
                 let sid = sid.clone();
                 let user_msg_ids = tokio::task::spawn_blocking(move || -> Vec<(String, String)> {
-                    let conn = match pool.get() { Ok(c) => c, Err(_) => return Vec::new() };
+                    let conn = match pool.get() {
+                        Ok(c) => c,
+                        Err(_) => return Vec::new(),
+                    };
                     let mut stmt = match conn.prepare(
                         "SELECT id, content FROM chat_messages
                          WHERE session_id = ?1 AND role = 'user' AND is_compacted = 0
-                         ORDER BY created_at DESC LIMIT 10"
-                    ) { Ok(s) => s, Err(_) => return Vec::new() };
+                         ORDER BY created_at DESC LIMIT 10",
+                    ) {
+                        Ok(s) => s,
+                        Err(_) => return Vec::new(),
+                    };
                     stmt.query_map(rusqlite::params![sid], |row| {
                         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
                     })
                     .map(|rows| rows.filter_map(|r| r.ok()).collect())
                     .unwrap_or_default()
-                }).await.unwrap_or_default();
+                })
+                .await
+                .unwrap_or_default();
 
                 // Filter out tool-result-only messages and build the section
-                let eligible: Vec<(String, String)> = user_msg_ids.into_iter().filter_map(|(id, content_json)| {
-                    let blocks: Vec<ContentBlock> = serde_json::from_str(&content_json).ok()?;
-                    // Skip if all blocks are tool_result (synthetic user message)
-                    if blocks.iter().all(|b| matches!(b, ContentBlock::ToolResult { .. })) {
-                        return None;
-                    }
-                    let preview: String = blocks.iter().find_map(|b| {
-                        if let ContentBlock::Text { text } = b {
-                            let truncated: String = text.chars().take(60).collect();
-                            let sanitized = truncated.replace('<', "&lt;").replace('>', "&gt;");
-                            Some(sanitized)
-                        } else { None }
-                    }).unwrap_or_else(|| "[non-text]".to_string());
-                    Some((id, preview))
-                }).collect();
+                let eligible: Vec<(String, String)> = user_msg_ids
+                    .into_iter()
+                    .filter_map(|(id, content_json)| {
+                        let blocks: Vec<ContentBlock> = serde_json::from_str(&content_json).ok()?;
+                        // Skip if all blocks are tool_result (synthetic user message)
+                        if blocks
+                            .iter()
+                            .all(|b| matches!(b, ContentBlock::ToolResult { .. }))
+                        {
+                            return None;
+                        }
+                        let preview: String = blocks
+                            .iter()
+                            .find_map(|b| {
+                                if let ContentBlock::Text { text } = b {
+                                    let truncated: String = text.chars().take(60).collect();
+                                    let sanitized =
+                                        truncated.replace('<', "&lt;").replace('>', "&gt;");
+                                    Some(sanitized)
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_else(|| "[non-text]".to_string());
+                        Some((id, preview))
+                    })
+                    .collect();
 
                 if !eligible.is_empty() {
                     context_section.push_str("\n### Message IDs (for react_to_message)\n");
                     for (id, preview) in &eligible {
                         context_section.push_str(&format!(
-                            "- `{}`: <data type=\"user_message_excerpt\">{}</data>\n", id, preview
+                            "- `{}`: <data type=\"user_message_excerpt\">{}</data>\n",
+                            id, preview
                         ));
                     }
                 }
@@ -591,8 +623,12 @@ impl ContextStage for BasePromptStage {
         context_section.push_str(&format!("- Date: {}\n", today));
 
         let role_instructions = request.ws_config.role_system_instructions.as_deref();
-        snapshot.system_prompt =
-            compose_system_prompt(&base_prompt, role_instructions, Some(&identity_summary), &context_section);
+        snapshot.system_prompt = compose_system_prompt(
+            &base_prompt,
+            role_instructions,
+            Some(&identity_summary),
+            &context_section,
+        );
         Ok(snapshot)
     }
 
@@ -654,38 +690,39 @@ impl ContextStage for MessageHistoryStage {
                 if let Some(ref sid) = request.session_id {
                     let pool = db.0.clone();
                     let sid = sid.clone();
-                    let messages = tokio::task::spawn_blocking(move || -> Result<Vec<ChatMessage>, String> {
-                        let conn = pool.get().map_err(|e| e.to_string())?;
-                        let mut stmt = conn
-                            .prepare(
-                                "SELECT role, content FROM chat_messages
+                    let messages =
+                        tokio::task::spawn_blocking(move || -> Result<Vec<ChatMessage>, String> {
+                            let conn = pool.get().map_err(|e| e.to_string())?;
+                            let mut stmt = conn
+                                .prepare(
+                                    "SELECT role, content FROM chat_messages
                                  WHERE session_id = ?1 AND is_compacted = 0
                                  ORDER BY created_at ASC",
-                            )
-                            .map_err(|e| e.to_string())?;
+                                )
+                                .map_err(|e| e.to_string())?;
 
-                        let msgs = stmt
-                            .query_map(rusqlite::params![sid], |row| {
-                                let role: String = row.get(0)?;
-                                let content_json: String = row.get(1)?;
-                                Ok((role, content_json))
-                            })
-                            .map_err(|e| e.to_string())?
-                            .filter_map(|r| r.ok())
-                            .map(|(role, content_json)| {
-                                let content: Vec<ContentBlock> =
-                                    serde_json::from_str(&content_json).unwrap_or_default();
-                                ChatMessage {
-                                    role,
-                                    content,
-                                    created_at: None,
-                                }
-                            })
-                            .collect();
-                        Ok(msgs)
-                    })
-                    .await
-                    .map_err(|e| e.to_string())??;
+                            let msgs = stmt
+                                .query_map(rusqlite::params![sid], |row| {
+                                    let role: String = row.get(0)?;
+                                    let content_json: String = row.get(1)?;
+                                    Ok((role, content_json))
+                                })
+                                .map_err(|e| e.to_string())?
+                                .filter_map(|r| r.ok())
+                                .map(|(role, content_json)| {
+                                    let content: Vec<ContentBlock> =
+                                        serde_json::from_str(&content_json).unwrap_or_default();
+                                    ChatMessage {
+                                        role,
+                                        content,
+                                        created_at: None,
+                                    }
+                                })
+                                .collect();
+                            Ok(msgs)
+                        })
+                        .await
+                        .map_err(|e| e.to_string())??;
 
                     snapshot.messages = messages;
                 }
@@ -695,9 +732,7 @@ impl ContextStage for MessageHistoryStage {
                 if let Some(ref goal) = request.goal {
                     snapshot.messages = vec![ChatMessage {
                         role: "user".to_string(),
-                        content: vec![ContentBlock::Text {
-                            text: goal.clone(),
-                        }],
+                        content: vec![ContentBlock::Text { text: goal.clone() }],
                         created_at: None,
                     }];
                 }
@@ -775,10 +810,8 @@ impl ContextStage for SkillCatalogStage {
             _ => return Ok(snapshot),
         }
 
-        let catalog = skills::discover_skills(
-            &request.agent_id,
-            &request.ws_config.disabled_skills,
-        );
+        let catalog =
+            skills::discover_skills(&request.agent_id, &request.ws_config.disabled_skills);
 
         if catalog.skills.is_empty() {
             return Ok(snapshot);
@@ -786,23 +819,20 @@ impl ContextStage for SkillCatalogStage {
 
         // Build context text for relevance filtering:
         // Use the goal (agent loop) or the last user message (chat).
-        let context_text = request
-            .goal
-            .as_deref()
-            .or_else(|| {
-                // In chat mode, use the latest user message for matching
-                snapshot
-                    .messages
-                    .iter()
-                    .rev()
-                    .find(|m| m.role == "user")
-                    .and_then(|m| {
-                        m.content.iter().find_map(|block| match block {
-                            ContentBlock::Text { text } => Some(text.as_str()),
-                            _ => None,
-                        })
+        let context_text = request.goal.as_deref().or_else(|| {
+            // In chat mode, use the latest user message for matching
+            snapshot
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == "user")
+                .and_then(|m| {
+                    m.content.iter().find_map(|block| match block {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
                     })
-            });
+                })
+        });
 
         let catalog = skills::filter_relevant_skills(catalog, context_text);
 

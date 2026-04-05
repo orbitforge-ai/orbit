@@ -215,8 +215,11 @@ pub async fn delete_schedule(
     let id_clone = id.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM schedules WHERE id = ?1", rusqlite::params![id_clone])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM schedules WHERE id = ?1",
+            rusqlite::params![id_clone],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     })
     .await

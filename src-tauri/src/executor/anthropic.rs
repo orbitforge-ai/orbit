@@ -221,19 +221,20 @@ impl AnthropicProvider {
                                         }
                                     }
                                     "tool_use" => {
-                                        let input: serde_json::Value =
-                                            match serde_json::from_str(&current_tool_input_json) {
-                                                Ok(v) => v,
-                                                Err(e) => {
-                                                    debug!(
-                                                        tool = %current_tool_name,
-                                                        json_len = current_tool_input_json.len(),
-                                                        "failed to parse tool input JSON: {} — input may have been truncated by max_tokens",
-                                                        e
-                                                    );
-                                                    json!({})
-                                                }
-                                            };
+                                        let input: serde_json::Value = match serde_json::from_str(
+                                            &current_tool_input_json,
+                                        ) {
+                                            Ok(v) => v,
+                                            Err(e) => {
+                                                debug!(
+                                                    tool = %current_tool_name,
+                                                    json_len = current_tool_input_json.len(),
+                                                    "failed to parse tool input JSON: {} — input may have been truncated by max_tokens",
+                                                    e
+                                                );
+                                                json!({})
+                                            }
+                                        };
                                         content_blocks.push(ContentBlock::ToolUse {
                                             id: current_tool_id.clone(),
                                             name: current_tool_name.clone(),
@@ -267,22 +268,17 @@ impl AnthropicProvider {
                                 };
                             }
                             if let Some(u) = event["usage"].as_object() {
-                                if let Some(out) = u.get("output_tokens").and_then(|v| v.as_u64())
-                                {
+                                if let Some(out) = u.get("output_tokens").and_then(|v| v.as_u64()) {
                                     usage.output_tokens = out as u32;
                                 }
                             }
                         }
                         "message_start" => {
                             if let Some(u) = event["message"]["usage"].as_object() {
-                                if let Some(inp) =
-                                    u.get("input_tokens").and_then(|v| v.as_u64())
-                                {
+                                if let Some(inp) = u.get("input_tokens").and_then(|v| v.as_u64()) {
                                     usage.input_tokens = inp as u32;
                                 }
-                                if let Some(out) =
-                                    u.get("output_tokens").and_then(|v| v.as_u64())
-                                {
+                                if let Some(out) = u.get("output_tokens").and_then(|v| v.as_u64()) {
                                     usage.output_tokens = out as u32;
                                 }
                             }

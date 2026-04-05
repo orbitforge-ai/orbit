@@ -85,7 +85,10 @@ pub fn load_auth_state(data_dir: &PathBuf) -> AuthMode {
                 mode
             }
             Err(e) => {
-                warn!("Failed to parse auth_state.json ({}), defaulting to Unset", e);
+                warn!(
+                    "Failed to parse auth_state.json ({}), defaulting to Unset",
+                    e
+                );
                 AuthMode::Unset
             }
         },

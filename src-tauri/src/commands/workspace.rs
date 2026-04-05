@@ -33,7 +33,10 @@ pub(crate) async fn sync_model_config_to_cloud(
     if let Some(client) = cloud.get() {
         let aid3 = agent_id.to_string();
         tokio::spawn(async move {
-            if let Err(e) = client.patch_agent_model_config(&aid3, &model_config_json).await {
+            if let Err(e) = client
+                .patch_agent_model_config(&aid3, &model_config_json)
+                .await
+            {
                 tracing::warn!("cloud patch model_config {}: {}", aid3, e);
             }
         });
@@ -43,7 +46,9 @@ pub(crate) async fn sync_model_config_to_cloud(
 
 #[tauri::command]
 pub fn get_workspace_path(agent_id: String) -> String {
-    workspace::agent_dir(&agent_id).to_string_lossy().to_string()
+    workspace::agent_dir(&agent_id)
+        .to_string_lossy()
+        .to_string()
 }
 
 #[tauri::command]
@@ -77,11 +82,9 @@ pub async fn write_workspace_file(
     path: String,
     content: String,
 ) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        workspace::write_workspace_file(&agent_id, &path, &content)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || workspace::write_workspace_file(&agent_id, &path, &content))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   CheckCircle,
   XCircle,
   Loader2,
@@ -20,6 +21,9 @@ interface ToolUseBlockProps {
   onExpandedItemChange: (itemKey: string | null) => void;
   allowDetails: boolean;
 }
+
+const INTERRUPTED_TOOL_RESULT_MARKER =
+  'did not complete because the previous response was interrupted';
 
 export function ToolUseBlock({
   thoughts,
@@ -120,6 +124,8 @@ function ToolDetailPanel({ tool }: { tool: Extract<DisplayBlock, { kind: 'tool_c
   const isSubAgentTool = tool.name === 'spawn_sub_agents';
   const isWaitingSendMessage =
     tool.name === 'send_message' && tool.input.wait_for_result === true && !tool.result;
+  const status = getToolStatus(tool);
+  const isInterrupted = status === 'interrupted';
 
   return (
     <div className="rounded-lg border border-warning/25 bg-warning/5 overflow-hidden">
@@ -130,7 +136,7 @@ function ToolDetailPanel({ tool }: { tool: Extract<DisplayBlock, { kind: 'tool_c
             return <Icon size={11} className={`${colorClass} shrink-0`} />;
           })()}
           <span className="font-medium text-warning">{label}</span>
-          <ToolStatusIndicator status={getToolStatus(tool)} />
+          <ToolStatusIndicator status={status} />
         </div>
       </div>
 
@@ -155,15 +161,27 @@ function ToolDetailPanel({ tool }: { tool: Extract<DisplayBlock, { kind: 'tool_c
       {tool.result && (
         <div
           className={`border-t ${
-            tool.result.isError
+            isInterrupted
+              ? 'border-amber-500/20 bg-amber-500/5'
+              : tool.result.isError
               ? 'border-red-500/20 bg-red-500/5'
               : 'border-emerald-500/20 bg-emerald-500/5'
           }`}
         >
           <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted">Result</div>
+          {isInterrupted && (
+            <div className="px-3 pb-1 text-xs text-amber-300">
+              This tool call was interrupted before it completed. The agent should retry this step
+              in smaller pieces.
+            </div>
+          )}
           <pre
             className={`px-3 pb-2 text-xs font-mono whitespace-pre-wrap break-all overflow-x-auto ${
-              tool.result.isError ? 'text-red-400' : 'text-secondary'
+              isInterrupted
+                ? 'text-amber-200'
+                : tool.result.isError
+                  ? 'text-red-400'
+                  : 'text-secondary'
             }`}
           >
             {tool.result.content}
@@ -178,7 +196,10 @@ function getToolStatus(tool: Extract<DisplayBlock, { kind: 'tool_call' }>) {
   const isSubAgentTool = tool.name === 'spawn_sub_agents';
   const isWaitingSendMessage =
     tool.name === 'send_message' && tool.input.wait_for_result === true && !tool.result;
+  const isInterrupted =
+    tool.result?.isError && tool.result.content.includes(INTERRUPTED_TOOL_RESULT_MARKER);
 
+  if (isInterrupted) return 'interrupted' as const;
   if (tool.result?.isError) return 'error' as const;
   if (tool.result) return 'success' as const;
   if (isSubAgentTool || isWaitingSendMessage) return 'pending' as const;
@@ -188,11 +209,13 @@ function getToolStatus(tool: Extract<DisplayBlock, { kind: 'tool_call' }>) {
 function ToolStatusIndicator({
   status,
 }: {
-  status: 'success' | 'error' | 'pending' | 'idle';
+  status: 'success' | 'error' | 'pending' | 'idle' | 'interrupted';
 }) {
   switch (status) {
     case 'success':
       return <CheckCircle size={11} className="text-emerald-400 shrink-0" />;
+    case 'interrupted':
+      return <AlertTriangle size={11} className="text-amber-400 shrink-0" />;
     case 'error':
       return <XCircle size={11} className="text-red-400 shrink-0" />;
     case 'pending':

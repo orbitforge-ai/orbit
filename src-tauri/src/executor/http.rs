@@ -28,7 +28,7 @@ fn is_dangerous_ip(ip: IpAddr) -> bool {
             || is_v4_metadata(v4)         // cloud metadata (169.254.169.254)
             || v4.is_documentation()      // 192.0.2/24, 198.51.100/24, 203.0.113/24
             || is_v4_shared(v4)           // 100.64.0.0/10 (CGN)
-            || is_v4_benchmarking(v4)     // 198.18.0.0/15
+            || is_v4_benchmarking(v4) // 198.18.0.0/15
         }
         IpAddr::V6(v6) => {
             v6.is_loopback()              // ::1
@@ -74,17 +74,22 @@ fn is_v6_link_local(ip: Ipv6Addr) -> bool {
 /// Validate a URL for SSRF safety. Blocks requests to private/internal networks,
 /// cloud metadata endpoints, and non-HTTP(S) schemes.
 async fn validate_url_for_ssrf(url_str: &str) -> Result<(), String> {
-    let url = Url::parse(url_str)
-        .map_err(|e| format!("Invalid URL '{}': {}", url_str, e))?;
+    let url = Url::parse(url_str).map_err(|e| format!("Invalid URL '{}': {}", url_str, e))?;
 
     // Only allow http and https schemes
     match url.scheme() {
         "http" | "https" => {}
-        scheme => return Err(format!("Blocked URL scheme '{}' — only http/https allowed", scheme)),
+        scheme => {
+            return Err(format!(
+                "Blocked URL scheme '{}' — only http/https allowed",
+                scheme
+            ))
+        }
     }
 
     // Block URLs without a host
-    let host = url.host_str()
+    let host = url
+        .host_str()
         .ok_or_else(|| "Blocked URL with no host".to_string())?;
 
     // Block common metadata hostnames
@@ -97,20 +102,28 @@ async fn validate_url_for_ssrf(url_str: &str) -> Result<(), String> {
     }
 
     // Resolve hostname to IP and check each address
-    let addrs = tokio::net::lookup_host(format!("{}:{}", host, url.port_or_known_default().unwrap_or(80)))
-        .await
-        .map_err(|e| format!("DNS resolution failed for '{}': {}", host, e))?;
+    let addrs = tokio::net::lookup_host(format!(
+        "{}:{}",
+        host,
+        url.port_or_known_default().unwrap_or(80)
+    ))
+    .await
+    .map_err(|e| format!("DNS resolution failed for '{}': {}", host, e))?;
 
     let addrs: Vec<_> = addrs.collect();
     if addrs.is_empty() {
-        return Err(format!("DNS resolution returned no addresses for '{}'", host));
+        return Err(format!(
+            "DNS resolution returned no addresses for '{}'",
+            host
+        ));
     }
 
     for addr in &addrs {
         if is_dangerous_ip(addr.ip()) {
             return Err(format!(
                 "Blocked request to '{}' — resolves to private/internal IP {}",
-                host, addr.ip()
+                host,
+                addr.ip()
             ));
         }
     }
@@ -171,7 +184,10 @@ pub async fn run_http(
         let msg = format!("[blocked] {}\n", reason);
         log_file.write_all(msg.as_bytes()).await.ok();
         emit_log_chunk(app, run_id, vec![("stderr".to_string(), reason.clone())]);
-        return Ok(ProcessResult { exit_code: 1, duration_ms: 0 });
+        return Ok(ProcessResult {
+            exit_code: 1,
+            duration_ms: 0,
+        });
     }
 
     // ── Header sanitization: reject CRLF injection attempts ──
@@ -182,29 +198,34 @@ pub async fn run_http(
                 let msg = format!("[blocked] {}\n", reason);
                 log_file.write_all(msg.as_bytes()).await.ok();
                 emit_log_chunk(app, run_id, vec![("stderr".to_string(), reason.clone())]);
-                return Ok(ProcessResult { exit_code: 1, duration_ms: 0 });
+                return Ok(ProcessResult {
+                    exit_code: 1,
+                    duration_ms: 0,
+                });
             }
             if let Err(reason) = validate_header_value(k, v) {
                 warn!(run_id = run_id, header = %k, "CRLF header injection blocked");
                 let msg = format!("[blocked] {}\n", reason);
                 log_file.write_all(msg.as_bytes()).await.ok();
                 emit_log_chunk(app, run_id, vec![("stderr".to_string(), reason.clone())]);
-                return Ok(ProcessResult { exit_code: 1, duration_ms: 0 });
+                return Ok(ProcessResult {
+                    exit_code: 1,
+                    duration_ms: 0,
+                });
             }
         }
     }
 
     // Log request details
-    let req_line = format!(
-        "--> {} {}\n",
-        cfg.method.to_uppercase(),
-        cfg.url
-    );
+    let req_line = format!("--> {} {}\n", cfg.method.to_uppercase(), cfg.url);
     log_file.write_all(req_line.as_bytes()).await.ok();
     emit_log_chunk(
         app,
         run_id,
-        vec![("stdout".to_string(), format!("--> {} {}", cfg.method.to_uppercase(), cfg.url))],
+        vec![(
+            "stdout".to_string(),
+            format!("--> {} {}", cfg.method.to_uppercase(), cfg.url),
+        )],
     );
 
     if let Some(headers) = &cfg.headers {
@@ -252,17 +273,25 @@ pub async fn run_http(
     let status = response.status();
     let duration_ms = start.elapsed().as_millis() as i64;
 
-    let status_line = format!("<-- {} {} ({}ms)\n", status.as_u16(), status.canonical_reason().unwrap_or(""), duration_ms);
+    let status_line = format!(
+        "<-- {} {} ({}ms)\n",
+        status.as_u16(),
+        status.canonical_reason().unwrap_or(""),
+        duration_ms
+    );
     log_file.write_all(status_line.as_bytes()).await.ok();
     emit_log_chunk(
         app,
         run_id,
-        vec![("stdout".to_string(), format!(
-            "<-- {} {} ({}ms)",
-            status.as_u16(),
-            status.canonical_reason().unwrap_or(""),
-            duration_ms
-        ))],
+        vec![(
+            "stdout".to_string(),
+            format!(
+                "<-- {} {} ({}ms)",
+                status.as_u16(),
+                status.canonical_reason().unwrap_or(""),
+                duration_ms
+            ),
+        )],
     );
 
     // Read response body
@@ -271,7 +300,11 @@ pub async fn run_http(
 
     // Log up to 10KB of the response body
     let truncated = if body_bytes.len() > 10_240 {
-        format!("{}\n... ({} bytes truncated)\n", &body_str[..10_240], body_bytes.len() - 10_240)
+        format!(
+            "{}\n... ({} bytes truncated)\n",
+            &body_str[..10_240],
+            body_bytes.len() - 10_240
+        )
     } else {
         format!("{}\n", body_str)
     };
@@ -285,9 +318,17 @@ pub async fn run_http(
     let expected = cfg.expected_status_codes.as_deref().unwrap_or(&[]);
     let exit_code = if expected.is_empty() {
         // Default: 2xx is success
-        if status.is_success() { 0 } else { 1 }
+        if status.is_success() {
+            0
+        } else {
+            1
+        }
     } else {
-        if expected.contains(&status.as_u16()) { 0 } else { 1 }
+        if expected.contains(&status.as_u16()) {
+            0
+        } else {
+            1
+        }
     };
 
     if exit_code != 0 {
@@ -296,13 +337,24 @@ pub async fn run_http(
         emit_log_chunk(
             app,
             run_id,
-            vec![("stderr".to_string(), format!("unexpected status: {}", status.as_u16()))],
+            vec![(
+                "stderr".to_string(),
+                format!("unexpected status: {}", status.as_u16()),
+            )],
         );
     }
 
-    debug!(run_id = run_id, status = status.as_u16(), duration_ms = duration_ms, "http task finished");
+    debug!(
+        run_id = run_id,
+        status = status.as_u16(),
+        duration_ms = duration_ms,
+        "http task finished"
+    );
 
-    Ok(ProcessResult { exit_code, duration_ms })
+    Ok(ProcessResult {
+        exit_code,
+        duration_ms,
+    })
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────────
@@ -325,7 +377,9 @@ mod tests {
         assert!(is_dangerous_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
         // 172.16.0.0/12
         assert!(is_dangerous_ip(IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1))));
-        assert!(is_dangerous_ip(IpAddr::V4(Ipv4Addr::new(172, 31, 255, 255))));
+        assert!(is_dangerous_ip(IpAddr::V4(Ipv4Addr::new(
+            172, 31, 255, 255
+        ))));
         // 192.168.0.0/16
         assert!(is_dangerous_ip(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))));
     }
@@ -337,21 +391,27 @@ mod tests {
 
     #[test]
     fn blocks_cloud_metadata() {
-        assert!(is_dangerous_ip(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254))));
+        assert!(is_dangerous_ip(IpAddr::V4(Ipv4Addr::new(
+            169, 254, 169, 254
+        ))));
     }
 
     #[test]
     fn blocks_cgn_range() {
         // 100.64.0.0/10
         assert!(is_dangerous_ip(IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1))));
-        assert!(is_dangerous_ip(IpAddr::V4(Ipv4Addr::new(100, 127, 255, 255))));
+        assert!(is_dangerous_ip(IpAddr::V4(Ipv4Addr::new(
+            100, 127, 255, 255
+        ))));
     }
 
     #[test]
     fn allows_public_ips() {
         assert!(!is_dangerous_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
         assert!(!is_dangerous_ip(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))));
-        assert!(!is_dangerous_ip(IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))));
+        assert!(!is_dangerous_ip(IpAddr::V4(Ipv4Addr::new(
+            93, 184, 216, 34
+        ))));
     }
 
     #[test]
@@ -362,8 +422,12 @@ mod tests {
     #[test]
     fn blocks_ipv6_unique_local() {
         // fc00::/7
-        assert!(is_dangerous_ip(IpAddr::V6(Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 1))));
-        assert!(is_dangerous_ip(IpAddr::V6(Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 1))));
+        assert!(is_dangerous_ip(IpAddr::V6(Ipv6Addr::new(
+            0xfc00, 0, 0, 0, 0, 0, 0, 1
+        ))));
+        assert!(is_dangerous_ip(IpAddr::V6(Ipv6Addr::new(
+            0xfd00, 0, 0, 0, 0, 0, 0, 1
+        ))));
     }
 
     #[test]
@@ -384,25 +448,41 @@ mod tests {
 
     #[tokio::test]
     async fn blocks_metadata_hostnames() {
-        assert!(validate_url_for_ssrf("http://metadata.google.internal/computeMetadata/v1/").await.is_err());
+        assert!(
+            validate_url_for_ssrf("http://metadata.google.internal/computeMetadata/v1/")
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
     async fn blocks_localhost_urls() {
-        assert!(validate_url_for_ssrf("http://127.0.0.1/admin").await.is_err());
+        assert!(validate_url_for_ssrf("http://127.0.0.1/admin")
+            .await
+            .is_err());
         assert!(validate_url_for_ssrf("http://[::1]/admin").await.is_err());
     }
 
     #[tokio::test]
     async fn blocks_private_ip_urls() {
-        assert!(validate_url_for_ssrf("http://10.0.0.1/internal").await.is_err());
-        assert!(validate_url_for_ssrf("http://192.168.1.1/router").await.is_err());
-        assert!(validate_url_for_ssrf("http://172.16.0.1/api").await.is_err());
+        assert!(validate_url_for_ssrf("http://10.0.0.1/internal")
+            .await
+            .is_err());
+        assert!(validate_url_for_ssrf("http://192.168.1.1/router")
+            .await
+            .is_err());
+        assert!(validate_url_for_ssrf("http://172.16.0.1/api")
+            .await
+            .is_err());
     }
 
     #[tokio::test]
     async fn blocks_metadata_ip() {
-        assert!(validate_url_for_ssrf("http://169.254.169.254/latest/meta-data/").await.is_err());
+        assert!(
+            validate_url_for_ssrf("http://169.254.169.254/latest/meta-data/")
+                .await
+                .is_err()
+        );
     }
 
     // ── Header sanitization tests ──────────────────────────────────────────

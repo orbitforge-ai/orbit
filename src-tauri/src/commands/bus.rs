@@ -2,7 +2,9 @@ use ulid::Ulid;
 
 use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
-use crate::models::bus::{BusMessage, BusSubscription, BusThreadMessage, CreateBusSubscription, PaginatedBusThread};
+use crate::models::bus::{
+    BusMessage, BusSubscription, BusThreadMessage, CreateBusSubscription, PaginatedBusThread,
+};
 
 #[tauri::command]
 pub async fn list_bus_messages(
@@ -267,8 +269,13 @@ pub async fn toggle_bus_subscription(
     if let Some(client) = cloud.get() {
         let id = id.clone();
         tokio::spawn(async move {
-            let _ = client.patch_by_id("bus_subscriptions", &id,
-                serde_json::json!({"enabled": enabled, "updated_at": now})).await;
+            let _ = client
+                .patch_by_id(
+                    "bus_subscriptions",
+                    &id,
+                    serde_json::json!({"enabled": enabled, "updated_at": now}),
+                )
+                .await;
         });
     }
     Ok(())
@@ -285,8 +292,11 @@ pub async fn delete_bus_subscription(
     let id_clone = id.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM bus_subscriptions WHERE id = ?1", rusqlite::params![id_clone])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM bus_subscriptions WHERE id = ?1",
+            rusqlite::params![id_clone],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     })
     .await

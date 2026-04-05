@@ -81,9 +81,7 @@ pub async fn create_user(
 }
 
 #[tauri::command]
-pub async fn get_active_user(
-    active_user: tauri::State<'_, ActiveUser>,
-) -> Result<String, String> {
+pub async fn get_active_user(active_user: tauri::State<'_, ActiveUser>) -> Result<String, String> {
     Ok(active_user.get().await)
 }
 

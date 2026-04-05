@@ -2,63 +2,63 @@ use ulid::Ulid;
 
 use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
-use crate::executor::engine::{ ExecutorTx, RunRequest };
+use crate::executor::engine::{ExecutorTx, RunRequest};
 use crate::executor::keychain;
 use crate::models::task::Task;
 
 #[tauri::command]
 pub async fn set_api_key(
-  provider: String,
-  key: String,
-  cloud: tauri::State<'_, CloudClientState>,
+    provider: String,
+    key: String,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
-  let cloud = cloud.inner().clone();
-  let prov = provider.clone();
-  let k = key.clone();
-  tokio::task::spawn_blocking(move || keychain::store_api_key(&prov, &k))
-    .await
-    .map_err(|e| e.to_string())??;
-  // Also push to Supabase Vault so other devices can sync.
-  // Awaited (not fire-and-forget) so the call completes before the command returns.
-  // Best-effort: a vault failure still returns Ok so the local key is usable.
-  match cloud.get() {
-    Some(client) => {
-      if let Err(e) = client.upsert_api_key_in_vault(&provider, &key).await {
-        tracing::warn!("vault upsert_api_key '{}': {}", provider, e);
-      }
+    let cloud = cloud.inner().clone();
+    let prov = provider.clone();
+    let k = key.clone();
+    tokio::task::spawn_blocking(move || keychain::store_api_key(&prov, &k))
+        .await
+        .map_err(|e| e.to_string())??;
+    // Also push to Supabase Vault so other devices can sync.
+    // Awaited (not fire-and-forget) so the call completes before the command returns.
+    // Best-effort: a vault failure still returns Ok so the local key is usable.
+    match cloud.get() {
+        Some(client) => {
+            if let Err(e) = client.upsert_api_key_in_vault(&provider, &key).await {
+                tracing::warn!("vault upsert_api_key '{}': {}", provider, e);
+            }
+        }
+        None => tracing::debug!("set_api_key: no cloud client, skipping vault sync"),
     }
-    None => tracing::debug!("set_api_key: no cloud client, skipping vault sync"),
-  }
-  Ok(())
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn has_api_key(provider: String) -> Result<bool, String> {
-  tokio::task
-    ::spawn_blocking(move || Ok(keychain::has_api_key(&provider))).await
-    .map_err(|e: tokio::task::JoinError| e.to_string())?
+    tokio::task::spawn_blocking(move || Ok(keychain::has_api_key(&provider)))
+        .await
+        .map_err(|e: tokio::task::JoinError| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn delete_api_key(provider: String) -> Result<(), String> {
-  tokio::task
-    ::spawn_blocking(move || keychain::delete_api_key(&provider)).await
-    .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || keychain::delete_api_key(&provider))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Trigger an autonomous agent loop run.
 /// Creates an ephemeral agent_loop task and dispatches it to the executor.
 #[tauri::command]
 pub async fn trigger_agent_loop(
-  agent_id: String,
-  goal: String,
-  db: tauri::State<'_, DbPool>,
-  executor_tx: tauri::State<'_, ExecutorTx>
+    agent_id: String,
+    goal: String,
+    db: tauri::State<'_, DbPool>,
+    executor_tx: tauri::State<'_, ExecutorTx>,
 ) -> Result<String, String> {
-  let pool = db.0.clone();
-  let tx = executor_tx.0.clone();
+    let pool = db.0.clone();
+    let tx = executor_tx.0.clone();
 
-  let (task, run_id, _log_path) = tokio::task
+    let (task, run_id, _log_path) = tokio::task
     ::spawn_blocking(
       move || -> Result<(Task, String, String), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
@@ -136,18 +136,17 @@ pub async fn trigger_agent_loop(
     ).await
     .map_err(|e| e.to_string())??;
 
-  let run_id_clone = run_id.clone();
-  tx
-    .send(RunRequest {
-      run_id: run_id_clone,
-      task,
-      schedule_id: None,
-      _trigger: "manual".to_string(),
-      retry_count: 0,
-      _parent_run_id: None,
-      chain_depth: 0,
+    let run_id_clone = run_id.clone();
+    tx.send(RunRequest {
+        run_id: run_id_clone,
+        task,
+        schedule_id: None,
+        _trigger: "manual".to_string(),
+        retry_count: 0,
+        _parent_run_id: None,
+        chain_depth: 0,
     })
     .map_err(|e| format!("failed to send to executor: {}", e))?;
 
-  Ok(run_id)
+    Ok(run_id)
 }

@@ -47,7 +47,10 @@ fn infer_memory_type(text: &str) -> String {
         "name is ",
         "lives in ",
     ];
-    if user_markers.iter().any(|marker| normalized.contains(marker)) {
+    if user_markers
+        .iter()
+        .any(|marker| normalized.contains(marker))
+    {
         return "user".to_string();
     }
 
@@ -64,7 +67,10 @@ fn infer_memory_type(text: &str) -> String {
         "be concise",
         "be brief",
     ];
-    if feedback_markers.iter().any(|marker| normalized.contains(marker)) {
+    if feedback_markers
+        .iter()
+        .any(|marker| normalized.contains(marker))
+    {
         return "feedback".to_string();
     }
 
@@ -88,7 +94,10 @@ fn infer_memory_type(text: &str) -> String {
         "task ",
         "implementation ",
     ];
-    if project_markers.iter().any(|marker| normalized.contains(marker)) {
+    if project_markers
+        .iter()
+        .any(|marker| normalized.contains(marker))
+    {
         return "project".to_string();
     }
 
@@ -671,10 +680,7 @@ mod tests {
 
     #[test]
     fn infer_memory_type_detects_user_facts() {
-        assert_eq!(
-            infer_memory_type("User's favorite color is red."),
-            "user"
-        );
+        assert_eq!(infer_memory_type("User's favorite color is red."), "user");
     }
 
     #[test]

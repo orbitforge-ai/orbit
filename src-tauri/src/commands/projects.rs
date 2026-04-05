@@ -63,10 +63,7 @@ pub async fn list_projects(db: tauri::State<'_, DbPool>) -> Result<Vec<Project>,
 }
 
 #[tauri::command]
-pub async fn get_project(
-    id: String,
-    db: tauri::State<'_, DbPool>,
-) -> Result<Project, String> {
+pub async fn get_project(id: String, db: tauri::State<'_, DbPool>) -> Result<Project, String> {
     let pool = db.0.clone();
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
@@ -92,7 +89,11 @@ pub async fn create_project(
     let project: Project = tokio::task::spawn_blocking(move || -> Result<Project, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let base_slug = workspace::slugify(&payload.name);
-        let base_slug = if base_slug.is_empty() { "project".to_string() } else { base_slug };
+        let base_slug = if base_slug.is_empty() {
+            "project".to_string()
+        } else {
+            base_slug
+        };
 
         let id = {
             let mut candidate = base_slug.clone();
@@ -189,8 +190,11 @@ pub async fn delete_project(
     let id_clone = id.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id_clone])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM projects WHERE id = ?1",
+            rusqlite::params![id_clone],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     })
     .await
@@ -288,7 +292,12 @@ pub async fn add_agent_to_project(
             rusqlite::params![project_id, agent_id, is_default as i64, now],
         )
         .map_err(|e| e.to_string())?;
-        Ok::<ProjectAgent, String>(ProjectAgent { project_id, agent_id, is_default, added_at: now })
+        Ok::<ProjectAgent, String>(ProjectAgent {
+            project_id,
+            agent_id,
+            is_default,
+            added_at: now,
+        })
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -351,11 +360,9 @@ pub async fn list_project_workspace_files(
     path: Option<String>,
 ) -> Result<Vec<workspace::FileEntry>, String> {
     let rel = path.unwrap_or_else(|| ".".to_string());
-    tokio::task::spawn_blocking(move || {
-        workspace::list_project_workspace_files(&project_id, &rel)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || workspace::list_project_workspace_files(&project_id, &rel))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -363,11 +370,9 @@ pub async fn read_project_workspace_file(
     project_id: String,
     path: String,
 ) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        workspace::read_project_workspace_file(&project_id, &path)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || workspace::read_project_workspace_file(&project_id, &path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -384,10 +389,7 @@ pub async fn write_project_workspace_file(
 }
 
 #[tauri::command]
-pub async fn delete_project_workspace_file(
-    project_id: String,
-    path: String,
-) -> Result<(), String> {
+pub async fn delete_project_workspace_file(project_id: String, path: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         workspace::delete_project_workspace_file(&project_id, &path)
     })

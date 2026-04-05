@@ -1,4 +1,4 @@
-use crate::auth::{ AuthMode, AuthState };
+use crate::auth::{AuthMode, AuthState};
 use crate::commands::users::ActiveUser;
 use crate::executor::memory::MemoryEntry;
 use crate::memory_service::MemoryServiceState;

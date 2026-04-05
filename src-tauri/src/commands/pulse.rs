@@ -30,8 +30,7 @@ pub async fn get_pulse_config(
     let aid = agent_id.clone();
 
     // Read pulse.md content
-    let content = workspace::read_workspace_file(&agent_id, "pulse.md")
-        .unwrap_or_default();
+    let content = workspace::read_workspace_file(&agent_id, "pulse.md").unwrap_or_default();
 
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;

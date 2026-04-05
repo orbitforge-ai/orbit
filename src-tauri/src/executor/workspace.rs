@@ -8,7 +8,13 @@ pub fn slugify(name: &str) -> String {
     let slug: String = name
         .to_lowercase()
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     // Collapse multiple hyphens and trim
     let mut result = String::new();
@@ -99,7 +105,10 @@ pub fn list_project_workspace_files(
 }
 
 /// Read a file from a project workspace (path-sandboxed).
-pub fn read_project_workspace_file(project_id: &str, relative_path: &str) -> Result<String, String> {
+pub fn read_project_workspace_file(
+    project_id: &str,
+    relative_path: &str,
+) -> Result<String, String> {
     let root = project_workspace_dir(project_id);
     let path = validate_path(&root, relative_path)?;
     fs::read_to_string(&path).map_err(|e| format!("failed to read file: {}", e))
@@ -542,9 +551,7 @@ fn validate_path(base: &Path, requested: &str) -> Result<PathBuf, String> {
         return Err(format!("path escapes agent workspace: {}", requested));
     }
 
-    let filename = resolved
-        .file_name()
-        .ok_or("invalid path: no filename")?;
+    let filename = resolved.file_name().ok_or("invalid path: no filename")?;
     Ok(parent_canonical.join(filename))
 }
 
@@ -569,9 +576,12 @@ pub fn serialize_model_config(agent_id: &str) -> Result<String, String> {
     let config = load_agent_config(agent_id).unwrap_or_default();
     let system_prompt = read_workspace_file(agent_id, "system_prompt.md")
         .unwrap_or_else(|_| DEFAULT_SYSTEM_PROMPT.to_string());
-    let stored = StoredModelConfig { version: 1, config, system_prompt };
-    serde_json::to_string(&stored)
-        .map_err(|e| format!("failed to serialize model_config: {}", e))
+    let stored = StoredModelConfig {
+        version: 1,
+        config,
+        system_prompt,
+    };
+    serde_json::to_string(&stored).map_err(|e| format!("failed to serialize model_config: {}", e))
 }
 
 /// Deserialize a model_config blob and write config.json + system_prompt.md to disk.
@@ -583,8 +593,7 @@ pub fn apply_model_config_to_disk(agent_id: &str, model_config_json: &str) -> Re
     let stored: StoredModelConfig = serde_json::from_str(model_config_json)
         .map_err(|e| format!("failed to parse model_config: {}", e))?;
     let dir = agent_dir(agent_id);
-    fs::create_dir_all(&dir)
-        .map_err(|e| format!("failed to create agent dir: {}", e))?;
+    fs::create_dir_all(&dir).map_err(|e| format!("failed to create agent dir: {}", e))?;
     save_agent_config(agent_id, &stored.config)?;
     fs::write(dir.join("system_prompt.md"), &stored.system_prompt)
         .map_err(|e| format!("failed to write system_prompt.md: {}", e))
@@ -610,8 +619,7 @@ pub fn init_agent_workspace(agent_id: &str) -> Result<(), String> {
     fs::create_dir_all(&memory_dir).map_err(|e| format!("failed to create memory dir: {}", e))?;
     fs::create_dir_all(&workspace_dir)
         .map_err(|e| format!("failed to create workspace dir: {}", e))?;
-    fs::create_dir_all(&skills_dir)
-        .map_err(|e| format!("failed to create skills dir: {}", e))?;
+    fs::create_dir_all(&skills_dir).map_err(|e| format!("failed to create skills dir: {}", e))?;
 
     // Write default system prompt if it doesn't exist
     let prompt_path = root.join("system_prompt.md");
@@ -626,8 +634,7 @@ pub fn init_agent_workspace(agent_id: &str) -> Result<(), String> {
         let default_config = AgentWorkspaceConfig::default();
         let json = serde_json::to_string_pretty(&default_config)
             .map_err(|e| format!("failed to serialize config: {}", e))?;
-        fs::write(&config_path, json)
-            .map_err(|e| format!("failed to write config.json: {}", e))?;
+        fs::write(&config_path, json).map_err(|e| format!("failed to write config.json: {}", e))?;
     }
 
     // Write default pulse prompt if it doesn't exist
@@ -667,10 +674,7 @@ pub fn write_workspace_file(
 }
 
 /// List files in a directory within the agent's workspace (path-sandboxed).
-pub fn list_workspace_files(
-    agent_id: &str,
-    relative_path: &str,
-) -> Result<Vec<FileEntry>, String> {
+pub fn list_workspace_files(agent_id: &str, relative_path: &str) -> Result<Vec<FileEntry>, String> {
     let root = agent_dir(agent_id);
     let path = validate_path(&root, relative_path)?;
 

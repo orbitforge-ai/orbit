@@ -1,11 +1,11 @@
 use serde_json::json;
-use std::path::{ Path, PathBuf };
+use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
-use tracing::{ info, warn };
+use tracing::{info, warn};
 
 use crate::db::DbPool;
-use crate::events::emitter::{ emit_bus_message_sent, emit_log_chunk, emit_sub_agents_spawned };
-use crate::executor::engine::{ AgentSemaphores, RunRequest, SessionExecutionRegistry };
+use crate::events::emitter::{emit_bus_message_sent, emit_log_chunk, emit_sub_agents_spawned};
+use crate::executor::engine::{AgentSemaphores, RunRequest, SessionExecutionRegistry};
 use crate::executor::llm_provider::ToolDefinition;
 use crate::executor::memory::MemoryClient;
 use crate::executor::permissions::PermissionRegistry;
@@ -24,130 +24,133 @@ const MAX_SUB_AGENT_TIMEOUT_SECS: u64 = 600;
 /// Context for executing agent tools — provides sandboxed filesystem access
 /// and optional Agent Bus capabilities.
 pub struct ToolExecutionContext {
-  /// The agent's ID (used for skill discovery and other lookups).
-  pub agent_id: String,
-  /// The agent's entire root directory (~/.orbit/agents/{agent_id}/).
-  pub _agent_root: PathBuf,
-  /// The workspace subdirectory for scratch files.
-  pub workspace_root: PathBuf,
-  /// Which search provider to use for web_search (e.g. "brave", "tavily").
-  pub web_search_provider: String,
-  /// Skills explicitly disabled for this agent.
-  pub disabled_skills: Vec<String>,
-  // ─── Agent Bus fields ───────────────────────────────────────────────
-  pub db: Option<DbPool>,
-  pub executor_tx: Option<mpsc::UnboundedSender<RunRequest>>,
-  pub app: Option<tauri::AppHandle>,
-  pub current_agent_id: Option<String>,
-  pub current_run_id: Option<String>,
-  pub current_session_id: Option<String>,
-  pub chain_depth: i64,
-  pub agent_semaphores: Option<AgentSemaphores>,
-  pub session_registry: Option<SessionExecutionRegistry>,
-  /// Whether this context is for a sub-agent (prevents nesting).
-  pub is_sub_agent: bool,
-  /// Permission registry for gating tool execution.
-  pub permission_registry: Option<PermissionRegistry>,
-  /// Optional memory client for long-term memory operations.
-  pub memory_client: Option<MemoryClient>,
-  /// User ID used for scoping memory operations (Supabase user_id when cloud, else "default_user").
-  pub memory_user_id: String,
-  /// Optional cloud client for syncing data to Supabase.
-  pub cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+    /// The agent's ID (used for skill discovery and other lookups).
+    pub agent_id: String,
+    /// The agent's entire root directory (~/.orbit/agents/{agent_id}/).
+    pub _agent_root: PathBuf,
+    /// The workspace subdirectory for scratch files.
+    pub workspace_root: PathBuf,
+    /// Which search provider to use for web_search (e.g. "brave", "tavily").
+    pub web_search_provider: String,
+    /// Skills explicitly disabled for this agent.
+    pub disabled_skills: Vec<String>,
+    // ─── Agent Bus fields ───────────────────────────────────────────────
+    pub db: Option<DbPool>,
+    pub executor_tx: Option<mpsc::UnboundedSender<RunRequest>>,
+    pub app: Option<tauri::AppHandle>,
+    pub current_agent_id: Option<String>,
+    pub current_run_id: Option<String>,
+    pub current_session_id: Option<String>,
+    pub chain_depth: i64,
+    pub agent_semaphores: Option<AgentSemaphores>,
+    pub session_registry: Option<SessionExecutionRegistry>,
+    /// Whether this context is for a sub-agent (prevents nesting).
+    pub is_sub_agent: bool,
+    /// Permission registry for gating tool execution.
+    pub permission_registry: Option<PermissionRegistry>,
+    /// Optional memory client for long-term memory operations.
+    pub memory_client: Option<MemoryClient>,
+    /// User ID used for scoping memory operations (Supabase user_id when cloud, else "default_user").
+    pub memory_user_id: String,
+    /// Optional cloud client for syncing data to Supabase.
+    pub cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 }
 
 impl ToolExecutionContext {
-  pub fn new_with_bus(
-    agent_id: &str,
-    run_id: &str,
-    session_id: Option<&str>,
-    chain_depth: i64,
-    db: DbPool,
-    executor_tx: mpsc::UnboundedSender<RunRequest>,
-    app: tauri::AppHandle,
-    agent_semaphores: AgentSemaphores,
-    session_registry: SessionExecutionRegistry,
-  ) -> Self {
-    let agent_root = super::workspace::agent_dir(agent_id);
-    let workspace_root = agent_root.join("workspace");
-    let ws_config = super::workspace::load_agent_config(agent_id).unwrap_or_default();
-    Self {
-      agent_id: agent_id.to_string(),
-      _agent_root: agent_root,
-      workspace_root,
-      web_search_provider: ws_config.web_search_provider,
-      disabled_skills: ws_config.disabled_skills,
-      db: Some(db),
-      executor_tx: Some(executor_tx),
-      app: Some(app),
-      current_agent_id: Some(agent_id.to_string()),
-      current_run_id: Some(run_id.to_string()),
-      current_session_id: session_id.map(|s| s.to_string()),
-      chain_depth,
-      agent_semaphores: Some(agent_semaphores),
-      session_registry: Some(session_registry),
-      is_sub_agent: false,
-      permission_registry: None,
-      memory_client: None,
-      memory_user_id: "default_user".to_string(),
-      cloud_client: None,
+    pub fn new_with_bus(
+        agent_id: &str,
+        run_id: &str,
+        session_id: Option<&str>,
+        chain_depth: i64,
+        db: DbPool,
+        executor_tx: mpsc::UnboundedSender<RunRequest>,
+        app: tauri::AppHandle,
+        agent_semaphores: AgentSemaphores,
+        session_registry: SessionExecutionRegistry,
+    ) -> Self {
+        let agent_root = super::workspace::agent_dir(agent_id);
+        let workspace_root = agent_root.join("workspace");
+        let ws_config = super::workspace::load_agent_config(agent_id).unwrap_or_default();
+        Self {
+            agent_id: agent_id.to_string(),
+            _agent_root: agent_root,
+            workspace_root,
+            web_search_provider: ws_config.web_search_provider,
+            disabled_skills: ws_config.disabled_skills,
+            db: Some(db),
+            executor_tx: Some(executor_tx),
+            app: Some(app),
+            current_agent_id: Some(agent_id.to_string()),
+            current_run_id: Some(run_id.to_string()),
+            current_session_id: session_id.map(|s| s.to_string()),
+            chain_depth,
+            agent_semaphores: Some(agent_semaphores),
+            session_registry: Some(session_registry),
+            is_sub_agent: false,
+            permission_registry: None,
+            memory_client: None,
+            memory_user_id: "default_user".to_string(),
+            cloud_client: None,
+        }
     }
-  }
 
-  /// Set the permission registry on this context (builder pattern).
-  pub fn with_permission_registry(mut self, registry: PermissionRegistry) -> Self {
-    self.permission_registry = Some(registry);
-    self
-  }
+    /// Set the permission registry on this context (builder pattern).
+    pub fn with_permission_registry(mut self, registry: PermissionRegistry) -> Self {
+        self.permission_registry = Some(registry);
+        self
+    }
 
-  /// Set the memory client on this context (builder pattern).
-  pub fn with_memory_client(mut self, client: Option<MemoryClient>) -> Self {
-    self.memory_client = client;
-    self
-  }
+    /// Set the memory client on this context (builder pattern).
+    pub fn with_memory_client(mut self, client: Option<MemoryClient>) -> Self {
+        self.memory_client = client;
+        self
+    }
 
-  /// Set the user ID for memory scoping (builder pattern).
-  pub fn with_memory_user_id(mut self, user_id: String) -> Self {
-    self.memory_user_id = user_id;
-    self
-  }
+    /// Set the user ID for memory scoping (builder pattern).
+    pub fn with_memory_user_id(mut self, user_id: String) -> Self {
+        self.memory_user_id = user_id;
+        self
+    }
 
-  /// Set the cloud client for syncing (builder pattern).
-  pub fn with_cloud_client(mut self, client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>) -> Self {
-    self.cloud_client = client;
-    self
-  }
+    /// Set the cloud client for syncing (builder pattern).
+    pub fn with_cloud_client(
+        mut self,
+        client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+    ) -> Self {
+        self.cloud_client = client;
+        self
+    }
 
-  pub fn new_for_sub_agent(
-    agent_id: &str,
-    run_id: &str,
-    session_id: Option<&str>,
-    chain_depth: i64,
-    db: DbPool,
-    executor_tx: mpsc::UnboundedSender<RunRequest>,
-    app: tauri::AppHandle,
-    agent_semaphores: AgentSemaphores,
-    session_registry: SessionExecutionRegistry,
-  ) -> Self {
-    let mut ctx = Self::new_with_bus(
-      agent_id,
-      run_id,
-      session_id,
-      chain_depth,
-      db,
-      executor_tx,
-      app,
-      agent_semaphores,
-      session_registry,
-    );
-    ctx.is_sub_agent = true;
-    ctx
-  }
+    pub fn new_for_sub_agent(
+        agent_id: &str,
+        run_id: &str,
+        session_id: Option<&str>,
+        chain_depth: i64,
+        db: DbPool,
+        executor_tx: mpsc::UnboundedSender<RunRequest>,
+        app: tauri::AppHandle,
+        agent_semaphores: AgentSemaphores,
+        session_registry: SessionExecutionRegistry,
+    ) -> Self {
+        let mut ctx = Self::new_with_bus(
+            agent_id,
+            run_id,
+            session_id,
+            chain_depth,
+            db,
+            executor_tx,
+            app,
+            agent_semaphores,
+            session_registry,
+        );
+        ctx.is_sub_agent = true;
+        ctx
+    }
 }
 
 /// Build the tool definitions that are exposed to the LLM.
 pub fn build_tool_definitions(allowed: &[String]) -> Vec<ToolDefinition> {
-  let all_tools = vec![
+    let all_tools = vec![
     ToolDefinition {
       name: "shell_command".to_string(),
       description: "Execute a shell command in the agent's workspace directory. Returns stdout and stderr.".to_string(),
@@ -405,258 +408,308 @@ pub fn build_tool_definitions(allowed: &[String]) -> Vec<ToolDefinition> {
     }
   ];
 
-  if allowed.is_empty() {
-    return all_tools;
-  }
+    if allowed.is_empty() {
+        return all_tools;
+    }
 
-  all_tools
-    .into_iter()
-    .filter(|t| t.name == "react_to_message" || allowed.contains(&t.name))
-    .collect()
+    all_tools
+        .into_iter()
+        .filter(|t| t.name == "react_to_message" || allowed.contains(&t.name))
+        .collect()
 }
 
 /// Validate a path stays within the given base directory.
 fn validate_path(base: &Path, requested: &str) -> Result<PathBuf, String> {
-  let resolved = base.join(requested);
+    let resolved = base.join(requested);
 
-  if resolved.exists() {
-    let canonical = resolved.canonicalize().map_err(|e| format!("failed to resolve path: {}", e))?;
-    let base_canonical = base.canonicalize().map_err(|e| format!("failed to resolve base: {}", e))?;
-    if !canonical.starts_with(&base_canonical) {
-      return Err(format!("path escapes workspace: {}", requested));
+    if resolved.exists() {
+        let canonical = resolved
+            .canonicalize()
+            .map_err(|e| format!("failed to resolve path: {}", e))?;
+        let base_canonical = base
+            .canonicalize()
+            .map_err(|e| format!("failed to resolve base: {}", e))?;
+        if !canonical.starts_with(&base_canonical) {
+            return Err(format!("path escapes workspace: {}", requested));
+        }
+        return Ok(canonical);
     }
-    return Ok(canonical);
-  }
 
-  // For new files, validate the parent
-  let parent = resolved.parent().ok_or("invalid path")?;
-  if !parent.exists() {
-    std::fs::create_dir_all(parent).map_err(|e| format!("failed to create directories: {}", e))?;
-  }
-  let parent_canonical = parent
-    .canonicalize()
-    .map_err(|e| format!("failed to resolve parent: {}", e))?;
-  let base_canonical = base.canonicalize().map_err(|e| format!("failed to resolve base: {}", e))?;
-  if !parent_canonical.starts_with(&base_canonical) {
-    return Err(format!("path escapes workspace: {}", requested));
-  }
+    // For new files, validate the parent
+    let parent = resolved.parent().ok_or("invalid path")?;
+    if !parent.exists() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create directories: {}", e))?;
+    }
+    let parent_canonical = parent
+        .canonicalize()
+        .map_err(|e| format!("failed to resolve parent: {}", e))?;
+    let base_canonical = base
+        .canonicalize()
+        .map_err(|e| format!("failed to resolve base: {}", e))?;
+    if !parent_canonical.starts_with(&base_canonical) {
+        return Err(format!("path escapes workspace: {}", requested));
+    }
 
-  Ok(parent_canonical.join(resolved.file_name().ok_or("no filename")?))
+    Ok(parent_canonical.join(resolved.file_name().ok_or("no filename")?))
 }
 
 /// Execute a single tool call. Returns (result_text, is_finish).
 pub async fn execute_tool(
-  ctx: &ToolExecutionContext,
-  tool_name: &str,
-  input: &serde_json::Value,
-  app: &tauri::AppHandle,
-  run_id: &str
+    ctx: &ToolExecutionContext,
+    tool_name: &str,
+    input: &serde_json::Value,
+    app: &tauri::AppHandle,
+    run_id: &str,
 ) -> Result<(String, bool), String> {
-  match tool_name {
-    "shell_command" => {
-      let command = input["command"].as_str().ok_or("shell_command: missing 'command' field")?;
+    match tool_name {
+        "shell_command" => {
+            let command = input["command"]
+                .as_str()
+                .ok_or("shell_command: missing 'command' field")?;
 
-      info!(run_id = run_id, command = command, "agent tool: shell_command");
+            info!(
+                run_id = run_id,
+                command = command,
+                "agent tool: shell_command"
+            );
 
-      // Ensure workspace dir exists
-      std::fs
-        ::create_dir_all(&ctx.workspace_root)
-        .map_err(|e| format!("failed to create workspace: {}", e))?;
+            // Ensure workspace dir exists
+            std::fs::create_dir_all(&ctx.workspace_root)
+                .map_err(|e| format!("failed to create workspace: {}", e))?;
 
-      let output = tokio::process::Command
-        ::new("/bin/sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(&ctx.workspace_root)
-        .output().await
-        .map_err(|e| format!("failed to execute command: {}", e))?;
+            let output = tokio::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(command)
+                .current_dir(&ctx.workspace_root)
+                .output()
+                .await
+                .map_err(|e| format!("failed to execute command: {}", e))?;
 
-      let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-      let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-      let exit_code = output.status.code().unwrap_or(-1);
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let exit_code = output.status.code().unwrap_or(-1);
 
-      // Emit log chunks
-      if !stdout.is_empty() {
-        let lines: Vec<(String, String)> = stdout
-          .lines()
-          .map(|l| ("stdout".to_string(), l.to_string()))
-          .collect();
-        emit_log_chunk(app, run_id, lines);
-      }
-      if !stderr.is_empty() {
-        let lines: Vec<(String, String)> = stderr
-          .lines()
-          .map(|l| ("stderr".to_string(), l.to_string()))
-          .collect();
-        emit_log_chunk(app, run_id, lines);
-      }
+            // Emit log chunks
+            if !stdout.is_empty() {
+                let lines: Vec<(String, String)> = stdout
+                    .lines()
+                    .map(|l| ("stdout".to_string(), l.to_string()))
+                    .collect();
+                emit_log_chunk(app, run_id, lines);
+            }
+            if !stderr.is_empty() {
+                let lines: Vec<(String, String)> = stderr
+                    .lines()
+                    .map(|l| ("stderr".to_string(), l.to_string()))
+                    .collect();
+                emit_log_chunk(app, run_id, lines);
+            }
 
-      let mut result = String::new();
-      if !stdout.is_empty() {
-        result.push_str(&stdout);
-      }
-      if !stderr.is_empty() {
-        if !result.is_empty() {
-          result.push('\n');
+            let mut result = String::new();
+            if !stdout.is_empty() {
+                result.push_str(&stdout);
+            }
+            if !stderr.is_empty() {
+                if !result.is_empty() {
+                    result.push('\n');
+                }
+                result.push_str("[stderr]\n");
+                result.push_str(&stderr);
+            }
+            result.push_str(&format!("\n[exit code: {}]", exit_code));
+
+            // Truncate to 50KB to avoid blowing up context
+            if result.len() > 50_000 {
+                result.truncate(50_000);
+                result.push_str("\n[output truncated]");
+            }
+
+            Ok((result, false))
         }
-        result.push_str("[stderr]\n");
-        result.push_str(&stderr);
-      }
-      result.push_str(&format!("\n[exit code: {}]", exit_code));
 
-      // Truncate to 50KB to avoid blowing up context
-      if result.len() > 50_000 {
-        result.truncate(50_000);
-        result.push_str("\n[output truncated]");
-      }
+        "read_file" => {
+            let path = input["path"]
+                .as_str()
+                .ok_or("read_file: missing 'path' field")?;
 
-      Ok((result, false))
-    }
+            let full_path = validate_path(&ctx.workspace_root, path)?;
+            let content = std::fs::read_to_string(&full_path)
+                .map_err(|e| format!("failed to read {}: {}", path, e))?;
 
-    "read_file" => {
-      let path = input["path"].as_str().ok_or("read_file: missing 'path' field")?;
+            // Truncate to 100KB
+            let content = if content.len() > 100_000 {
+                let mut truncated = content[..100_000].to_string();
+                truncated.push_str("\n[file truncated at 100KB]");
+                truncated
+            } else {
+                content
+            };
 
-      let full_path = validate_path(&ctx.workspace_root, path)?;
-      let content = std::fs
-        ::read_to_string(&full_path)
-        .map_err(|e| format!("failed to read {}: {}", path, e))?;
+            Ok((content, false))
+        }
 
-      // Truncate to 100KB
-      let content = if content.len() > 100_000 {
-        let mut truncated = content[..100_000].to_string();
-        truncated.push_str("\n[file truncated at 100KB]");
-        truncated
-      } else {
-        content
-      };
+        "write_file" => {
+            let path = input["path"]
+                .as_str()
+                .ok_or("write_file: missing 'path' field")?;
+            let content = input["content"]
+                .as_str()
+                .ok_or("write_file: missing 'content' field")?;
 
-      Ok((content, false))
-    }
+            let full_path = validate_path(&ctx.workspace_root, path)?;
+            if let Some(parent) = full_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("failed to create dirs: {}", e))?;
+            }
+            std::fs::write(&full_path, content)
+                .map_err(|e| format!("failed to write {}: {}", path, e))?;
 
-    "write_file" => {
-      let path = input["path"].as_str().ok_or("write_file: missing 'path' field")?;
-      let content = input["content"].as_str().ok_or("write_file: missing 'content' field")?;
+            Ok((
+                format!("Successfully wrote {} bytes to {}", content.len(), path),
+                false,
+            ))
+        }
 
-      let full_path = validate_path(&ctx.workspace_root, path)?;
-      if let Some(parent) = full_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("failed to create dirs: {}", e))?;
-      }
-      std::fs::write(&full_path, content).map_err(|e| format!("failed to write {}: {}", path, e))?;
+        "list_files" => {
+            let path = input["path"]
+                .as_str()
+                .ok_or("list_files: missing 'path' field")?;
 
-      Ok((format!("Successfully wrote {} bytes to {}", content.len(), path), false))
-    }
+            let full_path = validate_path(&ctx.workspace_root, path)?;
+            if !full_path.is_dir() {
+                return Err(format!("{} is not a directory", path));
+            }
 
-    "list_files" => {
-      let path = input["path"].as_str().ok_or("list_files: missing 'path' field")?;
+            let entries = std::fs::read_dir(&full_path)
+                .map_err(|e| format!("failed to list {}: {}", path, e))?;
 
-      let full_path = validate_path(&ctx.workspace_root, path)?;
-      if !full_path.is_dir() {
-        return Err(format!("{} is not a directory", path));
-      }
+            let mut listing = Vec::new();
+            for entry in entries {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let meta = entry.metadata().map_err(|e| e.to_string())?;
+                let name = entry.file_name().to_string_lossy().to_string();
+                let kind = if meta.is_dir() { "dir" } else { "file" };
+                let size = meta.len();
+                listing.push(format!("{:>6} {:4} {}", size, kind, name));
+            }
+            listing.sort();
 
-      let entries = std::fs
-        ::read_dir(&full_path)
-        .map_err(|e| format!("failed to list {}: {}", path, e))?;
+            if listing.is_empty() {
+                Ok(("(empty directory)".to_string(), false))
+            } else {
+                Ok((listing.join("\n"), false))
+            }
+        }
 
-      let mut listing = Vec::new();
-      for entry in entries {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let meta = entry.metadata().map_err(|e| e.to_string())?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        let kind = if meta.is_dir() { "dir" } else { "file" };
-        let size = meta.len();
-        listing.push(format!("{:>6} {:4} {}", size, kind, name));
-      }
-      listing.sort();
+        "web_search" => {
+            let query = input["query"]
+                .as_str()
+                .ok_or("web_search: missing 'query' field")?;
+            let count = input["count"].as_u64().unwrap_or(5).min(10) as u32;
 
-      if listing.is_empty() {
-        Ok(("(empty directory)".to_string(), false))
-      } else {
-        Ok((listing.join("\n"), false))
-      }
-    }
+            info!(run_id = run_id, query = query, provider = %ctx.web_search_provider, "agent tool: web_search");
 
-    "web_search" => {
-      let query = input["query"].as_str().ok_or("web_search: missing 'query' field")?;
-      let count = input["count"].as_u64().unwrap_or(5).min(10) as u32;
+            let result = execute_web_search(&ctx.web_search_provider, query, count).await?;
 
-      info!(run_id = run_id, query = query, provider = %ctx.web_search_provider, "agent tool: web_search");
+            Ok((result, false))
+        }
 
-      let result = execute_web_search(&ctx.web_search_provider, query, count).await?;
+        "send_message" => {
+            let target = input["target_agent"]
+                .as_str()
+                .ok_or("send_message: missing 'target_agent' field")?;
+            let message = input["message"]
+                .as_str()
+                .ok_or("send_message: missing 'message' field")?;
+            let wait = input["wait_for_result"].as_bool().unwrap_or(false);
 
-      Ok((result, false))
-    }
+            info!(
+                run_id = run_id,
+                target = target,
+                wait = wait,
+                "agent tool: send_message"
+            );
 
-    "send_message" => {
-      let target = input["target_agent"].as_str().ok_or("send_message: missing 'target_agent' field")?;
-      let message = input["message"].as_str().ok_or("send_message: missing 'message' field")?;
-      let wait = input["wait_for_result"].as_bool().unwrap_or(false);
+            let db = ctx
+                .db
+                .as_ref()
+                .ok_or("send_message: agent bus not available in this context")?;
+            let bus_app = ctx
+                .app
+                .as_ref()
+                .ok_or("send_message: app handle not available")?;
+            let agent_semaphores = ctx
+                .agent_semaphores
+                .as_ref()
+                .ok_or("send_message: agent semaphores not available")?;
+            let session_registry = ctx
+                .session_registry
+                .as_ref()
+                .ok_or("send_message: session registry not available")?;
+            let from_agent = ctx.current_agent_id.as_deref().unwrap_or("unknown");
+            let from_run: Option<String> = ctx.current_run_id.as_ref().and_then(|rid| {
+                if rid.starts_with("chat:") {
+                    None
+                } else {
+                    Some(rid.clone())
+                }
+            });
+            let from_session = ctx.current_session_id.clone();
 
-      info!(run_id = run_id, target = target, wait = wait, "agent tool: send_message");
-
-      let db = ctx.db.as_ref().ok_or("send_message: agent bus not available in this context")?;
-      let bus_app = ctx.app.as_ref().ok_or("send_message: app handle not available")?;
-      let agent_semaphores = ctx.agent_semaphores.as_ref().ok_or("send_message: agent semaphores not available")?;
-      let session_registry = ctx.session_registry.as_ref().ok_or("send_message: session registry not available")?;
-      let from_agent = ctx.current_agent_id.as_deref().unwrap_or("unknown");
-      let from_run: Option<String> = ctx.current_run_id.as_ref().and_then(|rid| {
-        if rid.starts_with("chat:") { None } else { Some(rid.clone()) }
-      });
-      let from_session = ctx.current_session_id.clone();
-
-      // Check chain depth
-      let next_depth = ctx.chain_depth + 1;
-      if next_depth > MAX_CHAIN_DEPTH {
-        return Ok((
+            // Check chain depth
+            let next_depth = ctx.chain_depth + 1;
+            if next_depth > MAX_CHAIN_DEPTH {
+                return Ok((
           format!("Error: Maximum chain depth ({}) exceeded. Cannot trigger further agents to prevent infinite loops.", MAX_CHAIN_DEPTH),
           false,
         ));
-      }
+            }
 
-      // Resolve target agent by name or ID
-      let (to_agent_id, to_agent_name) = {
-        let pool = db.clone();
-        let target_str = target.to_string();
-        tokio::task::spawn_blocking(move || {
-          let conn = pool.get().map_err(|e| e.to_string())?;
-          // Try by ID first, then by name
-          let result: Result<(String, String), String> = conn
-            .query_row(
-              "SELECT id, name FROM agents WHERE id = ?1 OR name = ?1 LIMIT 1",
-              rusqlite::params![target_str],
-              |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .map_err(|_| format!("Agent '{}' not found", target_str));
-          result
-        })
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?
-      };
+            // Resolve target agent by name or ID
+            let (to_agent_id, to_agent_name) = {
+                let pool = db.clone();
+                let target_str = target.to_string();
+                tokio::task::spawn_blocking(move || {
+                    let conn = pool.get().map_err(|e| e.to_string())?;
+                    // Try by ID first, then by name
+                    let result: Result<(String, String), String> = conn
+                        .query_row(
+                            "SELECT id, name FROM agents WHERE id = ?1 OR name = ?1 LIMIT 1",
+                            rusqlite::params![target_str],
+                            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                        )
+                        .map_err(|_| format!("Agent '{}' not found", target_str));
+                    result
+                })
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())?
+            };
 
-      // Truncate payload to 50KB
-      let payload_str = if message.len() > 50_000 {
-        &message[..50_000]
-      } else {
-        message
-      };
+            // Truncate payload to 50KB
+            let payload_str = if message.len() > 50_000 {
+                &message[..50_000]
+            } else {
+                message
+            };
 
-      let msg_id = ulid::Ulid::new().to_string();
-      let new_session_id = ulid::Ulid::new().to_string();
-      let now = chrono::Utc::now().to_rfc3339();
-      {
-        let pool = db.clone();
-        let msg_id = msg_id.clone();
-        let new_session_id = new_session_id.clone();
-        let from_agent = from_agent.to_string();
-        let from_run = from_run.clone();
-        let from_session = from_session.clone();
-        let to_agent_id = to_agent_id.clone();
-        let payload_str = payload_str.to_string();
-        let now = now.clone();
-        let title = payload_str.chars().take(60).collect::<String>();
+            let msg_id = ulid::Ulid::new().to_string();
+            let new_session_id = ulid::Ulid::new().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+            {
+                let pool = db.clone();
+                let msg_id = msg_id.clone();
+                let new_session_id = new_session_id.clone();
+                let from_agent = from_agent.to_string();
+                let from_run = from_run.clone();
+                let from_session = from_session.clone();
+                let to_agent_id = to_agent_id.clone();
+                let payload_str = payload_str.to_string();
+                let now = now.clone();
+                let title = payload_str.chars().take(60).collect::<String>();
 
-        tokio::task::spawn_blocking(move || {
+                tokio::task::spawn_blocking(move || {
           let conn = pool.get().map_err(|e| e.to_string())?;
           conn.execute(
             "INSERT INTO chat_sessions (
@@ -699,76 +752,85 @@ pub async fn execute_tool(
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
-      }
+            }
 
-      let db_clone = db.clone();
-      let app_clone = bus_app.clone();
-      let tx_clone = ctx.executor_tx.as_ref().ok_or("send_message: executor channel not available")?.clone();
-      let semaphores = agent_semaphores.clone();
-      let registry = session_registry.clone();
-      let perm_registry = ctx.permission_registry.clone().unwrap_or_else(PermissionRegistry::new);
-      let mem_client = ctx.memory_client.clone();
-      let mem_user_id = ctx.memory_user_id.clone();
-      let cloud_cl = ctx.cloud_client.clone();
-      let target_agent_id = to_agent_id.clone();
-      let target_session_id = new_session_id.clone();
-      tokio::task::spawn_blocking(move || {
-        tauri::async_runtime::block_on(async move {
-          if let Err(e) = session_agent::run_agent_session(
-            &target_agent_id,
-            &target_session_id,
-            next_depth,
-            false,
-            &db_clone,
-            &app_clone,
-            &tx_clone,
-            &semaphores,
-            &registry,
-            &perm_registry,
-            mem_client.as_ref(),
-            &mem_user_id,
-            cloud_cl,
-          ).await {
-            warn!(session_id = %target_session_id, "send_message session failed: {}", e);
-          }
-        })
-      });
+            let db_clone = db.clone();
+            let app_clone = bus_app.clone();
+            let tx_clone = ctx
+                .executor_tx
+                .as_ref()
+                .ok_or("send_message: executor channel not available")?
+                .clone();
+            let semaphores = agent_semaphores.clone();
+            let registry = session_registry.clone();
+            let perm_registry = ctx
+                .permission_registry
+                .clone()
+                .unwrap_or_else(PermissionRegistry::new);
+            let mem_client = ctx.memory_client.clone();
+            let mem_user_id = ctx.memory_user_id.clone();
+            let cloud_cl = ctx.cloud_client.clone();
+            let target_agent_id = to_agent_id.clone();
+            let target_session_id = new_session_id.clone();
+            tokio::task::spawn_blocking(move || {
+                tauri::async_runtime::block_on(async move {
+                    if let Err(e) = session_agent::run_agent_session(
+                        &target_agent_id,
+                        &target_session_id,
+                        next_depth,
+                        false,
+                        &db_clone,
+                        &app_clone,
+                        &tx_clone,
+                        &semaphores,
+                        &registry,
+                        &perm_registry,
+                        mem_client.as_ref(),
+                        &mem_user_id,
+                        cloud_cl,
+                    )
+                    .await
+                    {
+                        warn!(session_id = %target_session_id, "send_message session failed: {}", e);
+                    }
+                })
+            });
 
-      // Emit bus event
-      emit_bus_message_sent(
-        bus_app,
-        &msg_id,
-        from_agent,
-        &to_agent_id,
-        "direct",
-        json!({ "message": payload_str }),
-        Some(&new_session_id),
-        None,
-      );
+            // Emit bus event
+            emit_bus_message_sent(
+                bus_app,
+                &msg_id,
+                from_agent,
+                &to_agent_id,
+                "direct",
+                json!({ "message": payload_str }),
+                Some(&new_session_id),
+                None,
+            );
 
-      if !wait {
-        return Ok((
+            if !wait {
+                return Ok((
           format!("Message sent to agent '{}'. Session ID: {}. The agent will process your message asynchronously.", to_agent_name, new_session_id),
           false,
         ));
-      }
+            }
 
-      // Wait mode: poll session state until terminal
-      let timeout = tokio::time::Duration::from_secs(120);
-      let start = tokio::time::Instant::now();
-      loop {
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            // Wait mode: poll session state until terminal
+            let timeout = tokio::time::Duration::from_secs(120);
+            let start = tokio::time::Instant::now();
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-        if start.elapsed() > timeout {
-          return Ok((
+                if start.elapsed() > timeout {
+                    return Ok((
             format!("Timed out waiting for agent '{}' (session {}). The agent may still be running.", to_agent_name, new_session_id),
             false,
           ));
-        }
+                }
 
-        let pool = db.clone();
-        let sid = new_session_id.clone();
-        let result: Option<(Option<String>, Option<String>, Option<String>)> = tokio::task::spawn_blocking(move || {
+                let pool = db.clone();
+                let sid = new_session_id.clone();
+                let result: Option<(Option<String>, Option<String>, Option<String>)> = tokio::task::spawn_blocking(move || {
           let conn = pool.get().ok()?;
           conn.query_row(
             "SELECT execution_state, finish_summary, terminal_error FROM chat_sessions WHERE id = ?1",
@@ -780,83 +842,118 @@ pub async fn execute_tool(
         .ok()
         .flatten();
 
-        match result {
-          Some((Some(state), finish_summary, terminal_error))
-            if matches!(state.as_str(), "success" | "failure" | "cancelled" | "timed_out") =>
-          {
-            let summary = finish_summary
-              .or(terminal_error)
-              .unwrap_or_else(|| format!("Agent '{}' finished with state: {}", to_agent_name, state));
-            return Ok((summary, false));
-          }
-          _ => {}
+                match result {
+                    Some((Some(state), finish_summary, terminal_error))
+                        if matches!(
+                            state.as_str(),
+                            "success" | "failure" | "cancelled" | "timed_out"
+                        ) =>
+                    {
+                        let summary = finish_summary.or(terminal_error).unwrap_or_else(|| {
+                            format!("Agent '{}' finished with state: {}", to_agent_name, state)
+                        });
+                        return Ok((summary, false));
+                    }
+                    _ => {}
+                }
+            }
         }
-      }
-    }
 
-    "spawn_sub_agents" => {
-      // Belt-and-suspenders: reject if this is already a sub-agent
-      if ctx.is_sub_agent {
-        return Ok(("Error: Sub-agents cannot spawn further sub-agents.".to_string(), false));
-      }
+        "spawn_sub_agents" => {
+            // Belt-and-suspenders: reject if this is already a sub-agent
+            if ctx.is_sub_agent {
+                return Ok((
+                    "Error: Sub-agents cannot spawn further sub-agents.".to_string(),
+                    false,
+                ));
+            }
 
-      let tasks = input["tasks"].as_array().ok_or("spawn_sub_agents: missing 'tasks' array")?;
-      if tasks.is_empty() {
-        return Ok(("Error: 'tasks' array must not be empty.".to_string(), false));
-      }
-      if tasks.len() > MAX_SUB_AGENTS {
-        return Ok((
-          format!("Error: Maximum {} sub-agents allowed, got {}.", MAX_SUB_AGENTS, tasks.len()),
-          false,
-        ));
-      }
+            let tasks = input["tasks"]
+                .as_array()
+                .ok_or("spawn_sub_agents: missing 'tasks' array")?;
+            if tasks.is_empty() {
+                return Ok(("Error: 'tasks' array must not be empty.".to_string(), false));
+            }
+            if tasks.len() > MAX_SUB_AGENTS {
+                return Ok((
+                    format!(
+                        "Error: Maximum {} sub-agents allowed, got {}.",
+                        MAX_SUB_AGENTS,
+                        tasks.len()
+                    ),
+                    false,
+                ));
+            }
 
-      let timeout_secs = input["timeout_seconds"]
-        .as_u64()
-        .unwrap_or(DEFAULT_SUB_AGENT_TIMEOUT_SECS)
-        .min(MAX_SUB_AGENT_TIMEOUT_SECS);
+            let timeout_secs = input["timeout_seconds"]
+                .as_u64()
+                .unwrap_or(DEFAULT_SUB_AGENT_TIMEOUT_SECS)
+                .min(MAX_SUB_AGENT_TIMEOUT_SECS);
 
-      let db = ctx.db.as_ref().ok_or("spawn_sub_agents: database not available")?;
-      let bus_app = ctx.app.as_ref().ok_or("spawn_sub_agents: app handle not available")?;
-      let executor_tx = ctx.executor_tx.as_ref().ok_or("spawn_sub_agents: executor channel not available")?;
-      let agent_semaphores = ctx.agent_semaphores.as_ref().ok_or("spawn_sub_agents: agent semaphores not available")?;
-      let session_registry = ctx.session_registry.as_ref().ok_or("spawn_sub_agents: session registry not available")?;
-      let agent_id = ctx.current_agent_id.as_deref().unwrap_or(&ctx.agent_id);
-      let parent_session_id = ctx.current_session_id.clone();
-      let next_depth = ctx.chain_depth + 1;
+            let db = ctx
+                .db
+                .as_ref()
+                .ok_or("spawn_sub_agents: database not available")?;
+            let bus_app = ctx
+                .app
+                .as_ref()
+                .ok_or("spawn_sub_agents: app handle not available")?;
+            let executor_tx = ctx
+                .executor_tx
+                .as_ref()
+                .ok_or("spawn_sub_agents: executor channel not available")?;
+            let agent_semaphores = ctx
+                .agent_semaphores
+                .as_ref()
+                .ok_or("spawn_sub_agents: agent semaphores not available")?;
+            let session_registry = ctx
+                .session_registry
+                .as_ref()
+                .ok_or("spawn_sub_agents: session registry not available")?;
+            let agent_id = ctx.current_agent_id.as_deref().unwrap_or(&ctx.agent_id);
+            let parent_session_id = ctx.current_session_id.clone();
+            let next_depth = ctx.chain_depth + 1;
 
-      info!(run_id = run_id, count = tasks.len(), "agent tool: spawn_sub_agents");
+            info!(
+                run_id = run_id,
+                count = tasks.len(),
+                "agent tool: spawn_sub_agents"
+            );
 
-      // Parse and validate sub-tasks
-      struct SubTask {
-        id: String,
-        goal: String,
-        session_id: String,
-      }
+            // Parse and validate sub-tasks
+            struct SubTask {
+                id: String,
+                goal: String,
+                session_id: String,
+            }
 
-      let mut sub_tasks: Vec<SubTask> = Vec::new();
-      for item in tasks {
-        let id = item["id"].as_str().ok_or("spawn_sub_agents: each task needs an 'id' field")?;
-        let goal = item["goal"].as_str().ok_or("spawn_sub_agents: each task needs a 'goal' field")?;
-        sub_tasks.push(SubTask {
-          id: id.to_string(),
-          goal: goal.to_string(),
-          session_id: ulid::Ulid::new().to_string(),
-        });
-      }
+            let mut sub_tasks: Vec<SubTask> = Vec::new();
+            for item in tasks {
+                let id = item["id"]
+                    .as_str()
+                    .ok_or("spawn_sub_agents: each task needs an 'id' field")?;
+                let goal = item["goal"]
+                    .as_str()
+                    .ok_or("spawn_sub_agents: each task needs a 'goal' field")?;
+                sub_tasks.push(SubTask {
+                    id: id.to_string(),
+                    goal: goal.to_string(),
+                    session_id: ulid::Ulid::new().to_string(),
+                });
+            }
 
-      // Create session records for each sub-agent
-      let now = chrono::Utc::now().to_rfc3339();
-      for st in &sub_tasks {
-        let pool = db.clone();
-        let session_id = st.session_id.clone();
-        let title = st.id.clone();
-        let goal = st.goal.clone();
-        let agent_id = agent_id.to_string();
-        let parent_session_id = parent_session_id.clone();
-        let now = now.clone();
+            // Create session records for each sub-agent
+            let now = chrono::Utc::now().to_rfc3339();
+            for st in &sub_tasks {
+                let pool = db.clone();
+                let session_id = st.session_id.clone();
+                let title = st.id.clone();
+                let goal = st.goal.clone();
+                let agent_id = agent_id.to_string();
+                let parent_session_id = parent_session_id.clone();
+                let now = now.clone();
 
-        tokio::task::spawn_blocking(move || {
+                tokio::task::spawn_blocking(move || {
           let conn = pool.get().map_err(|e| e.to_string())?;
           conn.execute(
             "INSERT INTO chat_sessions (
@@ -880,112 +977,131 @@ pub async fn execute_tool(
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
-      }
-
-      // Emit event so UI can track sub-agents
-      let sub_session_ids: Vec<String> = sub_tasks.iter().map(|s| s.session_id.clone()).collect();
-      emit_sub_agents_spawned(
-        bus_app,
-        parent_session_id.as_deref(),
-        ctx.current_run_id.as_deref(),
-        sub_session_ids.clone(),
-      );
-
-      // Spawn all sub-agents
-      for st in &sub_tasks {
-        let db_clone = db.clone();
-        let app_clone = bus_app.clone();
-        let tx_clone = executor_tx.clone();
-        let semaphores = agent_semaphores.clone();
-        let registry = session_registry.clone();
-        let perm_registry = ctx.permission_registry.clone().unwrap_or_else(PermissionRegistry::new);
-        let mem_client = ctx.memory_client.clone();
-        let mem_user_id = ctx.memory_user_id.clone();
-        let cloud_cl = ctx.cloud_client.clone();
-        let sub_agent_id = agent_id.to_string();
-        let sub_session_id = st.session_id.clone();
-        tokio::task::spawn_blocking(move || {
-          tauri::async_runtime::block_on(async move {
-            if let Err(e) = session_agent::run_agent_session(
-              &sub_agent_id,
-              &sub_session_id,
-              next_depth,
-              true,
-              &db_clone,
-              &app_clone,
-              &tx_clone,
-              &semaphores,
-              &registry,
-              &perm_registry,
-              mem_client.as_ref(),
-              &mem_user_id,
-              cloud_cl,
-            ).await {
-              warn!(session_id = %sub_session_id, "sub-agent session failed: {}", e);
             }
-          })
-        });
-      }
 
-      // Poll all sub-agent sessions until they reach terminal state
-      let timeout = tokio::time::Duration::from_secs(timeout_secs + 30); // extra grace period
-      let start = tokio::time::Instant::now();
-      let sub_session_refs: Vec<(String, String)> = sub_tasks.iter().map(|s| (s.id.clone(), s.session_id.clone())).collect();
+            // Emit event so UI can track sub-agents
+            let sub_session_ids: Vec<String> =
+                sub_tasks.iter().map(|s| s.session_id.clone()).collect();
+            emit_sub_agents_spawned(
+                bus_app,
+                parent_session_id.as_deref(),
+                ctx.current_run_id.as_deref(),
+                sub_session_ids.clone(),
+            );
 
-      loop {
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-        let all_done = {
-          let pool = db.clone();
-          let ids: Vec<String> = sub_session_refs.iter().map(|(_, sid)| sid.clone()).collect();
-          tokio::task::spawn_blocking(move || -> bool {
-            let conn = match pool.get() {
-              Ok(c) => c,
-              Err(_) => return false,
-            };
-            for sid in &ids {
-              let state: Option<String> = conn.query_row(
-                "SELECT execution_state FROM chat_sessions WHERE id = ?1",
-                rusqlite::params![sid],
-                |row| row.get(0),
-              ).ok();
-              match state.as_deref() {
-                Some("success") | Some("failure") | Some("cancelled") | Some("timed_out") => {}
-                _ => return false,
-              }
+            // Spawn all sub-agents
+            for st in &sub_tasks {
+                let db_clone = db.clone();
+                let app_clone = bus_app.clone();
+                let tx_clone = executor_tx.clone();
+                let semaphores = agent_semaphores.clone();
+                let registry = session_registry.clone();
+                let perm_registry = ctx
+                    .permission_registry
+                    .clone()
+                    .unwrap_or_else(PermissionRegistry::new);
+                let mem_client = ctx.memory_client.clone();
+                let mem_user_id = ctx.memory_user_id.clone();
+                let cloud_cl = ctx.cloud_client.clone();
+                let sub_agent_id = agent_id.to_string();
+                let sub_session_id = st.session_id.clone();
+                tokio::task::spawn_blocking(move || {
+                    tauri::async_runtime::block_on(async move {
+                        if let Err(e) = session_agent::run_agent_session(
+                            &sub_agent_id,
+                            &sub_session_id,
+                            next_depth,
+                            true,
+                            &db_clone,
+                            &app_clone,
+                            &tx_clone,
+                            &semaphores,
+                            &registry,
+                            &perm_registry,
+                            mem_client.as_ref(),
+                            &mem_user_id,
+                            cloud_cl,
+                        )
+                        .await
+                        {
+                            warn!(session_id = %sub_session_id, "sub-agent session failed: {}", e);
+                        }
+                    })
+                });
             }
-            true
-          })
-          .await
-          .unwrap_or(false)
-        };
 
-        if all_done {
-          break;
-        }
+            // Poll all sub-agent sessions until they reach terminal state
+            let timeout = tokio::time::Duration::from_secs(timeout_secs + 30); // extra grace period
+            let start = tokio::time::Instant::now();
+            let sub_session_refs: Vec<(String, String)> = sub_tasks
+                .iter()
+                .map(|s| (s.id.clone(), s.session_id.clone()))
+                .collect();
 
-        if start.elapsed() > timeout {
-          warn!(run_id = run_id, "spawn_sub_agents: timed out waiting for sub-agents");
-          for (_, session_id) in &sub_session_refs {
-            session_registry.cancel(session_id).await;
-            let _ = session_agent::update_session_execution_state(
-              db,
-              session_id,
-              "timed_out",
-              None,
-              Some(format!("Sub-agent timed out after {}s.", timeout_secs)),
-            ).await;
-          }
-          break;
-        }
-      }
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-      // Collect results from all sub-agents
-      let mut results = Vec::new();
-      for (task_id, sub_session_id) in &sub_session_refs {
-        let pool = db.clone();
-        let sid = sub_session_id.clone();
-        let result = tokio::task::spawn_blocking(move || -> (String, Option<String>, Option<String>) {
+                let all_done = {
+                    let pool = db.clone();
+                    let ids: Vec<String> = sub_session_refs
+                        .iter()
+                        .map(|(_, sid)| sid.clone())
+                        .collect();
+                    tokio::task::spawn_blocking(move || -> bool {
+                        let conn = match pool.get() {
+                            Ok(c) => c,
+                            Err(_) => return false,
+                        };
+                        for sid in &ids {
+                            let state: Option<String> = conn
+                                .query_row(
+                                    "SELECT execution_state FROM chat_sessions WHERE id = ?1",
+                                    rusqlite::params![sid],
+                                    |row| row.get(0),
+                                )
+                                .ok();
+                            match state.as_deref() {
+                                Some("success") | Some("failure") | Some("cancelled")
+                                | Some("timed_out") => {}
+                                _ => return false,
+                            }
+                        }
+                        true
+                    })
+                    .await
+                    .unwrap_or(false)
+                };
+
+                if all_done {
+                    break;
+                }
+
+                if start.elapsed() > timeout {
+                    warn!(
+                        run_id = run_id,
+                        "spawn_sub_agents: timed out waiting for sub-agents"
+                    );
+                    for (_, session_id) in &sub_session_refs {
+                        session_registry.cancel(session_id).await;
+                        let _ = session_agent::update_session_execution_state(
+                            db,
+                            session_id,
+                            "timed_out",
+                            None,
+                            Some(format!("Sub-agent timed out after {}s.", timeout_secs)),
+                        )
+                        .await;
+                    }
+                    break;
+                }
+            }
+
+            // Collect results from all sub-agents
+            let mut results = Vec::new();
+            for (task_id, sub_session_id) in &sub_session_refs {
+                let pool = db.clone();
+                let sid = sub_session_id.clone();
+                let result = tokio::task::spawn_blocking(move || -> (String, Option<String>, Option<String>) {
           let conn = match pool.get() {
             Ok(c) => c,
             Err(_) => return ("failure".to_string(), None, Some("Database unavailable".to_string())),
@@ -999,180 +1115,235 @@ pub async fn execute_tool(
         .await
         .unwrap_or(("failure".to_string(), None, Some("Join error".to_string())));
 
-        let (state, summary, terminal_error) = result;
-        match state.as_str() {
-          "success" => {
-            results.push(json!({
+                let (state, summary, terminal_error) = result;
+                match state.as_str() {
+                    "success" => {
+                        results.push(json!({
               "id": task_id,
               "status": "success",
               "summary": summary.unwrap_or_else(|| "Sub-agent completed successfully.".to_string()),
             }));
-          }
-          "timed_out" => {
-            results.push(json!({
+                    }
+                    "timed_out" => {
+                        results.push(json!({
               "id": task_id,
               "status": "timed_out",
               "error": terminal_error.unwrap_or_else(|| format!("Sub-agent timed out after {}s.", timeout_secs)),
             }));
-          }
-          _ => {
-            results.push(json!({
+                    }
+                    _ => {
+                        results.push(json!({
               "id": task_id,
               "status": state,
               "error": terminal_error.or(summary).unwrap_or_else(|| format!("Sub-agent finished with state: {}", state)),
             }));
-          }
+                    }
+                }
+            }
+
+            let response = json!({ "results": results });
+            Ok((
+                serde_json::to_string_pretty(&response).unwrap_or_else(|_| response.to_string()),
+                false,
+            ))
         }
-      }
 
-      let response = json!({ "results": results });
-      Ok((serde_json::to_string_pretty(&response).unwrap_or_else(|_| response.to_string()), false))
-    }
+        "activate_skill" => {
+            let skill_name = input["skill_name"]
+                .as_str()
+                .ok_or("activate_skill: missing 'skill_name' field")?;
 
-    "activate_skill" => {
-      let skill_name = input["skill_name"].as_str().ok_or("activate_skill: missing 'skill_name' field")?;
+            info!(
+                run_id = run_id,
+                skill = skill_name,
+                "agent tool: activate_skill"
+            );
 
-      info!(run_id = run_id, skill = skill_name, "agent tool: activate_skill");
+            let instructions =
+                skills::load_skill_instructions(&ctx.agent_id, skill_name, &ctx.disabled_skills)?;
 
-      let instructions = skills::load_skill_instructions(
-        &ctx.agent_id,
-        skill_name,
-        &ctx.disabled_skills,
-      )?;
+            Ok((
+                format!(
+                    "<skill-instructions name=\"{}\">\n{}\n</skill-instructions>",
+                    skill_name, instructions
+                ),
+                false,
+            ))
+        }
 
-      Ok((
-        format!("<skill-instructions name=\"{}\">\n{}\n</skill-instructions>", skill_name, instructions),
-        false,
-      ))
-    }
+        "remember" => {
+            let text = input["text"]
+                .as_str()
+                .ok_or("remember: missing 'text' field")?;
+            let memory_type = input["memory_type"]
+                .as_str()
+                .ok_or("remember: missing 'memory_type' field")?;
 
-    "remember" => {
-      let text = input["text"].as_str().ok_or("remember: missing 'text' field")?;
-      let memory_type = input["memory_type"].as_str().ok_or("remember: missing 'memory_type' field")?;
-
-      if !matches!(memory_type, "user" | "feedback" | "project" | "reference") {
-        return Ok((
+            if !matches!(memory_type, "user" | "feedback" | "project" | "reference") {
+                return Ok((
           format!("Error: invalid memory_type '{}'. Must be one of: user, feedback, project, reference", memory_type),
           false,
         ));
-      }
+            }
 
-      let client = match &ctx.memory_client {
-        Some(c) => c,
-        None => return Ok(("Memory service is not available.".to_string(), false)),
-      };
+            let client = match &ctx.memory_client {
+                Some(c) => c,
+                None => return Ok(("Memory service is not available.".to_string(), false)),
+            };
 
-      info!(run_id = run_id, memory_type = memory_type, "agent tool: remember");
+            info!(
+                run_id = run_id,
+                memory_type = memory_type,
+                "agent tool: remember"
+            );
 
-      match client.add_memory(text, memory_type, &ctx.memory_user_id, None).await {
-        Ok(_) => Ok((format!("Remembered: \"{}\" (type: {})", text, memory_type), false)),
-        Err(e) => Ok((format!("Failed to save memory: {}", e), false)),
-      }
-    }
-
-    "forget" => {
-      let query = input["query"].as_str().ok_or("forget: missing 'query' field")?;
-
-      let client = match &ctx.memory_client {
-        Some(c) => c,
-        None => return Ok(("Memory service is not available.".to_string(), false)),
-      };
-
-      info!(run_id = run_id, query = query, "agent tool: forget");
-
-      let matches = match client.search_memories(query, &ctx.memory_user_id, None, 1).await {
-        Ok(m) => m,
-        Err(e) => return Ok((format!("Failed to search for memory to forget: {}", e), false)),
-      };
-
-      let Some(top) = matches.into_iter().next() else {
-        return Ok(("No matching memory found.".to_string(), false));
-      };
-
-      let preview: String = top.text.chars().take(80).collect();
-      match client.delete_memory(&top.id).await {
-        Ok(()) => Ok((format!("Forgot: \"{}\"", preview), false)),
-        Err(e) => Ok((format!("Failed to delete memory: {}", e), false)),
-      }
-    }
-
-    "search_memory" => {
-      let query = input["query"].as_str().ok_or("search_memory: missing 'query' field")?;
-      let memory_type = input["memory_type"].as_str();
-      let limit = input["limit"].as_u64().unwrap_or(5).min(20) as u32;
-
-      let client = match &ctx.memory_client {
-        Some(c) => c,
-        None => return Ok(("Memory service is not available.".to_string(), false)),
-      };
-
-      info!(run_id = run_id, query = query, "agent tool: search_memory");
-
-      match client.search_memories(query, &ctx.memory_user_id, memory_type, limit).await {
-        Ok(entries) if entries.is_empty() => Ok(("No matching memories found.".to_string(), false)),
-        Ok(entries) => {
-          let lines: Vec<String> = entries
-            .iter()
-            .map(|e| format!("[{}] {} ({})", e.memory_type, e.text, e.created_at))
-            .collect();
-          Ok((lines.join("\n"), false))
+            match client
+                .add_memory(text, memory_type, &ctx.memory_user_id, None)
+                .await
+            {
+                Ok(_) => Ok((
+                    format!("Remembered: \"{}\" (type: {})", text, memory_type),
+                    false,
+                )),
+                Err(e) => Ok((format!("Failed to save memory: {}", e), false)),
+            }
         }
-        Err(e) => Ok((format!("Memory search failed: {}", e), false)),
-      }
-    }
 
-    "list_memories" => {
-      let memory_type = input["memory_type"].as_str();
-      let limit = input["limit"].as_u64().unwrap_or(50).min(200) as u32;
+        "forget" => {
+            let query = input["query"]
+                .as_str()
+                .ok_or("forget: missing 'query' field")?;
 
-      let client = match &ctx.memory_client {
-        Some(c) => c,
-        None => return Ok(("Memory service is not available.".to_string(), false)),
-      };
+            let client = match &ctx.memory_client {
+                Some(c) => c,
+                None => return Ok(("Memory service is not available.".to_string(), false)),
+            };
 
-      info!(run_id = run_id, "agent tool: list_memories");
+            info!(run_id = run_id, query = query, "agent tool: forget");
 
-      match client.list_memories(&ctx.memory_user_id, memory_type, limit, 0).await {
-        Ok(entries) if entries.is_empty() => Ok(("No memories stored.".to_string(), false)),
-        Ok(entries) => {
-          let lines: Vec<String> = entries
-            .iter()
-            .map(|e| format!("[{}] {} ({})", e.memory_type, e.text, e.created_at))
-            .collect();
-          Ok((lines.join("\n"), false))
+            let matches = match client
+                .search_memories(query, &ctx.memory_user_id, None, 1)
+                .await
+            {
+                Ok(m) => m,
+                Err(e) => {
+                    return Ok((
+                        format!("Failed to search for memory to forget: {}", e),
+                        false,
+                    ))
+                }
+            };
+
+            let Some(top) = matches.into_iter().next() else {
+                return Ok(("No matching memory found.".to_string(), false));
+            };
+
+            let preview: String = top.text.chars().take(80).collect();
+            match client.delete_memory(&top.id).await {
+                Ok(()) => Ok((format!("Forgot: \"{}\"", preview), false)),
+                Err(e) => Ok((format!("Failed to delete memory: {}", e), false)),
+            }
         }
-        Err(e) => Ok((format!("Failed to list memories: {}", e), false)),
-      }
-    }
 
-    "react_to_message" => {
-      let message_id = input["message_id"].as_str()
-        .ok_or("react_to_message: missing 'message_id'")?;
-      let emoji = input["emoji"].as_str()
-        .ok_or("react_to_message: missing 'emoji'")?;
+        "search_memory" => {
+            let query = input["query"]
+                .as_str()
+                .ok_or("search_memory: missing 'query' field")?;
+            let memory_type = input["memory_type"].as_str();
+            let limit = input["limit"].as_u64().unwrap_or(5).min(20) as u32;
 
-      let allowed_emojis = [
-        "\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F602}", "\u{1F389}", "\u{1F914}",
-        "\u{1F440}", "\u{1F525}", "\u{1F4AF}", "\u{2705}", "\u{2B50}",
-      ];
-      if !allowed_emojis.contains(&emoji) {
-        return Err(format!("react_to_message: invalid emoji '{}'", emoji));
-      }
+            let client = match &ctx.memory_client {
+                Some(c) => c,
+                None => return Ok(("Memory service is not available.".to_string(), false)),
+            };
 
-      let session_id = ctx.current_session_id.as_deref()
-        .ok_or("react_to_message: no active session")?;
+            info!(run_id = run_id, query = query, "agent tool: search_memory");
 
-      let db = ctx.db.as_ref().ok_or("react_to_message: no database")?;
-      let pool = db.0.clone();
-      let reaction_id = ulid::Ulid::new().to_string();
-      let now = chrono::Utc::now().to_rfc3339();
-      let msg_id = message_id.to_string();
-      let emoji_str = emoji.to_string();
-      let sid = session_id.to_string();
-      let rid = reaction_id.clone();
-      let now_clone = now.clone();
+            match client
+                .search_memories(query, &ctx.memory_user_id, memory_type, limit)
+                .await
+            {
+                Ok(entries) if entries.is_empty() => {
+                    Ok(("No matching memories found.".to_string(), false))
+                }
+                Ok(entries) => {
+                    let lines: Vec<String> = entries
+                        .iter()
+                        .map(|e| format!("[{}] {} ({})", e.memory_type, e.text, e.created_at))
+                        .collect();
+                    Ok((lines.join("\n"), false))
+                }
+                Err(e) => Ok((format!("Memory search failed: {}", e), false)),
+            }
+        }
 
-      let inserted = tokio::task::spawn_blocking(move || -> Result<bool, String> {
+        "list_memories" => {
+            let memory_type = input["memory_type"].as_str();
+            let limit = input["limit"].as_u64().unwrap_or(50).min(200) as u32;
+
+            let client = match &ctx.memory_client {
+                Some(c) => c,
+                None => return Ok(("Memory service is not available.".to_string(), false)),
+            };
+
+            info!(run_id = run_id, "agent tool: list_memories");
+
+            match client
+                .list_memories(&ctx.memory_user_id, memory_type, limit, 0)
+                .await
+            {
+                Ok(entries) if entries.is_empty() => Ok(("No memories stored.".to_string(), false)),
+                Ok(entries) => {
+                    let lines: Vec<String> = entries
+                        .iter()
+                        .map(|e| format!("[{}] {} ({})", e.memory_type, e.text, e.created_at))
+                        .collect();
+                    Ok((lines.join("\n"), false))
+                }
+                Err(e) => Ok((format!("Failed to list memories: {}", e), false)),
+            }
+        }
+
+        "react_to_message" => {
+            let message_id = input["message_id"]
+                .as_str()
+                .ok_or("react_to_message: missing 'message_id'")?;
+            let emoji = input["emoji"]
+                .as_str()
+                .ok_or("react_to_message: missing 'emoji'")?;
+
+            let allowed_emojis = [
+                "\u{1F44D}",
+                "\u{2764}\u{FE0F}",
+                "\u{1F602}",
+                "\u{1F389}",
+                "\u{1F914}",
+                "\u{1F440}",
+                "\u{1F525}",
+                "\u{1F4AF}",
+                "\u{2705}",
+                "\u{2B50}",
+            ];
+            if !allowed_emojis.contains(&emoji) {
+                return Err(format!("react_to_message: invalid emoji '{}'", emoji));
+            }
+
+            let session_id = ctx
+                .current_session_id
+                .as_deref()
+                .ok_or("react_to_message: no active session")?;
+
+            let db = ctx.db.as_ref().ok_or("react_to_message: no database")?;
+            let pool = db.0.clone();
+            let reaction_id = ulid::Ulid::new().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+            let msg_id = message_id.to_string();
+            let emoji_str = emoji.to_string();
+            let sid = session_id.to_string();
+            let rid = reaction_id.clone();
+            let now_clone = now.clone();
+
+            let inserted = tokio::task::spawn_blocking(move || -> Result<bool, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         // Verify message exists, belongs to this session, and is a user message
         let exists: bool = conn.query_row(
@@ -1191,139 +1362,155 @@ pub async fn execute_tool(
         Ok(changes > 0)
       }).await.map_err(|e| e.to_string())??;
 
-      // Emit event only when a new row was actually inserted (no duplicate re-animation)
-      if inserted {
-        if let Some(app_handle) = &ctx.app {
-          crate::events::emitter::emit_message_reaction(
-            app_handle, session_id, message_id, &reaction_id, emoji, &now,
-          );
-        }
+            // Emit event only when a new row was actually inserted (no duplicate re-animation)
+            if inserted {
+                if let Some(app_handle) = &ctx.app {
+                    crate::events::emitter::emit_message_reaction(
+                        app_handle,
+                        session_id,
+                        message_id,
+                        &reaction_id,
+                        emoji,
+                        &now,
+                    );
+                }
 
-        // Cloud sync
-        if let Some(cloud) = &ctx.cloud_client {
-          let cloud = cloud.clone();
-          let rid = reaction_id.clone();
-          let mid = message_id.to_string();
-          let sid = session_id.to_string();
-          let emoji_c = emoji.to_string();
-          let now_c = now.clone();
-          tokio::spawn(async move {
-            if let Err(e) = cloud.upsert_message_reaction(&rid, &mid, &sid, &emoji_c, &now_c).await {
-              warn!("cloud sync reaction failed: {}", e);
+                // Cloud sync
+                if let Some(cloud) = &ctx.cloud_client {
+                    let cloud = cloud.clone();
+                    let rid = reaction_id.clone();
+                    let mid = message_id.to_string();
+                    let sid = session_id.to_string();
+                    let emoji_c = emoji.to_string();
+                    let now_c = now.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = cloud
+                            .upsert_message_reaction(&rid, &mid, &sid, &emoji_c, &now_c)
+                            .await
+                        {
+                            warn!("cloud sync reaction failed: {}", e);
+                        }
+                    });
+                }
             }
-          });
+
+            Ok((format!("Reacted with {} to message", emoji), false))
         }
-      }
 
-      Ok((format!("Reacted with {} to message", emoji), false))
+        "finish" => {
+            let summary = input["summary"]
+                .as_str()
+                .unwrap_or("Agent finished without summary");
+            Ok((summary.to_string(), true))
+        }
+
+        other => Err(format!("unknown tool: {}", other)),
     }
-
-    "finish" => {
-      let summary = input["summary"].as_str().unwrap_or("Agent finished without summary");
-      Ok((summary.to_string(), true))
-    }
-
-    other => Err(format!("unknown tool: {}", other)),
-  }
 }
 
 // ─── Web search providers ───────────────────────────────────────────────────
 
 async fn execute_web_search(provider: &str, query: &str, count: u32) -> Result<String, String> {
-  match provider {
-    "brave" => brave_search(query, count).await,
-    "tavily" => tavily_search(query, count).await,
-    other => Err(format!("unsupported search provider: {}", other)),
-  }
+    match provider {
+        "brave" => brave_search(query, count).await,
+        "tavily" => tavily_search(query, count).await,
+        other => Err(format!("unsupported search provider: {}", other)),
+    }
 }
 
 async fn brave_search(query: &str, count: u32) -> Result<String, String> {
-  let api_key = super::keychain::retrieve_api_key("brave")
-    .map_err(|_| "No API key for Brave Search. Set it in Settings.".to_string())?;
+    let api_key = super::keychain::retrieve_api_key("brave")
+        .map_err(|_| "No API key for Brave Search. Set it in Settings.".to_string())?;
 
-  let client = reqwest::Client::new();
-  let resp = client
-    .get("https://api.search.brave.com/res/v1/web/search")
-    .header("X-Subscription-Token", &api_key)
-    .header("Accept", "application/json")
-    .query(&[("q", query), ("count", &count.to_string())])
-    .send()
-    .await
-    .map_err(|e| format!("Brave search request failed: {}", e))?;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://api.search.brave.com/res/v1/web/search")
+        .header("X-Subscription-Token", &api_key)
+        .header("Accept", "application/json")
+        .query(&[("q", query), ("count", &count.to_string())])
+        .send()
+        .await
+        .map_err(|e| format!("Brave search request failed: {}", e))?;
 
-  if !resp.status().is_success() {
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
-    return Err(format!("Brave search returned {}: {}", status, body));
-  }
-
-  let json: serde_json::Value = resp
-    .json()
-    .await
-    .map_err(|e| format!("Failed to parse Brave search response: {}", e))?;
-
-  let mut results = Vec::new();
-
-  if let Some(web_results) = json["web"].get("results").and_then(|r| r.as_array()) {
-    for (i, item) in web_results.iter().enumerate() {
-      let title = item["title"].as_str().unwrap_or("(no title)");
-      let url = item["url"].as_str().unwrap_or("");
-      let description = item["description"].as_str().unwrap_or("(no description)");
-      results.push(format!("{}. {}\n   {}\n   {}", i + 1, title, url, description));
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Brave search returned {}: {}", status, body));
     }
-  }
 
-  if results.is_empty() {
-    Ok("No results found.".to_string())
-  } else {
-    Ok(results.join("\n\n"))
-  }
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Brave search response: {}", e))?;
+
+    let mut results = Vec::new();
+
+    if let Some(web_results) = json["web"].get("results").and_then(|r| r.as_array()) {
+        for (i, item) in web_results.iter().enumerate() {
+            let title = item["title"].as_str().unwrap_or("(no title)");
+            let url = item["url"].as_str().unwrap_or("");
+            let description = item["description"].as_str().unwrap_or("(no description)");
+            results.push(format!(
+                "{}. {}\n   {}\n   {}",
+                i + 1,
+                title,
+                url,
+                description
+            ));
+        }
+    }
+
+    if results.is_empty() {
+        Ok("No results found.".to_string())
+    } else {
+        Ok(results.join("\n\n"))
+    }
 }
 
 async fn tavily_search(query: &str, count: u32) -> Result<String, String> {
-  let api_key = super::keychain::retrieve_api_key("tavily")
-    .map_err(|_| "No API key for Tavily. Set it in Settings.".to_string())?;
+    let api_key = super::keychain::retrieve_api_key("tavily")
+        .map_err(|_| "No API key for Tavily. Set it in Settings.".to_string())?;
 
-  let client = reqwest::Client::new();
-  let body = json!({
-    "query": query,
-    "max_results": count,
-    "search_depth": "basic"
-  });
+    let client = reqwest::Client::new();
+    let body = json!({
+      "query": query,
+      "max_results": count,
+      "search_depth": "basic"
+    });
 
-  let resp = client
-    .post("https://api.tavily.com/search")
-    .header("Authorization", format!("Bearer {}", api_key))
-    .json(&body)
-    .send()
-    .await
-    .map_err(|e| format!("Tavily search request failed: {}", e))?;
+    let resp = client
+        .post("https://api.tavily.com/search")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Tavily search request failed: {}", e))?;
 
-  if !resp.status().is_success() {
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
-    return Err(format!("Tavily search returned {}: {}", status, body));
-  }
-
-  let json: serde_json::Value = resp
-    .json()
-    .await
-    .map_err(|e| format!("Failed to parse Tavily search response: {}", e))?;
-
-  let mut results = Vec::new();
-
-  if let Some(items) = json["results"].as_array() {
-    for (i, item) in items.iter().enumerate() {
-      let title = item["title"].as_str().unwrap_or("(no title)");
-      let url = item["url"].as_str().unwrap_or("");
-      let content = item["content"].as_str().unwrap_or("(no content)");
-      results.push(format!("{}. {}\n   {}\n   {}", i + 1, title, url, content));
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Tavily search returned {}: {}", status, body));
     }
-  }
 
-  if results.is_empty() {
-    Ok("No results found.".to_string())
-  } else {
-    Ok(results.join("\n\n"))
-  }
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Tavily search response: {}", e))?;
+
+    let mut results = Vec::new();
+
+    if let Some(items) = json["results"].as_array() {
+        for (i, item) in items.iter().enumerate() {
+            let title = item["title"].as_str().unwrap_or("(no title)");
+            let url = item["url"].as_str().unwrap_or("");
+            let content = item["content"].as_str().unwrap_or("(no content)");
+            results.push(format!("{}. {}\n   {}\n   {}", i + 1, title, url, content));
+        }
+    }
+
+    if results.is_empty() {
+        Ok("No results found.".to_string())
+    } else {
+        Ok(results.join("\n\n"))
+    }
 }
