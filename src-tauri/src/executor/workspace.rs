@@ -550,6 +550,8 @@ fn validate_path(base: &Path, requested: &str) -> Result<PathBuf, String> {
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = r#"You are a helpful autonomous agent. Follow the user's goal and use the available tools to accomplish it.
 
+When the user asks you to recall something they previously told you, asks what you remember, or asks for a preference/fact that may be stored in memory, use `search_memory` before answering. If the user shares a durable preference, instruction, or project fact that should persist, use `remember`.
+
 When you are done, call the `finish` tool with a summary of what you accomplished.
 "#;
 

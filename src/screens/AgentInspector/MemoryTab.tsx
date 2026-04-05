@@ -21,7 +21,15 @@ const TYPE_BADGE: Record<MemoryType, string> = {
 };
 
 function daysSince(iso: string): number {
-  return (Date.now() - new Date(iso).getTime()) / (1000 * 60 * 60 * 24);
+  const ts = new Date(iso).getTime();
+  if (Number.isNaN(ts)) return Number.NaN;
+  return (Date.now() - ts) / (1000 * 60 * 60 * 24);
+}
+
+function formatMemoryDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return 'Unknown date';
+  return date.toLocaleDateString();
 }
 
 export function MemoryTab({ agentId }: { agentId: string }) {
@@ -47,6 +55,12 @@ export function MemoryTab({ agentId }: { agentId: string }) {
     queryKey: ['memories', agentId, filterType],
     queryFn: () =>
       memoryApi.list(agentId, filterType === 'all' ? undefined : filterType, 200),
+    enabled: health === true,
+  });
+
+  const { data: allMemories } = useQuery({
+    queryKey: ['memories', agentId, 'all'],
+    queryFn: () => memoryApi.list(agentId, undefined, 200),
     enabled: health === true,
   });
 
@@ -208,7 +222,7 @@ export function MemoryTab({ agentId }: { agentId: string }) {
               {opt.label}
               {opt.value !== 'all' && memories && (
                 <span className="ml-1.5 text-[10px] opacity-60">
-                  {memories.filter((m) => m.memoryType === opt.value).length}
+                  {(allMemories ?? []).filter((m) => m.memoryType === opt.value).length}
                 </span>
               )}
             </button>
@@ -289,7 +303,8 @@ function MemoryRow({
   onCancelEdit: () => void;
   onDelete: () => void;
 }) {
-  const stale = daysSince(memory.createdAt) > 30;
+  const ageInDays = daysSince(memory.createdAt);
+  const stale = Number.isFinite(ageInDays) && ageInDays > 30;
 
   return (
     <div
@@ -317,7 +332,7 @@ function MemoryRow({
               {memory.memoryType}
             </span>
             <span className="text-[10px] text-muted">
-              {new Date(memory.createdAt).toLocaleDateString()}
+              {formatMemoryDate(memory.createdAt)}
             </span>
             {stale && (
               <span className="flex items-center gap-1 text-[10px] text-amber-400">

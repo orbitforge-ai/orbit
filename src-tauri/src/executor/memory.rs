@@ -15,6 +15,7 @@ pub struct MemoryClient {
 // ─── Public response type ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MemoryEntry {
     pub id: String,
     pub text: String,
@@ -535,7 +536,8 @@ fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> MemoryEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::{cloud_item_to_entry, parse_cloud_response};
+    use super::{cloud_item_to_entry, parse_cloud_response, MemoryEntry};
+    use serde_json::json;
 
     #[test]
     fn parses_wrapped_cloud_response() {
@@ -584,5 +586,31 @@ mod tests {
         assert_eq!(entry.created_at, "2026-04-03T12:00:00Z");
         assert_eq!(entry.updated_at, "2026-04-03T13:00:00Z");
         assert_eq!(entry.memory_type, "reference");
+    }
+
+    #[test]
+    fn memory_entry_serializes_with_camel_case_keys() {
+        let entry = MemoryEntry {
+            id: "mem_4".to_string(),
+            text: "Camel case".to_string(),
+            memory_type: "user".to_string(),
+            user_id: "user_1".to_string(),
+            agent_id: "agent_1".to_string(),
+            created_at: "2026-04-04T12:00:00Z".to_string(),
+            updated_at: "2026-04-04T12:00:00Z".to_string(),
+            source: "explicit".to_string(),
+            score: Some(0.98),
+            metadata: json!({}),
+        };
+
+        let value = serde_json::to_value(&entry).expect("memory entry should serialize");
+
+        assert_eq!(value["memoryType"], "user");
+        assert_eq!(value["createdAt"], "2026-04-04T12:00:00Z");
+        assert_eq!(value["updatedAt"], "2026-04-04T12:00:00Z");
+        assert_eq!(value["userId"], "user_1");
+        assert_eq!(value["agentId"], "agent_1");
+        assert!(value.get("memory_type").is_none());
+        assert!(value.get("created_at").is_none());
     }
 }

@@ -154,6 +154,12 @@ const GUARDRAIL_PROMPT: &str = "\
 - If uncertain whether an action is in scope, explain what you want to do and why before proceeding.
 - Do not autonomously install software, modify system configuration, or access files outside your workspace unless explicitly requested.
 
+### Memory
+- When the user asks about something they previously told you, asks what you remember, or asks for a preference/fact that may be stored in memory, call `search_memory` before answering.
+- If you say you are going to check memory, actually use `search_memory`. Do not claim memory was checked unless you performed the tool call.
+- Do not say you do not know or do not have something in memory until you have checked with `search_memory` when recall is plausibly relevant.
+- Use `remember` to store durable user preferences, explicit requests to remember something, and important project decisions or reference facts that should persist across sessions.
+
 ### Destructive Operations
 - Never run commands that delete, overwrite, or corrupt data without explicit user instruction (rm -rf, git reset --hard, DROP TABLE, mkfs, etc.).
 - Never run commands that affect system services, networking, or other processes.
@@ -547,7 +553,7 @@ impl ContextStage for BasePromptStage {
 
 #[cfg(test)]
 mod tests {
-    use super::compose_system_prompt;
+    use super::{compose_system_prompt, GUARDRAIL_PROMPT};
 
     #[test]
     fn compose_system_prompt_inserts_identity_once_before_current_context() {
@@ -560,6 +566,12 @@ mod tests {
 
         assert!(prompt.contains("Base prompt\n\nIdentity summary\n\n## Current Context"));
         assert_eq!(prompt.matches("Identity summary").count(), 1);
+    }
+
+    #[test]
+    fn guardrails_require_explicit_memory_lookup_for_recall_questions() {
+        assert!(GUARDRAIL_PROMPT.contains("call `search_memory` before answering"));
+        assert!(GUARDRAIL_PROMPT.contains("actually use `search_memory`"));
     }
 }
 
