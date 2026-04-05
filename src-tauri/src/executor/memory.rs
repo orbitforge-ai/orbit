@@ -30,6 +30,69 @@ pub struct MemoryEntry {
     pub metadata: serde_json::Value,
 }
 
+fn infer_memory_type(text: &str) -> String {
+    let normalized = text.trim().to_lowercase();
+
+    let user_markers = [
+        "user's ",
+        "the user ",
+        "favorite ",
+        "prefers ",
+        "likes ",
+        "dislikes ",
+        "allergic ",
+        "birthday ",
+        "name is ",
+        "lives in ",
+    ];
+    if user_markers.iter().any(|marker| normalized.contains(marker)) {
+        return "user".to_string();
+    }
+
+    let feedback_markers = [
+        "answer ",
+        "respond ",
+        "response ",
+        "tone ",
+        "format ",
+        "be more ",
+        "be less ",
+        "avoid ",
+        "use bullets",
+        "be concise",
+        "be brief",
+    ];
+    if feedback_markers.iter().any(|marker| normalized.contains(marker)) {
+        return "feedback".to_string();
+    }
+
+    let project_markers = [
+        "project ",
+        "repo ",
+        "repository ",
+        "workspace ",
+        "branch ",
+        "file ",
+        "src/",
+        "package.json",
+        "tauri",
+        "api ",
+        "database ",
+        "schema ",
+        "migration ",
+        "component ",
+        "feature ",
+        "bug ",
+        "task ",
+        "implementation ",
+    ];
+    if project_markers.iter().any(|marker| normalized.contains(marker)) {
+        return "project".to_string();
+    }
+
+    "reference".to_string()
+}
+
 // ─── Cloud wire types (private) ──────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -406,7 +469,6 @@ impl MemoryClient {
     ) -> Result<Vec<MemoryEntry>, String> {
         let now = Utc::now().to_rfc3339();
         let meta = serde_json::json!({
-            "memory_type": "project",
             "agent_id": agent_id,
             "source": "auto_extracted",
             "created_at": now,
@@ -474,20 +536,19 @@ fn parse_cloud_response(body: &str, operation: &str) -> Result<CloudResponse, St
 fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> MemoryEntry {
     let meta = &item.metadata;
 
-    let memory_type = meta
-        .get("memory_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("reference")
-        .to_string();
-    let agent_id = meta
-        .get("agent_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
     let source = meta
         .get("source")
         .and_then(|v| v.as_str())
         .unwrap_or("explicit")
+        .to_string();
+    let raw_memory_type = meta
+        .get("memory_type")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let agent_id = meta
+        .get("agent_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
         .to_string();
     let created_at = meta
         .get("created_at")
@@ -501,6 +562,11 @@ fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> MemoryEntry {
         .or(item.updated_at.as_deref())
         .unwrap_or("")
         .to_string();
+    let memory_type = match (source.as_str(), raw_memory_type.as_deref()) {
+        ("auto_extracted", _) => infer_memory_type(&item.memory),
+        (_, Some(mt)) => mt.to_string(),
+        _ => infer_memory_type(&item.memory),
+    };
 
     // Strip known fields from residual metadata
     let residual_metadata = match &item.metadata {
@@ -536,7 +602,7 @@ fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> MemoryEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::{cloud_item_to_entry, parse_cloud_response, MemoryEntry};
+    use super::{cloud_item_to_entry, infer_memory_type, parse_cloud_response, MemoryEntry};
     use serde_json::json;
 
     #[test]
@@ -612,5 +678,33 @@ mod tests {
         assert_eq!(value["agentId"], "agent_1");
         assert!(value.get("memory_type").is_none());
         assert!(value.get("created_at").is_none());
+    }
+
+    #[test]
+    fn infer_memory_type_detects_user_facts() {
+        assert_eq!(
+            infer_memory_type("User's favorite color is red."),
+            "user"
+        );
+    }
+
+    #[test]
+    fn auto_extracted_entries_are_reclassified_from_text() {
+        let item = super::CloudMemoryItem {
+            id: "mem_5".to_string(),
+            memory: "User's favorite color is red.".to_string(),
+            created_at: Some("2026-04-04T12:00:00Z".to_string()),
+            updated_at: Some("2026-04-04T12:00:00Z".to_string()),
+            score: None,
+            metadata: json!({
+                "memory_type": "project",
+                "source": "auto_extracted"
+            }),
+            event: None,
+        };
+
+        let entry = cloud_item_to_entry(item, "user_1");
+
+        assert_eq!(entry.memory_type, "user");
     }
 }
