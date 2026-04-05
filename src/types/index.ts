@@ -26,7 +26,6 @@ export interface MemoryEntry {
   text: string;
   memoryType: MemoryType;
   userId: string;
-  agentId: string;
   createdAt: string;
   updatedAt: string;
   source: 'explicit' | 'auto_extracted';

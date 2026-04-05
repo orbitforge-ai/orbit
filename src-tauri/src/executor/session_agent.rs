@@ -764,7 +764,7 @@ async fn extract_session_memories(
     }
 
     let (count, status) = match client
-        .extract_memories(&conversation_text, user_id, agent_id)
+        .extract_memories(&conversation_text, user_id)
         .await
     {
         Ok(entries) => (entries.len() as i64, "success".to_string()),

@@ -12,6 +12,7 @@ import { TasksScreen } from './screens/Tasks';
 import { AgentInspector } from './screens/AgentInspector';
 import { TaskEdit } from './screens/TaskEdit';
 import { ProjectInspector } from './screens/ProjectInspector';
+import { Memory } from './screens/Memory';
 import { Settings } from './screens/Settings';
 import { AuthScreen } from './screens/Auth';
 
@@ -59,6 +60,7 @@ function AppContent() {
       tasks: <TasksScreen />,
       agents: <AgentInspector />,
       projects: <ProjectInspector />,
+      memory: <Memory />,
       settings: <Settings />,
       'task-edit': <TaskEdit />,
     } as Record<string, React.ReactNode>

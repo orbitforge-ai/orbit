@@ -22,7 +22,6 @@ async fn resolve_user_id(auth: &AuthState, active_user: &ActiveUser) -> String {
 #[tauri::command]
 pub async fn search_memories(
     query: String,
-    agent_id: String,
     memory_type: Option<String>,
     limit: Option<u32>,
     memory_state: tauri::State<'_, Option<MemoryServiceState>>,
@@ -32,13 +31,12 @@ pub async fn search_memories(
     let c = client(&memory_state)?;
     let user_id = resolve_user_id(&auth, &active_user).await;
     let limit = limit.unwrap_or(10).min(50);
-    c.search_memories(&query, &user_id, &agent_id, memory_type.as_deref(), limit)
+    c.search_memories(&query, &user_id, memory_type.as_deref(), limit)
         .await
 }
 
 #[tauri::command]
 pub async fn list_memories(
-    agent_id: String,
     memory_type: Option<String>,
     limit: Option<u32>,
     offset: Option<u32>,
@@ -50,7 +48,7 @@ pub async fn list_memories(
     let user_id = resolve_user_id(&auth, &active_user).await;
     let limit = limit.unwrap_or(50).min(200);
     let offset = offset.unwrap_or(0);
-    c.list_memories(&user_id, &agent_id, memory_type.as_deref(), limit, offset)
+    c.list_memories(&user_id, memory_type.as_deref(), limit, offset)
         .await
 }
 
@@ -58,14 +56,13 @@ pub async fn list_memories(
 pub async fn add_memory(
     text: String,
     memory_type: String,
-    agent_id: String,
     memory_state: tauri::State<'_, Option<MemoryServiceState>>,
     active_user: tauri::State<'_, ActiveUser>,
     auth: tauri::State<'_, AuthState>,
 ) -> Result<Vec<MemoryEntry>, String> {
     let c = client(&memory_state)?;
     let user_id = resolve_user_id(&auth, &active_user).await;
-    c.add_memory(&text, &memory_type, &user_id, &agent_id, None).await
+    c.add_memory(&text, &memory_type, &user_id, None).await
 }
 
 #[tauri::command]

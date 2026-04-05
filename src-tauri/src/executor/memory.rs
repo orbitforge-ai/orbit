@@ -1,9 +1,12 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+/// Constant agent_id sent to mem0 cloud so all agents share a single memory pool.
+const GLOBAL_AGENT_ID: &str = "global";
+
 /// HTTP client for the mem0 cloud API.
 ///
-/// All memory operations call https://api.mem0.ai directly. The user_id + agent_id
+/// All memory operations call https://api.mem0.ai directly. The user_id
 /// scoping enforces per-user isolation; the API key is a shared org-level credential
 /// embedded at build time.
 #[derive(Clone)]
@@ -21,7 +24,6 @@ pub struct MemoryEntry {
     pub text: String,
     pub memory_type: String,
     pub user_id: String,
-    pub agent_id: String,
     pub created_at: String,
     pub updated_at: String,
     pub source: String,
@@ -210,13 +212,11 @@ impl MemoryClient {
         text: &str,
         memory_type: &str,
         user_id: &str,
-        agent_id: &str,
         extra_metadata: Option<serde_json::Value>,
     ) -> Result<Vec<MemoryEntry>, String> {
         let now = Utc::now().to_rfc3339();
         let mut meta = serde_json::json!({
             "memory_type": memory_type,
-            "agent_id": agent_id,
             "source": "explicit",
             "created_at": now,
             "updated_at": now,
@@ -235,7 +235,7 @@ impl MemoryClient {
                 content: text.to_string(),
             }],
             user_id: user_id.to_string(),
-            agent_id: agent_id.to_string(),
+            agent_id: GLOBAL_AGENT_ID.to_string(),
             metadata: meta,
             async_mode: false,
             output_format: "v1.1",
@@ -283,16 +283,15 @@ impl MemoryClient {
         &self,
         query: &str,
         user_id: &str,
-        agent_id: &str,
         memory_type: Option<&str>,
         limit: u32,
     ) -> Result<Vec<MemoryEntry>, String> {
         let body = CloudSearchBody {
             query: query.to_string(),
             user_id: user_id.to_string(),
-            agent_id: agent_id.to_string(),
+            agent_id: GLOBAL_AGENT_ID.to_string(),
             top_k: limit,
-            filters: Some(serde_json::json!({ "agent_id": agent_id })),
+            filters: None,
         };
 
         let resp = self
@@ -330,11 +329,10 @@ impl MemoryClient {
         Ok(entries)
     }
 
-    /// List memories for a user/agent.
+    /// List memories for a user.
     pub async fn list_memories(
         &self,
         user_id: &str,
-        agent_id: &str,
         memory_type: Option<&str>,
         limit: u32,
         offset: u32,
@@ -344,8 +342,8 @@ impl MemoryClient {
 
         let body = CloudListBody {
             user_id: user_id.to_string(),
-            agent_id: agent_id.to_string(),
-            filters: Some(serde_json::json!({ "agent_id": agent_id })),
+            agent_id: GLOBAL_AGENT_ID.to_string(),
+            filters: None,
             page,
             page_size: limit,
         };
@@ -465,11 +463,9 @@ impl MemoryClient {
         &self,
         conversation_text: &str,
         user_id: &str,
-        agent_id: &str,
     ) -> Result<Vec<MemoryEntry>, String> {
         let now = Utc::now().to_rfc3339();
         let meta = serde_json::json!({
-            "agent_id": agent_id,
             "source": "auto_extracted",
             "created_at": now,
             "updated_at": now,
@@ -481,7 +477,7 @@ impl MemoryClient {
                 content: conversation_text.to_string(),
             }],
             user_id: user_id.to_string(),
-            agent_id: agent_id.to_string(),
+            agent_id: GLOBAL_AGENT_ID.to_string(),
             metadata: meta,
             async_mode: false,
             output_format: "v1.1",
@@ -545,11 +541,6 @@ fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> MemoryEntry {
         .get("memory_type")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let agent_id = meta
-        .get("agent_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
     let created_at = meta
         .get("created_at")
         .and_then(|v| v.as_str())
@@ -576,7 +567,7 @@ fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> MemoryEntry {
                 .filter(|(k, _)| {
                     !matches!(
                         k.as_str(),
-                        "memory_type" | "agent_id" | "source" | "created_at" | "updated_at"
+                        "memory_type" | "source" | "created_at" | "updated_at"
                     )
                 })
                 .map(|(k, v)| (k.clone(), v.clone()))
@@ -591,7 +582,6 @@ fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> MemoryEntry {
         text: item.memory,
         memory_type,
         user_id: user_id.to_string(),
-        agent_id,
         created_at,
         updated_at,
         source,
@@ -661,7 +651,6 @@ mod tests {
             text: "Camel case".to_string(),
             memory_type: "user".to_string(),
             user_id: "user_1".to_string(),
-            agent_id: "agent_1".to_string(),
             created_at: "2026-04-04T12:00:00Z".to_string(),
             updated_at: "2026-04-04T12:00:00Z".to_string(),
             source: "explicit".to_string(),
@@ -675,9 +664,9 @@ mod tests {
         assert_eq!(value["createdAt"], "2026-04-04T12:00:00Z");
         assert_eq!(value["updatedAt"], "2026-04-04T12:00:00Z");
         assert_eq!(value["userId"], "user_1");
-        assert_eq!(value["agentId"], "agent_1");
         assert!(value.get("memory_type").is_none());
         assert!(value.get("created_at").is_none());
+        assert!(value.get("agentId").is_none());
     }
 
     #[test]

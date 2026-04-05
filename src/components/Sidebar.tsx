@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Shield,
   FolderOpen,
+  Brain,
   HardDrive,
   Users,
   Settings,
@@ -34,6 +35,7 @@ const GLOBAL_NAV = [
   { id: 'tasks' as const, label: 'All Tasks', icon: ListChecks },
   { id: 'history' as const, label: 'All History', icon: History },
   { id: 'schedules' as const, label: 'Schedules', icon: Clock },
+  { id: 'memory' as const, label: 'Memory', icon: Brain },
 ];
 
 const PROJECT_TABS = [

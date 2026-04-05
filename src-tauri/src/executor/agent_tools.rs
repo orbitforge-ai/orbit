@@ -1042,11 +1042,10 @@ pub async fn execute_tool(
         Some(c) => c,
         None => return Ok(("Memory service is not available.".to_string(), false)),
       };
-      let agent_id = ctx.current_agent_id.as_deref().unwrap_or(&ctx.agent_id);
 
       info!(run_id = run_id, memory_type = memory_type, "agent tool: remember");
 
-      match client.add_memory(text, memory_type, &ctx.memory_user_id, agent_id, None).await {
+      match client.add_memory(text, memory_type, &ctx.memory_user_id, None).await {
         Ok(_) => Ok((format!("Remembered: \"{}\" (type: {})", text, memory_type), false)),
         Err(e) => Ok((format!("Failed to save memory: {}", e), false)),
       }
@@ -1059,11 +1058,10 @@ pub async fn execute_tool(
         Some(c) => c,
         None => return Ok(("Memory service is not available.".to_string(), false)),
       };
-      let agent_id = ctx.current_agent_id.as_deref().unwrap_or(&ctx.agent_id);
 
       info!(run_id = run_id, query = query, "agent tool: forget");
 
-      let matches = match client.search_memories(query, &ctx.memory_user_id, agent_id, None, 1).await {
+      let matches = match client.search_memories(query, &ctx.memory_user_id, None, 1).await {
         Ok(m) => m,
         Err(e) => return Ok((format!("Failed to search for memory to forget: {}", e), false)),
       };
@@ -1088,11 +1086,10 @@ pub async fn execute_tool(
         Some(c) => c,
         None => return Ok(("Memory service is not available.".to_string(), false)),
       };
-      let agent_id = ctx.current_agent_id.as_deref().unwrap_or(&ctx.agent_id);
 
       info!(run_id = run_id, query = query, "agent tool: search_memory");
 
-      match client.search_memories(query, &ctx.memory_user_id, agent_id, memory_type, limit).await {
+      match client.search_memories(query, &ctx.memory_user_id, memory_type, limit).await {
         Ok(entries) if entries.is_empty() => Ok(("No matching memories found.".to_string(), false)),
         Ok(entries) => {
           let lines: Vec<String> = entries
@@ -1113,11 +1110,10 @@ pub async fn execute_tool(
         Some(c) => c,
         None => return Ok(("Memory service is not available.".to_string(), false)),
       };
-      let agent_id = ctx.current_agent_id.as_deref().unwrap_or(&ctx.agent_id);
 
       info!(run_id = run_id, "agent tool: list_memories");
 
-      match client.list_memories(&ctx.memory_user_id, agent_id, memory_type, limit, 0).await {
+      match client.list_memories(&ctx.memory_user_id, memory_type, limit, 0).await {
         Ok(entries) if entries.is_empty() => Ok(("No memories stored.".to_string(), false)),
         Ok(entries) => {
           let lines: Vec<String> = entries

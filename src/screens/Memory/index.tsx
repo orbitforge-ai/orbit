@@ -1,6 +1,17 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Brain, CheckCircle, ChevronDown, Pencil, Plus, Search, Trash2, WifiOff, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  Brain,
+  CheckCircle,
+  ChevronDown,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+  WifiOff,
+  X,
+} from 'lucide-react';
 import * as Select from '@radix-ui/react-select';
 import { memoryApi } from '../../api/memory';
 import { MemoryEntry, MemoryType } from '../../types';
@@ -32,7 +43,7 @@ function formatMemoryDate(iso: string): string {
   return date.toLocaleDateString();
 }
 
-export function MemoryTab({ agentId }: { agentId: string }) {
+export function Memory() {
   const queryClient = useQueryClient();
   const [filterType, setFilterType] = useState<MemoryType | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -52,23 +63,25 @@ export function MemoryTab({ agentId }: { agentId: string }) {
   });
 
   const { data: memories, isLoading } = useQuery({
-    queryKey: ['memories', agentId, filterType],
-    queryFn: () =>
-      memoryApi.list(agentId, filterType === 'all' ? undefined : filterType, 200),
+    queryKey: ['memories', filterType],
+    queryFn: () => memoryApi.list(filterType === 'all' ? undefined : filterType, 200),
     enabled: health === true,
   });
 
   const { data: allMemories } = useQuery({
-    queryKey: ['memories', agentId, 'all'],
-    queryFn: () => memoryApi.list(agentId, undefined, 200),
+    queryKey: ['memories', 'all'],
+    queryFn: () => memoryApi.list(undefined, 200),
     enabled: health === true,
   });
 
   async function handleSearch() {
-    if (!searchQuery.trim()) { setSearchResults(null); return; }
+    if (!searchQuery.trim()) {
+      setSearchResults(null);
+      return;
+    }
     setSearching(true);
     try {
-      setSearchResults(await memoryApi.search(searchQuery, agentId, undefined, 20));
+      setSearchResults(await memoryApi.search(searchQuery, undefined, 20));
     } finally {
       setSearching(false);
     }
@@ -83,10 +96,10 @@ export function MemoryTab({ agentId }: { agentId: string }) {
     if (!newText.trim()) return;
     setAdding(true);
     try {
-      await memoryApi.add(newText.trim(), newType, agentId);
+      await memoryApi.add(newText.trim(), newType);
       setNewText('');
       setShowAddForm(false);
-      queryClient.invalidateQueries({ queryKey: ['memories', agentId] });
+      queryClient.invalidateQueries({ queryKey: ['memories'] });
     } finally {
       setAdding(false);
     }
@@ -94,7 +107,7 @@ export function MemoryTab({ agentId }: { agentId: string }) {
 
   async function handleDelete(memoryId: string) {
     await memoryApi.delete(memoryId);
-    queryClient.invalidateQueries({ queryKey: ['memories', agentId] });
+    queryClient.invalidateQueries({ queryKey: ['memories'] });
     if (searchResults) setSearchResults(searchResults.filter((m) => m.id !== memoryId));
   }
 
@@ -102,7 +115,7 @@ export function MemoryTab({ agentId }: { agentId: string }) {
     if (!editText.trim()) return;
     await memoryApi.update(memoryId, editText.trim());
     setEditingId(null);
-    queryClient.invalidateQueries({ queryKey: ['memories', agentId] });
+    queryClient.invalidateQueries({ queryKey: ['memories'] });
   }
 
   const displayMemories = searchResults ?? memories ?? [];
@@ -171,7 +184,7 @@ export function MemoryTab({ agentId }: { agentId: string }) {
               disabled={adding || !newText.trim()}
               className="px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-xs font-medium transition-colors"
             >
-              {adding ? 'Saving…' : 'Save'}
+              {adding ? 'Saving\u2026' : 'Save'}
             </button>
           </div>
         </div>
@@ -180,12 +193,15 @@ export function MemoryTab({ agentId }: { agentId: string }) {
       {/* Search */}
       <div className="flex gap-2">
         <div className="relative flex-1">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
+          <Search
+            size={13}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none"
+          />
           <input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-            placeholder="Semantic search…"
+            placeholder="Semantic search..."
             className="w-full pl-8 pr-8 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
           />
           {searchQuery && (
@@ -202,7 +218,7 @@ export function MemoryTab({ agentId }: { agentId: string }) {
           disabled={searching || !searchQuery.trim()}
           className="px-3 py-2 rounded-lg bg-surface border border-edge text-secondary hover:text-white disabled:opacity-50 text-xs transition-colors"
         >
-          {searching ? 'Searching…' : 'Search'}
+          {searching ? 'Searching\u2026' : 'Search'}
         </button>
       </div>
 
@@ -234,7 +250,8 @@ export function MemoryTab({ agentId }: { agentId: string }) {
       {searchResults && (
         <div className="flex items-center gap-2 text-xs text-muted">
           <Search size={11} />
-          {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} for &ldquo;{searchQuery}&rdquo;
+          {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} for &ldquo;
+          {searchQuery}&rdquo;
           <button
             onClick={clearSearch}
             className="ml-auto flex items-center gap-1 text-muted hover:text-white transition-colors"
@@ -254,7 +271,7 @@ export function MemoryTab({ agentId }: { agentId: string }) {
           </p>
         </div>
       ) : isLoading ? (
-        <div className="py-10 text-center text-xs text-muted">Loading memories…</div>
+        <div className="py-10 text-center text-xs text-muted">Loading memories&hellip;</div>
       ) : displayMemories.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
           <Brain size={28} className="text-muted opacity-40" />
@@ -271,7 +288,10 @@ export function MemoryTab({ agentId }: { agentId: string }) {
               memory={memory}
               isEditing={editingId === memory.id}
               editText={editText}
-              onStartEdit={() => { setEditingId(memory.id); setEditText(memory.text); }}
+              onStartEdit={() => {
+                setEditingId(memory.id);
+                setEditText(memory.text);
+              }}
               onEditTextChange={setEditText}
               onSaveEdit={() => handleSaveEdit(memory.id)}
               onCancelEdit={() => setEditingId(null)}
@@ -331,9 +351,7 @@ function MemoryRow({
             >
               {memory.memoryType}
             </span>
-            <span className="text-[10px] text-muted">
-              {formatMemoryDate(memory.createdAt)}
-            </span>
+            <span className="text-[10px] text-muted">{formatMemoryDate(memory.createdAt)}</span>
             {stale && (
               <span className="flex items-center gap-1 text-[10px] text-amber-400">
                 <AlertTriangle size={9} /> Stale

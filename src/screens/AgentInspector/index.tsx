@@ -4,7 +4,6 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import {
   Activity,
   Bot,
-  Brain,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -27,7 +26,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { agentsApi } from '../../api/agents';
 import { chatApi } from '../../api/chat';
 import { workspaceApi } from '../../api/workspace';
-import { memoryApi } from '../../api/memory';
 import { StatusBadge } from '../../components/StatusBadge';
 import { InlineEdit } from '../../components/InlineEdit';
 import {
@@ -49,7 +47,6 @@ import { WorkspaceTab } from './WorkspaceTab';
 import { ConfigTab } from './ConfigTab';
 import { SchedulesTab } from './SchedulesTab';
 import { BusTab } from './BusTab';
-import { MemoryTab } from './MemoryTab';
 import { SkillsTab } from './SkillsTab';
 import { AgentRunDialog } from './AgentRunDialog';
 import { AgentRunView } from './AgentRunView';
@@ -489,7 +486,6 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
     { id: 'chat' as const, label: 'Chat', icon: MessageSquare },
     { id: 'workspace' as const, label: 'Workspace', icon: FolderOpen },
     { id: 'config' as const, label: 'Config', icon: Settings },
-    { id: 'memory' as const, label: 'Memory', icon: Brain },
     { id: 'skills' as const, label: 'Skills', icon: Sparkles },
     { id: 'schedules' as const, label: 'Schedules', icon: Clock },
     { id: 'bus' as const, label: 'Bus', icon: Radio },
@@ -726,7 +722,6 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
             ref={schedulesSaveRef}
           />
         </div>
-        {agentTab === 'memory' && <MemoryTab agentId={agentId} />}
         {agentTab === 'skills' && <SkillsTab agentId={agentId} />}
         {agentTab === 'bus' && <BusTab agentId={agentId} />}
       </div>
@@ -776,15 +771,6 @@ function ChatWorkspace({
   sessionsCollapsed: boolean;
   onToggleSessions: () => void;
 }) {
-  const { data: memoryCount } = useQuery({
-    queryKey: ['memories-count', agentId],
-    queryFn: async () => {
-      const entries = await memoryApi.list(agentId, undefined, 200);
-      return entries.length;
-    },
-    refetchInterval: 60_000,
-  });
-
   const { data: agentConfig } = useQuery({
     queryKey: ['agent-config', agentId],
     queryFn: () => workspaceApi.getConfig(agentId),
@@ -819,14 +805,6 @@ function ChatWorkspace({
       )}
 
       <div className="relative flex-1 min-w-0 flex flex-col">
-        {memoryCount !== undefined && memoryCount > 0 && (
-          <div className="flex items-center gap-1.5 px-4 py-1 border-b border-edge/50 bg-panel/60 shrink-0">
-            <Brain size={10} className="text-accent-light opacity-70" />
-            <span className="text-[10px] text-muted">
-              {memoryCount} {memoryCount === 1 ? 'memory' : 'memories'} available
-            </span>
-          </div>
-        )}
         <div className="flex-1 min-h-0 relative">
           {draftSession && activeSessionId === draftSession.id ? (
             <ChatPanel

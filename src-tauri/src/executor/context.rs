@@ -270,7 +270,7 @@ impl ContextStage for MemoryStage {
         // Search for relevant memories (cap at 10)
         let memories = match self
             .client
-            .search_memories(query, &request.user_id, &request.agent_id, None, 10)
+            .search_memories(query, &request.user_id, None, 10)
             .await
         {
             Ok(mems) => mems,

@@ -620,7 +620,7 @@ async fn perform_compaction_inner(
                     .await;
                 }
                 let (count, status) = match client
-                    .extract_memories(&extract_text, &user_id, &agent_id)
+                    .extract_memories(&extract_text, &user_id)
                     .await
                 {
                     Ok(entries) => (entries.len() as i64, "success".to_string()),

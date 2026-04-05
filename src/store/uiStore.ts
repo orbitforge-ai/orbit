@@ -6,6 +6,7 @@ type Screen =
   | 'history'
   | 'agents'
   | 'schedules'
+  | 'memory'
   | 'projects'
   | 'task-builder'
   | 'schedule-builder'
@@ -28,7 +29,7 @@ function getPersistedAgentId(): string | null {
   return null;
 }
 
-type AgentTab = 'chat' | 'workspace' | 'config' | 'memory' | 'skills' | 'schedules' | 'bus';
+type AgentTab = 'chat' | 'workspace' | 'config' | 'skills' | 'schedules' | 'bus';
 type ProjectTab = 'workspace' | 'agents' | 'tasks' | 'history';
 
 function getPersistedProjectId(): string | null {
