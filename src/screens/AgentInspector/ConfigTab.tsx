@@ -11,11 +11,6 @@ import { projectsApi } from '../../api/projects';
 import { AgentWorkspaceConfig, Project } from '../../types';
 import { CollapsibleSection } from '../../components/CollapsibleSection';
 import { AgentIdentitySection } from './AgentIdentitySection';
-import {
-  getRoleDefaultTools,
-  getRoleSystemInstructions,
-  DEFAULT_ROLE_ID,
-} from '../../lib/agentRoles';
 import { MODEL_OPTIONS, LLM_PROVIDERS, DEFAULT_MODEL_BY_PROVIDER } from '../../constants/providers';
 import { useApiKeyStatus } from '../../hooks/useApiKeyStatus';
 import { useUiStore } from '../../store/uiStore';
@@ -169,23 +164,6 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
       // Disable all except finish (which is always on)
       updateConfig({ allowedTools: ['finish'] });
     }
-  }
-
-  function handleRoleChange(newRoleId: string) {
-    updateConfig({
-      roleId: newRoleId,
-      roleSystemInstructions: getRoleSystemInstructions(newRoleId),
-      allowedTools: getRoleDefaultTools(newRoleId),
-    });
-  }
-
-  function isRoleDefaultsDirty(): boolean {
-    if (!config?.roleId || config.roleId === DEFAULT_ROLE_ID) return false;
-    const defaultTools = getRoleDefaultTools(config.roleId);
-    const current = config.allowedTools;
-    if (defaultTools.length === 0 && current.length === 0) return false;
-    if (defaultTools.length !== current.length) return true;
-    return !defaultTools.every((t) => current.includes(t));
   }
 
   if (!config) {

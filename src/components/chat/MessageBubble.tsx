@@ -1,14 +1,14 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bot, User, ChevronRight, Layers, ExternalLink } from 'lucide-react';
 import TurndownService from 'turndown';
 import { DisplayMessage } from './types';
 import { TextBlock } from './TextBlock';
-import { ThinkingBlock } from './ThinkingBlock';
 import { ToolUseBlock } from './ToolUseBlock';
 import { PermissionPrompt } from './PermissionPrompt';
 import { TypingIndicator } from './StreamingCursor';
 import { ReactionChip } from './ReactionChip';
 import { useUiStore } from '../../store/uiStore';
+import { useSettingsStore } from '../../store/settingsStore';
 
 function formatTimestamp(iso: string): string {
   const d = new Date(iso);
@@ -32,6 +32,8 @@ interface MessageBubbleProps {
 export function MessageBubble({ message, agentId }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const [expanded, setExpanded] = useState(false);
+  const showAgentThoughts = useSettingsStore((s) => s.showAgentThoughts);
+  const [expandedDetailKey, setExpandedDetailKey] = useState<string | null>(null);
   const navigate = useUiStore((s) => s.navigate);
   const selectRun = useUiStore((s) => s.selectRun);
   const isBusSender = isUser && !!message.senderLabel;
@@ -60,6 +62,30 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
     },
     [turndown]
   );
+
+  const primaryBlocks = message.blocks.filter(
+    (block) => block.kind !== 'thinking' && block.kind !== 'tool_call'
+  );
+  const thinkingBlocks = message.blocks.filter((block) => block.kind === 'thinking');
+  const toolBlocks = message.blocks.filter(
+    (block): block is Extract<DisplayMessage['blocks'][number], { kind: 'tool_call' }> =>
+      block.kind === 'tool_call'
+  );
+  const hasPrimaryContent = primaryBlocks.length > 0;
+  const hasThinking = thinkingBlocks.length > 0;
+  const hasTools = toolBlocks.length > 0;
+  const allowItemDetails = true;
+  const showChipOnlyBubble = !hasPrimaryContent && (hasThinking || hasTools);
+  const shouldRenderContent =
+    hasPrimaryContent ||
+    hasThinking ||
+    hasTools ||
+    (message.blocks.length === 0 && message.isStreaming) ||
+    !!message.linkedRunId;
+
+  useEffect(() => {
+    setExpandedDetailKey(showAgentThoughts && hasThinking ? 'thinking:0' : null);
+  }, [message.id, showAgentThoughts, hasThinking]);
 
   // Summary message — collapsed by default, expandable
   if (message.isSummary) {
@@ -131,6 +157,10 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
     );
   }
 
+  if (!shouldRenderContent) {
+    return null;
+  }
+
   return (
     <div className={`flex gap-3 ${isUser && !isBusSender ? 'flex-row-reverse' : ''}`}>
       {/* Avatar */}
@@ -157,7 +187,9 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
       <div className={`min-w-0 max-w-[85%] relative ${reactions.length > 0 ? 'mb-3' : ''}`}>
         <div
           onCopy={handleCopy}
-          className={`rounded-xl px-4 py-3 space-y-2 overflow-hidden select-text ${
+          className={`rounded-xl overflow-hidden select-text ${
+            showChipOnlyBubble ? 'px-3 py-2 space-y-1.5' : 'px-4 py-3 space-y-2'
+          } ${
             isBusSender
               ? 'bg-blue-500/10 border border-blue-500/20'
               : isUser
@@ -165,21 +197,10 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
                 : 'bg-surface border border-edge'
           }`}
         >
-          {message.blocks.map((block, i) => {
+          {primaryBlocks.map((block, i) => {
             switch (block.kind) {
               case 'text':
                 return <TextBlock key={i} text={block.text} isStreaming={block.isStreaming} />;
-              case 'thinking':
-                return <ThinkingBlock key={i} thinking={block.thinking} />;
-              case 'tool_call':
-                return (
-                  <ToolUseBlock
-                    key={i}
-                    name={block.name}
-                    input={block.input}
-                    result={block.result}
-                  />
-                );
               case 'image':
                 return (
                   <img
@@ -205,6 +226,15 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
                 );
             }
           })}
+          {(hasThinking || hasTools) && (
+            <ToolUseBlock
+              thoughts={thinkingBlocks}
+              tools={toolBlocks}
+              expandedItemKey={expandedDetailKey}
+              onExpandedItemChange={setExpandedDetailKey}
+              allowDetails={allowItemDetails}
+            />
+          )}
           {message.blocks.length === 0 && message.isStreaming && <TypingIndicator />}
           {message.linkedRunId && !message.isStreaming && (
             <button

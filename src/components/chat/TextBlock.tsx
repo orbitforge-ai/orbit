@@ -11,7 +11,11 @@ export function TextBlock({ text, isStreaming }: TextBlockProps) {
   return (
     <div className="text-sm text-primary leading-relaxed chat-markdown">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-      {isStreaming && <StreamingCursor />}
+      {isStreaming && (
+        <div className="mt-2">
+          <StreamingCursor />
+        </div>
+      )}
     </div>
   );
 }

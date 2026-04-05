@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
-  ChevronRight,
   CheckCircle,
   XCircle,
-  Hammer,
   Loader2,
   GitBranch,
   ChevronDown,
@@ -11,90 +9,197 @@ import {
 import { onRunStateChanged } from '../../events/runEvents';
 import { runsApi } from '../../api/runs';
 import { RunSummary } from '../../types';
+import { DisplayBlock } from './types';
+import { formatToolName, getToolVisual } from './toolVisuals';
+import { ThinkingBlock, ThinkingDetailPanel } from './ThinkingBlock';
 
 interface ToolUseBlockProps {
-  name: string;
-  input: Record<string, unknown>;
-  result?: { content: string; isError: boolean };
+  thoughts: Extract<DisplayBlock, { kind: 'thinking' }>[];
+  tools: Extract<DisplayBlock, { kind: 'tool_call' }>[];
+  expandedItemKey: string | null;
+  onExpandedItemChange: (itemKey: string | null) => void;
+  allowDetails: boolean;
 }
 
-export function ToolUseBlock({ name, input, result }: ToolUseBlockProps) {
-  const [expanded, setExpanded] = useState(false);
-  const inputStr = JSON.stringify(input, null, 2);
-  const isSubAgentTool = name === 'spawn_sub_agents';
-  const isWaitingSendMessage = name === 'send_message' && input.wait_for_result === true && !result;
+export function ToolUseBlock({
+  thoughts,
+  tools,
+  expandedItemKey,
+  onExpandedItemChange,
+  allowDetails,
+}: ToolUseBlockProps) {
+  const expandedThinking =
+    allowDetails && expandedItemKey?.startsWith('thinking:')
+      ? thoughts[Number(expandedItemKey.split(':')[1])] ?? null
+      : null;
+  const expandedTool =
+    allowDetails && expandedItemKey?.startsWith('tool:')
+      ? tools.find((tool) => `tool:${tool.id}` === expandedItemKey) ?? null
+      : null;
+
+  if (tools.length === 0 && thoughts.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-warning/30 bg-warning/5 overflow-hidden">
-      {/* Collapsed header — always visible */}
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 px-3 py-2 w-full text-left hover:bg-warning/10 transition-colors"
-      >
-        <ChevronRight
-          size={12}
-          className={`text-warning shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
-        />
-        <Hammer size={12} className="text-warning shrink-0" />
-        <span className="text-xs text-muted">Tool Used</span>
-        <span className="text-xs font-medium text-warning">{name}</span>
-        {result && !result.isError && (
-          <CheckCircle size={11} className="text-emerald-400 ml-auto shrink-0" />
-        )}
-        {result && result.isError && (
-          <XCircle size={11} className="text-red-400 ml-auto shrink-0" />
-        )}
-        {!result && (isSubAgentTool || isWaitingSendMessage) && (
-          <Loader2 size={11} className="text-accent-hover ml-auto shrink-0 animate-spin" />
-        )}
-      </button>
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-1.5">
+        {thoughts.map((thought, index) => {
+          const itemKey = `thinking:${index}`;
+          return (
+            <ThinkingBlock
+              key={itemKey}
+              thinking={thought.thinking}
+              selected={allowDetails && expandedItemKey === itemKey}
+              disabled={!allowDetails}
+              onClick={() => {
+                if (!allowDetails) return;
+                onExpandedItemChange(expandedItemKey === itemKey ? null : itemKey);
+              }}
+            />
+          );
+        })}
+        {tools.map((tool) => (
+          <ToolChip
+            key={tool.id}
+            tool={tool}
+            selected={allowDetails && expandedItemKey === `tool:${tool.id}`}
+            disabled={!allowDetails}
+            onClick={() => {
+              if (!allowDetails) return;
+              onExpandedItemChange(
+                expandedItemKey === `tool:${tool.id}` ? null : `tool:${tool.id}`
+              );
+            }}
+          />
+        ))}
+      </div>
 
-      {/* Sub-agent live tracker — shown while waiting for result */}
-      {isSubAgentTool && !result && (
-        <SubAgentTracker tasks={input.tasks as SubAgentTask[] | undefined} />
+      {expandedThinking && allowDetails && <ThinkingDetailPanel thinking={expandedThinking.thinking} />}
+      {expandedTool && allowDetails && <ToolDetailPanel tool={expandedTool} />}
+    </div>
+  );
+}
+
+function ToolChip({
+  tool,
+  selected,
+  disabled,
+  onClick,
+}: {
+  tool: Extract<DisplayBlock, { kind: 'tool_call' }>;
+  selected: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const { Icon, colorClass } = getToolVisual(tool.name);
+  const label = formatToolName(tool.name);
+  const status = getToolStatus(tool);
+  const interactiveClasses = selected
+    ? 'border-warning/50 bg-warning/15 text-warning shadow-[0_0_0_1px_rgba(245,158,11,0.12)]'
+    : 'border-edge bg-background text-secondary hover:border-edge-hover hover:text-white';
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors ${interactiveClasses} ${
+        disabled ? 'cursor-default opacity-90' : ''
+      }`}
+      title={label}
+    >
+      <Icon size={11} className={`${colorClass} shrink-0`} />
+      <span className="truncate font-medium">{label}</span>
+      <ToolStatusIndicator status={status} />
+    </button>
+  );
+}
+
+function ToolDetailPanel({ tool }: { tool: Extract<DisplayBlock, { kind: 'tool_call' }> }) {
+  const inputStr = JSON.stringify(tool.input, null, 2);
+  const label = formatToolName(tool.name);
+  const isSubAgentTool = tool.name === 'spawn_sub_agents';
+  const isWaitingSendMessage =
+    tool.name === 'send_message' && tool.input.wait_for_result === true && !tool.result;
+
+  return (
+    <div className="rounded-lg border border-warning/25 bg-warning/5 overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-warning/10">
+        <div className="inline-flex items-center gap-1.5 rounded-full border border-warning/20 bg-background/80 px-2 py-1 text-[11px]">
+          {(() => {
+            const { Icon, colorClass } = getToolVisual(tool.name);
+            return <Icon size={11} className={`${colorClass} shrink-0`} />;
+          })()}
+          <span className="font-medium text-warning">{label}</span>
+          <ToolStatusIndicator status={getToolStatus(tool)} />
+        </div>
+      </div>
+
+      {isSubAgentTool && !tool.result && (
+        <SubAgentTracker tasks={tool.input.tasks as SubAgentTask[] | undefined} />
       )}
       {isWaitingSendMessage && (
         <SendMessagePending
-          targetAgent={typeof input.target_agent === 'string' ? input.target_agent : undefined}
+          targetAgent={
+            typeof tool.input.target_agent === 'string' ? tool.input.target_agent : undefined
+          }
         />
       )}
 
-      {/* Expanded details */}
-      {expanded && (
-        <>
-          {/* Input */}
-          <div className="border-t border-warning/10">
-            <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted">Input</div>
-            <pre className="px-3 pb-2 text-xs font-mono text-secondary whitespace-pre-wrap break-all overflow-x-auto">
-              {inputStr}
-            </pre>
-          </div>
+      <div className="border-t border-warning/10">
+        <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted">Input</div>
+        <pre className="px-3 pb-2 text-xs font-mono text-secondary whitespace-pre-wrap break-all overflow-x-auto">
+          {inputStr}
+        </pre>
+      </div>
 
-          {/* Result */}
-          {result && (
-            <div
-              className={`border-t ${
-                result.isError
-                  ? 'border-red-500/20 bg-red-500/5'
-                  : 'border-emerald-500/20 bg-emerald-500/5'
-              }`}
-            >
-              <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted">
-                Result
-              </div>
-              <pre
-                className={`px-3 pb-2 text-xs font-mono whitespace-pre-wrap break-all overflow-x-auto ${
-                  result.isError ? 'text-red-400' : 'text-secondary'
-                }`}
-              >
-                {result.content}
-              </pre>
-            </div>
-          )}
-        </>
+      {tool.result && (
+        <div
+          className={`border-t ${
+            tool.result.isError
+              ? 'border-red-500/20 bg-red-500/5'
+              : 'border-emerald-500/20 bg-emerald-500/5'
+          }`}
+        >
+          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted">Result</div>
+          <pre
+            className={`px-3 pb-2 text-xs font-mono whitespace-pre-wrap break-all overflow-x-auto ${
+              tool.result.isError ? 'text-red-400' : 'text-secondary'
+            }`}
+          >
+            {tool.result.content}
+          </pre>
+        </div>
       )}
     </div>
   );
+}
+
+function getToolStatus(tool: Extract<DisplayBlock, { kind: 'tool_call' }>) {
+  const isSubAgentTool = tool.name === 'spawn_sub_agents';
+  const isWaitingSendMessage =
+    tool.name === 'send_message' && tool.input.wait_for_result === true && !tool.result;
+
+  if (tool.result?.isError) return 'error' as const;
+  if (tool.result) return 'success' as const;
+  if (isSubAgentTool || isWaitingSendMessage) return 'pending' as const;
+  return 'idle' as const;
+}
+
+function ToolStatusIndicator({
+  status,
+}: {
+  status: 'success' | 'error' | 'pending' | 'idle';
+}) {
+  switch (status) {
+    case 'success':
+      return <CheckCircle size={11} className="text-emerald-400 shrink-0" />;
+    case 'error':
+      return <XCircle size={11} className="text-red-400 shrink-0" />;
+    case 'pending':
+      return <Loader2 size={11} className="text-accent-hover shrink-0 animate-spin" />;
+    default:
+      return <span className="h-1.5 w-1.5 rounded-full bg-border-hover shrink-0" />;
+  }
 }
 
 function SendMessagePending({ targetAgent }: { targetAgent?: string }) {
@@ -290,7 +395,7 @@ function SubAgentRow({
               }`}
             >
               {tc.isError ? <XCircle size={8} /> : <CheckCircle size={8} />}
-              {tc.name}
+              {formatToolName(tc.name)}
             </span>
           ))}
         </div>

@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import * as Switch from '@radix-ui/react-switch';
 import { Check, Key, Trash2 } from 'lucide-react';
 import { llmApi } from '../../api/llm';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { useApiKeyStatus, useInvalidateApiKeys } from '../../hooks/useApiKeyStatus';
 import { LLM_PROVIDERS, SEARCH_PROVIDERS } from '../../constants/providers';
+import { useSettingsStore } from '../../store/settingsStore';
 
 function ProviderKeyRow({ provider, label }: { provider: string; label: string }) {
   const { data: hasKey = false } = useApiKeyStatus(provider);
@@ -91,6 +93,9 @@ function ProviderKeyRow({ provider, label }: { provider: string; label: string }
 }
 
 export function Settings() {
+  const showAgentThoughts = useSettingsStore((s) => s.showAgentThoughts);
+  const setShowAgentThoughts = useSettingsStore((s) => s.setShowAgentThoughts);
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-2xl mx-auto p-8 space-y-8">
@@ -100,6 +105,28 @@ export function Settings() {
             Manage API keys shared across all agents.
           </p>
         </div>
+
+        <section className="space-y-3">
+          <h3 className="text-sm font-semibold text-white">Chat Display</h3>
+          <div className="rounded-lg border border-edge bg-background px-4 py-3">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <label className="text-sm font-medium text-white">Show agent thoughts</label>
+                <p className="text-xs text-muted mt-1">
+                  Off keeps conversations compact by default, while still letting you expand
+                  thoughts inline when needed.
+                </p>
+              </div>
+              <Switch.Root
+                checked={showAgentThoughts}
+                onCheckedChange={setShowAgentThoughts}
+                className="w-9 h-5 rounded-full bg-edge data-[state=checked]:bg-accent transition-colors outline-none shrink-0"
+              >
+                <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
+              </Switch.Root>
+            </div>
+          </div>
+        </section>
 
         <section className="space-y-3">
           <h3 className="text-sm font-semibold text-white">Model Providers</h3>

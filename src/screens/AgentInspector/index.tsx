@@ -4,14 +4,11 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import {
   Activity,
   Bot,
-  Check,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
   FolderOpen,
   GitBranch,
-  Globe,
   History,
   MessageSquare,
   Play,
@@ -37,7 +34,6 @@ import {
 import { useUiStore } from '../../store/uiStore';
 import {
   Agent,
-  AgentWorkspaceConfig,
   ChatSession,
   ContentBlock,
   CreateAgent,
@@ -54,7 +50,6 @@ import { AgentIdentitySection } from './AgentIdentitySection';
 import { RoleSelector, ROLE_ICON_MAP } from './RoleSelector';
 import { getDefaultAgentIdentity } from '../../lib/agentIdentity';
 import {
-  AGENT_ROLES,
   DEFAULT_ROLE_ID,
   getRoleDefaultTools,
   getRoleSystemInstructions,
@@ -118,7 +113,6 @@ export function AgentInspector() {
 }
 
 function NewAgentView() {
-  const queryClient = useQueryClient();
   const { navigate, selectAgent } = useUiStore();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
