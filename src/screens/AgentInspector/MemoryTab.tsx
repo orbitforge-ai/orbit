@@ -324,7 +324,7 @@ function MemoryRow({
                 <AlertTriangle size={9} /> Stale
               </span>
             )}
-            {memory.score !== undefined && (
+            {typeof memory.score === 'number' && (
               <span className="text-[10px] text-muted opacity-60">
                 score {memory.score.toFixed(2)}
               </span>

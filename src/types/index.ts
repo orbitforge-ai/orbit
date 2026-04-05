@@ -30,7 +30,7 @@ export interface MemoryEntry {
   createdAt: string;
   updatedAt: string;
   source: 'explicit' | 'auto_extracted';
-  score?: number;
+  score?: number | null;
 }
 
 export interface Agent {

@@ -35,7 +35,7 @@ fn log_dir() -> PathBuf {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  tauri::Builder
+  let builder = tauri::Builder
     ::default()
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_opener::init())
@@ -50,8 +50,12 @@ pub fn run() {
         .level_for("tungstenite", tauri_plugin_log::log::LevelFilter::Warn)
         .level_for("hyper", tauri_plugin_log::log::LevelFilter::Warn)
         .build()
-    )
-    .setup(|app| {
+    );
+
+  #[cfg(debug_assertions)]
+  let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+
+  builder.setup(|app| {
       let db_pool = init_db(data_dir())?;
       let initial_auth = load_auth_state(&data_dir());
 

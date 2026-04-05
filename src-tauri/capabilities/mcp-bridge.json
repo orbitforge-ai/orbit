@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "mcp-bridge",
+  "description": "Dev-only capability for the Tauri MCP bridge",
+  "windows": ["main"],
+  "permissions": ["mcp-bridge:default"]
+}
