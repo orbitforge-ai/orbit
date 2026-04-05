@@ -42,6 +42,15 @@ interface ChatPanelProps {
 
 let msgId = 0;
 
+function finalizeStreamingMessage(message: DisplayMessage): DisplayMessage {
+  const blocks = [...message.blocks];
+  const lastBlock = blocks[blocks.length - 1];
+  if (lastBlock && lastBlock.kind === 'text' && lastBlock.isStreaming) {
+    blocks[blocks.length - 1] = { ...lastBlock, isStreaming: false };
+  }
+  return { ...message, blocks, isStreaming: false };
+}
+
 function contentBlocksToDisplay(content: ContentBlock[]): DisplayBlock[] {
   return content.map((block): DisplayBlock => {
     if (block.type === 'text') return { kind: 'text', text: block.text, isStreaming: false };
@@ -284,18 +293,23 @@ export function ChatPanel({
     unsubs.push(
       onAgentIteration((payload) => {
         if (payload.runId !== streamId) return;
+        if (payload.action === 'llm_call' && payload.iteration > 1) {
+          setStreamMessages((prev) => {
+            const msgs = [...prev];
+            const last = msgs[msgs.length - 1];
+            if (last && last.role === 'assistant' && last.isStreaming) {
+              msgs[msgs.length - 1] = finalizeStreamingMessage(last);
+            }
+            return msgs;
+          });
+        }
         if (payload.action === 'finished') {
           setStreaming(false);
           setStreamMessages((prev) => {
             const msgs = [...prev];
             const last = msgs[msgs.length - 1];
             if (last && last.isStreaming) {
-              const updated = { ...last, isStreaming: false, blocks: [...last.blocks] };
-              const lastBlock = updated.blocks[updated.blocks.length - 1];
-              if (lastBlock && lastBlock.kind === 'text' && lastBlock.isStreaming) {
-                updated.blocks[updated.blocks.length - 1] = { ...lastBlock, isStreaming: false };
-              }
-              msgs[msgs.length - 1] = updated;
+              msgs[msgs.length - 1] = finalizeStreamingMessage(last);
             }
             return msgs;
           });
