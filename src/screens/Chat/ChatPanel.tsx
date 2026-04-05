@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
-import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ArrowDown, Loader2 } from 'lucide-react';
 import { chatApi } from '../../api/chat';
@@ -14,6 +14,7 @@ import {
   onAgentContentBlock,
   onAgentToolResult,
   onAgentIteration,
+  onMessageReaction,
 } from '../../events/runEvents';
 import { onPermissionRequest, onPermissionCancelled } from '../../events/permissionEvents';
 import { usePermissionStore } from '../../store/permissionStore';
@@ -131,10 +132,31 @@ export function ChatPanel({
     });
   }, [data]);
 
+  const { data: reactionsData } = useQuery({
+    queryKey: ['message-reactions', sessionId],
+    queryFn: () => chatApi.getReactions(sessionId!),
+    enabled: Boolean(sessionId),
+    staleTime: 30_000,
+  });
+
   const historyMessages = useMemo(() => {
     if (!sessionId) return [];
-    return chatMessagesToDisplay(allDbMessages);
-  }, [allDbMessages, sessionId]);
+    const msgs = chatMessagesToDisplay(allDbMessages);
+    if (reactionsData) {
+      const byMsg = new Map<string, Array<{ id: string; emoji: string }>>();
+      for (const r of reactionsData) {
+        const arr = byMsg.get(r.messageId) ?? [];
+        arr.push({ id: r.id, emoji: r.emoji });
+        byMsg.set(r.messageId, arr);
+      }
+      for (const msg of msgs) {
+        if (msg.dbId && byMsg.has(msg.dbId)) {
+          msg.reactions = byMsg.get(msg.dbId);
+        }
+      }
+    }
+    return msgs;
+  }, [allDbMessages, sessionId, reactionsData]);
 
   const optimisticInitialMessages = useMemo<DisplayMessage[]>(() => {
     if (isDraft || !initialQueuedMessage) return [];
@@ -201,6 +223,8 @@ export function ChatPanel({
     unsubs.push(
       onAgentContentBlock((payload) => {
         if (payload.runId !== streamId) return;
+        // Hide react_to_message tool calls — no bubble
+        if (payload.block.type === 'tool_use' && payload.block.name === 'react_to_message') return;
         setStreamMessages((prev) => {
           const msgs = [...prev];
           let last = msgs[msgs.length - 1];
@@ -318,6 +342,30 @@ export function ChatPanel({
       })
     );
 
+    unsubs.push(
+      onMessageReaction((payload) => {
+        if (payload.sessionId !== sessionId) return;
+        // Apply reaction to stream messages with animation
+        setStreamMessages((prev) => {
+          const msgs = [...prev];
+          for (let i = 0; i < msgs.length; i++) {
+            if (msgs[i].dbId === payload.messageId) {
+              const updated = { ...msgs[i] };
+              updated.reactions = [
+                ...(updated.reactions ?? []),
+                { id: payload.reactionId, emoji: payload.emoji, isNew: true },
+              ];
+              msgs[i] = updated;
+              return msgs;
+            }
+          }
+          return prev;
+        });
+        // Invalidate the reactions query so history view stays in sync
+        queryClient.invalidateQueries({ queryKey: ['message-reactions', sessionId] });
+      })
+    );
+
     return () => {
       unsubs.forEach((p) => p.then((unsub) => unsub()).catch(() => {}));
     };
@@ -393,7 +441,13 @@ export function ChatPanel({
       forceThinking();
 
       try {
-        await chatApi.sendMessage(sessionId, content);
+        const resp = await chatApi.sendMessage(sessionId, content);
+        // Set the dbId so reactions can target this message
+        setStreamMessages((prev) =>
+          prev.map((m) =>
+            m.id === userMsg.id ? { ...m, dbId: resp.userMessageId } : m
+          )
+        );
       } catch (err) {
         console.error('Failed to send message:', err);
         setStreaming(false);

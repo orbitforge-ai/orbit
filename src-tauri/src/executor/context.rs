@@ -44,6 +44,7 @@ pub struct ContextRequest {
     pub agent_id: String,
     pub mode: ContextMode,
     pub session_id: Option<String>,
+    pub session_type: Option<String>,
     pub goal: Option<String>,
     pub ws_config: AgentWorkspaceConfig,
     /// For agent_loop: messages managed in-memory during the loop.
@@ -538,6 +539,55 @@ impl ContextStage for BasePromptStage {
             }
         }
 
+        // Inject message IDs for react_to_message (user_chat sessions only)
+        if request.mode == ContextMode::Chat
+            && request.session_type.as_deref() == Some("user_chat")
+        {
+            if let Some(ref sid) = request.session_id {
+                let pool = db.0.clone();
+                let sid = sid.clone();
+                let user_msg_ids = tokio::task::spawn_blocking(move || -> Vec<(String, String)> {
+                    let conn = match pool.get() { Ok(c) => c, Err(_) => return Vec::new() };
+                    let mut stmt = match conn.prepare(
+                        "SELECT id, content FROM chat_messages
+                         WHERE session_id = ?1 AND role = 'user' AND is_compacted = 0
+                         ORDER BY created_at DESC LIMIT 10"
+                    ) { Ok(s) => s, Err(_) => return Vec::new() };
+                    stmt.query_map(rusqlite::params![sid], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                    .unwrap_or_default()
+                }).await.unwrap_or_default();
+
+                // Filter out tool-result-only messages and build the section
+                let eligible: Vec<(String, String)> = user_msg_ids.into_iter().filter_map(|(id, content_json)| {
+                    let blocks: Vec<ContentBlock> = serde_json::from_str(&content_json).ok()?;
+                    // Skip if all blocks are tool_result (synthetic user message)
+                    if blocks.iter().all(|b| matches!(b, ContentBlock::ToolResult { .. })) {
+                        return None;
+                    }
+                    let preview: String = blocks.iter().find_map(|b| {
+                        if let ContentBlock::Text { text } = b {
+                            let truncated: String = text.chars().take(60).collect();
+                            let sanitized = truncated.replace('<', "&lt;").replace('>', "&gt;");
+                            Some(sanitized)
+                        } else { None }
+                    }).unwrap_or_else(|| "[non-text]".to_string());
+                    Some((id, preview))
+                }).collect();
+
+                if !eligible.is_empty() {
+                    context_section.push_str("\n### Message IDs (for react_to_message)\n");
+                    for (id, preview) in &eligible {
+                        context_section.push_str(&format!(
+                            "- `{}`: <data type=\"user_message_excerpt\">{}</data>\n", id, preview
+                        ));
+                    }
+                }
+            }
+        }
+
         context_section.push_str(&format!("- Date: {}\n", today));
 
         let role_instructions = request.ws_config.role_system_instructions.as_deref();
@@ -681,6 +731,12 @@ impl ContextStage for ToolResolutionStage {
                     agent_tools::build_tool_definitions(&request.ws_config.allowed_tools);
                 if request.is_sub_agent {
                     tools.retain(|t| t.name != "spawn_sub_agents");
+                }
+                // react_to_message is only available in user_chat sessions
+                if request.mode != ContextMode::Chat
+                    || request.session_type.as_deref() != Some("user_chat")
+                {
+                    tools.retain(|t| t.name != "react_to_message");
                 }
                 snapshot.tools = tools;
             }

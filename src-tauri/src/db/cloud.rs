@@ -498,6 +498,28 @@ impl SupabaseClient {
         .await
     }
 
+    pub async fn upsert_message_reaction(
+        &self,
+        id: &str,
+        message_id: &str,
+        session_id: &str,
+        emoji: &str,
+        created_at: &str,
+    ) -> Result<(), String> {
+        self.upsert_single(
+            "message_reactions",
+            serde_json::json!({
+                "user_id": self.user_id,
+                "id": id,
+                "message_id": message_id,
+                "session_id": session_id,
+                "emoji": emoji,
+                "created_at": created_at,
+            }),
+        )
+        .await
+    }
+
     pub async fn upsert_chat_message_with_metadata(
         &self,
         id: &str,
@@ -600,14 +622,15 @@ impl SupabaseClient {
             mem_log,
         ) = rows;
 
-        // Read project tables separately to keep tuple sizes manageable
+        // Read project tables + reactions separately to keep tuple sizes manageable
         let user_id2 = self.user_id.clone();
         let p2 = pool.clone();
-        let (projects, project_agents) = tokio::task::spawn_blocking(move || {
+        let (projects, project_agents, reactions) = tokio::task::spawn_blocking(move || {
             let conn = p2.get().map_err(|e| e.to_string())?;
             Ok::<_, String>((
                 read_projects(&conn, &user_id2)?,
                 read_project_agents(&conn, &user_id2)?,
+                read_message_reactions(&conn, &user_id2)?,
             ))
         })
         .await
@@ -635,6 +658,7 @@ impl SupabaseClient {
         push!("memory_extraction_log", mem_log);
         push!("projects", projects);
         push!("project_agents", project_agents);
+        push!("message_reactions", reactions);
 
         info!("Pushed local data to Supabase");
         Ok(())
@@ -684,6 +708,7 @@ impl SupabaseClient {
         let mem_log = fetch!("memory_extraction_log");
         let projects = fetch!("projects");
         let project_agents = fetch!("project_agents");
+        let reactions = fetch!("message_reactions");
 
         let counts = std::collections::HashMap::from([
             ("agents".to_string(), agents.len()),
@@ -700,6 +725,7 @@ impl SupabaseClient {
             ("memory_extraction_log".to_string(), mem_log.len()),
             ("projects".to_string(), projects.len()),
             ("project_agents".to_string(), project_agents.len()),
+            ("message_reactions".to_string(), reactions.len()),
         ]);
 
         info!(
@@ -729,6 +755,7 @@ impl SupabaseClient {
             write_memory_extraction_log(&conn, mem_log)?;
             write_projects(&conn, projects)?;
             write_project_agents(&conn, project_agents)?;
+            write_message_reactions(&conn, reactions)?;
             Ok::<(), String>(())
         })
         .await
@@ -1597,6 +1624,46 @@ fn write_project_agents(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result
                 str_val(&r, "agent_id"),
                 bool_val(&r, "is_default"),
                 str_val(&r, "added_at"),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn read_message_reactions(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, message_id, session_id, emoji, created_at FROM message_reactions")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(serde_json::json!({
+                "user_id": user_id,
+                "id": row.get::<_, String>(0)?,
+                "message_id": row.get::<_, String>(1)?,
+                "session_id": row.get::<_, String>(2)?,
+                "emoji": row.get::<_, String>(3)?,
+                "created_at": row.get::<_, String>(4)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
+fn write_message_reactions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+    for r in rows {
+        conn.execute(
+            "INSERT OR REPLACE INTO message_reactions
+             (id, message_id, session_id, emoji, created_at)
+             VALUES (?1,?2,?3,?4,?5)",
+            rusqlite::params![
+                str_val(&r, "id"),
+                str_val(&r, "message_id"),
+                str_val(&r, "session_id"),
+                str_val(&r, "emoji"),
+                str_val(&r, "created_at"),
             ],
         )
         .map_err(|e| e.to_string())?;

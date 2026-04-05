@@ -10,6 +10,7 @@ import {
   CompactionStatusPayload,
   BusMessageSentPayload,
   SubAgentsSpawnedPayload,
+  MessageReactionPayload,
 } from '../types';
 
 export function onRunLogChunk(handler: (payload: RunLogChunkPayload) => void) {
@@ -68,6 +69,12 @@ export function onCompactionStatus(handler: (payload: CompactionStatusPayload) =
 
 export function onBusMessageSent(handler: (payload: BusMessageSentPayload) => void) {
   return listen<BusMessageSentPayload>('bus:message_sent', (event) => {
+    handler(event.payload);
+  });
+}
+
+export function onMessageReaction(handler: (payload: MessageReactionPayload) => void) {
+  return listen<MessageReactionPayload>('message:reaction', (event) => {
     handler(event.payload);
   });
 }

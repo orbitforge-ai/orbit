@@ -12,6 +12,7 @@ function nextId(): string {
  */
 export function chatMessagesToDisplay(messages: ChatMessage[]): DisplayMessage[] {
   const result: DisplayMessage[] = [];
+  const reactToolIds = new Set<string>();
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
@@ -28,6 +29,8 @@ export function chatMessagesToDisplay(messages: ChatMessage[]): DisplayMessage[]
       if (prev.role === 'assistant') {
         for (const block of msg.content) {
           if (block.type === 'tool_result') {
+            // Skip results for react_to_message (their tool_use was already filtered)
+            if (reactToolIds.has(block.tool_use_id)) continue;
             const toolCall = prev.blocks.find(
               (b) => b.kind === 'tool_call' && b.id === block.tool_use_id
             );
@@ -45,6 +48,11 @@ export function chatMessagesToDisplay(messages: ChatMessage[]): DisplayMessage[]
 
     const blocks: DisplayBlock[] = [];
     for (const block of msg.content) {
+      // Filter out react_to_message tool calls (hidden — no bubble)
+      if (block.type === 'tool_use' && block.name === 'react_to_message') {
+        reactToolIds.add(block.id);
+        continue;
+      }
       blocks.push(contentBlockToDisplay(block));
     }
 
@@ -56,6 +64,7 @@ export function chatMessagesToDisplay(messages: ChatMessage[]): DisplayMessage[]
 
     result.push({
       id: nextId(),
+      dbId: msg.id,
       role: msg.role,
       blocks,
       isStreaming: false,

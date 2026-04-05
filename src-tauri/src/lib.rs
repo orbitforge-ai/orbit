@@ -244,6 +244,7 @@ pub fn run() {
         commands::chat::cancel_agent_session,
         commands::chat::get_context_usage,
         commands::chat::compact_chat_session,
+        commands::chat::get_message_reactions,
         // Workspace
         commands::workspace::get_workspace_path,
         commands::workspace::init_agent_workspace,

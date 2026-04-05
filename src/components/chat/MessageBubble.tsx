@@ -7,6 +7,7 @@ import { ThinkingBlock } from './ThinkingBlock';
 import { ToolUseBlock } from './ToolUseBlock';
 import { PermissionPrompt } from './PermissionPrompt';
 import { TypingIndicator } from './StreamingCursor';
+import { ReactionChip } from './ReactionChip';
 import { useUiStore } from '../../store/uiStore';
 
 function formatTimestamp(iso: string): string {
@@ -31,6 +32,10 @@ interface MessageBubbleProps {
 export function MessageBubble({ message, agentId }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const [expanded, setExpanded] = useState(false);
+  const navigate = useUiStore((s) => s.navigate);
+  const selectRun = useUiStore((s) => s.selectRun);
+  const isBusSender = isUser && !!message.senderLabel;
+  const reactions = isUser ? (message.reactions ?? []) : [];
 
   const turndown = useMemo(() => {
     const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
@@ -126,10 +131,6 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
     );
   }
 
-  const isBusSender = isUser && !!message.senderLabel;
-  const navigate = useUiStore((s) => s.navigate);
-  const selectRun = useUiStore((s) => s.selectRun);
-
   return (
     <div className={`flex gap-3 ${isUser && !isBusSender ? 'flex-row-reverse' : ''}`}>
       {/* Avatar */}
@@ -152,64 +153,79 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
         </div>
       )}
 
-      {/* Bubble */}
-      <div
-        onCopy={handleCopy}
-        className={`min-w-0 max-w-[85%] rounded-xl px-4 py-3 space-y-2 overflow-hidden select-text ${
-          isBusSender
-            ? 'bg-blue-500/10 border border-blue-500/20'
-            : isUser
-              ? 'bg-accent/15 border border-accent/30'
-              : 'bg-surface border border-edge'
-        }`}
-      >
-        {message.blocks.map((block, i) => {
-          switch (block.kind) {
-            case 'text':
-              return <TextBlock key={i} text={block.text} isStreaming={block.isStreaming} />;
-            case 'thinking':
-              return <ThinkingBlock key={i} thinking={block.thinking} />;
-            case 'tool_call':
-              return (
-                <ToolUseBlock key={i} name={block.name} input={block.input} result={block.result} />
-              );
-            case 'image':
-              return (
-                <img
-                  key={i}
-                  src={`data:${block.mediaType};base64,${block.data}`}
-                  alt="Attached image"
-                  className="max-w-full max-h-[300px] rounded-lg object-contain"
-                />
-              );
-            case 'permission_prompt':
-              return (
-                <PermissionPrompt
-                  key={i}
-                  requestId={block.requestId}
-                  toolName={block.toolName}
-                  toolInput={block.toolInput}
-                  riskLevel={block.riskLevel}
-                  riskDescription={block.riskDescription}
-                  suggestedPattern={block.suggestedPattern}
-                  agentId={agentId ?? ''}
-                  resolved={block.resolved}
-                />
-              );
-          }
-        })}
-        {message.blocks.length === 0 && message.isStreaming && <TypingIndicator />}
-        {message.linkedRunId && !message.isStreaming && (
-          <button
-            onClick={() => {
-              selectRun(message.linkedRunId!);
-              navigate('history');
-            }}
-            className="flex items-center gap-1 text-[10px] text-accent-hover hover:text-white transition-colors mt-1"
-          >
-            <ExternalLink size={10} />
-            View Run
-          </button>
+      {/* Bubble + reactions wrapper */}
+      <div className={`min-w-0 max-w-[85%] relative ${reactions.length > 0 ? 'mb-3' : ''}`}>
+        <div
+          onCopy={handleCopy}
+          className={`rounded-xl px-4 py-3 space-y-2 overflow-hidden select-text ${
+            isBusSender
+              ? 'bg-blue-500/10 border border-blue-500/20'
+              : isUser
+                ? 'bg-accent/15 border border-accent/30'
+                : 'bg-surface border border-edge'
+          }`}
+        >
+          {message.blocks.map((block, i) => {
+            switch (block.kind) {
+              case 'text':
+                return <TextBlock key={i} text={block.text} isStreaming={block.isStreaming} />;
+              case 'thinking':
+                return <ThinkingBlock key={i} thinking={block.thinking} />;
+              case 'tool_call':
+                return (
+                  <ToolUseBlock
+                    key={i}
+                    name={block.name}
+                    input={block.input}
+                    result={block.result}
+                  />
+                );
+              case 'image':
+                return (
+                  <img
+                    key={i}
+                    src={`data:${block.mediaType};base64,${block.data}`}
+                    alt="Attached image"
+                    className="max-w-full max-h-[300px] rounded-lg object-contain"
+                  />
+                );
+              case 'permission_prompt':
+                return (
+                  <PermissionPrompt
+                    key={i}
+                    requestId={block.requestId}
+                    toolName={block.toolName}
+                    toolInput={block.toolInput}
+                    riskLevel={block.riskLevel}
+                    riskDescription={block.riskDescription}
+                    suggestedPattern={block.suggestedPattern}
+                    agentId={agentId ?? ''}
+                    resolved={block.resolved}
+                  />
+                );
+            }
+          })}
+          {message.blocks.length === 0 && message.isStreaming && <TypingIndicator />}
+          {message.linkedRunId && !message.isStreaming && (
+            <button
+              onClick={() => {
+                selectRun(message.linkedRunId!);
+                navigate('history');
+              }}
+              className="flex items-center gap-1 text-[10px] text-accent-hover hover:text-white transition-colors mt-1"
+            >
+              <ExternalLink size={10} />
+              View Run
+            </button>
+          )}
+        </div>
+        {/* Reactions — tapback style, overlapping bottom edge */}
+        {reactions.length > 0 && (
+          <div className="absolute -bottom-3 right-2 flex gap-1">
+            {reactions.map((r) => (
+              <ReactionChip key={r.id} emoji={r.emoji} isNew={r.isNew} />
+            ))}
+          </div>
         )}
       </div>
 

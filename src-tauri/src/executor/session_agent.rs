@@ -72,11 +72,13 @@ pub async fn run_agent_session(
     let provider = llm_provider::create_provider(provider_name, api_key)?;
 
     let history = load_session_messages(db, session_id).await?;
+    let session_type = load_session_type(db, session_id).await.ok();
     let pipeline = context::default_pipeline(memory_client.cloned());
     let ctx_request = ContextRequest {
         agent_id: agent_id.to_string(),
         mode: ContextMode::Chat,
         session_id: Some(session_id.to_string()),
+        session_type,
         goal: None,
         ws_config: ws_config.clone(),
         existing_messages: Some(history),
@@ -838,4 +840,20 @@ async fn call_llm_with_retry(
         "LLM call failed after {} attempts: {}",
         LLM_RETRY_ATTEMPTS, last_error
     ))
+}
+
+async fn load_session_type(db: &DbPool, session_id: &str) -> Result<String, String> {
+    let pool = db.0.clone();
+    let sid = session_id.to_string();
+    tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT session_type FROM chat_sessions WHERE id = ?1",
+            rusqlite::params![sid],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

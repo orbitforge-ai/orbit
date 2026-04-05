@@ -371,6 +371,7 @@ export type ContentBlock =
   | { type: 'image'; media_type: string; data: string };
 
 export interface ChatMessage {
+  id?: string;
   role: 'user' | 'assistant';
   content: ContentBlock[];
   created_at?: string;
@@ -381,6 +382,26 @@ export interface PaginatedChatMessages {
   messages: ChatMessage[];
   totalCount: number;
   hasMore: boolean;
+}
+
+export interface MessageReaction {
+  id: string;
+  messageId: string;
+  emoji: string;
+  createdAt: string;
+}
+
+export interface SendChatMessageResponse {
+  streamId: string;
+  userMessageId: string;
+}
+
+export interface MessageReactionPayload {
+  sessionId: string;
+  messageId: string;
+  reactionId: string;
+  emoji: string;
+  timestamp: string;
 }
 
 // ─── Agent loop event payloads ───────────────────────────────────────────────

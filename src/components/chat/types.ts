@@ -1,5 +1,6 @@
 export interface DisplayMessage {
   id: string;
+  dbId?: string; // The actual DB ULID, for reaction targeting
   role: 'user' | 'assistant';
   blocks: DisplayBlock[];
   isStreaming: boolean;
@@ -8,6 +9,7 @@ export interface DisplayMessage {
   isSummary?: boolean;
   senderLabel?: string; // agent name for bus messages (shown instead of "User" icon)
   linkedRunId?: string; // run ID to link to from assistant bus responses
+  reactions?: Array<{ id: string; emoji: string; isNew?: boolean }>;
 }
 
 export type DisplayBlock =

@@ -442,3 +442,33 @@ pub fn emit_agent_config_changed(app: &tauri::AppHandle, agent_id: &str, role_id
         warn!("failed to emit agent:config_changed: {}", e);
     }
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageReactionPayload {
+    pub session_id: String,
+    pub message_id: String,
+    pub reaction_id: String,
+    pub emoji: String,
+    pub timestamp: String,
+}
+
+pub fn emit_message_reaction(
+    app: &tauri::AppHandle,
+    session_id: &str,
+    message_id: &str,
+    reaction_id: &str,
+    emoji: &str,
+    timestamp: &str,
+) {
+    let payload = MessageReactionPayload {
+        session_id: session_id.to_string(),
+        message_id: message_id.to_string(),
+        reaction_id: reaction_id.to_string(),
+        emoji: emoji.to_string(),
+        timestamp: timestamp.to_string(),
+    };
+    if let Err(e) = app.emit("message:reaction", &payload) {
+        warn!("failed to emit message:reaction: {}", e);
+    }
+}

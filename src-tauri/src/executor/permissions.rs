@@ -472,7 +472,7 @@ pub fn classify_tool_call(
 
     match tool_name {
         // Always auto-allow: read-only and safe tools
-        "read_file" | "list_files" | "web_search" | "activate_skill" | "finish" | "spawn_sub_agents" => {
+        "read_file" | "list_files" | "web_search" | "activate_skill" | "finish" | "spawn_sub_agents" | "react_to_message" => {
             (RiskLevel::AutoAllow, String::new())
         }
 

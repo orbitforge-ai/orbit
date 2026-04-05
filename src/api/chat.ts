@@ -6,6 +6,8 @@ import {
   ContextUsage,
   PaginatedChatMessages,
   SessionExecutionStatus,
+  MessageReaction,
+  SendChatMessageResponse,
 } from '../types';
 
 export const chatApi = {
@@ -39,7 +41,7 @@ export const chatApi = {
     offset: number
   ): Promise<PaginatedChatMessages> => invoke('get_chat_messages', { sessionId, limit, offset }),
 
-  sendMessage: (sessionId: string, content: ContentBlock[]): Promise<string> =>
+  sendMessage: (sessionId: string, content: ContentBlock[]): Promise<SendChatMessageResponse> =>
     invoke('send_chat_message', { sessionId, content: JSON.stringify(content) }),
 
   getSessionExecution: (sessionId: string): Promise<SessionExecutionStatus> =>
@@ -53,4 +55,7 @@ export const chatApi = {
 
   compactSession: (sessionId: string): Promise<void> =>
     invoke('compact_chat_session', { sessionId }),
+
+  getReactions: (sessionId: string): Promise<MessageReaction[]> =>
+    invoke('get_message_reactions', { sessionId }),
 };
