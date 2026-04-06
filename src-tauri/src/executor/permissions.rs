@@ -592,6 +592,14 @@ pub fn classify_tool_call(
         }
 
         "shell_command" => {
+            if let Some(action) = input["process_action"].as_str() {
+                return match action {
+                    "list" | "poll" => (RiskLevel::AutoAllow, String::new()),
+                    "kill" => (RiskLevel::Prompt, "Kill background process".to_string()),
+                    _ => (RiskLevel::Prompt, format!("Process action: {}", action)),
+                };
+            }
+
             let command = input["command"].as_str().unwrap_or("");
             if permission_mode == "strict" {
                 return (
@@ -663,7 +671,13 @@ pub fn find_matching_rule<'a>(
 /// Extract the value to match against from the tool input.
 fn extract_match_value(tool_name: &str, input: &serde_json::Value) -> String {
     match tool_name {
-        "shell_command" => input["command"].as_str().unwrap_or("").to_string(),
+        "shell_command" => {
+            if let Some(action) = input["process_action"].as_str() {
+                format!("process_action:{}", action)
+            } else {
+                input["command"].as_str().unwrap_or("").to_string()
+            }
+        }
         "write_file" => input["path"].as_str().unwrap_or("").to_string(),
         "edit_file" => input["path"].as_str().unwrap_or("").to_string(),
         "send_message" => input["target_agent"].as_str().unwrap_or("").to_string(),
@@ -720,6 +734,9 @@ fn glob_match(pattern: &str, value: &str) -> bool {
 pub fn generate_always_allow_pattern(tool_name: &str, input: &serde_json::Value) -> String {
     match tool_name {
         "shell_command" => {
+            if let Some(action) = input["process_action"].as_str() {
+                return format!("process_action:{}", action);
+            }
             let command = input["command"].as_str().unwrap_or("");
             // Extract the base command and use "base_command *"
             let base = command
@@ -1117,6 +1134,14 @@ mod tests {
 
         let input = serde_json::json!({"target_agent": "other"});
         let (risk, _) = classify_tool_call("send_message", &input, "normal");
+        assert_eq!(risk, RiskLevel::Prompt);
+
+        let input = serde_json::json!({"process_action": "list"});
+        let (risk, _) = classify_tool_call("shell_command", &input, "normal");
+        assert_eq!(risk, RiskLevel::AutoAllow);
+
+        let input = serde_json::json!({"process_action": "kill", "process_id": "abc"});
+        let (risk, _) = classify_tool_call("shell_command", &input, "normal");
         assert_eq!(risk, RiskLevel::Prompt);
 
         // Permissive mode auto-allows everything

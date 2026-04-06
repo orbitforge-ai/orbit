@@ -2,10 +2,13 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use serde_json::json;
+use tauri::Manager;
 use tracing::info;
 
 use crate::events::emitter::emit_log_chunk;
+use crate::executor::bg_processes::BgProcessRegistry;
 use crate::executor::llm_provider::ToolDefinition;
+use crate::executor::workspace;
 
 use super::{context::ToolExecutionContext, ToolHandler};
 
@@ -147,7 +150,7 @@ impl ToolHandler for ShellCommandTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Execute a shell command in the agent's workspace directory. Returns stdout and stderr. Use timeout_seconds for commands that may run for a while or spawn background processes.".to_string(),
+            description: "Execute a shell command in the agent's workspace directory. Returns stdout and stderr. Supports background execution and process management for long-running commands.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -162,9 +165,25 @@ impl ToolHandler for ShellCommandTool {
                             DEFAULT_SHELL_COMMAND_TIMEOUT_SECS,
                             MAX_SHELL_COMMAND_TIMEOUT_SECS
                         )
+                    },
+                    "run_in_background": {
+                        "type": "boolean",
+                        "description": "If true, run the command in the background and return immediately with a process_id."
+                    },
+                    "process_action": {
+                        "type": "string",
+                        "enum": ["list", "poll", "kill"],
+                        "description": "Manage background processes. Use without command."
+                    },
+                    "process_id": {
+                        "type": "string",
+                        "description": "Background process ID for poll or kill actions."
                     }
                 },
-                "required": ["command"]
+                "oneOf": [
+                    { "required": ["command"] },
+                    { "required": ["process_action"] }
+                ]
             }),
         }
     }
@@ -176,6 +195,11 @@ impl ToolHandler for ShellCommandTool {
         app: &tauri::AppHandle,
         run_id: &str,
     ) -> Result<(String, bool), String> {
+        let registry = app.state::<BgProcessRegistry>();
+        if let Some(action) = input["process_action"].as_str() {
+            return handle_process_action(ctx, &registry, input, action).await;
+        }
+
         let command = input["command"]
             .as_str()
             .ok_or("shell_command: missing 'command' field")?;
@@ -183,20 +207,67 @@ impl ToolHandler for ShellCommandTool {
             .as_u64()
             .unwrap_or(DEFAULT_SHELL_COMMAND_TIMEOUT_SECS)
             .clamp(1, MAX_SHELL_COMMAND_TIMEOUT_SECS);
+        let run_in_background = input["run_in_background"].as_bool().unwrap_or(false);
 
         info!(
             run_id = run_id,
             command = command,
             timeout_secs = timeout_secs,
+            run_in_background = run_in_background,
             "agent tool: shell_command"
         );
 
         std::fs::create_dir_all(&ctx.workspace_root)
             .map_err(|e| format!("failed to create workspace: {}", e))?;
 
+        if run_in_background {
+            let bg_root = workspace::agent_dir(&ctx.agent_id).join("bg");
+            let summary = registry
+                .spawn(&ctx.agent_id, command, &ctx.workspace_root, &bg_root)
+                .await?;
+            let result = serde_json::to_string_pretty(&summary)
+                .map_err(|e| format!("failed to serialize background process result: {}", e))?;
+            return Ok((result, false));
+        }
+
         let result =
             execute_shell_command(&ctx.workspace_root, command, timeout_secs, app, run_id).await?;
 
         Ok((result, false))
+    }
+}
+
+async fn handle_process_action(
+    ctx: &ToolExecutionContext,
+    registry: &BgProcessRegistry,
+    input: &serde_json::Value,
+    action: &str,
+) -> Result<(String, bool), String> {
+    match action {
+        "list" => {
+            let processes = registry.list(&ctx.agent_id).await;
+            let result = serde_json::to_string_pretty(&processes)
+                .map_err(|e| format!("failed to serialize process list: {}", e))?;
+            Ok((result, false))
+        }
+        "poll" => {
+            let process_id = input["process_id"]
+                .as_str()
+                .ok_or("shell_command: missing 'process_id' for poll action")?;
+            let process = registry.poll(&ctx.agent_id, process_id).await?;
+            let result = serde_json::to_string_pretty(&process)
+                .map_err(|e| format!("failed to serialize process poll result: {}", e))?;
+            Ok((result, false))
+        }
+        "kill" => {
+            let process_id = input["process_id"]
+                .as_str()
+                .ok_or("shell_command: missing 'process_id' for kill action")?;
+            let process = registry.kill(&ctx.agent_id, process_id).await?;
+            let result = serde_json::to_string_pretty(&process)
+                .map_err(|e| format!("failed to serialize process kill result: {}", e))?;
+            Ok((result, false))
+        }
+        other => Err(format!("shell_command: unknown process_action '{}'", other)),
     }
 }

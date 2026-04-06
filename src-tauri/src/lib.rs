@@ -17,6 +17,7 @@ use auth::{load_auth_state, supabase_credentials, AuthMode, AuthState};
 use commands::users::ActiveUser;
 use db::cloud::{CloudClientState, SupabaseClient};
 use db::connection::init as init_db;
+use executor::bg_processes::BgProcessRegistry;
 use executor::engine::{AgentSemaphores, ExecutorEngine, ExecutorTx, SessionExecutionRegistry};
 use executor::permissions::PermissionRegistry;
 use scheduler::SchedulerEngine;
@@ -114,6 +115,7 @@ pub fn run() {
             let agent_semaphores = AgentSemaphores::new();
             let session_registry = SessionExecutionRegistry::new();
             let permission_registry = PermissionRegistry::new();
+            let bg_process_registry = BgProcessRegistry::new();
 
             // Initialise memory client from build-time API key (instant — no subprocess)
             let memory_state: Option<memory_service::MemoryServiceState> =
@@ -134,6 +136,7 @@ pub fn run() {
             app.manage(agent_semaphores.clone());
             app.manage(session_registry.clone());
             app.manage(permission_registry.clone());
+            app.manage(bg_process_registry);
             app.manage(memory_state);
             app.manage(ActiveUser::new("default_user".to_string()));
 
