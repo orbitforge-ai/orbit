@@ -1,7 +1,9 @@
 pub mod activate_skill;
 pub mod context;
+pub mod edit_file;
 pub mod finish;
 pub mod forget;
+pub mod grep;
 pub mod helpers;
 pub mod list_files;
 pub mod list_memories;
@@ -12,6 +14,7 @@ pub mod search_memory;
 pub mod send_message;
 pub mod shell_command;
 pub mod spawn_sub_agents;
+pub mod web_fetch;
 pub mod web_search;
 pub mod write_file;
 

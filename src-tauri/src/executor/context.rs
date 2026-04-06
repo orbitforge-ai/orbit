@@ -381,13 +381,22 @@ const REACT_TO_MESSAGE_GUIDANCE: &str = "\
 fn reaction_hint_for_text(text: &str) -> Option<(&'static str, &'static str)> {
     let lower = text.to_lowercase();
 
-    if ["love you", "love u", "adore you"].iter().any(|needle| lower.contains(needle)) {
+    if ["love you", "love u", "adore you"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+    {
         return Some(("❤️", "The user is expressing affection."));
     }
 
-    if ["best agent", "you're the best", "you are the best", "amazing job", "proud of you"]
-        .iter()
-        .any(|needle| lower.contains(needle))
+    if [
+        "best agent",
+        "you're the best",
+        "you are the best",
+        "amazing job",
+        "proud of you",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
     {
         return Some(("❤️", "The user is offering strong praise or appreciation."));
     }
@@ -399,9 +408,17 @@ fn reaction_hint_for_text(text: &str) -> Option<(&'static str, &'static str)> {
         return Some(("👍", "The user is expressing thanks or appreciation."));
     }
 
-    if ["congrats", "celebrate", "celebrating", "we did it", "i did it", "shipped it", "won"]
-        .iter()
-        .any(|needle| lower.contains(needle))
+    if [
+        "congrats",
+        "celebrate",
+        "celebrating",
+        "we did it",
+        "i did it",
+        "shipped it",
+        "won",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
     {
         return Some(("🎉", "The user is sharing a win or celebration."));
     }
@@ -413,11 +430,21 @@ fn reaction_hint_for_text(text: &str) -> Option<(&'static str, &'static str)> {
         return Some(("😂", "The user is joking or being playful."));
     }
 
-    if ["curious", "what do you think", "thoughts?", "interesting", "wild", "surprising"]
-        .iter()
-        .any(|needle| lower.contains(needle))
+    if [
+        "curious",
+        "what do you think",
+        "thoughts?",
+        "interesting",
+        "wild",
+        "surprising",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
     {
-        return Some(("👀", "The user is inviting curiosity or thoughtful consideration."));
+        return Some((
+            "👀",
+            "The user is inviting curiosity or thoughtful consideration.",
+        ));
     }
 
     None
@@ -712,7 +739,9 @@ impl ContextStage for BasePromptStage {
 
 #[cfg(test)]
 mod tests {
-    use super::{compose_system_prompt, GUARDRAIL_PROMPT, REACT_TO_MESSAGE_GUIDANCE};
+    use super::{
+        compose_system_prompt, reaction_hint_for_text, GUARDRAIL_PROMPT, REACT_TO_MESSAGE_GUIDANCE,
+    };
 
     #[test]
     fn compose_system_prompt_inserts_identity_once_before_current_context() {
@@ -765,7 +794,10 @@ mod tests {
         );
         assert_eq!(
             reaction_hint_for_text("What do you think about this weird bug?"),
-            Some(("👀", "The user is inviting curiosity or thoughtful consideration."))
+            Some((
+                "👀",
+                "The user is inviting curiosity or thoughtful consideration."
+            ))
         );
     }
 }

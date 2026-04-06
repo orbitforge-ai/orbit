@@ -31,7 +31,9 @@ const TOOL_CATEGORIES = [
     tools: [
       { id: 'read_file', label: 'Read Files' },
       { id: 'write_file', label: 'Write Files' },
+      { id: 'edit_file', label: 'Edit Files' },
       { id: 'list_files', label: 'List Files' },
+      { id: 'grep', label: 'Content Search' },
     ],
   },
   {
@@ -43,6 +45,7 @@ const TOOL_CATEGORIES = [
     tools: [
       { id: 'send_message', label: 'Send Message' },
       { id: 'web_search', label: 'Web Search' },
+      { id: 'web_fetch', label: 'Web Fetch' },
     ],
   },
   {

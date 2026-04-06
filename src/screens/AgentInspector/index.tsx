@@ -64,10 +64,13 @@ import { AgentRoleSelect } from './Header/AgentRoleSelect';
 const ALL_TOOL_IDS = [
   'read_file',
   'write_file',
+  'edit_file',
   'list_files',
+  'grep',
   'shell_command',
   'send_message',
   'web_search',
+  'web_fetch',
   'spawn_sub_agents',
   'activate_skill',
   'remember',

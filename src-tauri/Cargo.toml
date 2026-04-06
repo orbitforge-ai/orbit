@@ -52,6 +52,10 @@ cron = "0.12"
 # Async helpers
 futures = "0.3"
 async-trait = "0.1"
+glob = "0.3"
+html2md = "0.2"
+regex = "1"
+walkdir = "2"
 
 # Logging
 tauri-plugin-log = "2"

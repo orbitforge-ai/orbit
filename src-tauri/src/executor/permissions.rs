@@ -586,8 +586,10 @@ pub fn classify_tool_call(
 
     match tool_name {
         // Always auto-allow: read-only and safe tools
-        "read_file" | "list_files" | "web_search" | "activate_skill" | "finish"
-        | "spawn_sub_agents" | "react_to_message" => (RiskLevel::AutoAllow, String::new()),
+        "read_file" | "list_files" | "grep" | "web_search" | "web_fetch" | "activate_skill"
+        | "finish" | "spawn_sub_agents" | "react_to_message" => {
+            (RiskLevel::AutoAllow, String::new())
+        }
 
         "shell_command" => {
             let command = input["command"].as_str().unwrap_or("");
@@ -612,6 +614,17 @@ pub fn classify_tool_call(
                 );
             }
             (RiskLevel::Prompt, format!("File write: '{}'", path))
+        }
+
+        "edit_file" => {
+            let path = input["path"].as_str().unwrap_or("<unknown>");
+            if permission_mode == "strict" {
+                return (
+                    RiskLevel::Prompt,
+                    format!("Strict mode: edit_file '{}'", path),
+                );
+            }
+            (RiskLevel::Prompt, format!("File edit: '{}'", path))
         }
 
         "send_message" => {
@@ -652,6 +665,7 @@ fn extract_match_value(tool_name: &str, input: &serde_json::Value) -> String {
     match tool_name {
         "shell_command" => input["command"].as_str().unwrap_or("").to_string(),
         "write_file" => input["path"].as_str().unwrap_or("").to_string(),
+        "edit_file" => input["path"].as_str().unwrap_or("").to_string(),
         "send_message" => input["target_agent"].as_str().unwrap_or("").to_string(),
         _ => "*".to_string(),
     }
@@ -729,6 +743,15 @@ pub fn generate_always_allow_pattern(tool_name: &str, input: &serde_json::Value)
         "write_file" => {
             let path = input["path"].as_str().unwrap_or("");
             // Use file extension pattern
+            if let Some(ext) = path.rsplit('.').next() {
+                if ext != path {
+                    return format!("*.{}", ext);
+                }
+            }
+            path.to_string()
+        }
+        "edit_file" => {
+            let path = input["path"].as_str().unwrap_or("");
             if let Some(ext) = path.rsplit('.').next() {
                 if ext != path {
                     return format!("*.{}", ext);
@@ -1072,7 +1095,13 @@ mod tests {
         let (risk, _) = classify_tool_call("list_files", &input, "normal");
         assert_eq!(risk, RiskLevel::AutoAllow);
 
+        let (risk, _) = classify_tool_call("grep", &input, "normal");
+        assert_eq!(risk, RiskLevel::AutoAllow);
+
         let (risk, _) = classify_tool_call("web_search", &input, "normal");
+        assert_eq!(risk, RiskLevel::AutoAllow);
+
+        let (risk, _) = classify_tool_call("web_fetch", &input, "normal");
         assert_eq!(risk, RiskLevel::AutoAllow);
 
         let (risk, _) = classify_tool_call("finish", &input, "normal");
@@ -1081,6 +1110,9 @@ mod tests {
         // Prompt tools
         let input = serde_json::json!({"path": "test.txt"});
         let (risk, _) = classify_tool_call("write_file", &input, "normal");
+        assert_eq!(risk, RiskLevel::Prompt);
+
+        let (risk, _) = classify_tool_call("edit_file", &input, "normal");
         assert_eq!(risk, RiskLevel::Prompt);
 
         let input = serde_json::json!({"target_agent": "other"});

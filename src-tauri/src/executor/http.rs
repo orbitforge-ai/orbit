@@ -73,7 +73,7 @@ fn is_v6_link_local(ip: Ipv6Addr) -> bool {
 
 /// Validate a URL for SSRF safety. Blocks requests to private/internal networks,
 /// cloud metadata endpoints, and non-HTTP(S) schemes.
-async fn validate_url_for_ssrf(url_str: &str) -> Result<(), String> {
+pub async fn validate_url_for_ssrf(url_str: &str) -> Result<(), String> {
     let url = Url::parse(url_str).map_err(|e| format!("Invalid URL '{}': {}", url_str, e))?;
 
     // Only allow http and https schemes
