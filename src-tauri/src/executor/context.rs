@@ -368,6 +368,61 @@ fn compose_system_prompt(
 /// Loads the system prompt from disk and appends runtime context metadata.
 pub struct BasePromptStage;
 
+const REACT_TO_MESSAGE_GUIDANCE: &str = "\
+### Reactions
+- Consider calling `react_to_message` when a recent user-authored message would naturally deserve a lightweight emotional acknowledgment.
+- Common cases include affection, gratitude, praise, celebration, encouragement, excitement, amusement, sympathy, or a notable win/update the user is sharing.
+- If the user shares an especially thought-provoking, surprising, or intriguing prompt, you may use the thinking or eyes emoji to show curiosity or that you are actively considering it.
+- Choose a fitting emoji for the tone, such as a heart for affection, thumbs-up or checkmark for appreciation/approval, celebration or fire for exciting wins, thinking or eyes for intrigued curiosity, and laughter for clear jokes.
+- Prefer reacting to the most recent matching user-authored message from the Message IDs list below.
+- Do not react to every routine question or task request; use reactions sparingly and genuinely.
+- A normal text reply can accompany the reaction.";
+
+fn reaction_hint_for_text(text: &str) -> Option<(&'static str, &'static str)> {
+    let lower = text.to_lowercase();
+
+    if ["love you", "love u", "adore you"].iter().any(|needle| lower.contains(needle)) {
+        return Some(("❤️", "The user is expressing affection."));
+    }
+
+    if ["best agent", "you're the best", "you are the best", "amazing job", "proud of you"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+    {
+        return Some(("❤️", "The user is offering strong praise or appreciation."));
+    }
+
+    if ["thank you", "thanks", "appreciate it", "appreciate you"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+    {
+        return Some(("👍", "The user is expressing thanks or appreciation."));
+    }
+
+    if ["congrats", "celebrate", "celebrating", "we did it", "i did it", "shipped it", "won"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+    {
+        return Some(("🎉", "The user is sharing a win or celebration."));
+    }
+
+    if ["lol", "lmao", "haha", "that's funny", "that is funny"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+    {
+        return Some(("😂", "The user is joking or being playful."));
+    }
+
+    if ["curious", "what do you think", "thoughts?", "interesting", "wild", "surprising"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+    {
+        return Some(("👀", "The user is inviting curiosity or thoughtful consideration."));
+    }
+
+    None
+}
+
 #[async_trait::async_trait]
 impl ContextStage for BasePromptStage {
     async fn process(
@@ -580,7 +635,7 @@ impl ContextStage for BasePromptStage {
                 .unwrap_or_default();
 
                 // Filter out tool-result-only messages and build the section
-                let eligible: Vec<(String, String)> = user_msg_ids
+                let eligible: Vec<(String, String, Option<String>)> = user_msg_ids
                     .into_iter()
                     .filter_map(|(id, content_json)| {
                         let blocks: Vec<ContentBlock> = serde_json::from_str(&content_json).ok()?;
@@ -591,6 +646,13 @@ impl ContextStage for BasePromptStage {
                         {
                             return None;
                         }
+                        let first_text = blocks.iter().find_map(|b| {
+                            if let ContentBlock::Text { text } = b {
+                                Some(text.clone())
+                            } else {
+                                None
+                            }
+                        });
                         let preview: String = blocks
                             .iter()
                             .find_map(|b| {
@@ -604,13 +666,24 @@ impl ContextStage for BasePromptStage {
                                 }
                             })
                             .unwrap_or_else(|| "[non-text]".to_string());
-                        Some((id, preview))
+                        Some((id, preview, first_text))
                     })
                     .collect();
 
                 if !eligible.is_empty() {
+                    context_section.push('\n');
+                    context_section.push_str(REACT_TO_MESSAGE_GUIDANCE);
+                    if let Some((message_id, _preview, Some(full_text))) = eligible.first() {
+                        if let Some((emoji, reason)) = reaction_hint_for_text(full_text) {
+                            context_section.push_str("\n\n### Reaction Opportunity\n");
+                            context_section.push_str(&format!(
+                                "- The most recent user message may deserve a reaction.\n- Suggested target message ID: `{}`\n- Suggested emoji: {}\n- Reason: {}\n",
+                                message_id, emoji, reason
+                            ));
+                        }
+                    }
                     context_section.push_str("\n### Message IDs (for react_to_message)\n");
-                    for (id, preview) in &eligible {
+                    for (id, preview, _) in &eligible {
                         context_section.push_str(&format!(
                             "- `{}`: <data type=\"user_message_excerpt\">{}</data>\n",
                             id, preview
@@ -639,7 +712,7 @@ impl ContextStage for BasePromptStage {
 
 #[cfg(test)]
 mod tests {
-    use super::{compose_system_prompt, GUARDRAIL_PROMPT};
+    use super::{compose_system_prompt, GUARDRAIL_PROMPT, REACT_TO_MESSAGE_GUIDANCE};
 
     #[test]
     fn compose_system_prompt_inserts_identity_once_before_current_context() {
@@ -658,6 +731,42 @@ mod tests {
     fn guardrails_require_explicit_memory_lookup_for_recall_questions() {
         assert!(GUARDRAIL_PROMPT.contains("call `search_memory` before answering"));
         assert!(GUARDRAIL_PROMPT.contains("actually use `search_memory`"));
+    }
+
+    #[test]
+    fn reaction_guidance_mentions_more_than_warm_sentiment() {
+        assert!(REACT_TO_MESSAGE_GUIDANCE.contains("affection"));
+        assert!(REACT_TO_MESSAGE_GUIDANCE.contains("gratitude"));
+        assert!(REACT_TO_MESSAGE_GUIDANCE.contains("encouragement"));
+        assert!(REACT_TO_MESSAGE_GUIDANCE.contains("sympathy"));
+        assert!(REACT_TO_MESSAGE_GUIDANCE.contains("thought-provoking"));
+        assert!(REACT_TO_MESSAGE_GUIDANCE.contains("thinking or eyes emoji"));
+        assert!(REACT_TO_MESSAGE_GUIDANCE.contains("routine question"));
+        assert!(REACT_TO_MESSAGE_GUIDANCE.contains("most recent matching user-authored message"));
+    }
+
+    #[test]
+    fn reaction_hint_detects_affection_and_praise() {
+        assert_eq!(
+            reaction_hint_for_text("I love you so much"),
+            Some(("❤️", "The user is expressing affection."))
+        );
+        assert_eq!(
+            reaction_hint_for_text("You're the best agent!"),
+            Some(("❤️", "The user is offering strong praise or appreciation."))
+        );
+    }
+
+    #[test]
+    fn reaction_hint_detects_thanks_and_curiosity() {
+        assert_eq!(
+            reaction_hint_for_text("Thanks for the help"),
+            Some(("👍", "The user is expressing thanks or appreciation."))
+        );
+        assert_eq!(
+            reaction_hint_for_text("What do you think about this weird bug?"),
+            Some(("👀", "The user is inviting curiosity or thoughtful consideration."))
+        );
     }
 }
 
