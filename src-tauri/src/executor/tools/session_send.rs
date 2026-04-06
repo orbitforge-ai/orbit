@@ -9,7 +9,7 @@ use crate::executor::llm_provider::ToolDefinition;
 use super::{
     context::ToolExecutionContext,
     session_control::{
-        append_user_text_message, current_bus_run_id, load_accessible_session,
+        append_user_text_message, current_bus_run_id, is_active_state, load_accessible_session,
         load_execution_state, record_bus_message, start_session_run, update_session_chain_depth,
         wait_for_session_terminal, wrap_agent_message, MAX_SESSION_CHAIN_DEPTH,
     },
@@ -133,9 +133,13 @@ impl ToolHandler for SessionSendTool {
         }
 
         if trigger_run {
-            if execution_state.as_deref() == Some("running") {
+            if execution_state
+                .as_deref()
+                .map(is_active_state)
+                .unwrap_or(false)
+            {
                 notes.push(
-                    "The session was already running, so no second run was started. The new message will be available for a later run."
+                    "The session was already active, so no second run was started. The new message will be available when that run resumes or finishes."
                         .to_string(),
                 );
             } else {

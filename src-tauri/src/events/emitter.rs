@@ -120,6 +120,20 @@ pub struct BusMessageSentPayload {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UserQuestionPayload {
+    pub request_id: String,
+    pub run_id: String,
+    pub session_id: Option<String>,
+    pub question: String,
+    pub choices: Option<Vec<String>>,
+    pub allow_custom: bool,
+    pub multi_select: bool,
+    pub context: Option<String>,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentCreatedPayload {
     pub agent: crate::models::agent::Agent,
     pub role_id: Option<String>,
@@ -314,6 +328,33 @@ pub fn emit_bus_message_sent(
     };
     if let Err(e) = app.emit("bus:message_sent", &event_payload) {
         warn!("failed to emit bus:message_sent: {}", e);
+    }
+}
+
+pub fn emit_user_question(
+    app: &tauri::AppHandle,
+    request_id: &str,
+    run_id: &str,
+    session_id: Option<&str>,
+    question: &str,
+    choices: Option<&[String]>,
+    allow_custom: bool,
+    multi_select: bool,
+    context: Option<&str>,
+) {
+    let payload = UserQuestionPayload {
+        request_id: request_id.to_string(),
+        run_id: run_id.to_string(),
+        session_id: session_id.map(|value| value.to_string()),
+        question: question.to_string(),
+        choices: choices.map(|value| value.to_vec()),
+        allow_custom,
+        multi_select,
+        context: context.map(|value| value.to_string()),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    if let Err(e) = app.emit("user:question", &payload) {
+        warn!("failed to emit user:question: {}", e);
     }
 }
 

@@ -44,6 +44,9 @@ export const chatApi = {
   sendMessage: (sessionId: string, content: ContentBlock[]): Promise<SendChatMessageResponse> =>
     invoke('send_chat_message', { sessionId, content: JSON.stringify(content) }),
 
+  respondToUserQuestion: (requestId: string, response: string): Promise<void> =>
+    invoke('respond_to_user_question', { requestId, response }),
+
   getSessionExecution: (sessionId: string): Promise<SessionExecutionStatus> =>
     invoke('get_session_execution', { sessionId }),
 

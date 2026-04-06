@@ -1,4 +1,5 @@
 pub mod activate_skill;
+pub mod ask_user;
 pub mod context;
 pub mod edit_file;
 pub mod finish;
@@ -25,6 +26,7 @@ pub mod subagents;
 pub mod web_fetch;
 pub mod web_search;
 pub mod write_file;
+pub mod yield_turn;
 
 use crate::executor::llm_provider::ToolDefinition;
 

@@ -8,7 +8,9 @@ use crate::events::emitter::{
 use crate::executor::agent_tools::ToolExecutionContext;
 use crate::executor::compaction;
 use crate::executor::context::{self, ContextMode, ContextRequest};
-use crate::executor::engine::{AgentSemaphores, RunRequest, SessionExecutionRegistry};
+use crate::executor::engine::{
+    AgentSemaphores, RunRequest, SessionExecutionRegistry, UserQuestionRegistry,
+};
 use crate::executor::keychain;
 use crate::executor::llm_provider::{
     self, ChatMessage, ContentBlock, LlmConfig, LlmProvider, ToolDefinition,
@@ -35,6 +37,7 @@ pub async fn run_agent_session(
     agent_semaphores: &AgentSemaphores,
     session_registry: &SessionExecutionRegistry,
     permission_registry: &PermissionRegistry,
+    user_question_registry: Option<&UserQuestionRegistry>,
     memory_client: Option<&MemoryClient>,
     memory_user_id: &str,
     cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
@@ -132,6 +135,11 @@ pub async fn run_agent_session(
         .with_memory_client(memory_client.cloned())
         .with_memory_user_id(memory_user_id.to_string())
         .with_cloud_client(cloud_client.clone())
+    };
+    let tool_ctx = if let Some(question_registry) = user_question_registry {
+        tool_ctx.with_user_question_registry(question_registry.clone())
+    } else {
+        tool_ctx
     };
 
     let result = run_session_loop(

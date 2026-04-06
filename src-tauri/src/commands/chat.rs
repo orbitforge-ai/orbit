@@ -11,7 +11,9 @@ use crate::events::emitter::{
 use crate::executor::agent_tools::ToolExecutionContext;
 use crate::executor::compaction;
 use crate::executor::context::{self, ContextMode, ContextRequest};
-use crate::executor::engine::{AgentSemaphores, ExecutorTx, SessionExecutionRegistry};
+use crate::executor::engine::{
+    AgentSemaphores, ExecutorTx, SessionExecutionRegistry, UserQuestionRegistry,
+};
 use crate::executor::keychain;
 use crate::executor::llm_provider::{self, ChatMessage, ContentBlock, LlmConfig};
 use crate::executor::memory::MemoryClient;
@@ -392,6 +394,7 @@ struct LoadedChatState {
     session_title: String,
     chain_depth: i64,
     session_type: String,
+    execution_state: Option<String>,
     user_msg_id: String,
     user_msg_now: String,
     user_msg_content_json: String,
@@ -614,6 +617,7 @@ pub async fn send_chat_message(
     agent_semaphores: tauri::State<'_, AgentSemaphores>,
     session_registry: tauri::State<'_, SessionExecutionRegistry>,
     permission_registry: tauri::State<'_, PermissionRegistry>,
+    user_question_registry: tauri::State<'_, UserQuestionRegistry>,
     memory_state: tauri::State<'_, Option<MemoryServiceState>>,
     auth: tauri::State<'_, AuthState>,
     cloud: tauri::State<'_, CloudClientState>,
@@ -639,11 +643,11 @@ pub async fn send_chat_message(
             let conn = pool.get().map_err(|e| e.to_string())?;
 
             // Get session
-            let (agent_id, title, chain_depth, session_type): (String, String, i64, String) = conn
+            let (agent_id, title, chain_depth, session_type, execution_state): (String, String, i64, String, Option<String>) = conn
             .query_row(
-              "SELECT agent_id, title, chain_depth, session_type FROM chat_sessions WHERE id = ?1",
+              "SELECT agent_id, title, chain_depth, session_type, execution_state FROM chat_sessions WHERE id = ?1",
               rusqlite::params![sid],
-              |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+              |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
             )
             .map_err(|e| format!("session not found: {}", e))?;
 
@@ -725,6 +729,7 @@ pub async fn send_chat_message(
                 session_title: title,
                 chain_depth,
                 session_type,
+                execution_state,
                 user_msg_id: msg_id,
                 user_msg_now: now,
                 user_msg_content_json: content_json,
@@ -740,22 +745,13 @@ pub async fn send_chat_message(
         session_title: _session_title,
         chain_depth,
         session_type,
+        execution_state,
         user_msg_id,
         user_msg_now,
         user_msg_content_json,
     } = loaded;
 
     let db_bg = DbPool(pool.clone());
-    if let Err(err) =
-        session_agent::update_session_execution_state(&db_bg, &session_id, "running", None, None)
-            .await
-    {
-        warn!(
-            session_id = %session_id,
-            "failed to mark chat session as running: {}",
-            err
-        );
-    }
 
     // Sync the initial user message to Supabase (was missing — only SQLite was written above)
     if let Some(client) = cloud_client.clone() {
@@ -779,6 +775,25 @@ pub async fn send_chat_message(
         });
     }
 
+    let is_waiting_for_message = execution_state.as_deref() == Some("waiting_message");
+    if is_waiting_for_message {
+        return Ok(SendChatMessageResponse {
+            stream_id: stream_id_ret,
+            user_message_id: user_msg_id,
+        });
+    }
+
+    if let Err(err) =
+        session_agent::update_session_execution_state(&db_bg, &session_id, "running", None, None)
+            .await
+    {
+        warn!(
+            session_id = %session_id,
+            "failed to mark chat session as running: {}",
+            err
+        );
+    }
+
     // Resolve memory user_id from auth state
     let memory_user_id = match auth.get().await {
         AuthMode::Cloud(session) => session.user_id,
@@ -792,6 +807,7 @@ pub async fn send_chat_message(
     let semaphores = agent_semaphores.inner().clone();
     let registry = session_registry.inner().clone();
     let perm_registry = permission_registry.inner().clone();
+    let question_registry = user_question_registry.inner().clone();
     let mem_client = memory_state.as_ref().map(|s| s.client.clone());
 
     tauri::async_runtime::spawn(async move {
@@ -808,6 +824,7 @@ pub async fn send_chat_message(
             semaphores,
             registry,
             perm_registry,
+            question_registry,
             mem_client.as_ref(),
             &memory_user_id,
             cloud_client.clone(),
@@ -918,6 +935,7 @@ async fn do_llm_chat(
     agent_semaphores: AgentSemaphores,
     session_registry: SessionExecutionRegistry,
     permission_registry: PermissionRegistry,
+    user_question_registry: UserQuestionRegistry,
     memory_client: Option<&MemoryClient>,
     memory_user_id: &str,
     cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
@@ -971,6 +989,7 @@ async fn do_llm_chat(
         session_registry,
     )
     .with_permission_registry(permission_registry.clone())
+    .with_user_question_registry(user_question_registry)
     .with_memory_client(memory_client.cloned())
     .with_memory_user_id(memory_user_id.to_string())
     .with_cloud_client(cloud_client.clone());
@@ -1334,6 +1353,7 @@ pub async fn cancel_agent_session(
     session_id: String,
     db: tauri::State<'_, DbPool>,
     session_registry: tauri::State<'_, SessionExecutionRegistry>,
+    user_question_registry: tauri::State<'_, UserQuestionRegistry>,
 ) -> Result<(), String> {
     let pool = db.0.clone();
     let sid = session_id.clone();
@@ -1354,6 +1374,7 @@ pub async fn cancel_agent_session(
     }
 
     session_registry.cancel(&session_id).await;
+    user_question_registry.cancel_for_session(&session_id).await;
     let db_pool = DbPool(db.0.clone());
     session_agent::update_session_execution_state(
         &db_pool,
@@ -1363,6 +1384,15 @@ pub async fn cancel_agent_session(
         Some("Cancelled".to_string()),
     )
     .await
+}
+
+#[tauri::command]
+pub async fn respond_to_user_question(
+    request_id: String,
+    response: String,
+    registry: tauri::State<'_, UserQuestionRegistry>,
+) -> Result<(), String> {
+    registry.resolve(&request_id, response).await
 }
 
 // ─── Context Usage Query ────────────────────────────────────────────────────

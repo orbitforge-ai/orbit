@@ -5,6 +5,7 @@ import { DisplayMessage } from './types';
 import { TextBlock } from './TextBlock';
 import { ToolUseBlock } from './ToolUseBlock';
 import { PermissionPrompt } from './PermissionPrompt';
+import { UserQuestionPrompt } from './UserQuestionPrompt';
 import { TypingIndicator } from './StreamingCursor';
 import { ReactionChip } from './ReactionChip';
 import { useUiStore } from '../../store/uiStore';
@@ -234,6 +235,18 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
                     suggestedPattern={block.suggestedPattern}
                     agentId={agentId ?? ''}
                     resolved={block.resolved}
+                  />
+                );
+              case 'user_question_prompt':
+                return (
+                  <UserQuestionPrompt
+                    key={i}
+                    requestId={block.requestId}
+                    question={block.question}
+                    choices={block.choices}
+                    allowCustom={block.allowCustom}
+                    multiSelect={block.multiSelect}
+                    context={block.context}
                   />
                 );
             }

@@ -32,4 +32,13 @@ export type DisplayBlock =
       riskDescription: string;
       suggestedPattern: string;
       resolved?: 'allow' | 'always_allow' | 'deny';
+    }
+  | {
+      kind: 'user_question_prompt';
+      requestId: string;
+      question: string;
+      choices?: string[];
+      allowCustom: boolean;
+      multiSelect: boolean;
+      context?: string;
     };

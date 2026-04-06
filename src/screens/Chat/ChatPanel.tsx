@@ -15,6 +15,7 @@ import {
   onAgentToolResult,
   onAgentIteration,
   onMessageReaction,
+  onUserQuestion,
 } from '../../events/runEvents';
 import { onPermissionRequest, onPermissionCancelled } from '../../events/permissionEvents';
 import { usePermissionStore } from '../../store/permissionStore';
@@ -373,6 +374,36 @@ export function ChatPanel({
     );
 
     unsubs.push(
+      onUserQuestion((payload) => {
+        if (payload.runId !== streamId && payload.sessionId !== sessionId) return;
+        setStreamMessages((prev) => {
+          const msgs = [...prev];
+          let last = msgs[msgs.length - 1];
+          if (!last || last.role !== 'assistant') {
+            last = { id: `stream-${++msgId}`, role: 'assistant', blocks: [], isStreaming: true };
+            msgs.push(last);
+          } else {
+            last = { ...last };
+            msgs[msgs.length - 1] = last;
+          }
+          last.blocks = [
+            ...last.blocks,
+            {
+              kind: 'user_question_prompt' as const,
+              requestId: payload.requestId,
+              question: payload.question,
+              choices: payload.choices ?? undefined,
+              allowCustom: payload.allowCustom,
+              multiSelect: payload.multiSelect,
+              context: payload.context ?? undefined,
+            },
+          ];
+          return msgs;
+        });
+      })
+    );
+
+    unsubs.push(
       onMessageReaction((payload) => {
         if (payload.sessionId !== sessionId) return;
         // Apply reaction to stream messages with animation
@@ -403,7 +434,14 @@ export function ChatPanel({
 
   useEffect(() => {
     if (!streaming || !sessionExecution?.executionState) return;
-    if (sessionExecution.executionState === 'queued' || sessionExecution.executionState === 'running') {
+    if (
+      sessionExecution.executionState === 'queued' ||
+      sessionExecution.executionState === 'running' ||
+      sessionExecution.executionState === 'waiting_message' ||
+      sessionExecution.executionState === 'waiting_user' ||
+      sessionExecution.executionState === 'waiting_timeout' ||
+      sessionExecution.executionState === 'waiting_sub_agents'
+    ) {
       return;
     }
     finalizeStreamingState();

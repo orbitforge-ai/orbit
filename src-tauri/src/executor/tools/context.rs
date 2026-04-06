@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 
 use crate::db::DbPool;
-use crate::executor::engine::{AgentSemaphores, RunRequest, SessionExecutionRegistry};
+use crate::executor::engine::{
+    AgentSemaphores, RunRequest, SessionExecutionRegistry, UserQuestionRegistry,
+};
 use crate::executor::memory::MemoryClient;
 use crate::executor::permissions::PermissionRegistry;
 
@@ -36,6 +38,8 @@ pub struct ToolExecutionContext {
     pub allow_sub_agents: bool,
     /// Permission registry for gating tool execution.
     pub permission_registry: Option<PermissionRegistry>,
+    /// Registry for ask_user prompts waiting on frontend responses.
+    pub user_question_registry: Option<UserQuestionRegistry>,
     /// Optional memory client for long-term memory operations.
     pub memory_client: Option<MemoryClient>,
     /// User ID used for scoping memory operations (Supabase user_id when cloud, else "default_user").
@@ -77,6 +81,7 @@ impl ToolExecutionContext {
             is_sub_agent: false,
             allow_sub_agents: true,
             permission_registry: None,
+            user_question_registry: None,
             memory_client: None,
             memory_user_id: "default_user".to_string(),
             cloud_client: None,
@@ -86,6 +91,12 @@ impl ToolExecutionContext {
     /// Set the permission registry on this context (builder pattern).
     pub fn with_permission_registry(mut self, registry: PermissionRegistry) -> Self {
         self.permission_registry = Some(registry);
+        self
+    }
+
+    /// Set the user question registry on this context.
+    pub fn with_user_question_registry(mut self, registry: UserQuestionRegistry) -> Self {
+        self.user_question_registry = Some(registry);
         self
     }
 

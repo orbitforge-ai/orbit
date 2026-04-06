@@ -44,6 +44,7 @@ const TOOL_CATEGORIES = [
     label: 'Communication',
     tools: [
       { id: 'send_message', label: 'Send Message' },
+      { id: 'ask_user', label: 'Ask User' },
       { id: 'web_search', label: 'Web Search' },
       { id: 'web_fetch', label: 'Web Fetch' },
     ],
@@ -63,6 +64,7 @@ const TOOL_CATEGORIES = [
     tools: [
       { id: 'spawn_sub_agents', label: 'Sub-Agents' },
       { id: 'subagents', label: 'Manage Sub-Agents' },
+      { id: 'yield_turn', label: 'Yield Turn' },
       { id: 'activate_skill', label: 'Activate Skill' },
     ],
   },

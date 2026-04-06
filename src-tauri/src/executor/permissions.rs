@@ -587,8 +587,10 @@ pub fn classify_tool_call(
     match tool_name {
         // Always auto-allow: read-only and safe tools
         "read_file" | "list_files" | "grep" | "web_search" | "web_fetch" | "session_history"
-        | "session_status" | "sessions_list" | "sessions_spawn" | "activate_skill" | "finish"
-        | "spawn_sub_agents" | "react_to_message" => (RiskLevel::AutoAllow, String::new()),
+        | "session_status" | "sessions_list" | "sessions_spawn" | "ask_user" | "activate_skill"
+        | "finish" | "spawn_sub_agents" | "yield_turn" | "react_to_message" => {
+            (RiskLevel::AutoAllow, String::new())
+        }
 
         "shell_command" => {
             if let Some(action) = input["process_action"].as_str() {

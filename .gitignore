@@ -24,7 +24,7 @@ dist-ssr
 *.sw?
 
 # Agents
-plans
+
 .claude/skills/ui-ux*
 
 .supabase-pw

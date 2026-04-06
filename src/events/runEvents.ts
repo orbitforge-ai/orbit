@@ -11,6 +11,7 @@ import {
   BusMessageSentPayload,
   SubAgentsSpawnedPayload,
   MessageReactionPayload,
+  UserQuestionPayload,
 } from '../types';
 
 export function onRunLogChunk(handler: (payload: RunLogChunkPayload) => void) {
@@ -75,6 +76,12 @@ export function onBusMessageSent(handler: (payload: BusMessageSentPayload) => vo
 
 export function onMessageReaction(handler: (payload: MessageReactionPayload) => void) {
   return listen<MessageReactionPayload>('message:reaction', (event) => {
+    handler(event.payload);
+  });
+}
+
+export function onUserQuestion(handler: (payload: UserQuestionPayload) => void) {
+  return listen<UserQuestionPayload>('user:question', (event) => {
     handler(event.payload);
   });
 }

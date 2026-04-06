@@ -503,6 +503,7 @@ pub async fn start_session_run(
         .permission_registry
         .clone()
         .unwrap_or_else(PermissionRegistry::new);
+    let user_question_registry = ctx.user_question_registry.clone();
     let memory_client = ctx.memory_client.clone();
     let memory_user_id = ctx.memory_user_id.clone();
     let cloud_client = ctx.cloud_client.clone();
@@ -523,6 +524,7 @@ pub async fn start_session_run(
                 &agent_semaphores,
                 &session_registry,
                 &permission_registry,
+                user_question_registry.as_ref(),
                 memory_client.as_ref(),
                 &memory_user_id,
                 cloud_client,
@@ -539,6 +541,18 @@ pub async fn start_session_run(
 
 pub fn is_terminal_state(state: &str) -> bool {
     matches!(state, "success" | "failure" | "cancelled" | "timed_out")
+}
+
+pub fn is_active_state(state: &str) -> bool {
+    matches!(
+        state,
+        "queued"
+            | "running"
+            | "waiting_message"
+            | "waiting_user"
+            | "waiting_timeout"
+            | "waiting_sub_agents"
+    )
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {

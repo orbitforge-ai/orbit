@@ -206,7 +206,18 @@ export interface ChatSession {
   parentSessionId: string | null;
   sourceBusMessageId: string | null;
   chainDepth: number;
-  executionState: 'queued' | 'running' | 'success' | 'failure' | 'cancelled' | 'timed_out' | null;
+  executionState:
+    | 'queued'
+    | 'running'
+    | 'waiting_message'
+    | 'waiting_user'
+    | 'waiting_timeout'
+    | 'waiting_sub_agents'
+    | 'success'
+    | 'failure'
+    | 'cancelled'
+    | 'timed_out'
+    | null;
   finishSummary: string | null;
   terminalError: string | null;
   sourceAgentId?: string | null;
@@ -316,6 +327,18 @@ export interface PermissionRequestPayload {
 export interface PermissionCancelledPayload {
   requestId: string;
   runId: string;
+  timestamp: string;
+}
+
+export interface UserQuestionPayload {
+  requestId: string;
+  runId: string;
+  sessionId: string | null;
+  question: string;
+  choices: string[] | null;
+  allowCustom: boolean;
+  multiSelect: boolean;
+  context: string | null;
   timestamp: string;
 }
 

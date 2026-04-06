@@ -209,6 +209,7 @@ impl ToolHandler for SendMessageTool {
         let mem_client = ctx.memory_client.clone();
         let mem_user_id = ctx.memory_user_id.clone();
         let cloud_cl = ctx.cloud_client.clone();
+        let question_registry = ctx.user_question_registry.clone();
         let target_agent_id = to_agent_id.clone();
         let target_session_id = new_session_id.clone();
         tokio::task::spawn_blocking(move || {
@@ -225,6 +226,7 @@ impl ToolHandler for SendMessageTool {
                     &semaphores,
                     &registry,
                     &perm_registry,
+                    question_registry.as_ref(),
                     mem_client.as_ref(),
                     &mem_user_id,
                     cloud_cl,

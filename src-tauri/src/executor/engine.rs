@@ -216,6 +216,69 @@ impl SessionExecutionRegistry {
     }
 }
 
+#[derive(Clone)]
+pub struct UserQuestionRegistry {
+    pending: Arc<Mutex<HashMap<String, PendingUserQuestion>>>,
+}
+
+struct PendingUserQuestion {
+    session_id: Option<String>,
+    response_tx: oneshot::Sender<String>,
+}
+
+impl UserQuestionRegistry {
+    pub fn new() -> Self {
+        Self {
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub async fn register(
+        &self,
+        request_id: &str,
+        session_id: Option<&str>,
+    ) -> oneshot::Receiver<String> {
+        let (tx, rx) = oneshot::channel();
+        let mut pending = self.pending.lock().await;
+        pending.insert(
+            request_id.to_string(),
+            PendingUserQuestion {
+                session_id: session_id.map(|value| value.to_string()),
+                response_tx: tx,
+            },
+        );
+        rx
+    }
+
+    pub async fn resolve(&self, request_id: &str, response: String) -> Result<(), String> {
+        let mut pending = self.pending.lock().await;
+        match pending.remove(request_id) {
+            Some(entry) => {
+                let _ = entry.response_tx.send(response);
+                Ok(())
+            }
+            None => Err(format!("No pending user question with id '{}'", request_id)),
+        }
+    }
+
+    pub async fn cancel(&self, request_id: &str) {
+        let mut pending = self.pending.lock().await;
+        pending.remove(request_id);
+    }
+
+    pub async fn cancel_for_session(&self, session_id: &str) {
+        let mut pending = self.pending.lock().await;
+        let ids: Vec<String> = pending
+            .iter()
+            .filter(|(_, value)| value.session_id.as_deref() == Some(session_id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ids {
+            pending.remove(&id);
+        }
+    }
+}
+
 /// The background execution engine.
 pub struct ExecutorEngine {
     db: DbPool,

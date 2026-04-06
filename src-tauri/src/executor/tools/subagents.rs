@@ -7,9 +7,9 @@ use crate::executor::{llm_provider::ToolDefinition, session_agent};
 use super::{
     context::ToolExecutionContext,
     session_control::{
-        append_user_text_message, current_bus_run_id, list_child_sessions, load_accessible_session,
-        load_execution_state, record_bus_message, start_session_run, update_session_chain_depth,
-        wrap_agent_message, MAX_SESSION_CHAIN_DEPTH,
+        append_user_text_message, current_bus_run_id, is_active_state, list_child_sessions,
+        load_accessible_session, load_execution_state, record_bus_message, start_session_run,
+        update_session_chain_depth, wrap_agent_message, MAX_SESSION_CHAIN_DEPTH,
     },
     ToolHandler,
 };
@@ -140,7 +140,11 @@ impl ToolHandler for SubagentsTool {
                 }
 
                 let execution_state = load_execution_state(db, session_id).await?;
-                if execution_state.as_deref() == Some("running") {
+                if execution_state
+                    .as_deref()
+                    .map(is_active_state)
+                    .unwrap_or(false)
+                {
                     let payload = json!({
                         "sessionId": session_id,
                         "startedRun": false,

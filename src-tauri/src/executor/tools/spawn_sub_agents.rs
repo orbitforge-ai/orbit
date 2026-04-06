@@ -205,6 +205,7 @@ impl ToolHandler for SpawnSubAgentsTool {
                 .permission_registry
                 .clone()
                 .unwrap_or_else(PermissionRegistry::new);
+            let question_registry = ctx.user_question_registry.clone();
             let mem_client = ctx.memory_client.clone();
             let mem_user_id = ctx.memory_user_id.clone();
             let cloud_cl = ctx.cloud_client.clone();
@@ -224,6 +225,7 @@ impl ToolHandler for SpawnSubAgentsTool {
                         &semaphores,
                         &registry,
                         &perm_registry,
+                        question_registry.as_ref(),
                         mem_client.as_ref(),
                         &mem_user_id,
                         cloud_cl,

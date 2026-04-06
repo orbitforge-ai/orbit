@@ -18,7 +18,9 @@ use commands::users::ActiveUser;
 use db::cloud::{CloudClientState, SupabaseClient};
 use db::connection::init as init_db;
 use executor::bg_processes::BgProcessRegistry;
-use executor::engine::{AgentSemaphores, ExecutorEngine, ExecutorTx, SessionExecutionRegistry};
+use executor::engine::{
+    AgentSemaphores, ExecutorEngine, ExecutorTx, SessionExecutionRegistry, UserQuestionRegistry,
+};
 use executor::permissions::PermissionRegistry;
 use scheduler::SchedulerEngine;
 use std::sync::Arc;
@@ -115,6 +117,7 @@ pub fn run() {
             let agent_semaphores = AgentSemaphores::new();
             let session_registry = SessionExecutionRegistry::new();
             let permission_registry = PermissionRegistry::new();
+            let user_question_registry = UserQuestionRegistry::new();
             let bg_process_registry = BgProcessRegistry::new();
 
             // Initialise memory client from build-time API key (instant — no subprocess)
@@ -136,6 +139,7 @@ pub fn run() {
             app.manage(agent_semaphores.clone());
             app.manage(session_registry.clone());
             app.manage(permission_registry.clone());
+            app.manage(user_question_registry);
             app.manage(bg_process_registry);
             app.manage(memory_state);
             app.manage(ActiveUser::new("default_user".to_string()));
@@ -240,6 +244,7 @@ pub fn run() {
             commands::chat::delete_chat_session,
             commands::chat::get_chat_messages,
             commands::chat::send_chat_message,
+            commands::chat::respond_to_user_question,
             commands::chat::get_session_execution,
             commands::chat::cancel_agent_session,
             commands::chat::get_context_usage,

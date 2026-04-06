@@ -5,6 +5,8 @@ import {
   XCircle,
   Loader2,
   GitBranch,
+  PauseCircle,
+  HelpCircle,
   ChevronDown,
 } from 'lucide-react';
 import { onRunStateChanged } from '../../events/runEvents';
@@ -124,6 +126,8 @@ function ToolDetailPanel({ tool }: { tool: Extract<DisplayBlock, { kind: 'tool_c
   const isSubAgentTool = tool.name === 'spawn_sub_agents';
   const isWaitingSendMessage =
     tool.name === 'send_message' && tool.input.wait_for_result === true && !tool.result;
+  const isWaitingYield = tool.name === 'yield_turn' && !tool.result;
+  const isWaitingAskUser = tool.name === 'ask_user' && !tool.result;
   const status = getToolStatus(tool);
   const isInterrupted = status === 'interrupted';
 
@@ -147,6 +151,26 @@ function ToolDetailPanel({ tool }: { tool: Extract<DisplayBlock, { kind: 'tool_c
         <SendMessagePending
           targetAgent={
             typeof tool.input.target_agent === 'string' ? tool.input.target_agent : undefined
+          }
+        />
+      )}
+      {isWaitingYield && (
+        <GenericPending
+          Icon={PauseCircle}
+          label="Waiting for the selected yield condition"
+          sublabel={
+            typeof tool.input.wait_for === 'string'
+              ? `Condition: ${tool.input.wait_for}`
+              : undefined
+          }
+        />
+      )}
+      {isWaitingAskUser && (
+        <GenericPending
+          Icon={HelpCircle}
+          label="Waiting for the user to respond"
+          sublabel={
+            typeof tool.input.question === 'string' ? tool.input.question : undefined
           }
         />
       )}
@@ -196,13 +220,17 @@ function getToolStatus(tool: Extract<DisplayBlock, { kind: 'tool_call' }>) {
   const isSubAgentTool = tool.name === 'spawn_sub_agents';
   const isWaitingSendMessage =
     tool.name === 'send_message' && tool.input.wait_for_result === true && !tool.result;
+  const isWaitingYield = tool.name === 'yield_turn' && !tool.result;
+  const isWaitingAskUser = tool.name === 'ask_user' && !tool.result;
   const isInterrupted =
     tool.result?.isError && tool.result.content.includes(INTERRUPTED_TOOL_RESULT_MARKER);
 
   if (isInterrupted) return 'interrupted' as const;
   if (tool.result?.isError) return 'error' as const;
   if (tool.result) return 'success' as const;
-  if (isSubAgentTool || isWaitingSendMessage) return 'pending' as const;
+  if (isSubAgentTool || isWaitingSendMessage || isWaitingYield || isWaitingAskUser) {
+    return 'pending' as const;
+  }
   return 'idle' as const;
 }
 
@@ -250,6 +278,26 @@ function SendMessagePending({ targetAgent }: { targetAgent?: string }) {
           ? `${elapsedSeconds}s elapsed`
           : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s elapsed`}
       </div>
+    </div>
+  );
+}
+
+function GenericPending({
+  Icon,
+  label,
+  sublabel,
+}: {
+  Icon: typeof PauseCircle;
+  label: string;
+  sublabel?: string;
+}) {
+  return (
+    <div className="border-t border-warning/10 px-3 py-2">
+      <div className="flex items-center gap-2 text-xs text-secondary">
+        <Icon size={12} className="text-accent-hover shrink-0" />
+        <span>{label}</span>
+      </div>
+      {sublabel && <div className="mt-1 pl-5 text-[11px] text-muted">{sublabel}</div>}
     </div>
   );
 }
