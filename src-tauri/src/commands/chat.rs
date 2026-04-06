@@ -745,6 +745,18 @@ pub async fn send_chat_message(
         user_msg_content_json,
     } = loaded;
 
+    let db_bg = DbPool(pool.clone());
+    if let Err(err) =
+        session_agent::update_session_execution_state(&db_bg, &session_id, "running", None, None)
+            .await
+    {
+        warn!(
+            session_id = %session_id,
+            "failed to mark chat session as running: {}",
+            err
+        );
+    }
+
     // Sync the initial user message to Supabase (was missing — only SQLite was written above)
     if let Some(client) = cloud_client.clone() {
         let sid_cloud = session_id.clone();
@@ -774,7 +786,6 @@ pub async fn send_chat_message(
     };
 
     // Spawn the LLM call on a background task so the command returns immediately
-    let db_bg = DbPool(pool.clone());
     let sid_bg = session_id.clone();
     let session_type_bg = session_type.clone();
     let etx = executor_tx.0.clone();
@@ -804,7 +815,10 @@ pub async fn send_chat_message(
         .await
         {
             warn!("Chat LLM error: {}", e);
-            if e != "cancelled" {
+            if e == "cancelled" {
+                let _ = session_agent::finalize_cancelled_session(&db_bg, &sid_bg).await;
+            } else {
+                let _ = session_agent::finalize_failed_session(&db_bg, &sid_bg, &e).await;
                 let error_message = vec![ContentBlock::Text {
                     text: format!(
                         "I ran into an error while continuing this chat.\n\n{}\n\nIf this happened after a large tool call, please retry with a smaller request or ask me to split the work into smaller steps.",
@@ -1195,6 +1209,16 @@ async fn do_llm_chat(
         session_id = session_id,
         "Chat complete ({} tokens, {} iterations)", total_tokens, iteration
     );
+
+    if let Err(err) =
+        session_agent::update_session_execution_state(db, session_id, "success", None, None).await
+    {
+        warn!(
+            session_id = %session_id,
+            "failed to mark chat session as successful: {}",
+            err
+        );
+    }
 
     // Check if compaction is needed
     let threshold = compaction::effective_threshold(&ws_config);

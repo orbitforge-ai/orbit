@@ -563,14 +563,23 @@ pub async fn update_session_execution_state(
     let pool = db.0.clone();
     let session_id = session_id.to_string();
     let execution_state = execution_state.to_string();
+    let reset_metadata = execution_state == "running";
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE chat_sessions
        SET execution_state = ?1,
-           finish_summary = COALESCE(?2, finish_summary),
-           terminal_error = CASE WHEN ?3 IS NULL THEN terminal_error ELSE ?3 END,
+           finish_summary = CASE
+             WHEN ?6 THEN NULL
+             WHEN ?2 IS NULL THEN finish_summary
+             ELSE ?2
+           END,
+           terminal_error = CASE
+             WHEN ?6 THEN NULL
+             WHEN ?3 IS NULL THEN terminal_error
+             ELSE ?3
+           END,
            updated_at = ?4
        WHERE id = ?5 AND COALESCE(execution_state, '') != 'cancelled'",
             rusqlite::params![
@@ -578,7 +587,8 @@ pub async fn update_session_execution_state(
                 finish_summary,
                 terminal_error,
                 now,
-                session_id
+                session_id,
+                reset_metadata,
             ],
         )
         .map_err(|e| e.to_string())?;

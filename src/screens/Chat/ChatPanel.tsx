@@ -148,6 +148,32 @@ export function ChatPanel({
     staleTime: 30_000,
   });
 
+  const finalizeStreamingState = useCallback(() => {
+    setStreaming(false);
+    setStreamMessages((prev) => {
+      const msgs = [...prev];
+      const last = msgs[msgs.length - 1];
+      if (last && last.isStreaming) {
+        msgs[msgs.length - 1] = finalizeStreamingMessage(last);
+      }
+      return msgs;
+    });
+    if (sessionId) {
+      queryClient.invalidateQueries({ queryKey: ['chat-messages', sessionId] });
+      queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
+      queryClient.invalidateQueries({ queryKey: ['chat-session-execution', sessionId] });
+    }
+  }, [queryClient, sessionId]);
+
+  const { data: sessionExecution } = useQuery({
+    queryKey: ['chat-session-execution', sessionId],
+    queryFn: () => chatApi.getSessionExecution(sessionId!),
+    enabled: Boolean(sessionId) && streaming,
+    refetchInterval: streaming ? 5_000 : false,
+    refetchOnWindowFocus: false,
+    staleTime: 0,
+  });
+
   const historyMessages = useMemo(() => {
     if (!sessionId) return [];
     const msgs = chatMessagesToDisplay(allDbMessages);
@@ -304,17 +330,7 @@ export function ChatPanel({
           });
         }
         if (payload.action === 'finished') {
-          setStreaming(false);
-          setStreamMessages((prev) => {
-            const msgs = [...prev];
-            const last = msgs[msgs.length - 1];
-            if (last && last.isStreaming) {
-              msgs[msgs.length - 1] = finalizeStreamingMessage(last);
-            }
-            return msgs;
-          });
-          queryClient.invalidateQueries({ queryKey: ['chat-messages', sessionId] });
-          queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
+          finalizeStreamingState();
         }
       })
     );
@@ -383,7 +399,15 @@ export function ChatPanel({
     return () => {
       unsubs.forEach((p) => p.then((unsub) => unsub()).catch(() => {}));
     };
-  }, [queryClient, sessionId, streamId]);
+  }, [finalizeStreamingState, queryClient, sessionId, streamId]);
+
+  useEffect(() => {
+    if (!streaming || !sessionExecution?.executionState) return;
+    if (sessionExecution.executionState === 'queued' || sessionExecution.executionState === 'running') {
+      return;
+    }
+    finalizeStreamingState();
+  }, [finalizeStreamingState, sessionExecution?.executionState, streaming]);
 
   useEffect(() => {
     if (!isLoadingOlderRef.current || !parentRef.current) return;
