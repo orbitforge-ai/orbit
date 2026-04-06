@@ -586,10 +586,9 @@ pub fn classify_tool_call(
 
     match tool_name {
         // Always auto-allow: read-only and safe tools
-        "read_file" | "list_files" | "grep" | "web_search" | "web_fetch" | "activate_skill"
-        | "finish" | "spawn_sub_agents" | "react_to_message" => {
-            (RiskLevel::AutoAllow, String::new())
-        }
+        "read_file" | "list_files" | "grep" | "web_search" | "web_fetch" | "session_history"
+        | "session_status" | "sessions_list" | "activate_skill" | "finish" | "spawn_sub_agents"
+        | "react_to_message" => (RiskLevel::AutoAllow, String::new()),
 
         "shell_command" => {
             if let Some(action) = input["process_action"].as_str() {
@@ -1119,6 +1118,15 @@ mod tests {
         assert_eq!(risk, RiskLevel::AutoAllow);
 
         let (risk, _) = classify_tool_call("web_fetch", &input, "normal");
+        assert_eq!(risk, RiskLevel::AutoAllow);
+
+        let (risk, _) = classify_tool_call("session_history", &input, "normal");
+        assert_eq!(risk, RiskLevel::AutoAllow);
+
+        let (risk, _) = classify_tool_call("session_status", &input, "normal");
+        assert_eq!(risk, RiskLevel::AutoAllow);
+
+        let (risk, _) = classify_tool_call("sessions_list", &input, "normal");
         assert_eq!(risk, RiskLevel::AutoAllow);
 
         let (risk, _) = classify_tool_call("finish", &input, "normal");
