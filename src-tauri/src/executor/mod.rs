@@ -14,4 +14,5 @@ pub mod process;
 pub mod session_agent;
 pub mod skills;
 pub mod state_machine;
+pub mod tools;
 pub mod workspace;

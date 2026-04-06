@@ -1,0 +1,33 @@
+pub mod activate_skill;
+pub mod context;
+pub mod finish;
+pub mod forget;
+pub mod helpers;
+pub mod list_files;
+pub mod list_memories;
+pub mod react_to_message;
+pub mod read_file;
+pub mod remember;
+pub mod search_memory;
+pub mod send_message;
+pub mod shell_command;
+pub mod spawn_sub_agents;
+pub mod web_search;
+pub mod write_file;
+
+use crate::executor::llm_provider::ToolDefinition;
+
+#[async_trait::async_trait]
+pub trait ToolHandler: Send + Sync {
+    fn name(&self) -> &'static str;
+
+    fn definition(&self) -> ToolDefinition;
+
+    async fn execute(
+        &self,
+        ctx: &context::ToolExecutionContext,
+        input: &serde_json::Value,
+        app: &tauri::AppHandle,
+        run_id: &str,
+    ) -> Result<(String, bool), String>;
+}
