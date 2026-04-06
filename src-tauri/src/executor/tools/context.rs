@@ -30,8 +30,10 @@ pub struct ToolExecutionContext {
     pub chain_depth: i64,
     pub agent_semaphores: Option<AgentSemaphores>,
     pub session_registry: Option<SessionExecutionRegistry>,
-    /// Whether this context is for a sub-agent (prevents nesting).
+    /// Whether this context is for a sub-agent.
     pub is_sub_agent: bool,
+    /// Whether this context may call spawn_sub_agents.
+    pub allow_sub_agents: bool,
     /// Permission registry for gating tool execution.
     pub permission_registry: Option<PermissionRegistry>,
     /// Optional memory client for long-term memory operations.
@@ -73,6 +75,7 @@ impl ToolExecutionContext {
             agent_semaphores: Some(agent_semaphores),
             session_registry: Some(session_registry),
             is_sub_agent: false,
+            allow_sub_agents: true,
             permission_registry: None,
             memory_client: None,
             memory_user_id: "default_user".to_string(),
@@ -83,6 +86,12 @@ impl ToolExecutionContext {
     /// Set the permission registry on this context (builder pattern).
     pub fn with_permission_registry(mut self, registry: PermissionRegistry) -> Self {
         self.permission_registry = Some(registry);
+        self
+    }
+
+    /// Override whether this context may spawn sub-agents.
+    pub fn with_allow_sub_agents(mut self, allow_sub_agents: bool) -> Self {
+        self.allow_sub_agents = allow_sub_agents;
         self
     }
 
@@ -130,6 +139,7 @@ impl ToolExecutionContext {
             session_registry,
         );
         ctx.is_sub_agent = true;
+        ctx.allow_sub_agents = false;
         ctx
     }
 }

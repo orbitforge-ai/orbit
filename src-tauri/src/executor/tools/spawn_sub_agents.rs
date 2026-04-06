@@ -67,7 +67,7 @@ impl ToolHandler for SpawnSubAgentsTool {
         _app: &tauri::AppHandle,
         run_id: &str,
     ) -> Result<(String, bool), String> {
-        if ctx.is_sub_agent {
+        if !ctx.allow_sub_agents {
             return Ok((
                 "Error: Sub-agents cannot spawn further sub-agents.".to_string(),
                 false,
@@ -162,8 +162,9 @@ impl ToolHandler for SpawnSubAgentsTool {
                 conn.execute(
                     "INSERT INTO chat_sessions (
                        id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
-                       chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at
-                     ) VALUES (?1, ?2, ?3, 0, 'sub_agent', ?4, NULL, ?5, 'queued', NULL, NULL, ?6, ?6)",
+                       chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
+                       allow_sub_agents
+                     ) VALUES (?1, ?2, ?3, 0, 'sub_agent', ?4, NULL, ?5, 'queued', NULL, NULL, ?6, ?6, 0)",
                     rusqlite::params![session_id, agent_id, title, parent_session_id, next_depth, now],
                 )
                 .map_err(|e| e.to_string())?;
@@ -216,6 +217,7 @@ impl ToolHandler for SpawnSubAgentsTool {
                         &sub_session_id,
                         next_depth,
                         true,
+                        false,
                         &db_clone,
                         &app_clone,
                         &tx_clone,

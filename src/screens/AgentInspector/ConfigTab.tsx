@@ -54,12 +54,15 @@ const TOOL_CATEGORIES = [
       { id: 'session_history', label: 'Session History' },
       { id: 'session_status', label: 'Session Status' },
       { id: 'sessions_list', label: 'List Sessions' },
+      { id: 'session_send', label: 'Session Send' },
+      { id: 'sessions_spawn', label: 'Spawn Session' },
     ],
   },
   {
     label: 'Agent Control',
     tools: [
       { id: 'spawn_sub_agents', label: 'Sub-Agents' },
+      { id: 'subagents', label: 'Manage Sub-Agents' },
       { id: 'activate_skill', label: 'Activate Skill' },
     ],
   },

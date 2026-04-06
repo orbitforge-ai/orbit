@@ -28,6 +28,7 @@ pub async fn run_agent_session(
     session_id: &str,
     chain_depth: i64,
     is_sub_agent: bool,
+    allow_sub_agents: bool,
     db: &DbPool,
     app: &tauri::AppHandle,
     executor_tx: &tokio::sync::mpsc::UnboundedSender<RunRequest>,
@@ -83,6 +84,7 @@ pub async fn run_agent_session(
         ws_config: ws_config.clone(),
         existing_messages: Some(history),
         is_sub_agent,
+        allow_sub_agents,
         chain_depth,
         user_id: memory_user_id.to_string(),
     };
@@ -110,6 +112,7 @@ pub async fn run_agent_session(
             session_registry.clone(),
         )
         .with_permission_registry(permission_registry.clone())
+        .with_allow_sub_agents(allow_sub_agents)
         .with_memory_client(memory_client.cloned())
         .with_memory_user_id(memory_user_id.to_string())
         .with_cloud_client(cloud_client.clone())

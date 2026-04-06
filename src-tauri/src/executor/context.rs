@@ -47,8 +47,10 @@ pub struct ContextRequest {
     pub ws_config: AgentWorkspaceConfig,
     /// For agent_loop: messages managed in-memory during the loop.
     pub existing_messages: Option<Vec<ChatMessage>>,
-    /// Whether this context is for a sub-agent (prevents nesting spawn_sub_agents).
+    /// Whether this context is for a sub-agent.
     pub is_sub_agent: bool,
+    /// Whether this context may call spawn_sub_agents.
+    pub allow_sub_agents: bool,
     /// Chain depth from the original user interaction (0 = user-initiated).
     pub chain_depth: i64,
     /// Active user ID for memory scoping.
@@ -528,7 +530,7 @@ impl ContextStage for BasePromptStage {
         // Tool names from actual resolved definitions (matches what the LLM receives)
         let tool_names = {
             let mut tools = agent_tools::build_tool_definitions(&request.ws_config.allowed_tools);
-            if request.is_sub_agent {
+            if !request.allow_sub_agents {
                 tools.retain(|t| t.name != "spawn_sub_agents");
             }
             tools
@@ -572,7 +574,7 @@ impl ContextStage for BasePromptStage {
             context_section.push_str(&format!("- Available tools: {}\n", tool_names));
 
             // Add tool usage guidance
-            let has_spawn = !request.is_sub_agent && tool_names.contains("spawn_sub_agents");
+            let has_spawn = request.allow_sub_agents && tool_names.contains("spawn_sub_agents");
             let has_send_message = tool_names.contains("send_message");
 
             if has_spawn || has_send_message {
@@ -905,7 +907,7 @@ impl ContextStage for ToolResolutionStage {
             ContextMode::AgentLoop | ContextMode::Chat | ContextMode::Pulse => {
                 let mut tools =
                     agent_tools::build_tool_definitions(&request.ws_config.allowed_tools);
-                if request.is_sub_agent {
+                if !request.allow_sub_agents {
                     tools.retain(|t| t.name != "spawn_sub_agents");
                 }
                 // react_to_message is only available in user_chat sessions

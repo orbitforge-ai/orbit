@@ -147,6 +147,7 @@ pub async fn run_agent_loop(
         ws_config: ws_config.clone(),
         existing_messages: None,
         is_sub_agent,
+        allow_sub_agents: !is_sub_agent,
         chain_depth,
         user_id: memory_user_id.to_string(),
     };
@@ -177,6 +178,7 @@ pub async fn run_agent_loop(
             session_registry.clone(),
         )
         .with_permission_registry(permission_registry.clone())
+        .with_allow_sub_agents(false)
         .with_memory_client(memory_client.cloned())
         .with_memory_user_id(memory_user_id.to_string())
         .with_cloud_client(cloud_client.clone())
@@ -638,6 +640,7 @@ pub async fn run_agent_prompt(
         ws_config: ws_config.clone(),
         existing_messages: None,
         is_sub_agent: false,
+        allow_sub_agents: true,
         chain_depth: 0,
         user_id: memory_user_id.to_string(),
     };
@@ -912,6 +915,7 @@ pub async fn run_pulse(
         ws_config: ws_config.clone(),
         existing_messages: None,
         is_sub_agent: false,
+        allow_sub_agents: true,
         chain_depth,
         user_id: memory_user_id.to_string(),
     };

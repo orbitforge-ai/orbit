@@ -148,8 +148,9 @@ impl ToolHandler for SendMessageTool {
                 conn.execute(
                     "INSERT INTO chat_sessions (
                        id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
-                       chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at
-                     ) VALUES (?1, ?2, ?3, 0, 'bus_message', NULL, NULL, ?4, 'queued', NULL, NULL, ?5, ?5)",
+                       chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
+                       allow_sub_agents
+                     ) VALUES (?1, ?2, ?3, 0, 'bus_message', NULL, NULL, ?4, 'queued', NULL, NULL, ?5, ?5, 1)",
                     rusqlite::params![new_session_id, to_agent_id, title, next_depth, now],
                 )
                 .map_err(|e| e.to_string())?;
@@ -217,6 +218,7 @@ impl ToolHandler for SendMessageTool {
                     &target_session_id,
                     next_depth,
                     false,
+                    true,
                     &db_clone,
                     &app_clone,
                     &tx_clone,

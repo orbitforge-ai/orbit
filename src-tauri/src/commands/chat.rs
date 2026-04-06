@@ -942,6 +942,7 @@ async fn do_llm_chat(
         ws_config: ws_config.clone(),
         existing_messages: Some(messages),
         is_sub_agent: false,
+        allow_sub_agents: true,
         chain_depth: 0,
         user_id: memory_user_id.to_string(),
     };

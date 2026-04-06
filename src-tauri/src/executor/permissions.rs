@@ -587,8 +587,8 @@ pub fn classify_tool_call(
     match tool_name {
         // Always auto-allow: read-only and safe tools
         "read_file" | "list_files" | "grep" | "web_search" | "web_fetch" | "session_history"
-        | "session_status" | "sessions_list" | "activate_skill" | "finish" | "spawn_sub_agents"
-        | "react_to_message" => (RiskLevel::AutoAllow, String::new()),
+        | "session_status" | "sessions_list" | "sessions_spawn" | "activate_skill" | "finish"
+        | "spawn_sub_agents" | "react_to_message" => (RiskLevel::AutoAllow, String::new()),
 
         "shell_command" => {
             if let Some(action) = input["process_action"].as_str() {
@@ -639,6 +639,23 @@ pub fn classify_tool_call(
             (RiskLevel::Prompt, format!("Agent message to '{}'", target))
         }
 
+        "session_send" => {
+            let session_id = input["session_id"].as_str().unwrap_or("<unknown>");
+            (
+                RiskLevel::Prompt,
+                format!(
+                    "Send to existing session '{}'",
+                    truncate_for_display(session_id, 20)
+                ),
+            )
+        }
+
+        "subagents" => match input["action"].as_str().unwrap_or("list") {
+            "list" | "steer" => (RiskLevel::AutoAllow, String::new()),
+            "kill" => (RiskLevel::Prompt, "Kill sub-agent".to_string()),
+            action => (RiskLevel::Prompt, format!("Subagent action: {}", action)),
+        },
+
         _ => {
             // Unknown tools default to prompt in strict, auto-allow in normal
             if permission_mode == "strict" {
@@ -680,6 +697,12 @@ fn extract_match_value(tool_name: &str, input: &serde_json::Value) -> String {
         "write_file" => input["path"].as_str().unwrap_or("").to_string(),
         "edit_file" => input["path"].as_str().unwrap_or("").to_string(),
         "send_message" => input["target_agent"].as_str().unwrap_or("").to_string(),
+        "session_send" => input["session_id"].as_str().unwrap_or("").to_string(),
+        "subagents" => {
+            let action = input["action"].as_str().unwrap_or("list");
+            let session_id = input["session_id"].as_str().unwrap_or("");
+            format!("{}:{}", action, session_id)
+        }
         _ => "*".to_string(),
     }
 }
@@ -776,6 +799,12 @@ pub fn generate_always_allow_pattern(tool_name: &str, input: &serde_json::Value)
             path.to_string()
         }
         "send_message" => input["target_agent"].as_str().unwrap_or("*").to_string(),
+        "session_send" => input["session_id"].as_str().unwrap_or("*").to_string(),
+        "subagents" => {
+            let action = input["action"].as_str().unwrap_or("list");
+            let session_id = input["session_id"].as_str().unwrap_or("*");
+            format!("{}:{}", action, session_id)
+        }
         _ => "*".to_string(),
     }
 }
