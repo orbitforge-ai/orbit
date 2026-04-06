@@ -67,15 +67,17 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
     (block) => block.kind !== 'thinking' && block.kind !== 'tool_call'
   );
   const thinkingBlocks = message.blocks.filter((block) => block.kind === 'thinking');
+  const visibleThinkingBlocks = showAgentThoughts ? thinkingBlocks : [];
   const toolBlocks = message.blocks.filter(
     (block): block is Extract<DisplayMessage['blocks'][number], { kind: 'tool_call' }> =>
       block.kind === 'tool_call'
   );
   const hasPrimaryContent = primaryBlocks.length > 0;
-  const hasThinking = thinkingBlocks.length > 0;
+  const hasThinking = visibleThinkingBlocks.length > 0;
   const hasTools = toolBlocks.length > 0;
   const allowItemDetails = true;
   const showChipOnlyBubble = !hasPrimaryContent && (hasThinking || hasTools);
+  const showTimestamp = Boolean(message.timestamp && !message.isStreaming && !showChipOnlyBubble);
   const shouldRenderContent =
     hasPrimaryContent ||
     hasThinking ||
@@ -84,8 +86,16 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
     !!message.linkedRunId;
 
   useEffect(() => {
-    setExpandedDetailKey(showAgentThoughts && hasThinking ? 'thinking:0' : null);
-  }, [message.id, showAgentThoughts, hasThinking]);
+    setExpandedDetailKey((currentKey) => {
+      if (!currentKey) return null;
+      if (!showAgentThoughts && currentKey.startsWith('thinking:')) return null;
+      return currentKey;
+    });
+  }, [showAgentThoughts]);
+
+  useEffect(() => {
+    setExpandedDetailKey(null);
+  }, [message.id]);
 
   // Summary message — collapsed by default, expandable
   if (message.isSummary) {
@@ -187,10 +197,12 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
       <div className={`min-w-0 max-w-[85%] relative ${reactions.length > 0 ? 'mb-3' : ''}`}>
         <div
           onCopy={handleCopy}
-          className={`rounded-xl overflow-hidden select-text ${
-            showChipOnlyBubble ? 'px-3 py-2 space-y-1.5' : 'px-4 py-3 space-y-2'
+          className={`overflow-hidden select-text ${
+            showChipOnlyBubble ? 'px-0 py-0 space-y-1.5 bg-transparent border-0 shadow-none' : 'rounded-xl px-4 py-3 space-y-2'
           } ${
-            isBusSender
+            showChipOnlyBubble
+              ? ''
+              : isBusSender
               ? 'bg-blue-500/10 border border-blue-500/20'
               : isUser
                 ? 'bg-accent/15 border border-accent/30'
@@ -228,7 +240,7 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
           })}
           {(hasThinking || hasTools) && (
             <ToolUseBlock
-              thoughts={thinkingBlocks}
+              thoughts={visibleThinkingBlocks}
               tools={toolBlocks}
               expandedItemKey={expandedDetailKey}
               onExpandedItemChange={setExpandedDetailKey}
@@ -260,10 +272,10 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
       </div>
 
       {/* Timestamp — shown below the bubble, aligned to the side */}
-      {message.timestamp && !message.isStreaming && (
+      {showTimestamp && (
         <div className="self-end mb-0.5 shrink-0">
           <span className="text-[10px] text-border-hover tabular-nums">
-            {formatTimestamp(message.timestamp)}
+            {formatTimestamp(message.timestamp!)}
           </span>
         </div>
       )}

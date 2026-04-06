@@ -17,6 +17,7 @@ function getPersistedScreen(): Screen {
   try {
     const saved = localStorage.getItem('orbit:lastScreen');
     if (saved === 'chat') return 'agents';
+    if (saved === 'settings') return 'dashboard';
     if (saved) return saved as Screen;
   } catch {}
   return 'dashboard';
@@ -41,6 +42,7 @@ function getPersistedProjectId(): string | null {
 
 interface UiStore {
   screen: Screen;
+  settingsOpen: boolean;
   selectedRunId: string | null;
   selectedTaskId: string | null;
   editingTaskId: string | null;
@@ -52,6 +54,8 @@ interface UiStore {
   projectTab: ProjectTab;
 
   navigate: (screen: Screen) => void;
+  openSettings: () => void;
+  closeSettings: () => void;
   selectRun: (id: string | null) => void;
   selectTask: (id: string | null) => void;
   editTask: (id: string) => void;
@@ -66,6 +70,7 @@ interface UiStore {
 
 export const useUiStore = create<UiStore>((set) => ({
   screen: getPersistedScreen(),
+  settingsOpen: false,
   selectedRunId: null,
   selectedTaskId: null,
   editingTaskId: null,
@@ -77,20 +82,26 @@ export const useUiStore = create<UiStore>((set) => ({
   projectTab: 'workspace' as ProjectTab,
 
   navigate: (screen) => {
+    if (screen === 'settings') {
+      set({ settingsOpen: true });
+      return;
+    }
     try {
       localStorage.setItem('orbit:lastScreen', screen);
     } catch {}
-    set({ screen });
+    set({ screen, settingsOpen: false });
   },
+  openSettings: () => set({ settingsOpen: true }),
+  closeSettings: () => set({ settingsOpen: false }),
   selectRun: (id) => set({ selectedRunId: id, logPanelOpen: id !== null }),
   selectTask: (id) => set({ selectedTaskId: id }),
-  editTask: (id) => set({ editingTaskId: id, screen: 'task-edit' }),
+  editTask: (id) => set({ editingTaskId: id, screen: 'task-edit', settingsOpen: false }),
   selectAgent: (id) => {
     try {
       localStorage.setItem('orbit:lastScreen', 'agents');
       localStorage.setItem('orbit:lastAgentId', id);
     } catch {}
-    set({ selectedAgentId: id, screen: 'agents' });
+    set({ selectedAgentId: id, screen: 'agents', settingsOpen: false });
   },
   openAgentChat: (agentId, sessionId = null) => {
     try {
@@ -101,6 +112,7 @@ export const useUiStore = create<UiStore>((set) => ({
       selectedAgentId: agentId,
       pendingChatSessionId: sessionId,
       screen: 'agents',
+      settingsOpen: false,
       agentTab: 'chat',
     });
   },
@@ -113,7 +125,7 @@ export const useUiStore = create<UiStore>((set) => ({
         localStorage.removeItem('orbit:lastProjectId');
       }
     } catch {}
-    set({ selectedProjectId: id, screen: 'projects' });
+    set({ selectedProjectId: id, screen: 'projects', settingsOpen: false });
   },
   clearPendingChatSession: () => set({ pendingChatSessionId: null }),
   setLogPanelOpen: (open) => set({ logPanelOpen: open }),

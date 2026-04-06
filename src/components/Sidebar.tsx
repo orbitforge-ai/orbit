@@ -48,10 +48,12 @@ const PROJECT_TABS = [
 export function Sidebar() {
   const {
     screen,
+    settingsOpen,
     selectedAgentId,
     selectedProjectId,
     projectTab,
     navigate,
+    openSettings,
     selectAgent,
     selectProject,
     setProjectTab,
@@ -354,10 +356,10 @@ export function Sidebar() {
       <div className="flex items-center gap-1.5 border-t border-edge px-2 pt-2 min-w-0">
         <SyncIndicator />
         <button
-          onClick={() => navigate('settings')}
+          onClick={openSettings}
           className={cn(
             'shrink-0 rounded-lg p-1.5 transition-colors',
-            screen === 'settings'
+            settingsOpen
               ? 'bg-accent/15 text-accent-hover'
               : 'text-muted hover:bg-surface hover:text-white'
           )}
@@ -399,7 +401,11 @@ export function Sidebar() {
               </DropdownMenu.Item>
               <DropdownMenu.Item
                 onSelect={() => {
-                  useUiStore.setState({ screen: 'projects', selectedProjectId: null });
+                  useUiStore.setState({
+                    screen: 'projects',
+                    selectedProjectId: null,
+                    settingsOpen: false,
+                  });
                   setTimeout(() => {
                     window.dispatchEvent(new CustomEvent('orbit:new-project'));
                   }, 50);

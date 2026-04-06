@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import * as Switch from '@radix-ui/react-switch';
-import { Check, Key, Trash2 } from 'lucide-react';
+import { Check, Key, Trash2, X } from 'lucide-react';
 import { llmApi } from '../../api/llm';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { useApiKeyStatus, useInvalidateApiKeys } from '../../hooks/useApiKeyStatus';
@@ -92,65 +92,103 @@ function ProviderKeyRow({ provider, label }: { provider: string; label: string }
   );
 }
 
-export function Settings() {
+interface SettingsProps {
+  onClose?: () => void;
+}
+
+export function Settings({ onClose }: SettingsProps = {}) {
   const showAgentThoughts = useSettingsStore((s) => s.showAgentThoughts);
   const setShowAgentThoughts = useSettingsStore((s) => s.setShowAgentThoughts);
+  const handleClose = () => onClose?.();
+
+  useEffect(() => {
+    if (!onClose) return;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') handleClose();
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-2xl mx-auto p-8 space-y-8">
-        <div>
-          <h2 className="text-lg font-semibold text-white">Settings</h2>
-          <p className="text-sm text-muted mt-1">
-            Manage API keys shared across all agents.
-          </p>
-        </div>
-
-        <section className="space-y-3">
-          <h3 className="text-sm font-semibold text-white">Chat Display</h3>
-          <div className="rounded-lg border border-edge bg-background px-4 py-3">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <label className="text-sm font-medium text-white">Show agent thoughts</label>
-                <p className="text-xs text-muted mt-1">
-                  Off keeps conversations compact by default, while still letting you expand
-                  thoughts inline when needed.
-                </p>
-              </div>
-              <Switch.Root
-                checked={showAgentThoughts}
-                onCheckedChange={setShowAgentThoughts}
-                className="w-9 h-5 rounded-full bg-edge data-[state=checked]:bg-accent transition-colors outline-none shrink-0"
-              >
-                <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
-              </Switch.Root>
+    <div
+      className={onClose ? 'absolute inset-0 z-40 bg-black/60 backdrop-blur-sm' : 'h-full'}
+      onClick={handleClose}
+    >
+      <div className="h-full overflow-y-auto">
+        <div
+          className="max-w-2xl mx-auto p-8 space-y-8"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-white">Settings</h2>
+              <p className="text-sm text-muted mt-1">
+                Manage API keys shared across all agents.
+              </p>
             </div>
+            {onClose ? (
+              <button
+                onClick={handleClose}
+                className="flex shrink-0 items-center gap-2 rounded-lg border border-edge bg-surface px-3 py-2 text-sm text-secondary transition-colors hover:bg-panel hover:text-white"
+                aria-label="Close settings"
+                title="Close settings"
+              >
+                <X size={14} />
+                <span>Close</span>
+              </button>
+            ) : null}
           </div>
-        </section>
 
-        <section className="space-y-3">
-          <h3 className="text-sm font-semibold text-white">Model Providers</h3>
-          <p className="text-xs text-muted">
-            API keys for LLM providers. These are shared by all agents that use the same provider.
-          </p>
-          <div className="space-y-2">
-            {LLM_PROVIDERS.map((p) => (
-              <ProviderKeyRow key={p.value} provider={p.value} label={p.label} />
-            ))}
-          </div>
-        </section>
+          <section className="space-y-3">
+            <h3 className="text-sm font-semibold text-white">Chat Display</h3>
+            <div className="rounded-lg border border-edge bg-background px-4 py-3">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <label className="text-sm font-medium text-white">Show agent thoughts</label>
+                  <p className="text-xs text-muted mt-1">
+                    Off hides thought chips completely. On shows them as collapsed chips you can
+                    expand inline when needed.
+                  </p>
+                </div>
+                <Switch.Root
+                  checked={showAgentThoughts}
+                  onCheckedChange={setShowAgentThoughts}
+                  className="w-9 h-5 rounded-full bg-edge data-[state=checked]:bg-accent transition-colors outline-none shrink-0"
+                >
+                  <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
+                </Switch.Root>
+              </div>
+            </div>
+          </section>
 
-        <section className="space-y-3">
-          <h3 className="text-sm font-semibold text-white">Search Providers</h3>
-          <p className="text-xs text-muted">
-            API keys for web search. These are shared by all agents with web search enabled.
-          </p>
-          <div className="space-y-2">
-            {SEARCH_PROVIDERS.map((p) => (
-              <ProviderKeyRow key={p.value} provider={p.value} label={p.label} />
-            ))}
-          </div>
-        </section>
+          <section className="space-y-3">
+            <h3 className="text-sm font-semibold text-white">Model Providers</h3>
+            <p className="text-xs text-muted">
+              API keys for LLM providers. These are shared by all agents that use the same
+              provider.
+            </p>
+            <div className="space-y-2">
+              {LLM_PROVIDERS.map((p) => (
+                <ProviderKeyRow key={p.value} provider={p.value} label={p.label} />
+              ))}
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <h3 className="text-sm font-semibold text-white">Search Providers</h3>
+            <p className="text-xs text-muted">
+              API keys for web search. These are shared by all agents with web search enabled.
+            </p>
+            <div className="space-y-2">
+              {SEARCH_PROVIDERS.map((p) => (
+                <ProviderKeyRow key={p.value} provider={p.value} label={p.label} />
+              ))}
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   );

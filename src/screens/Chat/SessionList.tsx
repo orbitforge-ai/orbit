@@ -388,9 +388,20 @@ export function SessionList({
     }
   }
 
+  function getExecutionStateLabel(session: ChatSession) {
+    if (session.executionState === 'queued') return 'Queued';
+    if (session.executionState === 'running') return 'Running';
+    if (session.executionState === 'success') return 'Succeeded';
+    if (session.executionState === 'failure') return 'Failed';
+    if (session.executionState === 'cancelled') return 'Cancelled';
+    if (session.executionState === 'timed_out') return 'Timed out';
+    return null;
+  }
+
   function renderSessionRow(session: ChatSession) {
     const isDraft = draftSession?.id === session.id;
     const isPulse = session.sessionType === 'pulse';
+    const executionStateLabel = isDraft ? null : getExecutionStateLabel(session);
     const icon = isPulse ? (
       <Zap size={14} className="shrink-0 text-warning" />
     ) : session.sessionType === 'sub_agent' ? (
@@ -435,12 +446,17 @@ export function SessionList({
               </span>
             )}
           </div>
-          <p className="text-[10px] text-muted">
-            {!isDraft && session.executionState ? `${session.executionState} · ` : ''}
-            {formatTime(session.updatedAt)}
-          </p>
+          <p className="text-[10px] text-muted">{formatTime(session.updatedAt)}</p>
         </div>
-        {stateIcon}
+        {stateIcon && executionStateLabel ? (
+          <span
+            className="shrink-0"
+            title={executionStateLabel}
+            aria-label={executionStateLabel}
+          >
+            {stateIcon}
+          </span>
+        ) : stateIcon}
 
         <button
           onClick={(e) => {

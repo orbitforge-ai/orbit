@@ -26,7 +26,7 @@ const queryClient = new QueryClient({
 });
 
 function AppContent() {
-  const { screen } = useUiStore();
+  const { screen, settingsOpen, closeSettings } = useUiStore();
   const { state, load } = useAuthStore();
   const queryClient = useQueryClient();
 
@@ -61,7 +61,6 @@ function AppContent() {
       agents: <AgentInspector />,
       projects: <ProjectInspector />,
       memory: <Memory />,
-      settings: <Settings />,
       'task-edit': <TaskEdit />,
     } as Record<string, React.ReactNode>
   )[screen] ?? <Dashboard />;
@@ -69,7 +68,10 @@ function AppContent() {
   return (
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar />
-      <main className="flex-1 overflow-hidden">{content}</main>
+      <main className="relative flex-1 overflow-hidden">
+        {content}
+        {settingsOpen ? <Settings onClose={closeSettings} /> : null}
+      </main>
     </div>
   );
 }
