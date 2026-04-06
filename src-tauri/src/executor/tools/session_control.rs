@@ -11,6 +11,7 @@ use crate::events::emitter::emit_bus_message_sent;
 use crate::executor::llm_provider::ContentBlock;
 use crate::executor::permissions::PermissionRegistry;
 use crate::executor::session_agent;
+use crate::executor::session_worktree::SessionWorktreeState;
 use crate::models::chat::ChatSession;
 
 use super::context::ToolExecutionContext;
@@ -104,6 +105,7 @@ pub async fn create_session_with_initial_message(
     allow_sub_agents: bool,
     initial_text: &str,
     source_bus_message_id: Option<&str>,
+    worktree_state: Option<&SessionWorktreeState>,
 ) -> Result<String, String> {
     let pool = db.0.clone();
     let session_id = Ulid::new().to_string();
@@ -116,6 +118,7 @@ pub async fn create_session_with_initial_message(
         .unwrap_or_else(|| truncate_chars(initial_text, 60));
     let parent_session_id = parent_session_id.map(str::to_string);
     let source_bus_message_id = source_bus_message_id.map(str::to_string);
+    let worktree_state = worktree_state.cloned();
     let initial_text = initial_text.to_string();
     let session_id_for_db = session_id.clone();
 
@@ -126,8 +129,8 @@ pub async fn create_session_with_initial_message(
             "INSERT INTO chat_sessions (
                id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
                chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
-               allow_sub_agents
-             ) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, 'queued', NULL, NULL, ?8, ?8, ?9)",
+               allow_sub_agents, worktree_name, worktree_branch, worktree_path
+             ) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, 'queued', NULL, NULL, ?8, ?8, ?9, ?10, ?11, ?12)",
             rusqlite::params![
                 &session_id_for_db,
                 &agent_id,
@@ -138,6 +141,11 @@ pub async fn create_session_with_initial_message(
                 chain_depth,
                 &now,
                 allow_sub_agents,
+                worktree_state.as_ref().map(|state| state.name.clone()),
+                worktree_state.as_ref().map(|state| state.branch.clone()),
+                worktree_state
+                    .as_ref()
+                    .map(|state| state.path.to_string_lossy().to_string()),
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -194,7 +202,7 @@ pub async fn load_accessible_session(
             .query_row(
                 "SELECT id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
                         chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
-                        project_id, allow_sub_agents
+                        project_id, allow_sub_agents, worktree_name, worktree_branch, worktree_path
                  FROM chat_sessions
                  WHERE id = ?1",
                 rusqlite::params![session_id.clone()],
@@ -219,6 +227,9 @@ pub async fn load_accessible_session(
                             created_at: row.get(11)?,
                             updated_at: row.get(12)?,
                             project_id: row.get(13)?,
+                            worktree_name: row.get(15)?,
+                            worktree_branch: row.get(16)?,
+                            worktree_path: row.get(17)?,
                         },
                         allow_sub_agents: row.get::<_, bool>(14)?,
                     })

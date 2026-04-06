@@ -81,7 +81,8 @@ impl ToolHandler for GrepTool {
             .as_str()
             .ok_or("grep: missing 'pattern' field")?;
         let search_path = input["path"].as_str().unwrap_or(".");
-        let full_path = validate_path(&ctx.workspace_root, search_path)?;
+        let workspace_root = ctx.workspace_root();
+        let full_path = validate_path(&workspace_root, search_path)?;
         let case_insensitive = input["case_insensitive"].as_bool().unwrap_or(false);
         let context_lines = input["context_lines"].as_u64().unwrap_or(0) as usize;
         let max_results = input["max_results"]
@@ -100,10 +101,7 @@ impl ToolHandler for GrepTool {
             .build()
             .map_err(|e| format!("invalid regex '{}': {}", pattern, e))?;
 
-        let workspace_root = ctx
-            .workspace_root
-            .canonicalize()
-            .unwrap_or_else(|_| ctx.workspace_root.clone());
+        let workspace_root = workspace_root.canonicalize().unwrap_or(workspace_root);
         let match_root = if full_path.is_dir() {
             full_path.clone()
         } else {

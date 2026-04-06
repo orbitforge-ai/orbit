@@ -44,6 +44,16 @@ pub fn agent_dir(agent_id: &str) -> PathBuf {
     agents_root().join(agent_id)
 }
 
+/// Default workspace directory for a specific agent.
+pub fn agent_workspace_dir(agent_id: &str) -> PathBuf {
+    agent_dir(agent_id).join("workspace")
+}
+
+/// Directory that stores managed git worktrees for a specific agent.
+pub fn agent_worktrees_dir(agent_id: &str) -> PathBuf {
+    agent_dir(agent_id).join("worktrees")
+}
+
 /// Root directory for all project workspaces.
 pub fn projects_root() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
@@ -293,6 +303,8 @@ impl Default for AgentWorkspaceConfig {
                 "grep".to_string(),
                 "web_search".to_string(),
                 "web_fetch".to_string(),
+                "config".to_string(),
+                "worktree".to_string(),
                 "session_history".to_string(),
                 "session_status".to_string(),
                 "sessions_list".to_string(),

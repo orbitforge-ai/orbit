@@ -131,6 +131,11 @@ impl ToolHandler for SendMessageTool {
         let msg_id = ulid::Ulid::new().to_string();
         let new_session_id = ulid::Ulid::new().to_string();
         let now = chrono::Utc::now().to_rfc3339();
+        let inherited_worktree = if to_agent_id == ctx.agent_id {
+            ctx.current_worktree()
+        } else {
+            None
+        };
         {
             let pool = db.clone();
             let msg_id = msg_id.clone();
@@ -149,9 +154,20 @@ impl ToolHandler for SendMessageTool {
                     "INSERT INTO chat_sessions (
                        id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
                        chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
-                       allow_sub_agents
-                     ) VALUES (?1, ?2, ?3, 0, 'bus_message', NULL, NULL, ?4, 'queued', NULL, NULL, ?5, ?5, 1)",
-                    rusqlite::params![new_session_id, to_agent_id, title, next_depth, now],
+                       allow_sub_agents, worktree_name, worktree_branch, worktree_path
+                     ) VALUES (?1, ?2, ?3, 0, 'bus_message', NULL, NULL, ?4, 'queued', NULL, NULL, ?5, ?5, 1, ?6, ?7, ?8)",
+                    rusqlite::params![
+                        new_session_id,
+                        to_agent_id,
+                        title,
+                        next_depth,
+                        now,
+                        inherited_worktree.as_ref().map(|state| state.name.clone()),
+                        inherited_worktree.as_ref().map(|state| state.branch.clone()),
+                        inherited_worktree
+                            .as_ref()
+                            .map(|state| state.path.to_string_lossy().to_string()),
+                    ],
                 )
                 .map_err(|e| e.to_string())?;
 

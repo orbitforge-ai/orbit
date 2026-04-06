@@ -40,7 +40,8 @@ impl ToolHandler for ReadFileTool {
             .as_str()
             .ok_or("read_file: missing 'path' field")?;
 
-        let full_path = validate_path(&ctx.workspace_root, path)?;
+        let workspace_root = ctx.workspace_root();
+        let full_path = validate_path(&workspace_root, path)?;
         let content = std::fs::read_to_string(&full_path)
             .map_err(|e| format!("failed to read {}: {}", path, e))?;
 

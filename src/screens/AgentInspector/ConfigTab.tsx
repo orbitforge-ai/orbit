@@ -38,7 +38,10 @@ const TOOL_CATEGORIES = [
   },
   {
     label: 'Execution',
-    tools: [{ id: 'shell_command', label: 'Shell Commands' }],
+    tools: [
+      { id: 'shell_command', label: 'Shell Commands' },
+      { id: 'worktree', label: 'Git Worktree' },
+    ],
   },
   {
     label: 'Communication',
@@ -62,6 +65,7 @@ const TOOL_CATEGORIES = [
   {
     label: 'Agent Control',
     tools: [
+      { id: 'config', label: 'Self-Config' },
       { id: 'spawn_sub_agents', label: 'Sub-Agents' },
       { id: 'subagents', label: 'Manage Sub-Agents' },
       { id: 'yield_turn', label: 'Yield Turn' },

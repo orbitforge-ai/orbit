@@ -119,6 +119,7 @@ impl ToolHandler for SpawnSubAgentsTool {
         let agent_id = ctx.current_agent_id.as_deref().unwrap_or(&ctx.agent_id);
         let parent_session_id = ctx.current_session_id.clone();
         let next_depth = ctx.chain_depth + 1;
+        let inherited_worktree = ctx.current_worktree();
 
         info!(
             run_id = run_id,
@@ -155,6 +156,7 @@ impl ToolHandler for SpawnSubAgentsTool {
             let goal = st.goal.clone();
             let agent_id = agent_id.to_string();
             let parent_session_id = parent_session_id.clone();
+            let inherited_worktree = inherited_worktree.clone();
             let now = now.clone();
 
             tokio::task::spawn_blocking(move || {
@@ -163,9 +165,21 @@ impl ToolHandler for SpawnSubAgentsTool {
                     "INSERT INTO chat_sessions (
                        id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
                        chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
-                       allow_sub_agents
-                     ) VALUES (?1, ?2, ?3, 0, 'sub_agent', ?4, NULL, ?5, 'queued', NULL, NULL, ?6, ?6, 0)",
-                    rusqlite::params![session_id, agent_id, title, parent_session_id, next_depth, now],
+                       allow_sub_agents, worktree_name, worktree_branch, worktree_path
+                     ) VALUES (?1, ?2, ?3, 0, 'sub_agent', ?4, NULL, ?5, 'queued', NULL, NULL, ?6, ?6, 0, ?7, ?8, ?9)",
+                    rusqlite::params![
+                        session_id,
+                        agent_id,
+                        title,
+                        parent_session_id,
+                        next_depth,
+                        now,
+                        inherited_worktree.as_ref().map(|state| state.name.clone()),
+                        inherited_worktree.as_ref().map(|state| state.branch.clone()),
+                        inherited_worktree
+                            .as_ref()
+                            .map(|state| state.path.to_string_lossy().to_string()),
+                    ],
                 )
                 .map_err(|e| e.to_string())?;
 

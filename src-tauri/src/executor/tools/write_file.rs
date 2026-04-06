@@ -47,7 +47,8 @@ impl ToolHandler for WriteFileTool {
             .as_str()
             .ok_or("write_file: missing 'content' field")?;
 
-        let full_path = validate_path(&ctx.workspace_root, path)?;
+        let workspace_root = ctx.workspace_root();
+        let full_path = validate_path(&workspace_root, path)?;
         if let Some(parent) = full_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("failed to create dirs: {}", e))?;
         }

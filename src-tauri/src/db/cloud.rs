@@ -389,6 +389,9 @@ impl SupabaseClient {
                 "finish_summary": cs.finish_summary,
                 "terminal_error": cs.terminal_error,
                 "project_id": cs.project_id,
+                "worktree_name": cs.worktree_name,
+                "worktree_branch": cs.worktree_branch,
+                "worktree_path": cs.worktree_path,
                 "created_at": cs.created_at,
                 "updated_at": cs.updated_at,
             }),
@@ -995,7 +998,9 @@ fn read_chat_sessions(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<
             "SELECT id, agent_id, title, archived, last_input_tokens, session_type,
                     parent_session_id, source_bus_message_id, chain_depth,
                     execution_state, finish_summary, terminal_error,
-                    created_at, updated_at, project_id FROM chat_sessions",
+                    created_at, updated_at, project_id, allow_sub_agents,
+                    worktree_name, worktree_branch, worktree_path
+             FROM chat_sessions",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1018,6 +1023,10 @@ fn read_chat_sessions(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<
                 "created_at": row.get::<_, String>(12)?,
                 "updated_at": row.get::<_, String>(13)?,
                 "project_id": row.get::<_, Option<String>>(14)?,
+                "allow_sub_agents": row.get::<_, bool>(15)?,
+                "worktree_name": row.get::<_, Option<String>>(16)?,
+                "worktree_branch": row.get::<_, Option<String>>(17)?,
+                "worktree_path": row.get::<_, Option<String>>(18)?,
             }))
         })
         .map_err(|e| e.to_string())?
@@ -1430,8 +1439,9 @@ fn write_chat_sessions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<
              (id, agent_id, title, archived, last_input_tokens, session_type,
               parent_session_id, source_bus_message_id, chain_depth,
               execution_state, finish_summary, terminal_error,
-              created_at, updated_at, project_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+              created_at, updated_at, project_id, allow_sub_agents,
+              worktree_name, worktree_branch, worktree_path)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "agent_id"),
@@ -1448,6 +1458,10 @@ fn write_chat_sessions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<
                 str_val(&r, "created_at"),
                 str_val(&r, "updated_at"),
                 opt_str(&r, "project_id"),
+                bool_val(&r, "allow_sub_agents"),
+                opt_str(&r, "worktree_name"),
+                opt_str(&r, "worktree_branch"),
+                opt_str(&r, "worktree_path"),
             ],
         )
         .map_err(|e| e.to_string())?;

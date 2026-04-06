@@ -59,7 +59,8 @@ impl ToolHandler for EditFileTool {
             .ok_or("edit_file: missing 'new_text' field")?;
         let replace_all = input["replace_all"].as_bool().unwrap_or(false);
 
-        let full_path = validate_path(&ctx.workspace_root, path)?;
+        let workspace_root = ctx.workspace_root();
+        let full_path = validate_path(&workspace_root, path)?;
         if !full_path.is_file() {
             return Err(format!("edit_file: '{}' is not an existing file", path));
         }

@@ -21,4 +21,7 @@ pub struct ChatSession {
     pub created_at: String,
     pub updated_at: String,
     pub project_id: Option<String>,
+    pub worktree_name: Option<String>,
+    pub worktree_branch: Option<String>,
+    pub worktree_path: Option<String>,
 }

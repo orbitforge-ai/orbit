@@ -13,6 +13,7 @@ pub mod minimax;
 pub mod permissions;
 pub mod process;
 pub mod session_agent;
+pub mod session_worktree;
 pub mod skills;
 pub mod state_machine;
 pub mod tools;

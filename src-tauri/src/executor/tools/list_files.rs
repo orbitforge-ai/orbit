@@ -53,13 +53,14 @@ impl ToolHandler for ListFilesTool {
             .as_str()
             .ok_or("list_files: missing 'path' field")?;
 
-        let full_path = validate_path(&ctx.workspace_root, path)?;
+        let workspace_root = ctx.workspace_root();
+        let full_path = validate_path(&workspace_root, path)?;
         if !full_path.is_dir() {
             return Err(format!("{} is not a directory", path));
         }
 
         if let Some(pattern) = input["pattern"].as_str() {
-            return list_matching_files(&ctx.workspace_root, &full_path, pattern);
+            return list_matching_files(&workspace_root, &full_path, pattern);
         }
 
         let entries =

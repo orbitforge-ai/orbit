@@ -20,9 +20,11 @@ import {
   Pencil,
   Search,
   Send,
+  Settings,
   Terminal,
   Trash2,
   Zap,
+  GitBranchPlus,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -45,6 +47,8 @@ const TOOL_VISUALS: Record<string, ToolVisual> = {
   grep: { Icon: Search, colorClass: 'text-accent-hover' },
   web_search: { Icon: Globe, colorClass: 'text-blue-400' },
   web_fetch: { Icon: Link, colorClass: 'text-blue-400' },
+  config: { Icon: Settings, colorClass: 'text-muted' },
+  worktree: { Icon: GitBranchPlus, colorClass: 'text-emerald-400' },
   session_history: { Icon: History, colorClass: 'text-muted' },
   session_status: { Icon: BarChart3, colorClass: 'text-muted' },
   sessions_list: { Icon: List, colorClass: 'text-muted' },

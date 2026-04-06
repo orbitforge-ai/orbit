@@ -17,6 +17,7 @@ use crate::executor::llm_provider::{
 };
 use crate::executor::memory::MemoryClient;
 use crate::executor::permissions::{self, PermissionRegistry};
+use crate::executor::session_worktree;
 use crate::executor::workspace;
 
 const DEFAULT_MAX_ITERATIONS: u32 = 25;
@@ -76,6 +77,7 @@ pub async fn run_agent_session(
     let provider = llm_provider::create_provider(provider_name, api_key)?;
 
     let history = load_session_messages(db, session_id).await?;
+    let worktree_state = session_worktree::load_session_worktree_state(db, session_id).await?;
     let session_type = load_session_type(db, session_id).await.ok();
     let pipeline = context::default_pipeline(memory_client.cloned());
     let ctx_request = ContextRequest {
@@ -113,6 +115,7 @@ pub async fn run_agent_session(
             app.clone(),
             agent_semaphores.clone(),
             session_registry.clone(),
+            worktree_state.clone(),
         )
         .with_permission_registry(permission_registry.clone())
         .with_allow_sub_agents(allow_sub_agents)
@@ -130,6 +133,7 @@ pub async fn run_agent_session(
             app.clone(),
             agent_semaphores.clone(),
             session_registry.clone(),
+            worktree_state,
         )
         .with_permission_registry(permission_registry.clone())
         .with_memory_client(memory_client.cloned())

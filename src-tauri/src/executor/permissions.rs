@@ -592,6 +592,31 @@ pub fn classify_tool_call(
             (RiskLevel::AutoAllow, String::new())
         }
 
+        "config" => match input["action"].as_str().unwrap_or("list") {
+            "get" | "list" | "info" => (RiskLevel::AutoAllow, String::new()),
+            "set" => {
+                let setting = input["setting"].as_str().unwrap_or("<unknown>");
+                (RiskLevel::Prompt, format!("Update config: '{}'", setting))
+            }
+            action => (RiskLevel::Prompt, format!("Config action: {}", action)),
+        },
+
+        "worktree" => match input["action"].as_str().unwrap_or("list") {
+            "list" => (RiskLevel::AutoAllow, String::new()),
+            "create" => (RiskLevel::Prompt, "Create git worktree".to_string()),
+            "exit" => {
+                if input["keep_changes"].as_bool().unwrap_or(true) {
+                    (RiskLevel::AutoAllow, String::new())
+                } else {
+                    (
+                        RiskLevel::Prompt,
+                        "Remove worktree and discard changes".to_string(),
+                    )
+                }
+            }
+            action => (RiskLevel::Prompt, format!("Worktree action: {}", action)),
+        },
+
         "shell_command" => {
             if let Some(action) = input["process_action"].as_str() {
                 return match action {
@@ -1156,6 +1181,22 @@ mod tests {
 
         let (risk, _) = classify_tool_call("session_status", &input, "normal");
         assert_eq!(risk, RiskLevel::AutoAllow);
+
+        let input = serde_json::json!({"action": "list"});
+        let (risk, _) = classify_tool_call("config", &input, "normal");
+        assert_eq!(risk, RiskLevel::AutoAllow);
+
+        let input = serde_json::json!({"action": "set", "setting": "temperature", "value": 0.5});
+        let (risk, _) = classify_tool_call("config", &input, "normal");
+        assert_eq!(risk, RiskLevel::Prompt);
+
+        let input = serde_json::json!({"action": "list"});
+        let (risk, _) = classify_tool_call("worktree", &input, "normal");
+        assert_eq!(risk, RiskLevel::AutoAllow);
+
+        let input = serde_json::json!({"action": "create"});
+        let (risk, _) = classify_tool_call("worktree", &input, "normal");
+        assert_eq!(risk, RiskLevel::Prompt);
 
         let (risk, _) = classify_tool_call("sessions_list", &input, "normal");
         assert_eq!(risk, RiskLevel::AutoAllow);

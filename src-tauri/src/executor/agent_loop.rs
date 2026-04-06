@@ -16,6 +16,7 @@ use crate::executor::memory::MemoryClient;
 use crate::executor::permissions::{self, PermissionRegistry};
 use crate::executor::process::ProcessResult;
 use crate::executor::session_agent;
+use crate::executor::session_worktree;
 use crate::executor::workspace;
 use crate::models::task::{AgentLoopConfig, AgentStepConfig};
 
@@ -176,6 +177,7 @@ pub async fn run_agent_loop(
             app.clone(),
             agent_semaphores.clone(),
             session_registry.clone(),
+            None,
         )
         .with_permission_registry(permission_registry.clone())
         .with_allow_sub_agents(false)
@@ -193,6 +195,7 @@ pub async fn run_agent_loop(
             app.clone(),
             agent_semaphores.clone(),
             session_registry.clone(),
+            None,
         )
         .with_permission_registry(permission_registry.clone())
         .with_memory_client(memory_client.cloned())
@@ -959,6 +962,7 @@ pub async fn run_pulse(
         app.clone(),
         agent_semaphores.clone(),
         session_registry.clone(),
+        session_worktree::load_session_worktree_state(db, &session_id).await?,
     )
     .with_permission_registry(permission_registry.clone())
     .with_memory_client(memory_client.cloned())

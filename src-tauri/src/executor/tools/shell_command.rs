@@ -217,13 +217,14 @@ impl ToolHandler for ShellCommandTool {
             "agent tool: shell_command"
         );
 
-        std::fs::create_dir_all(&ctx.workspace_root)
+        let workspace_root = ctx.workspace_root();
+        std::fs::create_dir_all(&workspace_root)
             .map_err(|e| format!("failed to create workspace: {}", e))?;
 
         if run_in_background {
             let bg_root = workspace::agent_dir(&ctx.agent_id).join("bg");
             let summary = registry
-                .spawn(&ctx.agent_id, command, &ctx.workspace_root, &bg_root)
+                .spawn(&ctx.agent_id, command, &workspace_root, &bg_root)
                 .await?;
             let result = serde_json::to_string_pretty(&summary)
                 .map_err(|e| format!("failed to serialize background process result: {}", e))?;
@@ -231,7 +232,7 @@ impl ToolHandler for ShellCommandTool {
         }
 
         let result =
-            execute_shell_command(&ctx.workspace_root, command, timeout_secs, app, run_id).await?;
+            execute_shell_command(&workspace_root, command, timeout_secs, app, run_id).await?;
 
         Ok((result, false))
     }

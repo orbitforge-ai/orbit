@@ -19,6 +19,7 @@ use crate::executor::llm_provider::{self, ChatMessage, ContentBlock, LlmConfig};
 use crate::executor::memory::MemoryClient;
 use crate::executor::permissions::{self, PermissionRegistry};
 use crate::executor::session_agent;
+use crate::executor::session_worktree;
 use crate::executor::workspace;
 use crate::memory_service::MemoryServiceState;
 use crate::models::chat::ChatSession;
@@ -46,7 +47,8 @@ pub async fn list_chat_sessions(
                 cs.chain_depth, cs.execution_state, cs.finish_summary, cs.terminal_error,
                 bm.from_agent_id, a.name,
                 src.id, src.title,
-                cs.created_at, cs.updated_at, cs.project_id
+                cs.created_at, cs.updated_at, cs.project_id,
+                cs.worktree_name, cs.worktree_branch, cs.worktree_path
              FROM chat_sessions cs
              LEFT JOIN bus_messages bm ON bm.id = cs.source_bus_message_id
              LEFT JOIN agents a ON a.id = bm.from_agent_id
@@ -93,6 +95,9 @@ pub async fn list_chat_sessions(
             created_at: row.get(15)?,
             updated_at: row.get(16)?,
             project_id: row.get(17)?,
+            worktree_name: row.get(18)?,
+            worktree_branch: row.get(19)?,
+            worktree_path: row.get(20)?,
           })
         })
         .map_err(|e| e.to_string())?
@@ -153,6 +158,9 @@ pub async fn create_chat_session(
         created_at: now.clone(),
         updated_at: now,
         project_id,
+        worktree_name: None,
+        worktree_branch: None,
+        worktree_path: None,
       })
     }).await
     .map_err(|e| e.to_string())??;
@@ -987,6 +995,7 @@ async fn do_llm_chat(
         app.clone(),
         agent_semaphores,
         session_registry,
+        session_worktree::load_session_worktree_state(db, session_id).await?,
     )
     .with_permission_registry(permission_registry.clone())
     .with_user_question_registry(user_question_registry)

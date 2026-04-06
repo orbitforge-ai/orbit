@@ -1,5 +1,6 @@
 pub mod activate_skill;
 pub mod ask_user;
+pub mod config;
 pub mod context;
 pub mod edit_file;
 pub mod finish;
@@ -25,6 +26,7 @@ pub mod spawn_sub_agents;
 pub mod subagents;
 pub mod web_fetch;
 pub mod web_search;
+pub mod worktree;
 pub mod write_file;
 pub mod yield_turn;
 

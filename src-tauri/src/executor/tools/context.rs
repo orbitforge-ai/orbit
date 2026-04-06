@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
 use tokio::sync::mpsc;
 
@@ -8,6 +9,14 @@ use crate::executor::engine::{
 };
 use crate::executor::memory::MemoryClient;
 use crate::executor::permissions::PermissionRegistry;
+use crate::executor::session_worktree::SessionWorktreeState;
+
+#[derive(Debug, Clone)]
+struct WorkspaceRouting {
+    main_workspace_root: PathBuf,
+    active_workspace_root: PathBuf,
+    current_worktree: Option<SessionWorktreeState>,
+}
 
 /// Context for executing agent tools — provides sandboxed filesystem access
 /// and optional Agent Bus capabilities.
@@ -16,8 +25,7 @@ pub struct ToolExecutionContext {
     pub agent_id: String,
     /// The agent's entire root directory (~/.orbit/agents/{agent_id}/).
     pub _agent_root: PathBuf,
-    /// The workspace subdirectory for scratch files.
-    pub workspace_root: PathBuf,
+    workspace_routing: Arc<RwLock<WorkspaceRouting>>,
     /// Which search provider to use for web_search (e.g. "brave", "tavily").
     pub web_search_provider: String,
     /// Skills explicitly disabled for this agent.
@@ -59,14 +67,23 @@ impl ToolExecutionContext {
         app: tauri::AppHandle,
         agent_semaphores: AgentSemaphores,
         session_registry: SessionExecutionRegistry,
+        worktree: Option<SessionWorktreeState>,
     ) -> Self {
         let agent_root = crate::executor::workspace::agent_dir(agent_id);
-        let workspace_root = agent_root.join("workspace");
+        let main_workspace_root = crate::executor::workspace::agent_workspace_dir(agent_id);
+        let active_workspace_root = worktree
+            .as_ref()
+            .map(|state| state.path.clone())
+            .unwrap_or_else(|| main_workspace_root.clone());
         let ws_config = crate::executor::workspace::load_agent_config(agent_id).unwrap_or_default();
         Self {
             agent_id: agent_id.to_string(),
             _agent_root: agent_root,
-            workspace_root,
+            workspace_routing: Arc::new(RwLock::new(WorkspaceRouting {
+                main_workspace_root,
+                active_workspace_root,
+                current_worktree: worktree,
+            })),
             web_search_provider: ws_config.web_search_provider,
             disabled_skills: ws_config.disabled_skills,
             db: Some(db),
@@ -137,6 +154,7 @@ impl ToolExecutionContext {
         app: tauri::AppHandle,
         agent_semaphores: AgentSemaphores,
         session_registry: SessionExecutionRegistry,
+        worktree: Option<SessionWorktreeState>,
     ) -> Self {
         let mut ctx = Self::new_with_bus(
             agent_id,
@@ -148,9 +166,46 @@ impl ToolExecutionContext {
             app,
             agent_semaphores,
             session_registry,
+            worktree,
         );
         ctx.is_sub_agent = true;
         ctx.allow_sub_agents = false;
         ctx
+    }
+
+    pub fn workspace_root(&self) -> PathBuf {
+        self.workspace_routing
+            .read()
+            .expect("workspace routing poisoned")
+            .active_workspace_root
+            .clone()
+    }
+
+    pub fn main_workspace_root(&self) -> PathBuf {
+        self.workspace_routing
+            .read()
+            .expect("workspace routing poisoned")
+            .main_workspace_root
+            .clone()
+    }
+
+    pub fn current_worktree(&self) -> Option<SessionWorktreeState> {
+        self.workspace_routing
+            .read()
+            .expect("workspace routing poisoned")
+            .current_worktree
+            .clone()
+    }
+
+    pub fn set_current_worktree(&self, worktree: Option<SessionWorktreeState>) {
+        let mut routing = self
+            .workspace_routing
+            .write()
+            .expect("workspace routing poisoned");
+        routing.active_workspace_root = worktree
+            .as_ref()
+            .map(|state| state.path.clone())
+            .unwrap_or_else(|| routing.main_workspace_root.clone());
+        routing.current_worktree = worktree;
     }
 }

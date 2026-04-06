@@ -116,6 +116,11 @@ impl ToolHandler for SessionsSpawnTool {
 
         let target = resolve_agent(db, input["agent"].as_str(), &ctx.agent_id).await?;
         let is_cross_agent = target.id != ctx.agent_id;
+        let inherited_worktree = if is_cross_agent {
+            None
+        } else {
+            ctx.current_worktree()
+        };
         let session_type = if is_cross_agent {
             "bus_message"
         } else {
@@ -137,6 +142,7 @@ impl ToolHandler for SessionsSpawnTool {
             allow_sub_agents,
             &initial_goal,
             None,
+            inherited_worktree.as_ref(),
         )
         .await?;
 

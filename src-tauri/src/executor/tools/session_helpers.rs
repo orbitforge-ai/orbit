@@ -68,7 +68,7 @@ pub async fn load_owned_session(
             .query_row(
                 "SELECT id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
                         chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
-                        project_id, last_input_tokens
+                        project_id, worktree_name, worktree_branch, worktree_path, last_input_tokens
                  FROM chat_sessions
                  WHERE id = ?1",
                 rusqlite::params![session_id],
@@ -93,8 +93,11 @@ pub async fn load_owned_session(
                             created_at: row.get(11)?,
                             updated_at: row.get(12)?,
                             project_id: row.get(13)?,
+                            worktree_name: row.get(14)?,
+                            worktree_branch: row.get(15)?,
+                            worktree_path: row.get(16)?,
                         },
-                        last_input_tokens: row.get(14)?,
+                        last_input_tokens: row.get(17)?,
                     })
                 },
             )
@@ -211,7 +214,8 @@ pub async fn list_owned_sessions(
             "SELECT
                 cs.id, cs.agent_id, cs.title, cs.archived, cs.session_type, cs.parent_session_id,
                 cs.source_bus_message_id, cs.chain_depth, cs.execution_state, cs.finish_summary,
-                cs.terminal_error, cs.created_at, cs.updated_at, cs.project_id, cs.last_input_tokens,
+                cs.terminal_error, cs.created_at, cs.updated_at, cs.project_id,
+                cs.worktree_name, cs.worktree_branch, cs.worktree_path, cs.last_input_tokens,
                 (
                   SELECT content
                   FROM chat_messages cm
@@ -244,14 +248,18 @@ pub async fn list_owned_sessions(
             params.push(Box::new(format!("%{}%", search)));
         }
 
-        sql.push_str(&format!(" ORDER BY cs.updated_at DESC LIMIT ?{}", params.len() + 1));
+        sql.push_str(&format!(
+            " ORDER BY cs.updated_at DESC LIMIT ?{}",
+            params.len() + 1
+        ));
         params.push(Box::new(limit));
 
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|value| value.as_ref()).collect();
+        let params_refs: Vec<&dyn rusqlite::ToSql> =
+            params.iter().map(|value| value.as_ref()).collect();
         let rows = stmt
             .query_map(params_refs.as_slice(), |row| {
-                let last_content: Option<String> = row.get(15)?;
+                let last_content: Option<String> = row.get(18)?;
                 Ok(SessionListRecord {
                     session: ChatSession {
                         id: row.get(0)?,
@@ -272,12 +280,15 @@ pub async fn list_owned_sessions(
                         created_at: row.get(11)?,
                         updated_at: row.get(12)?,
                         project_id: row.get(13)?,
+                        worktree_name: row.get(14)?,
+                        worktree_branch: row.get(15)?,
+                        worktree_path: row.get(16)?,
                     },
-                    last_input_tokens: row.get(14)?,
+                    last_input_tokens: row.get(17)?,
                     last_message_preview: last_content
                         .as_ref()
                         .map(|content| content_preview_from_json(content, 160)),
-                    last_message_at: row.get(16)?,
+                    last_message_at: row.get(19)?,
                 })
             })
             .map_err(|e| e.to_string())?
