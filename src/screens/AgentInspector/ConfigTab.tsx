@@ -73,6 +73,10 @@ const TOOL_CATEGORIES = [
     ],
   },
   {
+    label: 'Task Management',
+    tools: [{ id: 'task', label: 'Agent Task Tracking' }],
+  },
+  {
     label: 'Memory',
     tools: [
       { id: 'remember', label: 'Remember' },

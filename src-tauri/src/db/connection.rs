@@ -19,6 +19,7 @@ const MIGRATION_13: &str = include_str!("migrations/0013_compaction_improvements
 const MIGRATION_14: &str = include_str!("migrations/0014_message_reactions.sql");
 const MIGRATION_15: &str = include_str!("migrations/0015_session_allow_subagents.sql");
 const MIGRATION_16: &str = include_str!("migrations/0016_session_worktrees.sql");
+const MIGRATION_17: &str = include_str!("migrations/0017_agent_tasks.sql");
 
 /// Newtype wrapper — stored as Tauri managed state.
 /// r2d2::Pool is Arc-based internally: cheap to clone.
@@ -134,6 +135,11 @@ pub fn init(data_dir: PathBuf) -> Result<DbPool, Box<dyn std::error::Error>> {
         conn.execute_batch(MIGRATION_16)?;
         conn.execute_batch("PRAGMA user_version = 16;")?;
         info!("Applied migration 16 (session_worktrees)");
+    }
+    if version < 17 {
+        conn.execute_batch(MIGRATION_17)?;
+        conn.execute_batch("PRAGMA user_version = 17;")?;
+        info!("Applied migration 17 (agent_tasks)");
     }
 
     info!("Database initialised at {:?}", db_path);

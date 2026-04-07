@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_task;
 pub mod bus;
 pub mod chat;
 pub mod project;

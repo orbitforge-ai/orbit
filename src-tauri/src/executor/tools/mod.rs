@@ -24,6 +24,7 @@ pub mod sessions_spawn;
 pub mod shell_command;
 pub mod spawn_sub_agents;
 pub mod subagents;
+pub mod task;
 pub mod web_fetch;
 pub mod web_search;
 pub mod worktree;

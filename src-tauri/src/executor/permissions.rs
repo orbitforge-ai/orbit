@@ -601,6 +601,8 @@ pub fn classify_tool_call(
             action => (RiskLevel::Prompt, format!("Config action: {}", action)),
         },
 
+        "task" => (RiskLevel::AutoAllow, String::new()),
+
         "worktree" => match input["action"].as_str().unwrap_or("list") {
             "list" => (RiskLevel::AutoAllow, String::new()),
             "create" => (RiskLevel::Prompt, "Create git worktree".to_string()),
@@ -1189,6 +1191,10 @@ mod tests {
         let input = serde_json::json!({"action": "set", "setting": "temperature", "value": 0.5});
         let (risk, _) = classify_tool_call("config", &input, "normal");
         assert_eq!(risk, RiskLevel::Prompt);
+
+        let input = serde_json::json!({"action": "list"});
+        let (risk, _) = classify_tool_call("task", &input, "normal");
+        assert_eq!(risk, RiskLevel::AutoAllow);
 
         let input = serde_json::json!({"action": "list"});
         let (risk, _) = classify_tool_call("worktree", &input, "normal");
