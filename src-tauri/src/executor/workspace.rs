@@ -305,6 +305,7 @@ impl Default for AgentWorkspaceConfig {
                 "web_fetch".to_string(),
                 "config".to_string(),
                 "task".to_string(),
+                "schedule".to_string(),
                 "worktree".to_string(),
                 "session_history".to_string(),
                 "session_status".to_string(),

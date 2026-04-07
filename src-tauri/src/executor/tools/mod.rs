@@ -12,6 +12,7 @@ pub mod list_memories;
 pub mod react_to_message;
 pub mod read_file;
 pub mod remember;
+pub mod schedule;
 pub mod search_memory;
 pub mod send_message;
 pub mod session_control;

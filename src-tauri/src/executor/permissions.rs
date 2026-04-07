@@ -603,6 +603,11 @@ pub fn classify_tool_call(
 
         "task" => (RiskLevel::AutoAllow, String::new()),
 
+        "schedule" => match input["action"].as_str().unwrap_or("list") {
+            "list" | "preview" | "pulse_get" => (RiskLevel::AutoAllow, String::new()),
+            action => (RiskLevel::Prompt, format!("Schedule action: {}", action)),
+        },
+
         "worktree" => match input["action"].as_str().unwrap_or("list") {
             "list" => (RiskLevel::AutoAllow, String::new()),
             "create" => (RiskLevel::Prompt, "Create git worktree".to_string()),
@@ -1195,6 +1200,14 @@ mod tests {
         let input = serde_json::json!({"action": "list"});
         let (risk, _) = classify_tool_call("task", &input, "normal");
         assert_eq!(risk, RiskLevel::AutoAllow);
+
+        let input = serde_json::json!({"action": "preview"});
+        let (risk, _) = classify_tool_call("schedule", &input, "normal");
+        assert_eq!(risk, RiskLevel::AutoAllow);
+
+        let input = serde_json::json!({"action": "create"});
+        let (risk, _) = classify_tool_call("schedule", &input, "normal");
+        assert_eq!(risk, RiskLevel::Prompt);
 
         let input = serde_json::json!({"action": "list"});
         let (risk, _) = classify_tool_call("worktree", &input, "normal");
