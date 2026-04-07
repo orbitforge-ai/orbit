@@ -2,7 +2,12 @@ use serde_json::json;
 
 use crate::executor::llm_provider::ToolDefinition;
 
-use super::{context::ToolExecutionContext, helpers::validate_path, ToolHandler};
+use super::{
+    context::ToolExecutionContext,
+    helpers::validate_path,
+    notebook::{format_notebook, is_notebook_path, parse_notebook},
+    ToolHandler,
+};
 
 pub struct ReadFileTool;
 
@@ -15,7 +20,7 @@ impl ToolHandler for ReadFileTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Read the contents of a file from the agent's workspace. Path is relative to the workspace directory.".to_string(),
+            description: "Read the contents of a file from the agent's workspace. Path is relative to the workspace directory. Jupyter notebooks (.ipynb) are rendered as human-readable cells and outputs.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -44,6 +49,11 @@ impl ToolHandler for ReadFileTool {
         let full_path = validate_path(&workspace_root, path)?;
         let content = std::fs::read_to_string(&full_path)
             .map_err(|e| format!("failed to read {}: {}", path, e))?;
+
+        if is_notebook_path(path) {
+            let notebook = parse_notebook(&content).map_err(|e| format!("read_file: {}", e))?;
+            return Ok((format_notebook(&notebook), false));
+        }
 
         let content = if content.len() > 100_000 {
             let mut truncated = content[..100_000].to_string();

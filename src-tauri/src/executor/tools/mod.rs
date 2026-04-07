@@ -9,6 +9,7 @@ pub mod grep;
 pub mod helpers;
 pub mod list_files;
 pub mod list_memories;
+pub mod notebook;
 pub mod react_to_message;
 pub mod read_file;
 pub mod remember;

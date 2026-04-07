@@ -2,7 +2,15 @@ use serde_json::json;
 
 use crate::executor::llm_provider::ToolDefinition;
 
-use super::{context::ToolExecutionContext, helpers::validate_path, ToolHandler};
+use super::{
+    context::ToolExecutionContext,
+    helpers::validate_path,
+    notebook::{
+        delete_cell, insert_cell, is_notebook_path, parse_notebook, replace_cell_source,
+        serialize_notebook_pretty,
+    },
+    ToolHandler,
+};
 
 pub struct EditFileTool;
 
@@ -15,7 +23,7 @@ impl ToolHandler for EditFileTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Edit a file by replacing exact text. The old_text must match exactly, including whitespace. Use replace_all to replace every occurrence.".to_string(),
+            description: "Edit a file by replacing exact text. The old_text must match exactly, including whitespace. Use replace_all to replace every occurrence. For .ipynb files, notebook_action supports cell-level edits.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -34,9 +42,31 @@ impl ToolHandler for EditFileTool {
                     "replace_all": {
                         "type": "boolean",
                         "description": "If true, replace every occurrence. Defaults to false."
+                    },
+                    "notebook_action": {
+                        "type": "string",
+                        "enum": ["replace_cell", "insert_cell", "delete_cell"],
+                        "description": "Notebook cell operation (only for .ipynb files)"
+                    },
+                    "cell_number": {
+                        "type": "integer",
+                        "description": "0-based cell index for notebook operations"
+                    },
+                    "cell_type": {
+                        "type": "string",
+                        "enum": ["code", "markdown"],
+                        "description": "Cell type for insert_cell or replace_cell. Defaults to the existing type for replace_cell."
+                    },
+                    "cell_source": {
+                        "type": "string",
+                        "description": "Notebook cell content for insert_cell or replace_cell"
                     }
                 },
-                "required": ["path", "old_text", "new_text"]
+                "required": ["path"],
+                "oneOf": [
+                    { "required": ["path", "old_text", "new_text"] },
+                    { "required": ["path", "notebook_action", "cell_number"] }
+                ]
             }),
         }
     }
@@ -51,6 +81,22 @@ impl ToolHandler for EditFileTool {
         let path = input["path"]
             .as_str()
             .ok_or("edit_file: missing 'path' field")?;
+
+        let workspace_root = ctx.workspace_root();
+        let full_path = validate_path(&workspace_root, path)?;
+        if !full_path.is_file() {
+            return Err(format!("edit_file: '{}' is not an existing file", path));
+        }
+
+        if let Some(notebook_action) = input["notebook_action"].as_str() {
+            if !is_notebook_path(path) {
+                return Err(
+                    "edit_file: notebook_action is only supported for .ipynb files".to_string(),
+                );
+            }
+            return edit_notebook(&full_path, path, input, notebook_action);
+        }
+
         let old_text = input["old_text"]
             .as_str()
             .ok_or("edit_file: missing 'old_text' field")?;
@@ -58,12 +104,6 @@ impl ToolHandler for EditFileTool {
             .as_str()
             .ok_or("edit_file: missing 'new_text' field")?;
         let replace_all = input["replace_all"].as_bool().unwrap_or(false);
-
-        let workspace_root = ctx.workspace_root();
-        let full_path = validate_path(&workspace_root, path)?;
-        if !full_path.is_file() {
-            return Err(format!("edit_file: '{}' is not an existing file", path));
-        }
 
         let content = std::fs::read_to_string(&full_path)
             .map_err(|e| format!("failed to read {}: {}", path, e))?;
@@ -109,6 +149,53 @@ fn apply_exact_edit(
     let replaced = if replace_all { count } else { 1 };
 
     Ok((updated, replaced))
+}
+
+fn edit_notebook(
+    full_path: &std::path::Path,
+    path: &str,
+    input: &serde_json::Value,
+    notebook_action: &str,
+) -> Result<(String, bool), String> {
+    let cell_number = input["cell_number"]
+        .as_u64()
+        .ok_or("edit_file: notebook_action requires 'cell_number'")? as usize;
+    let content = std::fs::read_to_string(full_path)
+        .map_err(|e| format!("failed to read {}: {}", path, e))?;
+    let mut notebook = parse_notebook(&content).map_err(|e| format!("edit_file: {}", e))?;
+
+    match notebook_action {
+        "replace_cell" => {
+            let cell_source = input["cell_source"]
+                .as_str()
+                .ok_or("edit_file: replace_cell requires 'cell_source'")?;
+            let cell_type = input["cell_type"].as_str();
+            replace_cell_source(&mut notebook, cell_number, cell_type, cell_source)
+                .map_err(|e| format!("edit_file: {}", e))?;
+        }
+        "insert_cell" => {
+            let cell_source = input["cell_source"]
+                .as_str()
+                .ok_or("edit_file: insert_cell requires 'cell_source'")?;
+            let cell_type = input["cell_type"].as_str().unwrap_or("code");
+            insert_cell(&mut notebook, cell_number, cell_type, cell_source)
+                .map_err(|e| format!("edit_file: {}", e))?;
+        }
+        "delete_cell" => {
+            delete_cell(&mut notebook, cell_number).map_err(|e| format!("edit_file: {}", e))?;
+        }
+        other => {
+            return Err(format!("edit_file: unknown notebook_action '{}'", other));
+        }
+    }
+
+    let updated = serialize_notebook_pretty(&notebook).map_err(|e| format!("edit_file: {}", e))?;
+    std::fs::write(full_path, updated).map_err(|e| format!("failed to write {}: {}", path, e))?;
+
+    Ok((
+        format!("Notebook '{}' updated via {}", path, notebook_action),
+        false,
+    ))
 }
 
 #[cfg(test)]

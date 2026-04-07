@@ -2,7 +2,12 @@ use serde_json::json;
 
 use crate::executor::llm_provider::ToolDefinition;
 
-use super::{context::ToolExecutionContext, helpers::validate_path, ToolHandler};
+use super::{
+    context::ToolExecutionContext,
+    helpers::validate_path,
+    notebook::{is_notebook_path, notebook_from_input, serialize_notebook_pretty},
+    ToolHandler,
+};
 
 pub struct WriteFileTool;
 
@@ -15,7 +20,7 @@ impl ToolHandler for WriteFileTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Write content to a file in the agent's workspace. Creates parent directories if needed. Path is relative to the workspace directory.".to_string(),
+            description: "Write content to a file in the agent's workspace. Creates parent directories if needed. Path is relative to the workspace directory. For .ipynb files, content may be raw notebook JSON or a structured notebook object.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -24,8 +29,7 @@ impl ToolHandler for WriteFileTool {
                         "description": "Relative path to the file within the workspace"
                     },
                     "content": {
-                        "type": "string",
-                        "description": "The content to write to the file"
+                        "description": "The content to write. For .ipynb files, this may be a JSON string or notebook object."
                     }
                 },
                 "required": ["path", "content"]
@@ -43,8 +47,8 @@ impl ToolHandler for WriteFileTool {
         let path = input["path"]
             .as_str()
             .ok_or("write_file: missing 'path' field")?;
-        let content = input["content"]
-            .as_str()
+        let content_value = input
+            .get("content")
             .ok_or("write_file: missing 'content' field")?;
 
         let workspace_root = ctx.workspace_root();
@@ -52,7 +56,18 @@ impl ToolHandler for WriteFileTool {
         if let Some(parent) = full_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("failed to create dirs: {}", e))?;
         }
-        std::fs::write(&full_path, content)
+        let content = if is_notebook_path(path) {
+            let notebook =
+                notebook_from_input(content_value).map_err(|e| format!("write_file: {}", e))?;
+            serialize_notebook_pretty(&notebook).map_err(|e| format!("write_file: {}", e))?
+        } else {
+            content_value
+                .as_str()
+                .ok_or("write_file: content must be a string for non-notebook files")?
+                .to_string()
+        };
+
+        std::fs::write(&full_path, &content)
             .map_err(|e| format!("failed to write {}: {}", path, e))?;
 
         Ok((
