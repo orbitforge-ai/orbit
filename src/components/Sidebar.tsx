@@ -22,7 +22,7 @@ import { useUiStore } from '../store/uiStore';
 import { agentsApi } from '../api/agents';
 import { projectsApi } from '../api/projects';
 import { workspaceApi } from '../api/workspace';
-import { Agent, Project } from '../types';
+import { Agent, PermissionRequestPayload, Project } from '../types';
 import { usePermissionStore } from '../store/permissionStore';
 import { onPermissionRequest, onPermissionCancelled } from '../events/permissionEvents';
 import { onAgentCreated, onAgentUpdated, onAgentDeleted, onAgentConfigChanged } from '../events/agentEvents';
@@ -72,6 +72,7 @@ export function Sidebar() {
     });
   };
   const pendingCount = usePermissionStore((s) => s.pendingCount);
+  const pendingRequestMap = usePermissionStore((s) => s.pending);
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -161,6 +162,20 @@ export function Sidebar() {
     queryKey: ['agent-role-ids'],
     queryFn: workspaceApi.listAgentRoleIds,
   });
+
+  const sortedPendingRequests = Object.values(pendingRequestMap).sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+  const agentNameById = new Map(agents.map((agent) => [agent.id, agent.name]));
+  const pendingByAgentId = sortedPendingRequests.reduce<
+    Record<string, PermissionRequestPayload[]>
+  >((acc, request) => {
+    if (!acc[request.agentId]) {
+      acc[request.agentId] = [];
+    }
+    acc[request.agentId].push(request);
+    return acc;
+  }, {});
 
   return (
     <aside className="w-[220px] flex-shrink-0 flex flex-col border-r border-edge bg-panel h-full">
@@ -301,11 +316,52 @@ export function Sidebar() {
 
           {agentsOpen && (
             <div className="ml-3 mt-0.5 space-y-0.5 border-l border-edge pl-2">
+              {sortedPendingRequests.length > 0 && (
+                <div className="mb-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-2">
+                  <div className="mb-1.5 flex items-center gap-1.5 px-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
+                    <Shield size={10} />
+                    Pending Approvals
+                  </div>
+                  <div className="space-y-1">
+                    {sortedPendingRequests.slice(0, 3).map((request) => {
+                      const agentName = agentNameById.get(request.agentId) ?? 'Unknown agent';
+                      return (
+                        <button
+                          key={request.requestId}
+                          onClick={() => openAgentChat(request.agentId, request.sessionId)}
+                          className="w-full rounded-md border border-transparent px-2 py-1.5 text-left transition-colors hover:border-amber-500/20 hover:bg-background/60"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-[11px] font-medium text-white">
+                              {agentName}
+                            </span>
+                            <span className="shrink-0 text-[10px] text-amber-300">
+                              {request.toolName}
+                            </span>
+                          </div>
+                          <div className="truncate text-[10px] text-muted">
+                            {request.riskDescription}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {sortedPendingRequests.length > 3 && (
+                    <div className="mt-1 px-0.5 text-[10px] text-muted">
+                      +{sortedPendingRequests.length - 3} more pending approval
+                      {sortedPendingRequests.length - 3 === 1 ? '' : 's'}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {agents.map((agent) => {
                 const roleId = agentRoleIds[agent.id];
                 const role = resolveRole(roleId);
                 const RoleIcon = ROLE_ICON_MAP[role.icon] ?? Bot;
                 const isSelected = screen === 'agents' && selectedAgentId === agent.id;
+                const pendingForAgent = pendingByAgentId[agent.id] ?? [];
+                const firstPendingRequest = pendingForAgent[0];
                 return (
                   <div
                     key={agent.id}
@@ -326,6 +382,20 @@ export function Sidebar() {
                       />
                       <span className="truncate">{agent.name}</span>
                     </button>
+                    {firstPendingRequest && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openAgentChat(agent.id, firstPendingRequest.sessionId);
+                        }}
+                        className="flex items-center gap-1 rounded px-1.5 py-1 text-amber-400 transition-colors hover:bg-amber-500/10 hover:text-amber-300"
+                        title={`Review ${pendingForAgent.length} pending approval${pendingForAgent.length === 1 ? '' : 's'} for ${agent.name}`}
+                        aria-label={`Review pending approvals for ${agent.name}`}
+                      >
+                        <Shield size={10} />
+                        <span className="text-[10px] font-medium">{pendingForAgent.length}</span>
+                      </button>
+                    )}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

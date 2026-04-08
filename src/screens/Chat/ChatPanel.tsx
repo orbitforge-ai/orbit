@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ArrowDown, Loader2 } from 'lucide-react';
+import { ArrowDown, Loader2, Shield } from 'lucide-react';
 import { chatApi } from '../../api/chat';
 import { AgentIdentityConfig, ChatDraft, ContentBlock } from '../../types';
 import { DisplayMessage, DisplayBlock } from '../../components/chat/types';
 import { chatMessagesToDisplay } from '../../components/chat/utils';
 import { MessageBubble } from '../../components/chat/MessageBubble';
+import { PermissionPrompt } from '../../components/chat/PermissionPrompt';
 import { ChatInput } from './ChatInput';
 import { ContextGauge } from '../../components/chat/ContextGauge';
 import {
@@ -84,6 +85,7 @@ export function ChatPanel({
   const isLoadingOlderRef = useRef(false);
   const isDraft = Boolean(draft && !sessionId);
   const streamId = sessionId ? `chat:${sessionId}` : null;
+  const pendingPermissionRequestMap = usePermissionStore((s) => s.pending);
 
   // ── Avatar ────────────────────────────────────────────────────────────────
   const avatarEnabled = FEATURES.avatar && (agentIdentity?.avatarEnabled ?? false);
@@ -576,6 +578,28 @@ export function ChatPanel({
   ]);
 
   const showScrollBtn = !isDraft && !autoScroll;
+  const visiblePermissionRequestIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const message of displayMessages) {
+      for (const block of message.blocks) {
+        if (block.kind === 'permission_prompt') {
+          ids.add(block.requestId);
+        }
+      }
+    }
+    return ids;
+  }, [displayMessages]);
+  const sessionPendingPermissionRequests = useMemo(() => {
+    if (!sessionId && !streamId) return [];
+
+    return Object.values(pendingPermissionRequestMap)
+      .filter(
+        (request) =>
+          (request.sessionId === sessionId || request.runId === streamId) &&
+          !visiblePermissionRequestIds.has(request.requestId)
+      )
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }, [pendingPermissionRequestMap, sessionId, streamId, visiblePermissionRequestIds]);
 
   return (
     <div className="flex flex-col h-full">
@@ -585,6 +609,30 @@ export function ChatPanel({
           onScroll={handleScroll}
           className="h-full overflow-y-auto overflow-x-hidden"
         >
+          {sessionPendingPermissionRequests.length > 0 && (
+            <div className="border-b border-amber-500/15 bg-amber-500/5 px-4 py-3">
+              <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300">
+                <Shield size={12} />
+                Pending Approval
+                {sessionPendingPermissionRequests.length > 1 ? 's' : ''}
+              </div>
+              <div className="space-y-2">
+                {sessionPendingPermissionRequests.map((request) => (
+                  <PermissionPrompt
+                    key={request.requestId}
+                    requestId={request.requestId}
+                    toolName={request.toolName}
+                    toolInput={request.toolInput}
+                    riskLevel={request.riskLevel}
+                    riskDescription={request.riskDescription}
+                    suggestedPattern={request.suggestedPattern}
+                    agentId={request.agentId}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
           {isFetchingNextPage && !isDraft && (
             <div className="flex items-center justify-center gap-2 py-3">
               <Loader2 size={14} className="animate-spin text-muted" />
