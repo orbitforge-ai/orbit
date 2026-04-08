@@ -26,3 +26,7 @@ export const SEARCH_PROVIDERS = [
   { value: 'brave', label: 'Brave Search' },
   { value: 'tavily', label: 'Tavily' },
 ];
+
+export const IMAGE_GENERATION_PROVIDERS = [
+  { value: 'openai', label: 'OpenAI Images (gpt-image-1)' },
+];

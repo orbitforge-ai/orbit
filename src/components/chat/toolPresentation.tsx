@@ -54,6 +54,7 @@ const TOOL_FORMATTERS: Record<string, ToolFormatter> = {
   web_search: formatWebSearch,
   web_fetch: formatWebFetch,
   image_analysis: formatImageAnalysis,
+  image_generation: formatImageGeneration,
   search_memory: formatMemoryLookup,
   list_memories: formatMemoryLookup,
 };
@@ -467,6 +468,64 @@ function formatImageAnalysis(tool: ToolCallBlock, normalizedResult: string | nul
     resultSections: normalizedResult
       ? [{ type: 'markdown', title: 'Analysis', content: normalizedResult }]
       : [],
+  };
+}
+
+function formatImageGeneration(tool: ToolCallBlock, normalizedResult: string | null): ToolPresentation {
+  const parsed = normalizedResult ? parseJson(normalizedResult) : null;
+  const requestSections: PresentationSection[] = [
+    {
+      type: 'keyValue',
+      title: 'Generation Request',
+      entries: [
+        {
+          label: 'Prompt',
+          value: summarizeTextPreview(stringValue(tool.input.prompt) ?? '(missing prompt)'),
+        },
+        {
+          label: 'Size',
+          value: stringValue(tool.input.size) ?? '1024x1024',
+        },
+        ...(tool.input.output_path
+          ? [{ label: 'Output Path', value: stringValue(tool.input.output_path) ?? '' }]
+          : []),
+      ],
+    },
+  ];
+
+  if (!isRecord(parsed)) {
+    return {
+      requestSections,
+      resultSections: summarizeResult(normalizedResult, tool.result?.isError ?? false),
+    };
+  }
+
+  const outputPath = firstString(parsed, ['outputPath']);
+  const model = firstString(parsed, ['model']);
+  const provider = firstString(parsed, ['provider']);
+  const size = firstString(parsed, ['size']);
+  const bytes = primitiveString(parsed.bytesWritten);
+  return {
+    requestSections,
+    resultSections: [
+      {
+        type: 'cards',
+        title: 'Saved Image',
+        cards: [
+          {
+            title: outputPath ?? 'Generated image saved',
+            subtitle: compactParts([provider, model, size].filter(isDefined)),
+            body: compactParts(
+              [
+                bytes ? `${bytes} bytes written` : null,
+                firstString(parsed, ['status']),
+              ].filter(isDefined)
+            ),
+            badge: 'PNG',
+          },
+        ],
+      },
+    ],
   };
 }
 

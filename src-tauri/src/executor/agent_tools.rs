@@ -15,6 +15,7 @@ fn all_tools() -> Vec<Box<dyn ToolHandler>> {
         Box::new(tools::web_search::WebSearchTool),
         Box::new(tools::web_fetch::WebFetchTool),
         Box::new(tools::image_analysis::ImageAnalysisTool),
+        Box::new(tools::image_generation::ImageGenerationTool),
         Box::new(tools::config::ConfigTool),
         Box::new(tools::task::TaskTool),
         Box::new(tools::schedule::ScheduleTool),

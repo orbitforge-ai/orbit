@@ -6,6 +6,7 @@ pub mod compaction;
 pub mod context;
 pub mod engine;
 pub mod http;
+pub mod image_gen;
 pub mod keychain;
 pub mod llm_provider;
 pub mod memory;

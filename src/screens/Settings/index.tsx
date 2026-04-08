@@ -4,7 +4,7 @@ import { Check, Key, Trash2, X } from 'lucide-react';
 import { llmApi } from '../../api/llm';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { useApiKeyStatus, useInvalidateApiKeys } from '../../hooks/useApiKeyStatus';
-import { LLM_PROVIDERS, SEARCH_PROVIDERS } from '../../constants/providers';
+import { IMAGE_GENERATION_PROVIDERS, LLM_PROVIDERS, SEARCH_PROVIDERS } from '../../constants/providers';
 import { useSettingsStore } from '../../store/settingsStore';
 
 function ProviderKeyRow({ provider, label }: { provider: string; label: string }) {
@@ -204,6 +204,19 @@ export function Settings({ onClose }: SettingsProps = {}) {
             </p>
             <div className="space-y-2">
               {SEARCH_PROVIDERS.map((p) => (
+                <ProviderKeyRow key={p.value} provider={p.value} label={p.label} />
+              ))}
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <h3 className="text-sm font-semibold text-white">Image Generation</h3>
+            <p className="text-xs text-muted">
+              Dedicated API key for image generation. v1 uses OpenAI Images with the fixed model
+              <span className="font-mono text-secondary"> gpt-image-1</span>.
+            </p>
+            <div className="space-y-2">
+              {IMAGE_GENERATION_PROVIDERS.map((p) => (
                 <ProviderKeyRow key={p.value} provider={p.value} label={p.label} />
               ))}
             </div>

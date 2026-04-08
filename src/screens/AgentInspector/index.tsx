@@ -74,6 +74,7 @@ const ALL_TOOL_IDS = [
   'web_search',
   'web_fetch',
   'image_analysis',
+  'image_generation',
   'session_history',
   'session_status',
   'sessions_list',

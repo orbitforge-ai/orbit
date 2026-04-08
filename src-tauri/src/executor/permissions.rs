@@ -591,6 +591,11 @@ pub fn classify_tool_call(
         | "ask_user" | "activate_skill" | "finish" | "spawn_sub_agents" | "yield_turn"
         | "react_to_message" => (RiskLevel::AutoAllow, String::new()),
 
+        "image_generation" => (
+            RiskLevel::Prompt,
+            "Generate image (uses API credits)".to_string(),
+        ),
+
         "config" => match input["action"].as_str().unwrap_or("list") {
             "get" | "list" | "info" => (RiskLevel::AutoAllow, String::new()),
             "set" => {
@@ -1184,6 +1189,9 @@ mod tests {
 
         let (risk, _) = classify_tool_call("image_analysis", &input, "normal");
         assert_eq!(risk, RiskLevel::AutoAllow);
+
+        let (risk, _) = classify_tool_call("image_generation", &input, "normal");
+        assert_eq!(risk, RiskLevel::Prompt);
 
         let (risk, _) = classify_tool_call("session_history", &input, "normal");
         assert_eq!(risk, RiskLevel::AutoAllow);
