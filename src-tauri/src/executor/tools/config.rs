@@ -11,14 +11,18 @@ const MODIFIABLE_SETTINGS: &[&str] = &[
     "temperature",
     "maxIterations",
     "maxTotalTokens",
-    "webSearchProvider",
     "memoryEnabled",
 ];
 const BLOCKED_SETTINGS: &[&str] = &[
+    // These now live in global settings and cannot be mutated via the
+    // per-agent config tool at all.
     "permissionMode",
     "permissionRules",
     "allowedTools",
+    "webSearchProvider",
     "disabledSkills",
+    "disabledTools",
+    "defaultChannelId",
 ];
 
 pub struct ConfigTool;
@@ -205,14 +209,6 @@ fn apply_setting_value(
                 .and_then(|value| u32::try_from(value).ok())
                 .filter(|value| *value > 0)
                 .ok_or("config: maxTotalTokens must be a positive integer")?;
-        }
-        "webSearchProvider" => {
-            config.web_search_provider = value
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .ok_or("config: webSearchProvider must be a non-empty string")?;
         }
         "memoryEnabled" => {
             config.memory_enabled = value

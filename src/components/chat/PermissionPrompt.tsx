@@ -11,6 +11,10 @@ interface PermissionPromptProps {
   riskLevel: 'moderate' | 'dangerous';
   riskDescription: string;
   suggestedPattern: string;
+  /**
+   * @deprecated permission rules are now global; this prop is ignored and
+   * kept only so callers can be migrated in a follow-up.
+   */
   agentId?: string;
   resolved?: 'allow' | 'always_allow' | 'deny';
 }
@@ -22,12 +26,8 @@ export function PermissionPrompt({
   riskLevel,
   riskDescription,
   suggestedPattern,
-  agentId: agentIdProp,
   resolved,
 }: PermissionPromptProps) {
-  // Fall back to getting agentId from the permission store if not provided as prop
-  const pendingReq = usePermissionStore((s) => s.pending[requestId]);
-  const agentId = agentIdProp || pendingReq?.agentId || '';
   const [expanded, setExpanded] = useState(false);
   const [localResolved, setLocalResolved] = useState<string | undefined>(resolved);
   const resolveRequest = usePermissionStore((s) => s.resolveRequest);
@@ -54,7 +54,7 @@ export function PermissionPrompt({
           createdAt: new Date().toISOString(),
           description: `Auto-created: always allow ${toolName} matching "${suggestedPattern}"`,
         };
-        await permissionsApi.saveRule(agentId, rule);
+        await permissionsApi.saveRule(rule);
       }
     } catch {
       // If the backend already resolved (e.g. timeout), silently ignore

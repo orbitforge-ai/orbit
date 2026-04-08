@@ -1,7 +1,6 @@
-use crate::db::cloud::CloudClientState;
-use crate::db::DbPool;
+use crate::executor::global_settings;
 use crate::executor::permissions::{PermissionRegistry, PermissionResponse};
-use crate::executor::workspace::{self, PermissionRule};
+use crate::executor::workspace::PermissionRule;
 
 #[tauri::command]
 pub async fn respond_to_permission(
@@ -18,45 +17,47 @@ pub async fn respond_to_permission(
     registry.resolve(&request_id, permission_response).await
 }
 
+/// Persist a permission rule to the global settings file.
+///
+/// `agent_id` is accepted for one release so older frontend callers do not
+/// break mid-upgrade, but it is logged and ignored. Remove it in the release
+/// after this one.
 #[tauri::command]
 pub async fn save_permission_rule(
-    agent_id: String,
+    agent_id: Option<String>,
     rule: PermissionRule,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
-    let pool = db.0.clone();
-    let cloud = cloud.inner().clone();
-    let agent_id_clone = agent_id.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let mut config = workspace::load_agent_config(&agent_id_clone)?;
-        config
-            .permission_rules
-            .retain(|r| !(r.tool == rule.tool && r.pattern == rule.pattern));
-        config.permission_rules.push(rule);
-        workspace::save_agent_config(&agent_id_clone, &config)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    super::workspace::sync_model_config_to_cloud(&agent_id, pool, cloud).await
+    if let Some(id) = agent_id.as_deref() {
+        tracing::debug!(
+            agent_id = %id,
+            "save_permission_rule: agent_id argument is ignored; rules are now global"
+        );
+    }
+    tokio::task::spawn_blocking(move || global_settings::save_global_permission_rule(rule))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(())
 }
 
+/// Delete a permission rule from the global settings file.
+///
+/// `agent_id` is accepted for one release for backwards compatibility and
+/// ignored. Remove in the next release.
 #[tauri::command]
 pub async fn delete_permission_rule(
-    agent_id: String,
+    agent_id: Option<String>,
     rule_id: String,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
-    let pool = db.0.clone();
-    let cloud = cloud.inner().clone();
-    let agent_id_clone = agent_id.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let mut config = workspace::load_agent_config(&agent_id_clone)?;
-        config.permission_rules.retain(|r| r.id != rule_id);
-        workspace::save_agent_config(&agent_id_clone, &config)
+    if let Some(id) = agent_id.as_deref() {
+        tracing::debug!(
+            agent_id = %id,
+            "delete_permission_rule: agent_id argument is ignored; rules are now global"
+        );
+    }
+    tokio::task::spawn_blocking(move || {
+        global_settings::delete_global_permission_rule(&rule_id)
     })
     .await
     .map_err(|e| e.to_string())??;
-    super::workspace::sync_model_config_to_cloud(&agent_id, pool, cloud).await
+    Ok(())
 }

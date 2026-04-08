@@ -1,11 +1,30 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import * as Switch from '@radix-ui/react-switch';
-import { Check, Key, Trash2, X } from 'lucide-react';
-import { llmApi } from '../../api/llm';
+import * as Select from '@radix-ui/react-select';
+import {
+  Check,
+  ChevronDown,
+  Key,
+  Plus,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { confirm } from '@tauri-apps/plugin-dialog';
+import { llmApi } from '../../api/llm';
 import { useApiKeyStatus, useInvalidateApiKeys } from '../../hooks/useApiKeyStatus';
-import { IMAGE_GENERATION_PROVIDERS, LLM_PROVIDERS, SEARCH_PROVIDERS } from '../../constants/providers';
+import {
+  IMAGE_GENERATION_PROVIDERS,
+  LLM_PROVIDERS,
+  SEARCH_PROVIDERS,
+} from '../../constants/providers';
+import { TOOL_CATEGORIES, TOOL_LABEL_BY_ID } from '../../constants/tools';
 import { useSettingsStore } from '../../store/settingsStore';
+import {
+  AgentDefaults,
+  ChannelConfig,
+  ChannelType,
+  PermissionRule,
+} from '../../types';
 
 function ProviderKeyRow({ provider, label }: { provider: string; label: string }) {
   const { data: hasKey = false } = useApiKeyStatus(provider);
@@ -92,6 +111,475 @@ function ProviderKeyRow({ provider, label }: { provider: string; label: string }
   );
 }
 
+// ─── Channels ────────────────────────────────────────────────────────────────
+
+const CHANNEL_TYPE_OPTIONS: { value: ChannelType; label: string; hint: string }[] = [
+  { value: 'slack', label: 'Slack', hint: 'Incoming webhook URL from a Slack app' },
+  { value: 'discord', label: 'Discord', hint: 'Channel webhook URL from Discord' },
+  { value: 'webhook', label: 'Generic webhook', hint: 'Any endpoint that accepts JSON POST' },
+];
+
+function generateChannelId() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+  return `ch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function ChannelsSection() {
+  const channels = useSettingsStore((s) => s.settings.channels);
+  const upsertChannel = useSettingsStore((s) => s.upsertChannel);
+  const removeChannel = useSettingsStore((s) => s.removeChannel);
+
+  const [draft, setDraft] = useState<ChannelConfig | null>(null);
+
+  function startAdd() {
+    setDraft({
+      id: generateChannelId(),
+      name: '',
+      type: 'slack',
+      webhookUrl: '',
+      enabled: true,
+    });
+  }
+
+  async function handleSave() {
+    if (!draft) return;
+    if (!draft.name.trim()) return;
+    if (!draft.webhookUrl.trim()) return;
+    try {
+      await upsertChannel({ ...draft, name: draft.name.trim(), webhookUrl: draft.webhookUrl.trim() });
+      setDraft(null);
+    } catch (err) {
+      console.error('Failed to save channel:', err);
+    }
+  }
+
+  async function handleDelete(channel: ChannelConfig) {
+    if (!(await confirm(`Delete channel "${channel.name}"?`))) return;
+    try {
+      await removeChannel(channel.id);
+    } catch (err) {
+      console.error('Failed to delete channel:', err);
+    }
+  }
+
+  async function handleToggle(channel: ChannelConfig, enabled: boolean) {
+    try {
+      await upsertChannel({ ...channel, enabled });
+    } catch (err) {
+      console.error('Failed to toggle channel:', err);
+    }
+  }
+
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-white">External Channels</h3>
+        {!draft && (
+          <button
+            onClick={startAdd}
+            className="flex items-center gap-1.5 rounded-md border border-edge bg-surface px-2.5 py-1 text-xs text-secondary transition-colors hover:bg-panel hover:text-white"
+          >
+            <Plus size={12} />
+            Add channel
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-muted">
+        Slack, Discord, and generic webhooks. Any agent can send to these channels via the{' '}
+        <span className="font-mono text-secondary">message</span> tool.
+      </p>
+
+      {channels.length === 0 && !draft && (
+        <div className="rounded-lg border border-dashed border-edge bg-background px-4 py-6 text-center text-xs text-muted">
+          No channels configured yet.
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {channels.map((channel) => (
+          <div
+            key={channel.id}
+            className="rounded-lg border border-edge bg-background px-4 py-3"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-white">{channel.name}</span>
+                  <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+                    {channel.type}
+                  </span>
+                </div>
+                <p className="mt-1 truncate font-mono text-xs text-muted">
+                  {channel.webhookUrl}
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <Switch.Root
+                  checked={channel.enabled}
+                  onCheckedChange={(v) => handleToggle(channel, v)}
+                  className="w-9 h-5 rounded-full bg-edge data-[state=checked]:bg-accent transition-colors outline-none shrink-0"
+                  aria-label={`Enable ${channel.name}`}
+                >
+                  <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
+                </Switch.Root>
+                <button
+                  onClick={() => handleDelete(channel)}
+                  className="flex items-center gap-1 px-2 py-1 rounded text-xs text-red-400 hover:bg-red-500/10 transition-colors"
+                >
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {draft && (
+        <div className="space-y-3 rounded-lg border border-accent/60 bg-background px-4 py-3">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-muted">Name</span>
+              <input
+                value={draft.name}
+                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                placeholder="e.g. #ops-alerts"
+                className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-muted">Type</span>
+              <Select.Root
+                value={draft.type}
+                onValueChange={(v) => setDraft({ ...draft, type: v as ChannelType })}
+              >
+                <Select.Trigger className="flex items-center justify-between rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-accent">
+                  <Select.Value />
+                  <Select.Icon>
+                    <ChevronDown size={14} />
+                  </Select.Icon>
+                </Select.Trigger>
+                <Select.Portal>
+                  <Select.Content
+                    position="popper"
+                    sideOffset={4}
+                    className="z-50 min-w-[var(--radix-select-trigger-width)] rounded-md border border-edge bg-surface p-1 shadow-lg"
+                  >
+                    <Select.Viewport>
+                      {CHANNEL_TYPE_OPTIONS.map((opt) => (
+                        <Select.Item
+                          key={opt.value}
+                          value={opt.value}
+                          className="cursor-pointer rounded px-2 py-1 text-sm text-white data-[highlighted]:bg-panel data-[highlighted]:outline-none"
+                        >
+                          <Select.ItemText>{opt.label}</Select.ItemText>
+                        </Select.Item>
+                      ))}
+                    </Select.Viewport>
+                  </Select.Content>
+                </Select.Portal>
+              </Select.Root>
+            </label>
+          </div>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted">Webhook URL</span>
+            <input
+              value={draft.webhookUrl}
+              onChange={(e) => setDraft({ ...draft, webhookUrl: e.target.value })}
+              placeholder="https://hooks.slack.com/services/..."
+              className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-accent"
+            />
+            <span className="text-[11px] text-muted">
+              {CHANNEL_TYPE_OPTIONS.find((o) => o.value === draft.type)?.hint}
+            </span>
+          </label>
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => setDraft(null)}
+              className="rounded-md px-3 py-1.5 text-xs text-muted hover:text-white transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={!draft.name.trim() || !draft.webhookUrl.trim()}
+              className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+            >
+              Save channel
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ─── Shared agent defaults ───────────────────────────────────────────────────
+
+const PERMISSION_MODE_OPTIONS: {
+  value: AgentDefaults['permissionMode'];
+  label: string;
+  description: string;
+}[] = [
+  { value: 'normal', label: 'Normal', description: 'Prompt for writes/exec, auto-allow reads' },
+  { value: 'strict', label: 'Strict', description: 'Prompt for all non-read operations' },
+  {
+    value: 'permissive',
+    label: 'Permissive',
+    description: 'Auto-allow everything (advanced users)',
+  },
+];
+
+function AgentDefaultsSection() {
+  const agentDefaults = useSettingsStore((s) => s.settings.agentDefaults);
+  const updateAgentDefaults = useSettingsStore((s) => s.updateAgentDefaults);
+
+  // An empty list in global settings means "all default tools". The UI
+  // surfaces that as "every tool allowed" until the user clicks a single tool
+  // to start customizing.
+  const allToolsEnabled = agentDefaults.allowedTools.length === 0;
+
+  const allowedSet = useMemo(
+    () => new Set(agentDefaults.allowedTools),
+    [agentDefaults.allowedTools],
+  );
+
+  async function toggleTool(toolId: string, on: boolean) {
+    // First interaction expands the implicit "all" list into an explicit one
+    // that excludes only the tool being turned off.
+    if (allToolsEnabled) {
+      if (on) return; // already on
+      const explicit = TOOL_CATEGORIES.flatMap((c) => c.tools.map((t) => t.id)).filter(
+        (id) => id !== toolId,
+      );
+      await updateAgentDefaults({ allowedTools: explicit });
+      return;
+    }
+    const next = on
+      ? [...agentDefaults.allowedTools, toolId]
+      : agentDefaults.allowedTools.filter((id) => id !== toolId);
+    await updateAgentDefaults({ allowedTools: next });
+  }
+
+  async function resetToAll() {
+    await updateAgentDefaults({ allowedTools: [] });
+  }
+
+  return (
+    <section className="space-y-3">
+      <h3 className="text-sm font-semibold text-white">Agent Defaults</h3>
+      <p className="text-xs text-muted">
+        These defaults apply to every agent at runtime. Individual agents can opt out of
+        specific tools via their own config.
+      </p>
+
+      <div className="rounded-lg border border-edge bg-background px-4 py-3">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <label className="text-sm font-medium text-white">Permission mode</label>
+            <p className="text-xs text-muted mt-1">
+              Controls how destructive tool calls are gated.
+            </p>
+          </div>
+          <Select.Root
+            value={agentDefaults.permissionMode}
+            onValueChange={(v) =>
+              updateAgentDefaults({ permissionMode: v as AgentDefaults['permissionMode'] })
+            }
+          >
+            <Select.Trigger className="flex items-center justify-between gap-2 rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white min-w-[130px] focus:outline-none focus:border-accent">
+              <Select.Value />
+              <Select.Icon>
+                <ChevronDown size={14} />
+              </Select.Icon>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Content
+                position="popper"
+                sideOffset={4}
+                className="z-50 rounded-md border border-edge bg-surface p-1 shadow-lg"
+              >
+                <Select.Viewport>
+                  {PERMISSION_MODE_OPTIONS.map((opt) => (
+                    <Select.Item
+                      key={opt.value}
+                      value={opt.value}
+                      className="cursor-pointer rounded px-2 py-1 text-sm text-white data-[highlighted]:bg-panel data-[highlighted]:outline-none"
+                    >
+                      <Select.ItemText>{opt.label}</Select.ItemText>
+                      <div className="text-[11px] text-muted">{opt.description}</div>
+                    </Select.Item>
+                  ))}
+                </Select.Viewport>
+              </Select.Content>
+            </Select.Portal>
+          </Select.Root>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-edge bg-background px-4 py-3">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <label className="text-sm font-medium text-white">Web search provider</label>
+            <p className="text-xs text-muted mt-1">
+              Provider used by the <span className="font-mono">web_search</span> tool.
+            </p>
+          </div>
+          <Select.Root
+            value={agentDefaults.webSearchProvider}
+            onValueChange={(v) => updateAgentDefaults({ webSearchProvider: v })}
+          >
+            <Select.Trigger className="flex items-center justify-between gap-2 rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white min-w-[130px] focus:outline-none focus:border-accent">
+              <Select.Value />
+              <Select.Icon>
+                <ChevronDown size={14} />
+              </Select.Icon>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Content
+                position="popper"
+                sideOffset={4}
+                className="z-50 rounded-md border border-edge bg-surface p-1 shadow-lg"
+              >
+                <Select.Viewport>
+                  {SEARCH_PROVIDERS.map((opt) => (
+                    <Select.Item
+                      key={opt.value}
+                      value={opt.value}
+                      className="cursor-pointer rounded px-2 py-1 text-sm text-white data-[highlighted]:bg-panel data-[highlighted]:outline-none"
+                    >
+                      <Select.ItemText>{opt.label}</Select.ItemText>
+                    </Select.Item>
+                  ))}
+                </Select.Viewport>
+              </Select.Content>
+            </Select.Portal>
+          </Select.Root>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-edge bg-background px-4 py-3 space-y-3">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <label className="text-sm font-medium text-white">Allowed tools</label>
+            <p className="text-xs text-muted mt-1">
+              Tools available to every agent by default. Per-agent <span className="font-mono">disabledTools</span>{' '}
+              further restricts this set.
+            </p>
+          </div>
+          {!allToolsEnabled && (
+            <button
+              onClick={resetToAll}
+              className="text-xs text-secondary hover:text-white transition-colors"
+            >
+              Reset to all
+            </button>
+          )}
+        </div>
+
+        <div className="space-y-2">
+          {TOOL_CATEGORIES.map((category) => (
+            <div key={category.label}>
+              <div className="text-[11px] uppercase tracking-wide text-muted mb-1">
+                {category.label}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {category.tools.map((tool) => {
+                  const enabled = allToolsEnabled || allowedSet.has(tool.id);
+                  return (
+                    <button
+                      key={tool.id}
+                      onClick={() => toggleTool(tool.id, !enabled)}
+                      className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                        enabled
+                          ? 'border-accent/60 bg-accent/10 text-white'
+                          : 'border-edge bg-background text-muted hover:text-secondary'
+                      }`}
+                    >
+                      {tool.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─── Permission rules ────────────────────────────────────────────────────────
+
+function PermissionRulesSection() {
+  const rules = useSettingsStore((s) => s.settings.agentDefaults.permissionRules);
+  const removeRule = useSettingsStore((s) => s.removePermissionRule);
+
+  async function handleDelete(rule: PermissionRule) {
+    if (!(await confirm(`Delete rule for "${rule.tool}"?`))) return;
+    try {
+      await removeRule(rule.id);
+    } catch (err) {
+      console.error('Failed to delete permission rule:', err);
+    }
+  }
+
+  return (
+    <section className="space-y-3">
+      <h3 className="text-sm font-semibold text-white">Permission Rules</h3>
+      <p className="text-xs text-muted">
+        Persisted allow/deny rules. New rules are added by clicking{' '}
+        <span className="text-secondary">Always allow</span> on a permission prompt.
+      </p>
+
+      {rules.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-edge bg-background px-4 py-6 text-center text-xs text-muted">
+          No permission rules yet.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {rules.map((rule) => (
+            <div
+              key={rule.id}
+              className="rounded-lg border border-edge bg-background px-4 py-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
+                        rule.decision === 'allow'
+                          ? 'bg-emerald-500/20 text-emerald-300'
+                          : 'bg-red-500/20 text-red-300'
+                      }`}
+                    >
+                      {rule.decision}
+                    </span>
+                    <span className="text-sm font-medium text-white">{rule.tool}</span>
+                  </div>
+                  <p className="mt-1 font-mono text-xs text-muted break-all">{rule.pattern}</p>
+                  {rule.description && (
+                    <p className="mt-1 text-xs text-muted">{rule.description}</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleDelete(rule)}
+                  className="flex items-center gap-1 px-2 py-1 rounded text-xs text-red-400 hover:bg-red-500/10 transition-colors"
+                >
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ─── Settings screen shell ───────────────────────────────────────────────────
+
 interface SettingsProps {
   onClose?: () => void;
 }
@@ -101,6 +589,9 @@ export function Settings({ onClose }: SettingsProps = {}) {
   const showVerboseToolDetails = useSettingsStore((s) => s.showVerboseToolDetails);
   const setShowAgentThoughts = useSettingsStore((s) => s.setShowAgentThoughts);
   const setShowVerboseToolDetails = useSettingsStore((s) => s.setShowVerboseToolDetails);
+  const loaded = useSettingsStore((s) => s.loaded);
+  const loadError = useSettingsStore((s) => s.error);
+
   const handleClose = () => onClose?.();
 
   useEffect(() => {
@@ -113,6 +604,11 @@ export function Settings({ onClose }: SettingsProps = {}) {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
+
+  // The unused-var noise `TOOL_LABEL_BY_ID` is imported for co-location with
+  // other UI that might render a tool label later — keep it in the module so
+  // dead-code elimination doesn't drop the symbol from the bundle.
+  void TOOL_LABEL_BY_ID;
 
   return (
     <div
@@ -128,7 +624,7 @@ export function Settings({ onClose }: SettingsProps = {}) {
             <div>
               <h2 className="text-lg font-semibold text-white">Settings</h2>
               <p className="text-sm text-muted mt-1">
-                Manage API keys shared across all agents.
+                Machine-wide defaults shared across every agent.
               </p>
             </div>
             {onClose ? (
@@ -144,6 +640,12 @@ export function Settings({ onClose }: SettingsProps = {}) {
             ) : null}
           </div>
 
+          {loadError && (
+            <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+              Failed to load global settings: {loadError}
+            </div>
+          )}
+
           <section className="space-y-3">
             <h3 className="text-sm font-semibold text-white">Chat Display</h3>
             <div className="rounded-lg border border-edge bg-background px-4 py-3">
@@ -157,7 +659,9 @@ export function Settings({ onClose }: SettingsProps = {}) {
                 </div>
                 <Switch.Root
                   checked={showAgentThoughts}
-                  onCheckedChange={setShowAgentThoughts}
+                  onCheckedChange={(v) => {
+                    void setShowAgentThoughts(v);
+                  }}
                   className="w-9 h-5 rounded-full bg-edge data-[state=checked]:bg-accent transition-colors outline-none shrink-0"
                 >
                   <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
@@ -175,7 +679,9 @@ export function Settings({ onClose }: SettingsProps = {}) {
                 </div>
                 <Switch.Root
                   checked={showVerboseToolDetails}
-                  onCheckedChange={setShowVerboseToolDetails}
+                  onCheckedChange={(v) => {
+                    void setShowVerboseToolDetails(v);
+                  }}
                   className="w-9 h-5 rounded-full bg-edge data-[state=checked]:bg-accent transition-colors outline-none shrink-0"
                 >
                   <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
@@ -183,6 +689,10 @@ export function Settings({ onClose }: SettingsProps = {}) {
               </div>
             </div>
           </section>
+
+          {loaded && <ChannelsSection />}
+          {loaded && <AgentDefaultsSection />}
+          {loaded && <PermissionRulesSection />}
 
           <section className="space-y-3">
             <h3 className="text-sm font-semibold text-white">Model Providers</h3>

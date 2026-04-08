@@ -59,6 +59,11 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            // Run the global settings migration before anything else can read
+            // the file. Idempotent: a no-op if ~/.orbit/settings.json is
+            // already present and parseable.
+            executor::migration::migrate_global_settings();
+
             let db_pool = init_db(data_dir())?;
             let initial_auth = load_auth_state(&data_dir());
 
@@ -282,6 +287,9 @@ pub fn run() {
             commands::permissions::respond_to_permission,
             commands::permissions::save_permission_rule,
             commands::permissions::delete_permission_rule,
+            // Global settings
+            commands::global_settings::get_global_settings,
+            commands::global_settings::update_global_settings,
             // Projects
             commands::projects::list_projects,
             commands::projects::get_project,

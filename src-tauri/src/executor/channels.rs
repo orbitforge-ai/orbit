@@ -1,11 +1,10 @@
-use std::fs;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use crate::executor::global_settings;
 use crate::executor::http::validate_url_for_ssrf;
-use crate::executor::workspace::agent_dir;
 
 const CHANNEL_REQUEST_TIMEOUT_SECS: u64 = 20;
 
@@ -36,29 +35,9 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ChannelsFile {
-    #[serde(default)]
-    pub channels: Vec<ChannelConfig>,
-}
-
-fn channels_path(agent_id: &str) -> std::path::PathBuf {
-    agent_dir(agent_id).join("channels.json")
-}
-
-/// Load all channels configured for an agent. Returns an empty list if the
-/// file does not exist yet.
-pub fn load_channels(agent_id: &str) -> Result<Vec<ChannelConfig>, String> {
-    let path = channels_path(agent_id);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let content =
-        fs::read_to_string(&path).map_err(|e| format!("failed to read channels: {}", e))?;
-    let file: ChannelsFile =
-        serde_json::from_str(&content).map_err(|e| format!("failed to parse channels: {}", e))?;
-    Ok(file.channels)
+/// Load all configured channels from the global settings file.
+pub fn load_channels() -> Vec<ChannelConfig> {
+    global_settings::load_global_settings().channels
 }
 
 /// Look up a channel by id or name (case-insensitive).

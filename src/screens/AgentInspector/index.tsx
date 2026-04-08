@@ -51,47 +51,12 @@ import { RoleSelector, ROLE_ICON_MAP } from './RoleSelector';
 import { getDefaultAgentIdentity } from '../../lib/agentIdentity';
 import {
   DEFAULT_ROLE_ID,
-  getRoleDefaultTools,
   getRoleSystemInstructions,
   resolveRole,
 } from '../../lib/agentRoles';
 import { SessionList } from '../Chat/SessionList';
 import { ChatPanel } from '../Chat/ChatPanel';
-import { WebSearchChip } from './Header/WebSearchChip';
 import { AgentRoleSelect } from './Header/AgentRoleSelect';
-
-// Mirrors ConfigTab.tsx TOOL_CATEGORIES — keep in sync if tools change
-const ALL_TOOL_IDS = [
-  'read_file',
-  'write_file',
-  'edit_file',
-  'list_files',
-  'grep',
-  'shell_command',
-  'worktree',
-  'send_message',
-  'ask_user',
-  'web_search',
-  'web_fetch',
-  'image_analysis',
-  'image_generation',
-  'session_history',
-  'session_status',
-  'sessions_list',
-  'session_send',
-  'sessions_spawn',
-  'config',
-  'spawn_sub_agents',
-  'subagents',
-  'yield_turn',
-  'activate_skill',
-  'task',
-  'schedule',
-  'remember',
-  'search_memory',
-  'forget',
-  'list_memories',
-];
 
 type ActivityItem =
   | { key: string; kind: 'session'; timestamp: number; session: ChatSession }
@@ -344,32 +309,8 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
       ...agentConfig,
       roleId: newRoleId,
       roleSystemInstructions: getRoleSystemInstructions(newRoleId),
-      allowedTools: getRoleDefaultTools(newRoleId),
     };
     await workspaceApi.updateConfig(agentId, updated);
-    queryClient.invalidateQueries({ queryKey: ['agent-config', agentId] });
-  }
-
-  async function handleWebSearchToggle() {
-    if (!agentConfig) return;
-    const isEnabled =
-      agentConfig.allowedTools.length === 0 || agentConfig.allowedTools.includes('web_search');
-    let updatedTools: string[];
-    if (isEnabled) {
-      const current =
-        agentConfig.allowedTools.length === 0 ? [...ALL_TOOL_IDS] : agentConfig.allowedTools;
-      updatedTools = current.filter((t) => t !== 'web_search');
-    } else {
-      updatedTools =
-        agentConfig.allowedTools.length === 0 ? [] : [...agentConfig.allowedTools, 'web_search'];
-    }
-    await workspaceApi.updateConfig(agentId, { ...agentConfig, allowedTools: updatedTools });
-    queryClient.invalidateQueries({ queryKey: ['agent-config', agentId] });
-  }
-
-  async function handleWebSearchProviderChange(provider: string) {
-    if (!agentConfig) return;
-    await workspaceApi.updateConfig(agentId, { ...agentConfig, webSearchProvider: provider });
     queryClient.invalidateQueries({ queryKey: ['agent-config', agentId] });
   }
 
@@ -539,18 +480,10 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
                 {agentConfig && (
-                  <>
-                    <AgentRoleSelect
-                      agentConfig={agentConfig}
-                      handleRoleChange={handleRoleChange}
-                    />
-                    <WebSearchChip
-                      allowedTools={agentConfig.allowedTools}
-                      webSearchProvider={agentConfig.webSearchProvider}
-                      onToggle={handleWebSearchToggle}
-                      onProviderChange={handleWebSearchProviderChange}
-                    />
-                  </>
+                  <AgentRoleSelect
+                    agentConfig={agentConfig}
+                    handleRoleChange={handleRoleChange}
+                  />
                 )}
                 <HeaderStatChip
                   label="Active"

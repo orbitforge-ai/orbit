@@ -45,6 +45,10 @@ pub struct ContextRequest {
     pub session_type: Option<String>,
     pub goal: Option<String>,
     pub ws_config: AgentWorkspaceConfig,
+    /// Effective allowed-tool list, computed from the global allow-list minus
+    /// the agent's `disabled_tools`. Snapshotted at request-build time so mid-run
+    /// global edits do not affect an in-progress run.
+    pub allowed_tools: Vec<String>,
     /// For agent_loop: messages managed in-memory during the loop.
     pub existing_messages: Option<Vec<ChatMessage>>,
     /// Whether this context is for a sub-agent.
@@ -55,6 +59,14 @@ pub struct ContextRequest {
     pub chain_depth: i64,
     /// Active user ID for memory scoping.
     pub user_id: String,
+}
+
+impl ContextRequest {
+    /// Snapshot the effective allowed-tools list for the supplied agent config,
+    /// using the current global settings. Call this when building the request.
+    pub fn effective_allowed_tools(ws_config: &AgentWorkspaceConfig) -> Vec<String> {
+        crate::executor::global_settings::MergedAgentConfig::build(ws_config.clone()).allowed_tools
+    }
 }
 
 /// What kind of LLM interaction is being built.
@@ -529,7 +541,7 @@ impl ContextStage for BasePromptStage {
 
         // Tool names from actual resolved definitions (matches what the LLM receives)
         let tool_names = {
-            let mut tools = agent_tools::build_tool_definitions(&request.ws_config.allowed_tools);
+            let mut tools = agent_tools::build_tool_definitions(&request.allowed_tools);
             if !request.allow_sub_agents {
                 tools.retain(|t| t.name != "spawn_sub_agents");
             }
@@ -906,7 +918,7 @@ impl ContextStage for ToolResolutionStage {
         match request.mode {
             ContextMode::AgentLoop | ContextMode::Chat | ContextMode::Pulse => {
                 let mut tools =
-                    agent_tools::build_tool_definitions(&request.ws_config.allowed_tools);
+                    agent_tools::build_tool_definitions(&request.allowed_tools);
                 if !request.allow_sub_agents {
                     tools.retain(|t| t.name != "spawn_sub_agents");
                 }

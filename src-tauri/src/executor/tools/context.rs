@@ -76,6 +76,7 @@ impl ToolExecutionContext {
             .map(|state| state.path.clone())
             .unwrap_or_else(|| main_workspace_root.clone());
         let ws_config = crate::executor::workspace::load_agent_config(agent_id).unwrap_or_default();
+        let global = crate::executor::global_settings::load_global_settings();
         Self {
             agent_id: agent_id.to_string(),
             _agent_root: agent_root,
@@ -84,7 +85,7 @@ impl ToolExecutionContext {
                 active_workspace_root,
                 current_worktree: worktree,
             })),
-            web_search_provider: ws_config.web_search_provider,
+            web_search_provider: global.agent_defaults.web_search_provider,
             disabled_skills: ws_config.disabled_skills,
             db: Some(db),
             executor_tx: Some(executor_tx),

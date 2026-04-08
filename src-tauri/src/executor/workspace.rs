@@ -205,25 +205,24 @@ pub struct AgentWorkspaceConfig {
     pub provider: String,
     pub model: String,
     pub temperature: f64,
+    #[serde(default = "default_max_iterations")]
     pub max_iterations: u32,
+    #[serde(default = "default_max_total_tokens")]
     pub max_total_tokens: u32,
-    pub allowed_tools: Vec<String>,
     #[serde(default)]
     pub compaction_threshold: Option<f64>,
     #[serde(default)]
     pub compaction_retain_count: Option<u32>,
     #[serde(default)]
     pub context_window_override: Option<u32>,
-    #[serde(default = "default_search_provider")]
-    pub web_search_provider: String,
     #[serde(default)]
     pub disabled_skills: Vec<String>,
+    #[serde(default)]
+    pub disabled_tools: Vec<String>,
+    #[serde(default)]
+    pub default_channel_id: Option<String>,
     #[serde(default = "default_agent_identity")]
     pub identity: AgentIdentityConfig,
-    #[serde(default)]
-    pub permission_rules: Vec<PermissionRule>,
-    #[serde(default = "default_permission_mode")]
-    pub permission_mode: String,
     #[serde(default = "default_true")]
     pub memory_enabled: bool,
     #[serde(default = "default_staleness_days")]
@@ -234,10 +233,6 @@ pub struct AgentWorkspaceConfig {
     pub role_system_instructions: Option<String>,
 }
 
-fn default_permission_mode() -> String {
-    "normal".to_string()
-}
-
 fn default_true() -> bool {
     true
 }
@@ -246,8 +241,12 @@ fn default_staleness_days() -> u32 {
     30
 }
 
-fn default_search_provider() -> String {
-    "brave".to_string()
+fn default_max_iterations() -> u32 {
+    25
+}
+
+fn default_max_total_tokens() -> u32 {
+    200_000
 }
 
 fn default_identity_preset_id() -> String {
@@ -292,45 +291,15 @@ impl Default for AgentWorkspaceConfig {
             provider: "anthropic".to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
             temperature: 0.7,
-            max_iterations: 25,
-            max_total_tokens: 200_000,
-            allowed_tools: vec![
-                "shell_command".to_string(),
-                "read_file".to_string(),
-                "write_file".to_string(),
-                "edit_file".to_string(),
-                "list_files".to_string(),
-                "grep".to_string(),
-                "web_search".to_string(),
-                "web_fetch".to_string(),
-                "image_analysis".to_string(),
-                "image_generation".to_string(),
-                "config".to_string(),
-                "task".to_string(),
-                "schedule".to_string(),
-                "worktree".to_string(),
-                "session_history".to_string(),
-                "session_status".to_string(),
-                "sessions_list".to_string(),
-                "session_send".to_string(),
-                "sessions_spawn".to_string(),
-                "subagents".to_string(),
-                "message".to_string(),
-                "yield_turn".to_string(),
-                "ask_user".to_string(),
-                "activate_skill".to_string(),
-                "remember".to_string(),
-                "search_memory".to_string(),
-                "finish".to_string(),
-            ],
+            max_iterations: default_max_iterations(),
+            max_total_tokens: default_max_total_tokens(),
             compaction_threshold: None,
             compaction_retain_count: None,
             context_window_override: None,
-            web_search_provider: default_search_provider(),
             disabled_skills: Vec::new(),
+            disabled_tools: Vec::new(),
+            default_channel_id: None,
             identity: default_agent_identity(),
-            permission_rules: Vec::new(),
-            permission_mode: default_permission_mode(),
             memory_enabled: true,
             memory_staleness_threshold_days: default_staleness_days(),
             role_id: None,
@@ -659,7 +628,14 @@ pub fn init_agent_workspace(agent_id: &str) -> Result<(), String> {
     // Write default config if it doesn't exist
     let config_path = root.join("config.json");
     if !config_path.exists() {
-        let default_config = AgentWorkspaceConfig::default();
+        let mut default_config = AgentWorkspaceConfig::default();
+        // Seed the default outbound channel so the new agent can use the
+        // `message` tool without explicitly naming a channel. Pick the first
+        // enabled global channel, if any.
+        let global = crate::executor::global_settings::load_global_settings();
+        if let Some(ch) = global.channels.iter().find(|c| c.enabled) {
+            default_config.default_channel_id = Some(ch.id.clone());
+        }
         let json = serde_json::to_string_pretty(&default_config)
             .map_err(|e| format!("failed to serialize config: {}", e))?;
         fs::write(&config_path, json).map_err(|e| format!("failed to write config.json: {}", e))?;
@@ -770,7 +746,19 @@ pub fn load_agent_config(agent_id: &str) -> Result<AgentWorkspaceConfig, String>
         fs::read_to_string(&config_path).map_err(|e| format!("failed to read config: {}", e))?;
     let config: AgentWorkspaceConfig =
         serde_json::from_str(&content).map_err(|e| format!("failed to parse config: {}", e))?;
-    Ok(normalize_agent_config(config))
+    let mut normalized = normalize_agent_config(config);
+
+    // If the agent's default_channel_id no longer resolves against the current
+    // global channel list, silently clear it in memory. The cleared value is
+    // NOT persisted here — the next explicit save will drop it naturally. This
+    // prevents a transient misconfiguration from permanently losing the id.
+    if let Some(ref id) = normalized.default_channel_id {
+        if crate::executor::global_settings::find_channel_by_id(id).is_none() {
+            normalized.default_channel_id = None;
+        }
+    }
+
+    Ok(normalized)
 }
 
 /// Save the agent's workspace configuration to config.json.
@@ -794,6 +782,9 @@ mod tests {
 
     #[test]
     fn missing_identity_defaults_to_balanced_assistant() {
+        // Legacy config with removed fields (allowedTools, webSearchProvider,
+        // permissionRules, permissionMode) should still parse — those fields
+        // are silently ignored by serde's default unknown-field behavior.
         let parsed: AgentWorkspaceConfig = serde_json::from_str(
             r#"{
                 "provider": "anthropic",
@@ -803,6 +794,8 @@ mod tests {
                 "maxTotalTokens": 200000,
                 "allowedTools": ["finish"],
                 "webSearchProvider": "brave",
+                "permissionMode": "normal",
+                "permissionRules": [],
                 "disabledSkills": []
             }"#,
         )
@@ -810,6 +803,18 @@ mod tests {
 
         assert_eq!(parsed.identity.preset_id, "balanced_assistant");
         assert_eq!(parsed.identity.identity_name, "Balanced Assistant");
+    }
+
+    #[test]
+    fn slim_config_serializes_without_removed_fields() {
+        let config = AgentWorkspaceConfig::default();
+        let json = serde_json::to_string(&config).expect("serialize");
+        assert!(!json.contains("allowedTools"));
+        assert!(!json.contains("webSearchProvider"));
+        assert!(!json.contains("permissionMode"));
+        assert!(!json.contains("permissionRules"));
+        assert!(json.contains("disabledTools"));
+        assert!(json.contains("defaultChannelId"));
     }
 
     #[test]

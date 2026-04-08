@@ -357,19 +357,48 @@ export interface AgentWorkspaceConfig {
   temperature: number;
   maxIterations: number;
   maxTotalTokens: number;
-  allowedTools: string[];
   compactionThreshold?: number;
   compactionRetainCount?: number;
   contextWindowOverride?: number;
-  webSearchProvider: string;
   disabledSkills: string[];
+  disabledTools: string[];
   identity: AgentIdentityConfig;
-  permissionRules: PermissionRule[];
-  permissionMode: 'normal' | 'strict' | 'permissive';
   memoryEnabled: boolean;
   memoryStalenessThresholdDays: number;
   roleId?: string;
   roleSystemInstructions?: string;
+  defaultChannelId?: string;
+}
+
+// ─── Global settings ─────────────────────────────────────────────────────────
+
+export type ChannelType = 'slack' | 'discord' | 'webhook';
+
+export interface ChannelConfig {
+  id: string;
+  name: string;
+  type: ChannelType;
+  webhookUrl: string;
+  enabled: boolean;
+}
+
+export interface ChatDisplaySettings {
+  showAgentThoughts: boolean;
+  showVerboseToolDetails: boolean;
+}
+
+export interface AgentDefaults {
+  allowedTools: string[];
+  permissionMode: 'normal' | 'strict' | 'permissive';
+  permissionRules: PermissionRule[];
+  webSearchProvider: string;
+}
+
+export interface GlobalSettings {
+  version: number;
+  chatDisplay: ChatDisplaySettings;
+  agentDefaults: AgentDefaults;
+  channels: ChannelConfig[];
 }
 
 // ─── Agent Skills types ────────────────────────────────────────────────────

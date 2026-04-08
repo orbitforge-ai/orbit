@@ -9,11 +9,11 @@ export const permissionsApi = {
     });
   },
 
-  saveRule(agentId: string, rule: PermissionRule) {
-    return invoke('save_permission_rule', { agentId, rule });
+  saveRule(rule: PermissionRule) {
+    return invoke('save_permission_rule', { agentId: null, rule });
   },
 
-  deleteRule(agentId: string, ruleId: string) {
-    return invoke('delete_permission_rule', { agentId, ruleId });
+  deleteRule(ruleId: string) {
+    return invoke('delete_permission_rule', { agentId: null, ruleId });
   },
 };

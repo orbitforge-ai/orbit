@@ -959,6 +959,7 @@ async fn do_llm_chat(
 
     // Build context via pipeline (messages already loaded, pass them to avoid re-query)
     let pipeline = context::default_pipeline(memory_client.cloned());
+    let allowed_tools = ContextRequest::effective_allowed_tools(&ws_config);
     let ctx_request = ContextRequest {
         agent_id: agent_id.to_string(),
         mode: ContextMode::Chat,
@@ -966,6 +967,7 @@ async fn do_llm_chat(
         session_type: Some(session_type.to_string()),
         goal: None,
         ws_config: ws_config.clone(),
+        allowed_tools,
         existing_messages: Some(messages),
         is_sub_agent: false,
         allow_sub_agents: true,

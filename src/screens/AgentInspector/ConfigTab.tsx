@@ -1,105 +1,20 @@
 import { useEffect, useState, useImperativeHandle, forwardRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, ChevronDown, FolderOpen, X, ExternalLink, AlertTriangle, Trash2 } from 'lucide-react';
+import { Check, ChevronDown, FolderOpen, X, ExternalLink, AlertTriangle } from 'lucide-react';
 import * as Select from '@radix-ui/react-select';
 import * as Slider from '@radix-ui/react-slider';
 import * as Switch from '@radix-ui/react-switch';
 
 import { workspaceApi } from '../../api/workspace';
-import { permissionsApi } from '../../api/permissions';
 import { projectsApi } from '../../api/projects';
 import { AgentWorkspaceConfig, Project } from '../../types';
 import { CollapsibleSection } from '../../components/CollapsibleSection';
 import { AgentIdentitySection } from './AgentIdentitySection';
 import { MODEL_OPTIONS, LLM_PROVIDERS, DEFAULT_MODEL_BY_PROVIDER } from '../../constants/providers';
+import { TOOL_CATEGORIES } from '../../constants/tools';
 import { useApiKeyStatus } from '../../hooks/useApiKeyStatus';
 import { useUiStore } from '../../store/uiStore';
-
-const PERMISSION_MODES = [
-  { value: 'normal', label: 'Normal', description: 'Prompt for writes/exec, auto-allow reads' },
-  { value: 'strict', label: 'Strict', description: 'Prompt for all non-read operations' },
-  {
-    value: 'permissive',
-    label: 'Permissive',
-    description: 'Auto-allow everything (advanced users)',
-  },
-];
-
-const TOOL_CATEGORIES = [
-  {
-    label: 'File System',
-    tools: [
-      { id: 'read_file', label: 'Read Files' },
-      { id: 'write_file', label: 'Write Files' },
-      { id: 'edit_file', label: 'Edit Files' },
-      { id: 'list_files', label: 'List Files' },
-      { id: 'grep', label: 'Content Search' },
-    ],
-  },
-  {
-    label: 'Execution',
-    tools: [
-      { id: 'shell_command', label: 'Shell Commands' },
-      { id: 'worktree', label: 'Git Worktree' },
-    ],
-  },
-  {
-    label: 'Communication',
-    tools: [
-      { id: 'send_message', label: 'Send Message' },
-      { id: 'message', label: 'External Messages' },
-      { id: 'ask_user', label: 'Ask User' },
-      { id: 'web_search', label: 'Web Search' },
-      { id: 'web_fetch', label: 'Web Fetch' },
-    ],
-  },
-  {
-    label: 'Vision',
-    tools: [
-      { id: 'image_analysis', label: 'Image Analysis' },
-      { id: 'image_generation', label: 'Image Generation' },
-    ],
-  },
-  {
-    label: 'Sessions',
-    tools: [
-      { id: 'session_history', label: 'Session History' },
-      { id: 'session_status', label: 'Session Status' },
-      { id: 'sessions_list', label: 'List Sessions' },
-      { id: 'session_send', label: 'Session Send' },
-      { id: 'sessions_spawn', label: 'Spawn Session' },
-    ],
-  },
-  {
-    label: 'Agent Control',
-    tools: [
-      { id: 'config', label: 'Self-Config' },
-      { id: 'spawn_sub_agents', label: 'Sub-Agents' },
-      { id: 'subagents', label: 'Manage Sub-Agents' },
-      { id: 'yield_turn', label: 'Yield Turn' },
-      { id: 'activate_skill', label: 'Activate Skill' },
-    ],
-  },
-  {
-    label: 'Task Management',
-    tools: [{ id: 'task', label: 'Agent Task Tracking' }],
-  },
-  {
-    label: 'Scheduling',
-    tools: [{ id: 'schedule', label: 'Schedules & Pulse' }],
-  },
-  {
-    label: 'Memory',
-    tools: [
-      { id: 'remember', label: 'Remember' },
-      { id: 'search_memory', label: 'Search Memory' },
-      { id: 'forget', label: 'Forget' },
-      { id: 'list_memories', label: 'List Memories' },
-    ],
-  },
-];
-
-const ALL_TOOL_IDS = TOOL_CATEGORIES.flatMap((c) => c.tools.map((t) => t.id));
+import { useSettingsStore } from '../../store/settingsStore';
 
 
 interface ConfigTabProps {
@@ -172,34 +87,18 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
     setSaving(false);
   }
 
-  function toggleTool(toolId: string) {
+  function toggleDisabledTool(toolId: string) {
     if (!config) return;
-    // If allowedTools is empty (meaning "all"), expand to explicit list first
-    const currentTools = config.allowedTools.length === 0 ? [...ALL_TOOL_IDS] : config.allowedTools;
-    let tools = currentTools.includes(toolId)
-      ? currentTools.filter((t) => t !== toolId)
-      : [...currentTools, toolId];
-    // When all non-finish tools are enabled, normalize back to empty (means "all")
-    if (ALL_TOOL_IDS.every((id) => tools.includes(id))) {
-      tools = [];
-    }
-    updateConfig({ allowedTools: tools });
+    const current = config.disabledTools ?? [];
+    const next = current.includes(toolId)
+      ? current.filter((t) => t !== toolId)
+      : [...current, toolId];
+    updateConfig({ disabledTools: next });
   }
 
-  function isToolEnabled(toolId: string): boolean {
+  function isToolDisabled(toolId: string): boolean {
     if (!config) return false;
-    return config.allowedTools.length === 0 || config.allowedTools.includes(toolId);
-  }
-
-  const allToolsEnabled = config ? config.allowedTools.length === 0 : false;
-
-  function toggleAllTools(enableAll: boolean) {
-    if (enableAll) {
-      updateConfig({ allowedTools: [] });
-    } else {
-      // Disable all except finish (which is always on)
-      updateConfig({ allowedTools: ['finish'] });
-    }
+    return (config.disabledTools ?? []).includes(toolId);
   }
 
   if (!config) {
@@ -452,41 +351,35 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
             </div>
           </div>
 
-          {/* Allowed Tools */}
+          {/* Disabled Tools */}
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
+            <div>
               <h5 className="text-xs font-semibold text-secondary uppercase tracking-wide">
-                Allowed Tools
+                Disabled Tools
               </h5>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted">All</span>
-                <Switch.Root
-                  checked={allToolsEnabled}
-                  onCheckedChange={toggleAllTools}
-                  className="w-9 h-5 rounded-full bg-edge data-[state=checked]:bg-emerald-500 transition-colors outline-none"
-                >
-                  <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
-                </Switch.Root>
-              </div>
+              <p className="text-[10px] text-muted mt-1">
+                The global allow-list is managed in Settings. Toggle individual tools off for
+                this agent only.
+              </p>
             </div>
 
             <div className="flex flex-wrap gap-1.5">
               {TOOL_CATEGORIES.flatMap((category) =>
                 category.tools.map((tool) => {
-                  const enabled = isToolEnabled(tool.id);
+                  const disabled = isToolDisabled(tool.id);
                   return (
                     <button
                       key={tool.id}
-                      onClick={() => toggleTool(tool.id)}
+                      onClick={() => toggleDisabledTool(tool.id)}
                       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium transition-colors ${
-                        enabled
-                          ? 'border-accent/40 bg-accent/10 text-accent-light hover:bg-accent/15'
-                          : 'border-edge bg-surface text-muted hover:border-edge-hover hover:text-white'
+                        disabled
+                          ? 'border-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/15'
+                          : 'border-edge bg-surface text-secondary hover:border-edge-hover hover:text-white'
                       }`}
                     >
                       <span
                         className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                          enabled ? 'bg-emerald-400' : 'bg-edge-hover'
+                          disabled ? 'bg-red-400' : 'bg-emerald-400'
                         }`}
                       />
                       {tool.label}
@@ -494,15 +387,16 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
                   );
                 })
               )}
-              {/* Finish — always on */}
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-edge bg-surface text-xs text-muted opacity-50">
-                <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-400" />
-                Finish
-              </span>
             </div>
           </div>
         </div>
       </CollapsibleSection>
+
+      {/* Default channel — only visible when global channels exist */}
+      <DefaultChannelSelect
+        value={config.defaultChannelId}
+        onChange={(id) => updateConfig({ defaultChannelId: id })}
+      />
 
       {/* Memory — collapsed by default */}
       <CollapsibleSection title="Memory" description="Long-term memory across sessions">
@@ -553,93 +447,90 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
         </div>
       </CollapsibleSection>
 
-      {/* Permissions — collapsed by default */}
-      <CollapsibleSection
-        title="Permissions"
-        description="Control which tool actions require user approval"
-      >
-        <div className="space-y-4">
-          {/* Permission Mode */}
-          <div>
-            <label className="text-xs text-muted block mb-1">Permission Mode</label>
-            <div className="flex gap-2">
-              {PERMISSION_MODES.map((mode) => (
-                <button
-                  key={mode.value}
-                  onClick={() =>
-                    updateConfig({
-                      permissionMode: mode.value as AgentWorkspaceConfig['permissionMode'],
-                    })
-                  }
-                  className={`px-3 py-1.5 rounded text-xs transition-colors ${
-                    config?.permissionMode === mode.value
-                      ? 'bg-accent/20 text-accent-hover border border-accent/40'
-                      : 'bg-surface border border-edge text-secondary hover:border-edge-hover'
-                  }`}
-                  title={mode.description}
-                >
-                  {mode.label}
-                </button>
-              ))}
-            </div>
-            <p className="text-[10px] text-muted mt-1">
-              {PERMISSION_MODES.find((m) => m.value === config?.permissionMode)?.description}
-            </p>
-          </div>
-
-          {/* Saved Permission Rules */}
-          <div>
-            <label className="text-xs text-muted block mb-1">
-              Saved Rules ({config?.permissionRules?.length ?? 0})
-            </label>
-            {!config?.permissionRules || config.permissionRules.length === 0 ? (
-              <p className="text-[10px] text-muted italic">
-                No saved rules. Click "Always Allow" or "Always Deny" on a permission prompt to
-                create rules.
-              </p>
-            ) : (
-              <div className="space-y-1">
-                {config.permissionRules.map((rule) => (
-                  <div
-                    key={rule.id}
-                    className="flex items-center gap-2 px-2 py-1.5 rounded bg-background/50 border border-edge/50 text-xs"
-                  >
-                    <span
-                      className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                        rule.decision === 'allow'
-                          ? 'bg-emerald-500/10 text-emerald-400'
-                          : 'bg-red-500/10 text-red-400'
-                      }`}
-                    >
-                      {rule.decision}
-                    </span>
-                    <span className="text-warning font-mono">{rule.tool}</span>
-                    <span className="text-muted font-mono truncate flex-1">{rule.pattern}</span>
-                    <button
-                      onClick={async () => {
-                        await permissionsApi.deleteRule(agentId, rule.id);
-                        updateConfig({
-                          permissionRules: config.permissionRules.filter((r) => r.id !== rule.id),
-                        });
-                      }}
-                      className="text-muted hover:text-red-400 transition-colors shrink-0"
-                      title="Delete rule"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </CollapsibleSection>
-
       {/* Projects */}
       <AgentProjectsSection agentId={agentId} />
     </div>
   );
 });
+
+// ─── Default Channel Select ───────────────────────────────────────────────────
+
+function DefaultChannelSelect({
+  value,
+  onChange,
+}: {
+  value: string | undefined;
+  onChange: (id: string | undefined) => void;
+}) {
+  const channels = useSettingsStore((s) => s.settings.channels);
+  const navigate = useUiStore((s) => s.navigate);
+
+  if (channels.length === 0) {
+    return (
+      <section className="space-y-2">
+        <h4 className="text-sm font-semibold text-white">Default Outbound Channel</h4>
+        <div className="rounded-lg border border-dashed border-edge bg-background px-4 py-4 text-xs text-muted">
+          No channels configured yet. Add one from{' '}
+          <button
+            onClick={() => navigate('settings')}
+            className="text-accent-hover hover:underline"
+          >
+            Settings
+          </button>{' '}
+          to let this agent send messages without specifying a channel.
+        </div>
+      </section>
+    );
+  }
+
+  const NONE_VALUE = '__none__';
+  const selected = value ?? NONE_VALUE;
+
+  return (
+    <section className="space-y-2">
+      <h4 className="text-sm font-semibold text-white">Default Outbound Channel</h4>
+      <p className="text-xs text-muted">
+        Used by the <span className="font-mono">message</span> tool when the agent calls it
+        without specifying a channel.
+      </p>
+      <Select.Root
+        value={selected}
+        onValueChange={(v) => onChange(v === NONE_VALUE ? undefined : v)}
+      >
+        <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent">
+          <Select.Value />
+          <Select.Icon>
+            <ChevronDown size={14} className="text-muted" />
+          </Select.Icon>
+        </Select.Trigger>
+        <Select.Portal>
+          <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
+            <Select.Viewport className="p-1">
+              <Select.Item
+                value={NONE_VALUE}
+                className="px-3 py-2 text-sm text-muted rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
+              >
+                <Select.ItemText>No default</Select.ItemText>
+              </Select.Item>
+              {channels.map((channel) => (
+                <Select.Item
+                  key={channel.id}
+                  value={channel.id}
+                  className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
+                >
+                  <Select.ItemText>
+                    {channel.name}
+                    {!channel.enabled && ' (disabled)'}
+                  </Select.ItemText>
+                </Select.Item>
+              ))}
+            </Select.Viewport>
+          </Select.Content>
+        </Select.Portal>
+      </Select.Root>
+    </section>
+  );
+}
 
 // ─── Agent Projects Section ───────────────────────────────────────────────────
 

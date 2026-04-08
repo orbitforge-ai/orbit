@@ -6,7 +6,8 @@ use tracing::{info, warn};
 
 use crate::events::emitter::{emit_permission_cancelled, emit_permission_request};
 use crate::executor::agent_tools::{self, ToolExecutionContext};
-use crate::executor::workspace::{self, PermissionRule};
+use crate::executor::global_settings;
+use crate::executor::workspace::PermissionRule;
 
 // ─── Risk levels ────────────────────────────────────────────────────────────
 
@@ -890,10 +891,40 @@ pub async fn execute_tool_with_permissions(
     run_id: &str,
     registry: &PermissionRegistry,
 ) -> Result<(String, bool), String> {
-    // Load fresh permission config (so mid-run "Always Allow" saves take effect)
-    let ws_config = workspace::load_agent_config(&ctx.agent_id).unwrap_or_default();
-    let permission_mode = &ws_config.permission_mode;
-    let permission_rules = &ws_config.permission_rules;
+    // Load fresh global settings (so mid-run "Always Allow" saves take effect).
+    // Permission mode and rules now live in the global settings file, not in
+    // per-agent config.
+    let global = global_settings::load_global_settings();
+    let permission_mode = global.agent_defaults.permission_mode.as_str();
+    let permission_rules = &global.agent_defaults.permission_rules;
+
+    // For `message.send`, resolve the target channel to a stable id BEFORE
+    // classification so permission rules match the same identity whether the
+    // agent sent with an explicit `channel` or via its default_channel_id.
+    let mut owned_input: Option<serde_json::Value> = None;
+    if tool_name == "message" && input["action"].as_str().unwrap_or("send") == "send" {
+        let raw_channel = input["channel"].as_str();
+        let resolved_id = match raw_channel {
+            Some(raw) if !raw.is_empty() => global_settings::find_channel_in_global(raw)
+                .map(|c| c.id),
+            _ => {
+                // Fall back to the agent's default outbound channel.
+                let ws_config = crate::executor::workspace::load_agent_config(&ctx.agent_id)
+                    .unwrap_or_default();
+                ws_config.default_channel_id.and_then(|id| {
+                    global_settings::find_channel_by_id(&id).map(|c| c.id)
+                })
+            }
+        };
+        if let Some(id) = resolved_id {
+            let mut clone = input.clone();
+            if let Some(obj) = clone.as_object_mut() {
+                obj.insert("channel".to_string(), serde_json::Value::String(id));
+            }
+            owned_input = Some(clone);
+        }
+    }
+    let input: &serde_json::Value = owned_input.as_ref().unwrap_or(input);
 
     // 1. Classify the tool call
     let (risk, description) = classify_tool_call(tool_name, input, permission_mode);

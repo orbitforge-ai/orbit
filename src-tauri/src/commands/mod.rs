@@ -2,6 +2,7 @@ pub mod agents;
 pub mod auth;
 pub mod bus;
 pub mod chat;
+pub mod global_settings;
 pub mod llm;
 pub mod memory;
 pub mod permissions;

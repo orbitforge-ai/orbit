@@ -139,6 +139,7 @@ pub async fn run_agent_loop(
 
     // ── Build context via pipeline ──────────────────────────────────────
     let pipeline = context::default_pipeline(memory_client.cloned());
+    let allowed_tools = ContextRequest::effective_allowed_tools(&ws_config);
     let ctx_request = ContextRequest {
         agent_id: agent_id.to_string(),
         mode: ContextMode::AgentLoop,
@@ -146,6 +147,7 @@ pub async fn run_agent_loop(
         session_type: None,
         goal: Some(goal.clone()),
         ws_config: ws_config.clone(),
+        allowed_tools,
         existing_messages: None,
         is_sub_agent,
         allow_sub_agents: !is_sub_agent,
@@ -634,6 +636,7 @@ pub async fn run_agent_prompt(
 
     // ── Build context via pipeline ──────────────────────────────────────
     let pipeline = context::default_pipeline(memory_client.cloned());
+    let allowed_tools = ContextRequest::effective_allowed_tools(&ws_config);
     let ctx_request = ContextRequest {
         agent_id: agent_id.to_string(),
         mode: ContextMode::SingleShot,
@@ -641,6 +644,7 @@ pub async fn run_agent_prompt(
         session_type: None,
         goal: Some(cfg.prompt.clone()),
         ws_config: ws_config.clone(),
+        allowed_tools,
         existing_messages: None,
         is_sub_agent: false,
         allow_sub_agents: true,
@@ -909,6 +913,7 @@ pub async fn run_pulse(
 
     // ── Build context via pipeline ──────────────────────────────────────
     let pipeline = context::default_pipeline(memory_client.cloned());
+    let allowed_tools = ContextRequest::effective_allowed_tools(&ws_config);
     let ctx_request = ContextRequest {
         agent_id: agent_id.to_string(),
         mode: ContextMode::Pulse,
@@ -916,6 +921,7 @@ pub async fn run_pulse(
         session_type: Some("pulse".to_string()),
         goal: Some(goal.to_string()),
         ws_config: ws_config.clone(),
+        allowed_tools,
         existing_messages: None,
         is_sub_agent: false,
         allow_sub_agents: true,

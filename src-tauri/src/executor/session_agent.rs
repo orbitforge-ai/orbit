@@ -80,6 +80,7 @@ pub async fn run_agent_session(
     let worktree_state = session_worktree::load_session_worktree_state(db, session_id).await?;
     let session_type = load_session_type(db, session_id).await.ok();
     let pipeline = context::default_pipeline(memory_client.cloned());
+    let allowed_tools = ContextRequest::effective_allowed_tools(&ws_config);
     let ctx_request = ContextRequest {
         agent_id: agent_id.to_string(),
         mode: ContextMode::Chat,
@@ -87,6 +88,7 @@ pub async fn run_agent_session(
         session_type,
         goal: None,
         ws_config: ws_config.clone(),
+        allowed_tools,
         existing_messages: Some(history),
         is_sub_agent,
         allow_sub_agents,
