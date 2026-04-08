@@ -98,7 +98,9 @@ interface SettingsProps {
 
 export function Settings({ onClose }: SettingsProps = {}) {
   const showAgentThoughts = useSettingsStore((s) => s.showAgentThoughts);
+  const showVerboseToolDetails = useSettingsStore((s) => s.showVerboseToolDetails);
   const setShowAgentThoughts = useSettingsStore((s) => s.setShowAgentThoughts);
+  const setShowVerboseToolDetails = useSettingsStore((s) => s.setShowVerboseToolDetails);
   const handleClose = () => onClose?.();
 
   useEffect(() => {
@@ -156,6 +158,24 @@ export function Settings({ onClose }: SettingsProps = {}) {
                 <Switch.Root
                   checked={showAgentThoughts}
                   onCheckedChange={setShowAgentThoughts}
+                  className="w-9 h-5 rounded-full bg-edge data-[state=checked]:bg-accent transition-colors outline-none shrink-0"
+                >
+                  <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
+                </Switch.Root>
+              </div>
+            </div>
+            <div className="rounded-lg border border-edge bg-background px-4 py-3">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <label className="text-sm font-medium text-white">Verbose tool details</label>
+                  <p className="text-xs text-muted mt-1">
+                    Off shows the shared human-readable tool panels. On also reveals raw input JSON
+                    and raw tool result payloads inside expanded tool details.
+                  </p>
+                </div>
+                <Switch.Root
+                  checked={showVerboseToolDetails}
+                  onCheckedChange={setShowVerboseToolDetails}
                   className="w-9 h-5 rounded-full bg-edge data-[state=checked]:bg-accent transition-colors outline-none shrink-0"
                 >
                   <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />

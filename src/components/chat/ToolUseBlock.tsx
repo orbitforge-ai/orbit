@@ -15,6 +15,12 @@ import { RunSummary } from '../../types';
 import { DisplayBlock } from './types';
 import { formatToolName, getToolVisual } from './toolVisuals';
 import { ThinkingBlock, ThinkingDetailPanel } from './ThinkingBlock';
+import {
+  buildToolPresentation,
+  canExpandToolDetails,
+  ToolPresentationSections,
+} from './toolPresentation';
+import { useSettingsStore } from '../../store/settingsStore';
 
 interface ToolUseBlockProps {
   thoughts: Extract<DisplayBlock, { kind: 'thinking' }>[];
@@ -40,7 +46,9 @@ export function ToolUseBlock({
       : null;
   const expandedTool =
     allowDetails && expandedItemKey?.startsWith('tool:')
-      ? tools.find((tool) => `tool:${tool.id}` === expandedItemKey) ?? null
+      ? tools.find(
+          (tool) => `tool:${tool.id}` === expandedItemKey && canExpandToolDetails(tool)
+        ) ?? null
       : null;
 
   if (tools.length === 0 && thoughts.length === 0) return null;
@@ -67,10 +75,14 @@ export function ToolUseBlock({
           <ToolChip
             key={tool.id}
             tool={tool}
-            selected={allowDetails && expandedItemKey === `tool:${tool.id}`}
-            disabled={!allowDetails}
+            selected={
+              allowDetails &&
+              canExpandToolDetails(tool) &&
+              expandedItemKey === `tool:${tool.id}`
+            }
+            disabled={!allowDetails || !canExpandToolDetails(tool)}
             onClick={() => {
-              if (!allowDetails) return;
+              if (!allowDetails || !canExpandToolDetails(tool)) return;
               onExpandedItemChange(
                 expandedItemKey === `tool:${tool.id}` ? null : `tool:${tool.id}`
               );
@@ -121,7 +133,7 @@ function ToolChip({
 }
 
 function ToolDetailPanel({ tool }: { tool: Extract<DisplayBlock, { kind: 'tool_call' }> }) {
-  const inputStr = JSON.stringify(tool.input, null, 2);
+  const showVerboseToolDetails = useSettingsStore((s) => s.showVerboseToolDetails);
   const label = formatToolName(tool.name);
   const isSubAgentTool = tool.name === 'spawn_sub_agents';
   const isWaitingSendMessage =
@@ -130,6 +142,9 @@ function ToolDetailPanel({ tool }: { tool: Extract<DisplayBlock, { kind: 'tool_c
   const isWaitingAskUser = tool.name === 'ask_user' && !tool.result;
   const status = getToolStatus(tool);
   const isInterrupted = status === 'interrupted';
+  const presentation = buildToolPresentation(tool);
+  const inputStr = JSON.stringify(tool.input, null, 2);
+  const resultStr = tool.result?.content ?? null;
 
   return (
     <div className="rounded-lg border border-warning/25 bg-warning/5 overflow-hidden">
@@ -175,12 +190,11 @@ function ToolDetailPanel({ tool }: { tool: Extract<DisplayBlock, { kind: 'tool_c
         />
       )}
 
-      <div className="border-t border-warning/10">
-        <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted">Input</div>
-        <pre className="px-3 pb-2 text-xs font-mono text-secondary whitespace-pre-wrap break-all overflow-x-auto">
-          {inputStr}
-        </pre>
-      </div>
+      {presentation.requestSections.length > 0 && (
+        <div className="border-t border-warning/10">
+          <ToolPresentationSections sections={presentation.requestSections} />
+        </div>
+      )}
 
       {tool.result && (
         <div
@@ -192,24 +206,42 @@ function ToolDetailPanel({ tool }: { tool: Extract<DisplayBlock, { kind: 'tool_c
               : 'border-emerald-500/20 bg-emerald-500/5'
           }`}
         >
-          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted">Result</div>
           {isInterrupted && (
-            <div className="px-3 pb-1 text-xs text-amber-300">
+            <div className="px-3 pt-3 text-xs text-amber-300">
               This tool call was interrupted before it completed. The agent should retry this step
               in smaller pieces.
             </div>
           )}
-          <pre
-            className={`px-3 pb-2 text-xs font-mono whitespace-pre-wrap break-all overflow-x-auto ${
-              isInterrupted
-                ? 'text-amber-200'
-                : tool.result.isError
-                  ? 'text-red-400'
-                  : 'text-secondary'
-            }`}
-          >
-            {tool.result.content}
-          </pre>
+          <ToolPresentationSections sections={presentation.resultSections} />
+        </div>
+      )}
+
+      {showVerboseToolDetails && (
+        <div className="border-t border-warning/10">
+          <div className="space-y-3 px-3 py-3">
+            <section className="space-y-1.5">
+              <div className="text-[10px] uppercase tracking-wider text-muted">Raw Input</div>
+              <pre className="rounded-lg border border-edge bg-background/60 px-3 py-2 text-xs font-mono text-secondary whitespace-pre-wrap break-all overflow-x-auto">
+                {inputStr}
+              </pre>
+            </section>
+            {resultStr && (
+              <section className="space-y-1.5">
+                <div className="text-[10px] uppercase tracking-wider text-muted">Raw Result</div>
+                <pre
+                  className={`rounded-lg border px-3 py-2 text-xs font-mono whitespace-pre-wrap break-all overflow-x-auto ${
+                    isInterrupted
+                      ? 'border-amber-500/20 bg-amber-500/5 text-amber-200'
+                      : tool.result?.isError
+                        ? 'border-red-500/20 bg-red-500/5 text-red-200'
+                        : 'border-edge bg-background/60 text-secondary'
+                  }`}
+                >
+                  {resultStr}
+                </pre>
+              </section>
+            )}
+          </div>
         </div>
       )}
     </div>
