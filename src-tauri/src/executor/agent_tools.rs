@@ -26,6 +26,7 @@ fn all_tools() -> Vec<Box<dyn ToolHandler>> {
         Box::new(tools::session_send::SessionSendTool),
         Box::new(tools::sessions_spawn::SessionsSpawnTool),
         Box::new(tools::send_message::SendMessageTool),
+        Box::new(tools::message::MessageTool),
         Box::new(tools::activate_skill::ActivateSkillTool),
         Box::new(tools::spawn_sub_agents::SpawnSubAgentsTool),
         Box::new(tools::subagents::SubagentsTool),

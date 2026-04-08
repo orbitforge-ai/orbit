@@ -11,6 +11,7 @@ pub mod image_analysis;
 pub mod image_generation;
 pub mod list_files;
 pub mod list_memories;
+pub mod message;
 pub mod notebook;
 pub mod react_to_message;
 pub mod read_file;

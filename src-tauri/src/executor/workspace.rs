@@ -315,6 +315,7 @@ impl Default for AgentWorkspaceConfig {
                 "session_send".to_string(),
                 "sessions_spawn".to_string(),
                 "subagents".to_string(),
+                "message".to_string(),
                 "yield_turn".to_string(),
                 "ask_user".to_string(),
                 "activate_skill".to_string(),

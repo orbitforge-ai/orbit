@@ -47,6 +47,7 @@ const TOOL_CATEGORIES = [
     label: 'Communication',
     tools: [
       { id: 'send_message', label: 'Send Message' },
+      { id: 'message', label: 'External Messages' },
       { id: 'ask_user', label: 'Ask User' },
       { id: 'web_search', label: 'Web Search' },
       { id: 'web_fetch', label: 'Web Fetch' },

@@ -2,6 +2,7 @@ pub mod agent_loop;
 pub mod agent_tools;
 pub mod anthropic;
 pub mod bg_processes;
+pub mod channels;
 pub mod compaction;
 pub mod context;
 pub mod engine;

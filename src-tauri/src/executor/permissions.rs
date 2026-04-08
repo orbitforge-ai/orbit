@@ -677,6 +677,24 @@ pub fn classify_tool_call(
             (RiskLevel::Prompt, format!("Agent message to '{}'", target))
         }
 
+        "message" => {
+            let action = input["action"].as_str().unwrap_or("send");
+            match action {
+                "list" => (RiskLevel::AutoAllow, String::new()),
+                "send" => {
+                    let channel = input["channel"].as_str().unwrap_or("<unknown>");
+                    (
+                        RiskLevel::PromptDangerous,
+                        format!("Send external message to channel '{}'", channel),
+                    )
+                }
+                other => (
+                    RiskLevel::Prompt,
+                    format!("Message action: {}", other),
+                ),
+            }
+        }
+
         "session_send" => {
             let session_id = input["session_id"].as_str().unwrap_or("<unknown>");
             (
@@ -735,6 +753,11 @@ fn extract_match_value(tool_name: &str, input: &serde_json::Value) -> String {
         "write_file" => input["path"].as_str().unwrap_or("").to_string(),
         "edit_file" => input["path"].as_str().unwrap_or("").to_string(),
         "send_message" => input["target_agent"].as_str().unwrap_or("").to_string(),
+        "message" => {
+            let action = input["action"].as_str().unwrap_or("send");
+            let channel = input["channel"].as_str().unwrap_or("");
+            format!("{}:{}", action, channel)
+        }
         "session_send" => input["session_id"].as_str().unwrap_or("").to_string(),
         "subagents" => {
             let action = input["action"].as_str().unwrap_or("list");
@@ -1244,6 +1267,15 @@ mod tests {
         let input = serde_json::json!({"target_agent": "other"});
         let (risk, _) = classify_tool_call("send_message", &input, "normal");
         assert_eq!(risk, RiskLevel::Prompt);
+
+        // message tool: list is auto-allow, send is dangerous
+        let input = serde_json::json!({"action": "list"});
+        let (risk, _) = classify_tool_call("message", &input, "normal");
+        assert_eq!(risk, RiskLevel::AutoAllow);
+
+        let input = serde_json::json!({"action": "send", "channel": "ops", "text": "hi"});
+        let (risk, _) = classify_tool_call("message", &input, "normal");
+        assert_eq!(risk, RiskLevel::PromptDangerous);
 
         let input = serde_json::json!({"process_action": "list"});
         let (risk, _) = classify_tool_call("shell_command", &input, "normal");
