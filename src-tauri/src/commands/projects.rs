@@ -2,7 +2,7 @@ use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
 use crate::executor::workspace;
 use crate::models::agent::Agent;
-use crate::models::project::{CreateProject, Project, ProjectAgent, UpdateProject};
+use crate::models::project::{CreateProject, Project, ProjectAgent, ProjectSummary, UpdateProject};
 
 macro_rules! cloud_upsert_project {
     ($cloud:expr, $project:expr) => {
@@ -40,19 +40,37 @@ fn map_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
     })
 }
 
+fn map_project_summary(row: &rusqlite::Row) -> rusqlite::Result<ProjectSummary> {
+    Ok(ProjectSummary {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        description: row.get(2)?,
+        created_at: row.get(3)?,
+        updated_at: row.get(4)?,
+        agent_count: row.get(5)?,
+    })
+}
+
 #[tauri::command]
-pub async fn list_projects(db: tauri::State<'_, DbPool>) -> Result<Vec<Project>, String> {
+pub async fn list_projects(db: tauri::State<'_, DbPool>) -> Result<Vec<ProjectSummary>, String> {
     let pool = db.0.clone();
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, description, created_at, updated_at
-                 FROM projects ORDER BY created_at ASC",
+                "SELECT p.id, p.name, p.description, p.created_at, p.updated_at,
+                        COALESCE(pa.agent_count, 0) AS agent_count
+                 FROM projects p
+                 LEFT JOIN (
+                     SELECT project_id, COUNT(*) AS agent_count
+                     FROM project_agents
+                     GROUP BY project_id
+                 ) pa ON pa.project_id = p.id
+                 ORDER BY p.created_at ASC",
             )
             .map_err(|e| e.to_string())?;
         let projects = stmt
-            .query_map([], map_project)
+            .query_map([], map_project_summary)
             .map_err(|e| e.to_string())?
             .filter_map(|r| r.ok())
             .collect();

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { FolderOpen, HardDrive, History, ListChecks, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { projectsApi } from '../../api/projects';
-import { Project } from '../../types';
+import { Project, ProjectSummary } from '../../types';
 import { useUiStore } from '../../store/uiStore';
 import { cn } from '../../lib/cn';
 import { ProjectWorkspaceTab } from './ProjectWorkspaceTab';
@@ -21,7 +21,7 @@ export function ProjectInspector() {
   const { selectedProjectId, selectProject } = useUiStore();
   const queryClient = useQueryClient();
 
-  const { data: projects = [] } = useQuery<Project[]>({
+  const { data: projects = [] } = useQuery<ProjectSummary[]>({
     queryKey: ['projects'],
     queryFn: projectsApi.list,
   });
@@ -72,7 +72,7 @@ function ProjectList({
   onCreateClose,
   onCreated,
 }: {
-  projects: Project[];
+  projects: ProjectSummary[];
   showCreate: boolean;
   onCreateOpen: () => void;
   onCreateClose: () => void;

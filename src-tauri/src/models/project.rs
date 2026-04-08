@@ -10,6 +10,19 @@ pub struct Project {
     pub updated_at: String,
 }
 
+/// Response shape for `list_projects` — includes an aggregated agent count so
+/// the sidebar can render counts without an N+1 query pattern.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSummary {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub agent_count: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateProject {

@@ -10,6 +10,15 @@ export interface Project {
   updatedAt: string;
 }
 
+/**
+ * Response shape for `list_projects` — same fields as `Project` plus an
+ * aggregated `agentCount` computed server-side. Kept as a separate interface
+ * so `get_project` / single-entity reads don't grow an unnecessary field.
+ */
+export interface ProjectSummary extends Project {
+  agentCount: number;
+}
+
 export interface ProjectAgent {
   projectId: string;
   agentId: string;

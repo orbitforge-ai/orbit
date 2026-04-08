@@ -1,8 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
-import { Agent, FileEntry, Project, ProjectAgent } from '../types';
+import { Agent, FileEntry, Project, ProjectAgent, ProjectSummary } from '../types';
 
 export const projectsApi = {
-  list: (): Promise<Project[]> => invoke('list_projects'),
+  list: (): Promise<ProjectSummary[]> => invoke('list_projects'),
 
   get: (id: string): Promise<Project> => invoke('get_project', { id }),
 

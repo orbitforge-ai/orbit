@@ -2,6 +2,22 @@ import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import {
+  DndContext,
+  DragOverlay,
+  useDraggable,
+  useDroppable,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core';
+import {
+  agentDraggableId,
+  parseAgentDraggableId,
+  parseProjectDroppableId,
+  projectDroppableId,
+  useAgentDndSensors,
+  useAssignAgentToProject,
+} from './dnd/agentDnd';
+import {
   LayoutDashboard,
   ListChecks,
   History,
@@ -22,7 +38,7 @@ import { useUiStore } from '../store/uiStore';
 import { agentsApi } from '../api/agents';
 import { projectsApi } from '../api/projects';
 import { workspaceApi } from '../api/workspace';
-import { Agent, PermissionRequestPayload, Project } from '../types';
+import { Agent, PermissionRequestPayload, ProjectSummary } from '../types';
 import { usePermissionStore } from '../store/permissionStore';
 import { onPermissionRequest, onPermissionCancelled } from '../events/permissionEvents';
 import { onAgentCreated, onAgentUpdated, onAgentDeleted, onAgentConfigChanged } from '../events/agentEvents';
@@ -152,7 +168,7 @@ export function Sidebar() {
     queryFn: agentsApi.list,
   });
 
-  const { data: projects = [] } = useQuery<Project[]>({
+  const { data: projects = [] } = useQuery<ProjectSummary[]>({
     queryKey: ['projects'],
     queryFn: projectsApi.list,
     refetchInterval: 15_000,
@@ -162,6 +178,27 @@ export function Sidebar() {
     queryKey: ['agent-role-ids'],
     queryFn: workspaceApi.listAgentRoleIds,
   });
+
+  // ─── Drag-and-drop: agent → project assignment ──────────────────────────────
+  const dndSensors = useAgentDndSensors();
+  const assignAgent = useAssignAgentToProject();
+  const [draggingAgentId, setDraggingAgentId] = useState<string | null>(null);
+
+  const handleDragStart = (event: DragStartEvent) => {
+    setDraggingAgentId(parseAgentDraggableId(event.active.id));
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    setDraggingAgentId(null);
+    const agentId = parseAgentDraggableId(event.active.id);
+    const projectId = parseProjectDroppableId(event.over?.id);
+    if (!agentId || !projectId) return;
+    assignAgent.mutate({ projectId, agentId });
+  };
+
+  const draggingAgent = draggingAgentId
+    ? agents.find((a) => a.id === draggingAgentId) ?? null
+    : null;
 
   const sortedPendingRequests = Object.values(pendingRequestMap).sort(
     (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
@@ -178,6 +215,7 @@ export function Sidebar() {
   }, {});
 
   return (
+    <DndContext sensors={dndSensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
     <aside className="w-[220px] flex-shrink-0 flex flex-col border-r border-edge bg-panel h-full">
       <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
 
@@ -208,6 +246,7 @@ export function Sidebar() {
                 const isSelected = selectedProjectId === project.id && screen === 'projects';
                 return (
                   <div key={project.id}>
+                    <DroppableSidebarProject projectId={project.id}>
                     <div className={cn(
                       'group flex items-center rounded-md transition-colors',
                       isSelected
@@ -224,6 +263,14 @@ export function Sidebar() {
                         <FolderOpen size={12} className="shrink-0" />
                         <span className="truncate text-left">{project.name}</span>
                       </button>
+                      {project.agentCount > 0 && (
+                        <span
+                          className="shrink-0 px-1.5 py-0.5 rounded-full bg-surface text-muted text-[10px] font-medium tabular-nums"
+                          title={`${project.agentCount} agent${project.agentCount === 1 ? '' : 's'} assigned`}
+                        >
+                          {project.agentCount}
+                        </span>
+                      )}
                       <button
                         onClick={() => toggleProjectExpanded(project.id)}
                         className="pr-2 py-1.5 text-muted hover:text-white transition-colors"
@@ -232,6 +279,7 @@ export function Sidebar() {
                         <ChevronRight size={10} className={cn('transition-transform', isExpanded && 'rotate-90')} />
                       </button>
                     </div>
+                    </DroppableSidebarProject>
                     {isExpanded && (
                       <div className="ml-3 mt-0.5 mb-1 space-y-0.5 border-l border-edge pl-2">
                         {PROJECT_TABS.map(({ id, label, icon: Icon }) => (
@@ -363,8 +411,8 @@ export function Sidebar() {
                 const pendingForAgent = pendingByAgentId[agent.id] ?? [];
                 const firstPendingRequest = pendingForAgent[0];
                 return (
+                  <DraggableSidebarAgent key={agent.id} agentId={agent.id}>
                   <div
-                    key={agent.id}
                     className={cn(
                       'group flex items-center gap-1 rounded-md transition-colors',
                       isSelected
@@ -408,6 +456,7 @@ export function Sidebar() {
                       <MessageSquare size={12} />
                     </button>
                   </div>
+                  </DraggableSidebarAgent>
                 );
               })}
 
@@ -490,5 +539,71 @@ export function Sidebar() {
         </DropdownMenu.Root>
       </div>
     </aside>
+    <DragOverlay>
+      {draggingAgent ? (
+        <div className="pointer-events-none rounded-md border border-accent bg-surface px-2.5 py-1.5 text-xs font-medium text-white shadow-lg">
+          {draggingAgent.name}
+        </div>
+      ) : null}
+    </DragOverlay>
+    </DndContext>
+  );
+}
+
+// ─── Drag-and-drop wrappers ──────────────────────────────────────────────────
+
+/**
+ * Makes a sidebar agent row draggable. Renders children inside a div with
+ * the dnd-kit listeners attached and a subtle cursor affordance.
+ */
+function DraggableSidebarAgent({
+  agentId,
+  children,
+}: {
+  agentId: string;
+  children: React.ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: agentDraggableId(agentId),
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      className={cn(
+        'cursor-grab active:cursor-grabbing touch-none',
+        isDragging && 'opacity-40'
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Makes a sidebar project row a drop target for agents. Highlights the row
+ * while a compatible item is hovering it.
+ */
+function DroppableSidebarProject({
+  projectId,
+  children,
+}: {
+  projectId: string;
+  children: React.ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: projectDroppableId(projectId),
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        'rounded-md transition-colors',
+        isOver && 'bg-accent/20 ring-1 ring-accent'
+      )}
+    >
+      {children}
+    </div>
   );
 }

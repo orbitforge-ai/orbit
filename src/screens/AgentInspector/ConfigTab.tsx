@@ -7,7 +7,7 @@ import * as Switch from '@radix-ui/react-switch';
 
 import { workspaceApi } from '../../api/workspace';
 import { projectsApi } from '../../api/projects';
-import { AgentWorkspaceConfig, Project } from '../../types';
+import { AgentWorkspaceConfig, Project, ProjectSummary } from '../../types';
 import { CollapsibleSection } from '../../components/CollapsibleSection';
 import { AgentIdentitySection } from './AgentIdentitySection';
 import { MODEL_OPTIONS, LLM_PROVIDERS, DEFAULT_MODEL_BY_PROVIDER } from '../../constants/providers';
@@ -543,7 +543,7 @@ function AgentProjectsSection({ agentId }: { agentId: string }) {
     queryFn: () => projectsApi.listAgentProjects(agentId),
   });
 
-  const { data: allProjects = [] } = useQuery<Project[]>({
+  const { data: allProjects = [] } = useQuery<ProjectSummary[]>({
     queryKey: ['projects'],
     queryFn: projectsApi.list,
     enabled: adding,
@@ -556,6 +556,7 @@ function AgentProjectsSection({ agentId }: { agentId: string }) {
     await projectsApi.addAgent(projectId, agentId, agentProjects.length === 0);
     queryClient.invalidateQueries({ queryKey: ['agent-projects', agentId] });
     queryClient.invalidateQueries({ queryKey: ['project-agents', projectId] });
+    queryClient.invalidateQueries({ queryKey: ['projects'] });
     setAdding(false);
   }
 
@@ -563,6 +564,7 @@ function AgentProjectsSection({ agentId }: { agentId: string }) {
     await projectsApi.removeAgent(projectId, agentId);
     queryClient.invalidateQueries({ queryKey: ['agent-projects', agentId] });
     queryClient.invalidateQueries({ queryKey: ['project-agents', projectId] });
+    queryClient.invalidateQueries({ queryKey: ['projects'] });
   }
 
   return (
