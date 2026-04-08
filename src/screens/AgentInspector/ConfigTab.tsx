@@ -53,6 +53,10 @@ const TOOL_CATEGORIES = [
     ],
   },
   {
+    label: 'Vision',
+    tools: [{ id: 'image_analysis', label: 'Image Analysis' }],
+  },
+  {
     label: 'Sessions',
     tools: [
       { id: 'session_history', label: 'Session History' },

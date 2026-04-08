@@ -6,6 +6,19 @@ function nextId(): string {
   return `msg-${++idCounter}`;
 }
 
+const AGENT_MESSAGE_WRAPPER =
+  /^<agent_message from="([^"]+)" untrusted="true">([\s\S]*)<\/agent_message>$/;
+
+/**
+ * Detect and unwrap a cross-agent message wrapper.
+ * Returns the inner text and the sender agent id, or null if not wrapped.
+ */
+function unwrapAgentMessage(text: string): { from: string; inner: string } | null {
+  const match = text.trim().match(AGENT_MESSAGE_WRAPPER);
+  if (!match) return null;
+  return { from: match[1], inner: match[2] };
+}
+
 /**
  * Convert a ChatMessage[] (from DB) into DisplayMessage[] for rendering.
  * Merges tool_result blocks into the preceding assistant message's tool_call blocks.
@@ -47,11 +60,22 @@ export function chatMessagesToDisplay(messages: ChatMessage[]): DisplayMessage[]
     }
 
     const blocks: DisplayBlock[] = [];
+    let senderLabel: string | undefined;
     for (const block of msg.content) {
       // Filter out react_to_message tool calls (hidden — no bubble)
       if (block.type === 'tool_use' && block.name === 'react_to_message') {
         reactToolIds.add(block.id);
         continue;
+      }
+      // Unwrap cross-agent message envelopes on user-role text blocks so the
+      // bubble shows the inner content with a sender label rather than raw XML.
+      if (msg.role === 'user' && block.type === 'text') {
+        const unwrapped = unwrapAgentMessage(block.text);
+        if (unwrapped) {
+          if (!senderLabel) senderLabel = unwrapped.from;
+          blocks.push({ kind: 'text', text: unwrapped.inner, isStreaming: false });
+          continue;
+        }
       }
       blocks.push(contentBlockToDisplay(block));
     }
@@ -71,6 +95,7 @@ export function chatMessagesToDisplay(messages: ChatMessage[]): DisplayMessage[]
       timestamp: msg.created_at,
       isCompacted: msg.isCompacted,
       isSummary,
+      senderLabel,
     });
   }
 

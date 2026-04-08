@@ -303,6 +303,7 @@ impl Default for AgentWorkspaceConfig {
                 "grep".to_string(),
                 "web_search".to_string(),
                 "web_fetch".to_string(),
+                "image_analysis".to_string(),
                 "config".to_string(),
                 "task".to_string(),
                 "schedule".to_string(),

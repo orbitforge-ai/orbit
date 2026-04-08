@@ -284,6 +284,54 @@ impl MiniMaxProvider {
             usage,
         })
     }
+
+    fn parse_complete_response(value: serde_json::Value) -> Result<LlmResponse, String> {
+        let usage = Usage {
+            input_tokens: value["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32,
+            output_tokens: value["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32,
+        };
+
+        let stop_reason = match value["stop_reason"].as_str().unwrap_or("end_turn") {
+            "end_turn" => StopReason::EndTurn,
+            "tool_use" => StopReason::ToolUse,
+            "max_tokens" => StopReason::MaxTokens,
+            _ => StopReason::EndTurn,
+        };
+
+        let mut content = Vec::new();
+        for block in value["content"].as_array().cloned().unwrap_or_default() {
+            match block["type"].as_str().unwrap_or("") {
+                "text" => {
+                    if let Some(text) = block["text"].as_str() {
+                        content.push(ContentBlock::Text {
+                            text: text.to_string(),
+                        });
+                    }
+                }
+                "thinking" => {
+                    if let Some(thinking) = block["thinking"].as_str() {
+                        content.push(ContentBlock::Thinking {
+                            thinking: thinking.to_string(),
+                        });
+                    }
+                }
+                "tool_use" => {
+                    content.push(ContentBlock::ToolUse {
+                        id: block["id"].as_str().unwrap_or_default().to_string(),
+                        name: block["name"].as_str().unwrap_or_default().to_string(),
+                        input: block["input"].clone(),
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        Ok(LlmResponse {
+            content,
+            stop_reason,
+            usage,
+        })
+    }
 }
 
 #[async_trait::async_trait]
@@ -349,5 +397,62 @@ impl LlmProvider for MiniMaxProvider {
 
         self.parse_sse_stream(response, app, run_id, iteration)
             .await
+    }
+
+    async fn chat_complete(
+        &self,
+        config: &LlmConfig,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+    ) -> Result<LlmResponse, String> {
+        let temperature = config.temperature.map(|t| t.clamp(0.01, 1.0));
+
+        let mut body = json!({
+            "model": config.model,
+            "max_tokens": config.max_tokens,
+            "messages": Self::serialize_messages(messages),
+        });
+
+        if !config.system_prompt.is_empty() {
+            body["system"] = json!(config.system_prompt);
+        }
+
+        if let Some(temp) = temperature {
+            body["temperature"] = json!(temp);
+        }
+
+        if !tools.is_empty() {
+            body["tools"] = json!(Self::serialize_tools(tools));
+        }
+
+        let response = self
+            .client
+            .post(MINIMAX_API_URL)
+            .header("x-api-key", &self.api_key)
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("MiniMax request failed: {}", e))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "unknown error".to_string());
+            let error_json: serde_json::Value =
+                serde_json::from_str(&error_body).unwrap_or(json!({"error": error_body}));
+            let msg = error_json["error"]["message"]
+                .as_str()
+                .unwrap_or(&error_body);
+            return Err(format!("MiniMax API error ({}): {}", status, msg));
+        }
+
+        let value = response
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| format!("MiniMax response parse failed: {}", e))?;
+        Self::parse_complete_response(value)
     }
 }

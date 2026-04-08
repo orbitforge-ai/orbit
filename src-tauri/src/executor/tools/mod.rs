@@ -7,6 +7,7 @@ pub mod finish;
 pub mod forget;
 pub mod grep;
 pub mod helpers;
+pub mod image_analysis;
 pub mod list_files;
 pub mod list_memories;
 pub mod notebook;

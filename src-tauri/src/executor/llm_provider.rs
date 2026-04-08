@@ -103,6 +103,14 @@ pub trait LlmProvider: Send + Sync {
         run_id: &str,
         iteration: u32,
     ) -> Result<LlmResponse, String>;
+
+    /// Send a non-streaming chat completion.
+    async fn chat_complete(
+        &self,
+        config: &LlmConfig,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+    ) -> Result<LlmResponse, String>;
 }
 
 // ─── Model context window lookup ────────────────────────────────────────────
@@ -131,6 +139,60 @@ pub fn model_context_window(model: &str) -> u32 {
     }
 }
 
+/// Returns whether the configured provider/model is expected to support image inputs.
+pub fn model_supports_images(provider_name: &str, model: &str) -> bool {
+    match provider_name {
+        "anthropic" => matches!(
+            model,
+            "claude-opus-4-20250415"
+                | "claude-sonnet-4-20250514"
+                | "claude-haiku-4-5-20251001"
+                | "claude-opus-4-20250514"
+                | "claude-3-5-sonnet-20241022"
+                | "claude-3-5-haiku-20241022"
+        ),
+        "minimax" => matches!(
+            model,
+            "MiniMax-M2.7"
+                | "MiniMax-M2.7-highspeed"
+                | "MiniMax-M2.5"
+                | "MiniMax-M2.5-highspeed"
+                | "MiniMax-M2.1"
+                | "MiniMax-M2.1-highspeed"
+                | "MiniMax-M2"
+        ),
+        _ => false,
+    }
+}
+
+pub fn extract_text_response(response: &LlmResponse) -> Result<String, String> {
+    let text = response
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+        .trim()
+        .to_string();
+
+    if !text.is_empty() {
+        return Ok(text);
+    }
+
+    if response
+        .content
+        .iter()
+        .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
+    {
+        return Err("model returned a tool request instead of analysis text".to_string());
+    }
+
+    Err("model returned no text analysis".to_string())
+}
+
 // ─── Provider factory ────────────────────────────────────────────────────────
 
 /// Create a provider instance by name.
@@ -148,7 +210,10 @@ pub fn create_provider(
 
 #[cfg(test)]
 mod tests {
-    use super::model_context_window;
+    use super::{
+        extract_text_response, model_context_window, model_supports_images, ContentBlock,
+        LlmResponse, StopReason, Usage,
+    };
 
     #[test]
     fn known_models_have_expected_context_windows() {
@@ -159,5 +224,30 @@ mod tests {
     #[test]
     fn unknown_models_fall_back_conservatively() {
         assert_eq!(model_context_window("unknown-model"), 200_000);
+    }
+
+    #[test]
+    fn image_support_checks_known_models() {
+        assert!(model_supports_images(
+            "anthropic",
+            "claude-sonnet-4-20250514"
+        ));
+        assert!(model_supports_images("minimax", "MiniMax-M2.7"));
+        assert!(!model_supports_images("anthropic", "unknown-model"));
+    }
+
+    #[test]
+    fn extracts_text_response_from_blocks() {
+        let response = LlmResponse {
+            content: vec![ContentBlock::Text {
+                text: "Image analysis".to_string(),
+            }],
+            stop_reason: StopReason::EndTurn,
+            usage: Usage::default(),
+        };
+        assert_eq!(
+            extract_text_response(&response).expect("text should be extracted"),
+            "Image analysis"
+        );
     }
 }

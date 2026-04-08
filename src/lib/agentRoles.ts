@@ -95,6 +95,7 @@ export const AGENT_ROLES: AgentRole[] = [
     defaultTools: [
       'web_search',
       'web_fetch',
+      'image_analysis',
       'read_file',
       'write_file',
       'edit_file',
@@ -130,6 +131,7 @@ export const AGENT_ROLES: AgentRole[] = [
     defaultTools: [
       'web_search',
       'web_fetch',
+      'image_analysis',
       'read_file',
       'write_file',
       'edit_file',
@@ -170,6 +172,7 @@ export const AGENT_ROLES: AgentRole[] = [
       'grep',
       'web_search',
       'web_fetch',
+      'image_analysis',
       'config',
       'task',
       'schedule',

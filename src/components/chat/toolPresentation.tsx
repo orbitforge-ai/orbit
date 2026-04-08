@@ -53,6 +53,7 @@ const TOOL_FORMATTERS: Record<string, ToolFormatter> = {
   list_files: formatListFiles,
   web_search: formatWebSearch,
   web_fetch: formatWebFetch,
+  image_analysis: formatImageAnalysis,
   search_memory: formatMemoryLookup,
   list_memories: formatMemoryLookup,
 };
@@ -431,6 +432,40 @@ function formatWebFetch(tool: ToolCallBlock, normalizedResult: string | null): T
             content: normalizedResult,
           },
         ]
+      : [],
+  };
+}
+
+function formatImageAnalysis(tool: ToolCallBlock, normalizedResult: string | null): ToolPresentation {
+  const imageCount = Array.isArray(tool.input.images) ? tool.input.images.length : 0;
+  return {
+    requestSections: [
+      {
+        type: 'keyValue',
+        title: 'Analysis Request',
+        entries: [
+          { label: 'Images', value: `${imageCount}` },
+          {
+            label: 'Prompt',
+            value: summarizeTextPreview(stringValue(tool.input.prompt) ?? 'Describe this image in detail.'),
+          },
+        ],
+      },
+      ...(Array.isArray(tool.input.images)
+        ? [
+            {
+              type: 'cards' as const,
+              title: 'Sources',
+              cards: tool.input.images.map((image, index) => ({
+                title: typeof image === 'string' ? image : `Image ${index + 1}`,
+                badge: `#${index + 1}`,
+              })),
+            },
+          ]
+        : []),
+    ],
+    resultSections: normalizedResult
+      ? [{ type: 'markdown', title: 'Analysis', content: normalizedResult }]
       : [],
   };
 }
