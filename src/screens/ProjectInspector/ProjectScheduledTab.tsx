@@ -12,7 +12,7 @@ const KIND_LABELS: Record<string, string> = {
   agent_loop: 'Agent Loop',
 };
 
-export function ProjectTasksTab({ projectId }: { projectId: string }) {
+export function ProjectScheduledTab({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const { navigate, editTask } = useUiStore();
 
@@ -59,7 +59,7 @@ export function ProjectTasksTab({ projectId }: { projectId: string }) {
     <div className="flex flex-col h-full overflow-y-auto">
       <div className="flex items-center justify-between px-4 py-3 border-b border-edge">
         <h3 className="text-sm font-semibold text-white">
-          Tasks
+          Scheduled Tasks
           <span className="ml-2 text-xs text-muted font-normal">({tasks.length})</span>
         </h3>
         <button

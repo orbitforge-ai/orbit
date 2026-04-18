@@ -608,6 +608,11 @@ pub fn classify_tool_call(
 
         "task" => (RiskLevel::AutoAllow, String::new()),
 
+        // work_item writes the local DB and is scoped to the agent's assigned
+        // projects via assert_agent_in_project, so there's no confused-deputy
+        // risk. Classified safe — no user prompt.
+        "work_item" => (RiskLevel::AutoAllow, String::new()),
+
         "schedule" => match input["action"].as_str().unwrap_or("list") {
             "list" | "preview" | "pulse_get" => (RiskLevel::AutoAllow, String::new()),
             action => (RiskLevel::Prompt, format!("Schedule action: {}", action)),

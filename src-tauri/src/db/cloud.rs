@@ -436,6 +436,59 @@ impl SupabaseClient {
         .await
     }
 
+    pub async fn upsert_work_item(
+        &self,
+        w: &crate::models::work_item::WorkItem,
+    ) -> Result<(), String> {
+        let labels = serde_json::to_string(&w.labels).unwrap_or_else(|_| "[]".into());
+        let metadata = serde_json::to_string(&w.metadata).unwrap_or_else(|_| "{}".into());
+        self.upsert_single(
+            "work_items",
+            serde_json::json!({
+                "user_id": self.user_id,
+                "id": w.id,
+                "project_id": w.project_id,
+                "title": w.title,
+                "description": w.description,
+                "kind": w.kind,
+                "status": w.status,
+                "priority": w.priority,
+                "assignee_agent_id": w.assignee_agent_id,
+                "created_by_agent_id": w.created_by_agent_id,
+                "parent_work_item_id": w.parent_work_item_id,
+                "position": w.position,
+                "labels": labels,
+                "metadata": metadata,
+                "blocked_reason": w.blocked_reason,
+                "started_at": w.started_at,
+                "completed_at": w.completed_at,
+                "created_at": w.created_at,
+                "updated_at": w.updated_at,
+            }),
+        )
+        .await
+    }
+
+    pub async fn upsert_work_item_comment(
+        &self,
+        c: &crate::models::work_item_comment::WorkItemComment,
+    ) -> Result<(), String> {
+        self.upsert_single(
+            "work_item_comments",
+            serde_json::json!({
+                "user_id": self.user_id,
+                "id": c.id,
+                "work_item_id": c.work_item_id,
+                "author_kind": c.author_kind,
+                "author_agent_id": c.author_agent_id,
+                "body": c.body,
+                "created_at": c.created_at,
+                "updated_at": c.updated_at,
+            }),
+        )
+        .await
+    }
+
     pub async fn upsert_project_agent(
         &self,
         pa: &crate::models::project::ProjectAgent,
@@ -628,16 +681,19 @@ impl SupabaseClient {
         // Read project tables + reactions separately to keep tuple sizes manageable
         let user_id2 = self.user_id.clone();
         let p2 = pool.clone();
-        let (projects, project_agents, reactions) = tokio::task::spawn_blocking(move || {
-            let conn = p2.get().map_err(|e| e.to_string())?;
-            Ok::<_, String>((
-                read_projects(&conn, &user_id2)?,
-                read_project_agents(&conn, &user_id2)?,
-                read_message_reactions(&conn, &user_id2)?,
-            ))
-        })
-        .await
-        .map_err(|e| e.to_string())??;
+        let (projects, project_agents, reactions, work_items, work_item_comments) =
+            tokio::task::spawn_blocking(move || {
+                let conn = p2.get().map_err(|e| e.to_string())?;
+                Ok::<_, String>((
+                    read_projects(&conn, &user_id2)?,
+                    read_project_agents(&conn, &user_id2)?,
+                    read_message_reactions(&conn, &user_id2)?,
+                    read_work_items(&conn, &user_id2)?,
+                    read_work_item_comments(&conn, &user_id2)?,
+                ))
+            })
+            .await
+            .map_err(|e| e.to_string())??;
 
         // Batch upsert each table; log failures but don't abort
         macro_rules! push {
@@ -662,6 +718,8 @@ impl SupabaseClient {
         push!("projects", projects);
         push!("project_agents", project_agents);
         push!("message_reactions", reactions);
+        push!("work_items", work_items);
+        push!("work_item_comments", work_item_comments);
 
         info!("Pushed local data to Supabase");
         Ok(())
@@ -712,6 +770,8 @@ impl SupabaseClient {
         let projects = fetch!("projects");
         let project_agents = fetch!("project_agents");
         let reactions = fetch!("message_reactions");
+        let work_items = fetch!("work_items");
+        let work_item_comments = fetch!("work_item_comments");
 
         let counts = std::collections::HashMap::from([
             ("agents".to_string(), agents.len()),
@@ -729,6 +789,8 @@ impl SupabaseClient {
             ("projects".to_string(), projects.len()),
             ("project_agents".to_string(), project_agents.len()),
             ("message_reactions".to_string(), reactions.len()),
+            ("work_items".to_string(), work_items.len()),
+            ("work_item_comments".to_string(), work_item_comments.len()),
         ]);
 
         info!(
@@ -759,6 +821,8 @@ impl SupabaseClient {
             write_projects(&conn, projects)?;
             write_project_agents(&conn, project_agents)?;
             write_message_reactions(&conn, reactions)?;
+            write_work_items(&conn, work_items)?;
+            write_work_item_comments(&conn, work_item_comments)?;
             Ok::<(), String>(())
         })
         .await
@@ -1252,6 +1316,74 @@ fn read_project_agents(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec
     Ok(rows)
 }
 
+fn read_work_items(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, project_id, title, description, kind, status, priority,
+                    assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
+                    labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at
+             FROM work_items",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(serde_json::json!({
+                "user_id": user_id,
+                "id": row.get::<_, String>(0)?,
+                "project_id": row.get::<_, String>(1)?,
+                "title": row.get::<_, String>(2)?,
+                "description": row.get::<_, Option<String>>(3)?,
+                "kind": row.get::<_, String>(4)?,
+                "status": row.get::<_, String>(5)?,
+                "priority": row.get::<_, i64>(6)?,
+                "assignee_agent_id": row.get::<_, Option<String>>(7)?,
+                "created_by_agent_id": row.get::<_, Option<String>>(8)?,
+                "parent_work_item_id": row.get::<_, Option<String>>(9)?,
+                "position": row.get::<_, f64>(10)?,
+                "labels": row.get::<_, String>(11)?,
+                "metadata": row.get::<_, String>(12)?,
+                "blocked_reason": row.get::<_, Option<String>>(13)?,
+                "started_at": row.get::<_, Option<String>>(14)?,
+                "completed_at": row.get::<_, Option<String>>(15)?,
+                "created_at": row.get::<_, String>(16)?,
+                "updated_at": row.get::<_, String>(17)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
+fn read_work_item_comments(
+    conn: &rusqlite::Connection,
+    user_id: &str,
+) -> Result<Vec<Value>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, work_item_id, author_kind, author_agent_id, body, created_at, updated_at
+             FROM work_item_comments",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(serde_json::json!({
+                "user_id": user_id,
+                "id": row.get::<_, String>(0)?,
+                "work_item_id": row.get::<_, String>(1)?,
+                "author_kind": row.get::<_, String>(2)?,
+                "author_agent_id": row.get::<_, Option<String>>(3)?,
+                "body": row.get::<_, String>(4)?,
+                "created_at": row.get::<_, String>(5)?,
+                "updated_at": row.get::<_, String>(6)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
 // ---------------------------------------------------------------------------
 // Supabase → SQLite (pull): write cloud rows into local tables
 // ---------------------------------------------------------------------------
@@ -1638,6 +1770,64 @@ fn write_project_agents(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result
                 str_val(&r, "agent_id"),
                 bool_val(&r, "is_default"),
                 str_val(&r, "added_at"),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn write_work_items(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+    for r in rows {
+        conn.execute(
+            "INSERT OR REPLACE INTO work_items (
+                id, project_id, title, description, kind, status, priority,
+                assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
+                labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+            rusqlite::params![
+                str_val(&r, "id"),
+                str_val(&r, "project_id"),
+                str_val(&r, "title"),
+                opt_str(&r, "description"),
+                str_val(&r, "kind"),
+                str_val(&r, "status"),
+                int_val(&r, "priority", 0),
+                opt_str(&r, "assignee_agent_id"),
+                opt_str(&r, "created_by_agent_id"),
+                opt_str(&r, "parent_work_item_id"),
+                r["position"].as_f64().unwrap_or(0.0),
+                json_str(&r, "labels", "[]"),
+                json_str(&r, "metadata", "{}"),
+                opt_str(&r, "blocked_reason"),
+                opt_str(&r, "started_at"),
+                opt_str(&r, "completed_at"),
+                str_val(&r, "created_at"),
+                str_val(&r, "updated_at"),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn write_work_item_comments(
+    conn: &rusqlite::Connection,
+    rows: Vec<Value>,
+) -> Result<(), String> {
+    for r in rows {
+        conn.execute(
+            "INSERT OR REPLACE INTO work_item_comments (
+                id, work_item_id, author_kind, author_agent_id, body, created_at, updated_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            rusqlite::params![
+                str_val(&r, "id"),
+                str_val(&r, "work_item_id"),
+                str_val(&r, "author_kind"),
+                opt_str(&r, "author_agent_id"),
+                str_val(&r, "body"),
+                str_val(&r, "created_at"),
+                str_val(&r, "updated_at"),
             ],
         )
         .map_err(|e| e.to_string())?;

@@ -342,12 +342,25 @@ pub async fn remove_agent_from_project(
     let pid = project_id.clone();
     let aid = agent_id.clone();
     tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.execute(
+        let mut conn = pool.get().map_err(|e| e.to_string())?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute(
             "DELETE FROM project_agents WHERE project_id = ?1 AND agent_id = ?2",
             rusqlite::params![project_id, agent_id],
         )
         .map_err(|e| e.to_string())?;
+        // Clear any work item assignments held by this agent in this project.
+        // Cards stay in their current column (no auto-move); a new claimant
+        // is needed for work to continue. See plan §3 "Unassign side effect".
+        tx.execute(
+            "UPDATE work_items
+                SET assignee_agent_id = NULL, updated_at = ?1
+              WHERE project_id = ?2 AND assignee_agent_id = ?3",
+            rusqlite::params![now, project_id, agent_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
         Ok::<(), String>(())
     })
     .await

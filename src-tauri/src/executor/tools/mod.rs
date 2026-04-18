@@ -32,6 +32,7 @@ pub mod subagents;
 pub mod task;
 pub mod web_fetch;
 pub mod web_search;
+pub mod work_item;
 pub mod worktree;
 pub mod write_file;
 pub mod yield_turn;

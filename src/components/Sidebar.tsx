@@ -32,6 +32,7 @@ import {
   HardDrive,
   Users,
   Settings,
+  KanbanSquare,
 } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { useUiStore } from '../store/uiStore';
@@ -57,7 +58,8 @@ const GLOBAL_NAV = [
 const PROJECT_TABS = [
   { id: 'workspace' as const, label: 'Workspace', icon: HardDrive },
   { id: 'agents' as const, label: 'Agents', icon: Users },
-  { id: 'tasks' as const, label: 'Tasks', icon: ListChecks },
+  { id: 'board' as const, label: 'Board', icon: KanbanSquare },
+  { id: 'scheduled' as const, label: 'Scheduled', icon: ListChecks },
   { id: 'history' as const, label: 'History', icon: History },
 ];
 

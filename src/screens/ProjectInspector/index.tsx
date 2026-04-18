@@ -1,19 +1,21 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { FolderOpen, HardDrive, History, ListChecks, Pencil, Plus, Trash2, Users } from 'lucide-react';
+import { FolderOpen, HardDrive, History, KanbanSquare, ListChecks, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { projectsApi } from '../../api/projects';
 import { Project, ProjectSummary } from '../../types';
 import { useUiStore } from '../../store/uiStore';
 import { cn } from '../../lib/cn';
 import { ProjectWorkspaceTab } from './ProjectWorkspaceTab';
 import { ProjectAgentsTab } from './ProjectAgentsTab';
-import { ProjectTasksTab } from './ProjectTasksTab';
+import { ProjectBoardTab } from './ProjectBoardTab';
+import { ProjectScheduledTab } from './ProjectScheduledTab';
 import { ProjectHistoryTab } from './ProjectHistoryTab';
 
 const TABS = [
   { id: 'workspace' as const, label: 'Workspace', icon: HardDrive },
   { id: 'agents' as const, label: 'Agents', icon: Users },
-  { id: 'tasks' as const, label: 'Tasks', icon: ListChecks },
+  { id: 'board' as const, label: 'Board', icon: KanbanSquare },
+  { id: 'scheduled' as const, label: 'Scheduled', icon: ListChecks },
   { id: 'history' as const, label: 'History', icon: History },
 ];
 
@@ -255,7 +257,8 @@ function ProjectDetail({
       <div className="flex-1 min-h-0 overflow-hidden">
         {projectTab === 'workspace' && <ProjectWorkspaceTab projectId={project.id} />}
         {projectTab === 'agents' && <ProjectAgentsTab projectId={project.id} />}
-        {projectTab === 'tasks' && <ProjectTasksTab projectId={project.id} />}
+        {projectTab === 'board' && <ProjectBoardTab projectId={project.id} />}
+        {projectTab === 'scheduled' && <ProjectScheduledTab projectId={project.id} />}
         {projectTab === 'history' && <ProjectHistoryTab projectId={project.id} />}
       </div>
     </div>

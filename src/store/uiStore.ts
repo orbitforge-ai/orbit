@@ -31,7 +31,7 @@ function getPersistedAgentId(): string | null {
 }
 
 type AgentTab = 'chat' | 'workspace' | 'config' | 'skills' | 'schedules' | 'bus';
-type ProjectTab = 'workspace' | 'agents' | 'tasks' | 'history';
+type ProjectTab = 'workspace' | 'agents' | 'board' | 'scheduled' | 'history';
 
 function getPersistedProjectId(): string | null {
   try {

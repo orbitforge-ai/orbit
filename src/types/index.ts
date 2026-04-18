@@ -26,6 +26,76 @@ export interface ProjectAgent {
   addedAt: string;
 }
 
+// ─── Work items (project board) ──────────────────────────────────────────────
+
+export type WorkItemStatus =
+  | 'backlog'
+  | 'todo'
+  | 'in_progress'
+  | 'blocked'
+  | 'review'
+  | 'done'
+  | 'cancelled';
+
+export type WorkItemKind = 'task' | 'bug' | 'story' | 'spike' | 'chore';
+
+export interface WorkItem {
+  id: string;
+  projectId: string;
+  title: string;
+  description: string | null;
+  kind: string;
+  status: WorkItemStatus;
+  priority: number;
+  assigneeAgentId: string | null;
+  createdByAgentId: string | null;
+  parentWorkItemId: string | null;
+  position: number;
+  labels: string[];
+  metadata: Record<string, unknown>;
+  blockedReason: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateWorkItem {
+  projectId: string;
+  title: string;
+  description?: string;
+  kind?: string;
+  status?: WorkItemStatus;
+  priority?: number;
+  assigneeAgentId?: string;
+  createdByAgentId?: string;
+  parentWorkItemId?: string;
+  position?: number;
+  labels?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface UpdateWorkItem {
+  title?: string;
+  description?: string;
+  kind?: string;
+  priority?: number;
+  labels?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface WorkItemComment {
+  id: string;
+  workItemId: string;
+  authorKind: 'user' | 'agent';
+  authorAgentId: string | null;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CommentAuthor = { kind: 'user' } | { kind: 'agent'; agentId: string };
+
 // ─── Memory ──────────────────────────────────────────────────────────────────
 
 export type MemoryType = 'user' | 'feedback' | 'project' | 'reference';
