@@ -95,7 +95,7 @@ Tell the user:
 
 - `id` must be reverse-DNS (`com.author.name`); must be unique on the device. Changing `id` is treated as a new plugin.
 - Tool `name` must not contain `__` (reserved as the plugin-namespace separator — the agent sees `<slug>__<tool-name>`).
-- `redirectUri` in every OAuth provider must be exactly `orbit://oauth/callback`.
+- `redirectUri` in every OAuth provider must be exactly `http://127.0.0.1:47821/oauth/callback` (Orbit runs a loopback HTTP listener on that port; RFC 8252 § 7.3).
 - `runtime.command` must exist in `PATH` or be a relative path inside the plugin directory. `env_clear` is applied before launch — PATH and HOME are re-injected, but the user's shell rc files are not.
 - Manifest `hostApiVersion` must satisfy the current Orbit build (`1.0.0` in V1). Declare `"hostApiVersion": "^1.0.0"` to match future 1.x hosts.
 - JSON-Schema `required` fields in entity schemas must actually be filled by the `create` action — missing fields are rejected at the manifest validator (coming from the SDK's helper).

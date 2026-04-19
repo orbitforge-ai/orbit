@@ -3,6 +3,12 @@
 //! per-plugin service (`com.orbit.plugin.<id>`). The subprocess env block
 //! built by [`build_env_for_subprocess`] is the single source of truth for
 //! "what secrets does a plugin see on launch".
+//!
+//! Callbacks arrive on a loopback HTTP listener bound to
+//! `127.0.0.1:LOOPBACK_PORT`, per RFC 8252 § 7.3. Avoids OS-level scheme
+//! registration (custom `orbit://` URLs require a registered .app bundle on
+//! macOS, which `cargo tauri dev` doesn't produce). Works identically in dev
+//! and release on macOS, Windows, and Linux.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -11,9 +17,12 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Runtime};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 pub const KEYCHAIN_SERVICE_PREFIX: &str = "com.orbit.plugin";
+pub const LOOPBACK_PORT: u16 = 47821;
 const STATE_TTL: Duration = Duration::from_secs(600);
 
 pub struct OAuthPending {
@@ -163,34 +172,163 @@ pub async fn start_flow<R: Runtime>(
     Ok(())
 }
 
-/// Listen for `orbit://oauth/callback?...` deep links and route them to the
-/// correct pending flow. V1 registers a single top-level handler on the
-/// Tauri app.
-pub fn spawn_deep_link_listener<R: Runtime>(
+/// Start the loopback HTTP listener that receives OAuth callbacks. Idempotent
+/// — safe to call multiple times; re-binds attempts log and bail (the existing
+/// listener keeps running).
+pub fn spawn_loopback_listener<R: Runtime>(
     app: AppHandle<R>,
     manager: Arc<super::PluginManager>,
 ) {
-    use tauri_plugin_deep_link::DeepLinkExt;
-    let app_for_handler = app.clone();
-    app.deep_link().on_open_url(move |event| {
-        let urls: Vec<_> = event.urls().to_vec();
-        let app = app_for_handler.clone();
-        let manager = manager.clone();
-        tauri::async_runtime::spawn(async move {
-            for url in urls {
-                if url.scheme() != "orbit" {
-                    continue;
-                }
-                if url.path() != "/oauth/callback" && url.host_str() != Some("oauth") {
-                    continue;
-                }
-                if let Err(e) = handle_callback(&app, &manager, url.as_str()).await {
-                    warn!("deep-link callback failed: {}", e);
-                }
+    tauri::async_runtime::spawn(async move {
+        let addr = format!("127.0.0.1:{}", LOOPBACK_PORT);
+        let listener = match TcpListener::bind(&addr).await {
+            Ok(l) => l,
+            Err(e) => {
+                warn!(
+                    "OAuth loopback listener failed to bind {} ({}); \
+                     callbacks will not be received until the port is free",
+                    addr, e
+                );
+                return;
             }
-        });
+        };
+        info!("OAuth loopback listener bound on {}", addr);
+        loop {
+            let (socket, _) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(e) => {
+                    warn!("OAuth loopback accept failed: {}", e);
+                    continue;
+                }
+            };
+            let app = app.clone();
+            let manager = manager.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = handle_loopback_connection(socket, &app, &manager).await {
+                    warn!("OAuth loopback connection error: {}", e);
+                }
+            });
+        }
     });
 }
+
+async fn handle_loopback_connection<R: Runtime>(
+    mut socket: tokio::net::TcpStream,
+    app: &AppHandle<R>,
+    manager: &Arc<super::PluginManager>,
+) -> Result<(), String> {
+    // Read the request headers into a single buffer. We only need the first
+    // line (the request target); hard-cap at 8 KiB to guard against slow
+    // clients or malicious peers trying to exhaust memory.
+    let mut buf = vec![0u8; 8192];
+    let mut read = 0usize;
+    loop {
+        if read >= buf.len() {
+            break;
+        }
+        let n = socket
+            .read(&mut buf[read..])
+            .await
+            .map_err(|e| format!("read: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        read += n;
+        if buf[..read].windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+    }
+    let head = std::str::from_utf8(&buf[..read]).map_err(|e| format!("non-utf8 request: {}", e))?;
+    let first_line = head.lines().next().unwrap_or("");
+    let mut parts = first_line.split_whitespace();
+    let method = parts.next().unwrap_or("");
+    let target = parts.next().unwrap_or("");
+    if method != "GET" {
+        let _ = write_response(&mut socket, 405, "method not allowed").await;
+        return Ok(());
+    }
+    if !target.starts_with("/oauth/callback") {
+        let _ = write_response(&mut socket, 404, "not found").await;
+        return Ok(());
+    }
+
+    // Synthesize an absolute URL so we can reuse the generic callback parser.
+    let full_url = format!("http://127.0.0.1:{}{}", LOOPBACK_PORT, target);
+    let outcome = handle_callback(app, manager, &full_url).await;
+
+    let (status, body) = match &outcome {
+        Ok(()) => (200u16, CALLBACK_SUCCESS_HTML.to_string()),
+        Err(e) => {
+            warn!("OAuth callback failed: {}", e);
+            let _ = app.emit(
+                "plugin:oauth:failed",
+                serde_json::json!({ "error": e }),
+            );
+            (400u16, render_failure_html(e))
+        }
+    };
+    let _ = write_response(&mut socket, status, &body).await;
+    outcome
+}
+
+fn render_failure_html(error: &str) -> String {
+    let escaped = error
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    CALLBACK_FAILURE_HTML.replace("{{ERROR}}", &escaped)
+}
+
+async fn write_response(
+    socket: &mut tokio::net::TcpStream,
+    status: u16,
+    body: &str,
+) -> std::io::Result<()> {
+    let reason = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        _ => "",
+    };
+    let response = format!(
+        "HTTP/1.1 {} {}\r\n\
+         Content-Type: text/html; charset=utf-8\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {}",
+        status,
+        reason,
+        body.as_bytes().len(),
+        body
+    );
+    socket.write_all(response.as_bytes()).await?;
+    socket.shutdown().await?;
+    Ok(())
+}
+
+const CALLBACK_SUCCESS_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\">\
+<title>Orbit — connected</title><style>\
+body{background:#0f1117;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;\
+display:flex;align-items:center;justify-content:center;height:100vh;margin:0}\
+.card{border:1px solid #2a2d3e;background:#13151e;border-radius:12px;padding:2rem 2.5rem;text-align:center;max-width:22rem}\
+h1{margin:0 0 .5rem;font-size:1.1rem}p{margin:0;color:#94a3b8;font-size:.9rem}\
+</style></head><body><div class=\"card\"><h1>✅ Connected</h1>\
+<p>You can close this window and return to Orbit.</p></div></body></html>";
+
+const CALLBACK_FAILURE_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\">\
+<title>Orbit — callback failed</title><style>\
+body{background:#0f1117;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',sans-serif;\
+display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:2rem}\
+.card{border:1px solid #2a2d3e;background:#13151e;border-radius:12px;padding:2rem 2.5rem;max-width:36rem}\
+h1{margin:0 0 .75rem;font-size:1.1rem;color:#f59e0b;text-align:center}\
+p{margin:0 0 .5rem;color:#94a3b8;font-size:.9rem;text-align:center}\
+pre{margin:1rem 0 0;padding:.75rem 1rem;background:#0a0c12;border:1px solid #2a2d3e;border-radius:8px;\
+color:#e2e8f0;font-size:.8rem;white-space:pre-wrap;word-break:break-word;max-height:16rem;overflow:auto}\
+</style></head><body><div class=\"card\"><h1>⚠ Callback failed</h1>\
+<p>Return to Orbit. The provider responded with:</p>\
+<pre>{{ERROR}}</pre></div></body></html>";
 
 /// Handle a single OAuth callback URL. Looks up the pending flow by `state`,
 /// exchanges the code at the token endpoint, and stores tokens in Keychain.

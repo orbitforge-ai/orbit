@@ -123,7 +123,7 @@ Unit tests in `plugins/*.rs` cover manifest validation, registry round-trips, zi
 |---|---|
 | Plugin subprocess exits immediately | `runtime.command` not in PATH, or the plugin's `server.js` throws before reading stdin. Check `plugin:log:<id>` event stream. |
 | Agent doesn't see the plugin's tools | Plugin disabled, or `plugins:changed` event dropped. Refresh the agent's tool definitions. |
-| OAuth callback returns 404 | Deep link scheme not registered — confirm `tauri.conf.json` has `plugins.deep-link.desktop.schemes = ["orbit"]`. |
+| OAuth callback never reaches the app | Loopback listener failed to bind `127.0.0.1:47821` (port already in use, or another Orbit instance is running). Check logs for `spawn_loopback_listener` errors, and confirm the provider's registered redirect URL matches `http://127.0.0.1:47821/oauth/callback` exactly. |
 | `tools/call` times out | The subprocess isn't writing its response back on stdout. Check the log ring. |
 | Plugin can't read a core entity | Missing from `permissions.coreEntities`. |
 

@@ -3,7 +3,7 @@
   "hostApiVersion": "^1.0.0",
   "id": "com.orbit.github",
   "name": "GitHub",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Bundled flagship plugin: clone repos, open PRs. Uses the Orbit-registered GitHub OAuth App via PKCE — no per-user setup required.",
   "author": "Orbit",
   "license": "MIT",
@@ -55,7 +55,7 @@
       "scopes": ["repo", "read:org"],
       "clientType": "public",
       "clientId": "Iv23liLu8CEAeNPqvl9v",
-      "redirectUri": "orbit://oauth/callback"
+      "redirectUri": "http://127.0.0.1:47821/oauth/callback"
     }
   ]
 }

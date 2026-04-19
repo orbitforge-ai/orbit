@@ -13,12 +13,12 @@ Orbit supports both public (PKCE-only) and confidential (client-secret) OAuth cl
     "tokenUrl": "https://github.com/login/oauth/access_token",
     "scopes": ["repo", "read:org"],
     "clientType": "confidential",       // or "public" for PKCE-only
-    "redirectUri": "orbit://oauth/callback"
+    "redirectUri": "http://127.0.0.1:47821/oauth/callback"
   }
 ]
 ```
 
-`redirectUri` **must** be exactly `orbit://oauth/callback`. The deep link is handled by `tauri-plugin-deep-link` and routed to Orbit's OAuth callback handler on macOS, Windows, and Linux.
+`redirectUri` **must** be exactly `http://127.0.0.1:47821/oauth/callback`. Orbit runs a short-lived loopback HTTP server on that port (RFC 8252 § 7.3) and routes the callback into the OAuth handler. This pattern works identically on macOS, Windows, and Linux with no OS-level scheme registration.
 
 ## Public vs confidential
 
@@ -30,8 +30,8 @@ Orbit supports both public (PKCE-only) and confidential (client-secret) OAuth cl
 1. User clicks Connect on the Plugin detail drawer's OAuth tab.
 2. Orbit generates PKCE + state, parks the verifier in memory (TTL 10 min).
 3. System browser opens the authorization URL.
-4. Provider redirects to `orbit://oauth/callback?state=...&code=...`.
-5. `tauri-plugin-deep-link` routes the URL to Orbit's callback handler.
+4. Provider redirects to `http://127.0.0.1:47821/oauth/callback?state=...&code=...`.
+5. Orbit's loopback listener receives the GET, parses state + code, and invokes the callback handler.
 6. Orbit exchanges the code at `tokenUrl` (adding `client_secret` for confidential clients).
 7. Access and refresh tokens land in Keychain.
 8. `plugin:oauth:connected` event fires; UI flips to "Connected".

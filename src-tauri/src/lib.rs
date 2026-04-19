@@ -52,7 +52,6 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_deep_link::init())
         .plugin(
             Builder::new()
                 .targets([
@@ -178,7 +177,7 @@ pub fn run() {
             let plugin_manager = std::sync::Arc::new(PluginManager::init(db_pool.clone()));
             plugin_manager.attach_log_emitter(app.handle());
             plugin_manager.start_core_api_servers(db_pool.clone());
-            plugins::oauth::spawn_deep_link_listener(app.handle().clone(), plugin_manager.clone());
+            plugins::oauth::spawn_loopback_listener(app.handle().clone(), plugin_manager.clone());
             app.manage(plugin_manager);
 
             // Start execution engine (now takes tx clone for retry scheduling)

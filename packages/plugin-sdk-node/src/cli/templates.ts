@@ -82,7 +82,7 @@ function manifest(
         tokenUrl: 'https://example.com/oauth/token',
         scopes: [],
         clientType: 'public',
-        redirectUri: 'orbit://oauth/callback',
+        redirectUri: 'http://127.0.0.1:47821/oauth/callback',
       },
     ];
   }

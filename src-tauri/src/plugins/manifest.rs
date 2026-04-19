@@ -145,7 +145,10 @@ fn default_client_type() -> String {
 }
 
 fn default_redirect_uri() -> String {
-    "orbit://oauth/callback".to_string()
+    format!(
+        "http://127.0.0.1:{}/oauth/callback",
+        super::oauth::LOOPBACK_PORT
+    )
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
