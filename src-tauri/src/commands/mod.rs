@@ -15,4 +15,5 @@ pub mod skills;
 pub mod tasks;
 pub mod users;
 pub mod work_items;
+pub mod workflow_runs;
 pub mod workspace;

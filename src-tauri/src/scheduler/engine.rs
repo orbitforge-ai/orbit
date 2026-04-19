@@ -8,13 +8,14 @@ use crate::executor::engine::{ExecutorTx, RunRequest};
 use crate::models::schedule::{OneShotConfig, RecurringConfig};
 use crate::models::task::Task;
 use crate::scheduler::converter::{compute_next, to_cron};
+use crate::workflows::orchestrator::WorkflowOrchestrator;
 
 /// The scheduler engine polls the database every 10 seconds and fires any
 /// schedules whose next_run_at is due.
 pub struct SchedulerEngine {
     db: DbPool,
     executor_tx: ExecutorTx,
-    _app: tauri::AppHandle,
+    app: tauri::AppHandle,
     log_dir: PathBuf,
 }
 
@@ -28,7 +29,7 @@ impl SchedulerEngine {
         Self {
             db,
             executor_tx,
-            _app: app,
+            app,
             log_dir,
         }
     }
@@ -38,6 +39,9 @@ impl SchedulerEngine {
 
         if let Err(e) = self.recover_orphans() {
             warn!("orphan recovery failed: {}", e);
+        }
+        if let Err(e) = self.recover_workflow_orphans() {
+            warn!("workflow orphan recovery failed: {}", e);
         }
         if let Err(e) = self.recompute_next_runs() {
             warn!("next_run_at recompute failed: {}", e);
@@ -59,19 +63,29 @@ impl SchedulerEngine {
 
         let mut stmt = conn
             .prepare(
-                "SELECT s.id, s.task_id, s.kind, s.config
+                "SELECT s.id, s.target_kind, s.task_id, s.workflow_id, s.kind, s.config
                  FROM schedules s
                  WHERE s.enabled = 1 AND s.next_run_at <= ?1",
             )
             .map_err(|e| e.to_string())?;
 
-        let due: Vec<(String, String, String, String)> = stmt
+        type DueRow = (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+        );
+        let due: Vec<DueRow> = stmt
             .query_map(rusqlite::params![now], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             })
             .map_err(|e| e.to_string())?
@@ -80,45 +94,91 @@ impl SchedulerEngine {
 
         drop(stmt);
 
-        for (schedule_id, task_id, kind, config_str) in due {
-            let task = match load_task(&conn, &task_id) {
-                Some(t) if t.enabled => t,
-                _ => {
+        for (schedule_id, target_kind, task_id, workflow_id, kind, config_str) in due {
+            match target_kind.as_str() {
+                "task" => {
+                    let task_id = match task_id {
+                        Some(t) => t,
+                        None => continue,
+                    };
+                    let task = match load_task(&conn, &task_id) {
+                        Some(t) if t.enabled => t,
+                        _ => continue,
+                    };
+
+                    let run_id = Ulid::new().to_string();
+                    let log_path = self.log_dir.join(format!("{}.log", run_id));
+
+                    conn.execute(
+                        "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger,
+                                           log_path, retry_count, metadata, created_at)
+                         VALUES (?1, ?2, ?3, ?4, 'pending', 'scheduled', ?5, 0, '{}', ?6)",
+                        rusqlite::params![
+                            run_id,
+                            task_id,
+                            schedule_id,
+                            task.agent_id,
+                            log_path.to_string_lossy().to_string(),
+                            now
+                        ],
+                    )
+                    .map_err(|e| e.to_string())?;
+
+                    let _ = self.executor_tx.0.send(RunRequest {
+                        run_id: run_id.clone(),
+                        task,
+                        schedule_id: Some(schedule_id.clone()),
+                        _trigger: "scheduled".to_string(),
+                        retry_count: 0,
+                        _parent_run_id: None,
+                        chain_depth: 0,
+                    });
+
+                    info!(
+                        run_id = run_id,
+                        schedule_id = schedule_id,
+                        kind = kind,
+                        "task run enqueued"
+                    );
+                }
+                "workflow" => {
+                    let workflow_id = match workflow_id {
+                        Some(w) => w,
+                        None => continue,
+                    };
+
+                    let trigger_data = serde_json::json!({
+                        "schedule_id": schedule_id,
+                        "fired_at": now,
+                    });
+
+                    let orchestrator =
+                        WorkflowOrchestrator::new(self.db.clone(), self.app.clone());
+                    let workflow_id_log = workflow_id.clone();
+                    let schedule_id_log = schedule_id.clone();
+                    tokio::spawn(async move {
+                        match orchestrator
+                            .start_run(workflow_id_log.clone(), "schedule", trigger_data)
+                            .await
+                        {
+                            Ok(run) => info!(
+                                run_id = run.id,
+                                workflow_id = workflow_id_log,
+                                schedule_id = schedule_id_log,
+                                "workflow run started"
+                            ),
+                            Err(e) => warn!("scheduled workflow run failed to start: {}", e),
+                        }
+                    });
+                }
+                other => {
+                    warn!("unknown schedule target_kind: {}", other);
                     continue;
                 }
-            };
-
-            let run_id = Ulid::new().to_string();
-            let log_path = self.log_dir.join(format!("{}.log", run_id));
-
-            conn
-        .execute(
-          "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, metadata, created_at)
-                 VALUES (?1, ?2, ?3, ?4, 'pending', 'scheduled', ?5, 0, '{}', ?6)",
-          rusqlite::params![
-            run_id,
-            task_id,
-            schedule_id,
-            task.agent_id,
-            log_path.to_string_lossy().to_string(),
-            now
-          ]
-        )
-        .map_err(|e| e.to_string())?;
-
-            let _ = self.executor_tx.0.send(RunRequest {
-                run_id: run_id.clone(),
-                task,
-                schedule_id: Some(schedule_id.clone()),
-                _trigger: "scheduled".to_string(),
-                retry_count: 0,
-                _parent_run_id: None,
-                chain_depth: 0,
-            });
+            }
 
             match kind.as_str() {
                 "recurring" => {
-                    // Advance next_run_at for recurring schedules
                     if let Ok(cfg) = serde_json::from_str::<RecurringConfig>(&config_str) {
                         if let Ok(cron_expr) = to_cron(&cfg) {
                             let next = compute_next(&cron_expr);
@@ -132,7 +192,6 @@ impl SchedulerEngine {
                     }
                 }
                 "one_shot" => {
-                    // One-shot: disable the schedule after firing
                     conn
             .execute(
               "UPDATE schedules SET enabled = 0, last_run_at = ?1, next_run_at = NULL, updated_at = ?1 WHERE id = ?2",
@@ -142,14 +201,31 @@ impl SchedulerEngine {
                 }
                 _ => {}
             }
-
-            info!(
-                run_id = run_id,
-                schedule_id = schedule_id,
-                kind = kind,
-                "run enqueued"
-            );
         }
+
+        Ok(())
+    }
+
+    fn recover_workflow_orphans(&self) -> Result<(), String> {
+        let conn = self.db.get().map_err(|e| e.to_string())?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let err = "orphaned: process restarted";
+
+        conn.execute(
+            "UPDATE workflow_runs
+             SET status = 'failed', error = ?1, completed_at = ?2
+             WHERE status IN ('queued', 'running')",
+            rusqlite::params![err, now],
+        )
+        .map_err(|e| e.to_string())?;
+
+        conn.execute(
+            "UPDATE workflow_run_steps
+             SET status = 'failed', error = COALESCE(error, ?1), completed_at = ?2
+             WHERE status IN ('queued', 'running')",
+            rusqlite::params![err, now],
+        )
+        .map_err(|e| e.to_string())?;
 
         Ok(())
     }

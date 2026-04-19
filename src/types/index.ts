@@ -217,6 +217,54 @@ export const KNOWN_NODE_TYPES = [
 
 export type WorkflowNodeType = (typeof KNOWN_NODE_TYPES)[number];
 
+// ─── Workflow runs (Phase 4 runtime) ─────────────────────────────────────────
+
+export type WorkflowRunStatus =
+  | 'queued'
+  | 'running'
+  | 'success'
+  | 'failed'
+  | 'cancelled';
+
+export type WorkflowRunStepStatus =
+  | 'queued'
+  | 'running'
+  | 'success'
+  | 'failed'
+  | 'skipped';
+
+export interface WorkflowRun {
+  id: string;
+  workflowId: string;
+  workflowVersion: number;
+  graphSnapshot: WorkflowGraph;
+  triggerKind: string;
+  triggerData: Record<string, unknown>;
+  status: WorkflowRunStatus;
+  error: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+}
+
+export interface WorkflowRunStep {
+  id: string;
+  runId: string;
+  nodeId: string;
+  nodeType: string;
+  status: WorkflowRunStepStatus;
+  input: unknown;
+  output: unknown;
+  error: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  sequence: number;
+}
+
+export interface WorkflowRunWithSteps extends WorkflowRun {
+  steps: WorkflowRunStep[];
+}
+
 // ─── Memory ──────────────────────────────────────────────────────────────────
 
 export type MemoryType = 'user' | 'feedback' | 'project' | 'reference';

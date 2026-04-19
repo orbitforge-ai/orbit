@@ -356,6 +356,8 @@ impl SupabaseClient {
                 "user_id": self.user_id,
                 "id": s.id,
                 "task_id": s.task_id,
+                "workflow_id": s.workflow_id,
+                "target_kind": s.target_kind,
                 "kind": s.kind,
                 "config": s.config,
                 "enabled": s.enabled,
@@ -715,6 +717,7 @@ impl SupabaseClient {
             work_items,
             work_item_comments,
             project_workflows,
+            workflow_runs,
         ) = tokio::task::spawn_blocking(move || {
             let conn = p2.get().map_err(|e| e.to_string())?;
             Ok::<_, String>((
@@ -724,6 +727,7 @@ impl SupabaseClient {
                 read_work_items(&conn, &user_id2)?,
                 read_work_item_comments(&conn, &user_id2)?,
                 read_project_workflows(&conn, &user_id2)?,
+                read_workflow_runs(&conn, &user_id2)?,
             ))
         })
         .await
@@ -755,6 +759,7 @@ impl SupabaseClient {
         push!("work_items", work_items);
         push!("work_item_comments", work_item_comments);
         push!("project_workflows", project_workflows);
+        push!("workflow_runs", workflow_runs);
 
         info!("Pushed local data to Supabase");
         Ok(())
@@ -808,6 +813,7 @@ impl SupabaseClient {
         let work_items = fetch!("work_items");
         let work_item_comments = fetch!("work_item_comments");
         let project_workflows = fetch!("project_workflows");
+        let workflow_runs = fetch!("workflow_runs");
 
         let counts = std::collections::HashMap::from([
             ("agents".to_string(), agents.len()),
@@ -828,6 +834,7 @@ impl SupabaseClient {
             ("work_items".to_string(), work_items.len()),
             ("work_item_comments".to_string(), work_item_comments.len()),
             ("project_workflows".to_string(), project_workflows.len()),
+            ("workflow_runs".to_string(), workflow_runs.len()),
         ]);
 
         info!(
@@ -861,6 +868,7 @@ impl SupabaseClient {
             write_work_items(&conn, work_items)?;
             write_work_item_comments(&conn, work_item_comments)?;
             write_project_workflows(&conn, project_workflows)?;
+            write_workflow_runs(&conn, workflow_runs)?;
             Ok::<(), String>(())
         })
         .await
@@ -991,25 +999,27 @@ fn read_tasks(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, 
 fn read_schedules(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, task_id, kind, config, enabled, next_run_at, last_run_at,
-                    created_at, updated_at FROM schedules",
+            "SELECT id, task_id, workflow_id, target_kind, kind, config, enabled,
+                    next_run_at, last_run_at, created_at, updated_at FROM schedules",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
-            let config_str: String = row.get(3)?;
-            let enabled: bool = row.get(4)?;
+            let config_str: String = row.get(5)?;
+            let enabled: bool = row.get(6)?;
             Ok(serde_json::json!({
                 "user_id": user_id,
                 "id": row.get::<_, String>(0)?,
-                "task_id": row.get::<_, String>(1)?,
-                "kind": row.get::<_, String>(2)?,
+                "task_id": row.get::<_, Option<String>>(1)?,
+                "workflow_id": row.get::<_, Option<String>>(2)?,
+                "target_kind": row.get::<_, String>(3)?,
+                "kind": row.get::<_, String>(4)?,
                 "config": json_or_null(&config_str),
                 "enabled": enabled,
-                "next_run_at": row.get::<_, Option<String>>(5)?,
-                "last_run_at": row.get::<_, Option<String>>(6)?,
-                "created_at": row.get::<_, String>(7)?,
-                "updated_at": row.get::<_, String>(8)?,
+                "next_run_at": row.get::<_, Option<String>>(7)?,
+                "last_run_at": row.get::<_, Option<String>>(8)?,
+                "created_at": row.get::<_, String>(9)?,
+                "updated_at": row.get::<_, String>(10)?,
             }))
         })
         .map_err(|e| e.to_string())?
@@ -1428,6 +1438,39 @@ fn read_project_workflows(
     Ok(rows)
 }
 
+fn read_workflow_runs(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, workflow_id, workflow_version, graph_snapshot, trigger_kind,
+                    trigger_data, status, error, started_at, completed_at, created_at
+             FROM workflow_runs",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            let graph_str: String = row.get(3)?;
+            let trigger_str: String = row.get(5)?;
+            Ok(serde_json::json!({
+                "user_id": user_id,
+                "id": row.get::<_, String>(0)?,
+                "workflow_id": row.get::<_, String>(1)?,
+                "workflow_version": row.get::<_, i64>(2)?,
+                "graph_snapshot": json_or_null(&graph_str),
+                "trigger_kind": row.get::<_, String>(4)?,
+                "trigger_data": json_or_null(&trigger_str),
+                "status": row.get::<_, String>(6)?,
+                "error": row.get::<_, Option<String>>(7)?,
+                "started_at": row.get::<_, Option<String>>(8)?,
+                "completed_at": row.get::<_, Option<String>>(9)?,
+                "created_at": row.get::<_, String>(10)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
 fn read_work_item_comments(
     conn: &rusqlite::Connection,
     user_id: &str,
@@ -1554,14 +1597,21 @@ fn write_tasks(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), Stri
 
 fn write_schedules(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
+        let target_kind = r
+            .get("target_kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("task")
+            .to_string();
         conn.execute(
             "INSERT OR REPLACE INTO schedules
-             (id, task_id, kind, config, enabled, next_run_at, last_run_at,
-              created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+             (id, task_id, workflow_id, target_kind, kind, config, enabled,
+              next_run_at, last_run_at, created_at, updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             rusqlite::params![
                 str_val(&r, "id"),
-                str_val(&r, "task_id"),
+                opt_str(&r, "task_id"),
+                opt_str(&r, "workflow_id"),
+                target_kind,
                 str_val(&r, "kind"),
                 json_str(&r, "config", "{}"),
                 bool_val(&r, "enabled"),
@@ -1906,6 +1956,32 @@ fn write_project_workflows(
                 int_val(&r, "version", 1),
                 str_val(&r, "created_at"),
                 str_val(&r, "updated_at"),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn write_workflow_runs(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+    for r in rows {
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_runs (
+                id, workflow_id, workflow_version, graph_snapshot, trigger_kind,
+                trigger_data, status, error, started_at, completed_at, created_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            rusqlite::params![
+                str_val(&r, "id"),
+                str_val(&r, "workflow_id"),
+                int_val(&r, "workflow_version", 1),
+                json_str(&r, "graph_snapshot", "{}"),
+                str_val(&r, "trigger_kind"),
+                json_str(&r, "trigger_data", "{}"),
+                str_val(&r, "status"),
+                opt_str(&r, "error"),
+                opt_str(&r, "started_at"),
+                opt_str(&r, "completed_at"),
+                str_val(&r, "created_at"),
             ],
         )
         .map_err(|e| e.to_string())?;

@@ -19,14 +19,16 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { ArrowLeft, Play, Save } from 'lucide-react';
+import { ArrowLeft, History, Play, Save } from 'lucide-react';
 import { useUiStore } from '../../store/uiStore';
 import { projectWorkflowsApi } from '../../api/projectWorkflows';
+import { workflowRunsApi } from '../../api/workflowRuns';
 import { ProjectWorkflow, WorkflowEdge, WorkflowGraph, WorkflowNode } from '../../types';
 import { nodeMeta, NODE_REGISTRY } from './nodeRegistry';
 import { nodeTypes } from './nodes';
 import { NodePalette } from './NodePalette';
 import { NodeInspector } from './NodeInspector';
+import { RunHistoryDrawer } from './RunHistoryDrawer';
 
 function workflowToFlow(graph: WorkflowGraph): { nodes: Node[]; edges: Edge[] } {
   return {
@@ -105,6 +107,8 @@ function Editor({ workflowId }: { workflowId: string }) {
   const [enabled, setEnabled] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [runDrawerOpen, setRunDrawerOpen] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!workflow) return;
@@ -239,6 +243,18 @@ function Editor({ workflowId }: { workflowId: string }) {
     },
   });
 
+  const runMutation = useMutation({
+    mutationFn: () => workflowRunsApi.start(workflowId, {}),
+    onSuccess: () => {
+      setRunError(null);
+      setRunDrawerOpen(true);
+      queryClient.invalidateQueries({ queryKey: ['workflow-runs', workflowId] });
+    },
+    onError: (err) => {
+      setRunError(String(err));
+    },
+  });
+
   const enabledMutation = useMutation({
     mutationFn: (next: boolean) => projectWorkflowsApi.setEnabled(workflowId, next),
     onSuccess: (updated) => {
@@ -296,12 +312,24 @@ function Editor({ workflowId }: { workflowId: string }) {
           Enabled
         </label>
         <button
-          disabled
-          title="Run is available in Phase 4 (workflow runtime)"
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-edge text-muted text-xs font-medium cursor-not-allowed opacity-50"
+          onClick={() => setRunDrawerOpen(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-edge hover:bg-edge/30 text-white text-xs font-medium transition-colors"
+        >
+          <History size={12} />
+          History
+        </button>
+        <button
+          onClick={() => runMutation.mutate()}
+          disabled={runMutation.isPending || dirty}
+          title={
+            dirty
+              ? 'Save changes before running'
+              : 'Run this workflow now'
+          }
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/80 hover:bg-emerald-500 text-white text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Play size={12} />
-          Run
+          {runMutation.isPending ? 'Starting…' : 'Run'}
         </button>
         <button
           onClick={() => saveMutation.mutate()}
@@ -316,6 +344,18 @@ function Editor({ workflowId }: { workflowId: string }) {
       {saveError && (
         <div className="px-4 py-2 bg-red-500/10 border-b border-red-500/20 text-xs text-red-300">
           {saveError}
+        </div>
+      )}
+
+      {runError && (
+        <div className="px-4 py-2 bg-red-500/10 border-b border-red-500/20 text-xs text-red-300 flex items-center justify-between">
+          <span>{runError}</span>
+          <button
+            onClick={() => setRunError(null)}
+            className="text-red-300 hover:text-white"
+          >
+            dismiss
+          </button>
         </div>
       )}
 
@@ -356,6 +396,13 @@ function Editor({ workflowId }: { workflowId: string }) {
           onDelete={deleteNode}
         />
       </div>
+
+      {runDrawerOpen && (
+        <RunHistoryDrawer
+          workflowId={workflowId}
+          onClose={() => setRunDrawerOpen(false)}
+        />
+      )}
     </div>
   );
 }

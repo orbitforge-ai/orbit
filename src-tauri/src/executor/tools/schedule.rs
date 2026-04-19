@@ -632,7 +632,8 @@ async fn set_pulse_config(
                 .map_err(|e| e.to_string())?;
             let schedule = conn
                 .query_row(
-                    "SELECT id, task_id, kind, config, enabled, next_run_at, last_run_at, created_at, updated_at
+                    "SELECT id, task_id, workflow_id, target_kind, kind, config, enabled,
+                            next_run_at, last_run_at, created_at, updated_at
                      FROM schedules WHERE id = ?1",
                     rusqlite::params![schedule_id],
                     parse_schedule_row,
@@ -769,7 +770,8 @@ async fn load_owned_schedule(
     tokio::task::spawn_blocking(move || -> Result<OwnedSchedule, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.query_row(
-            "SELECT s.id, s.task_id, s.kind, s.config, s.enabled, s.next_run_at, s.last_run_at, s.created_at, s.updated_at,
+            "SELECT s.id, s.task_id, s.workflow_id, s.target_kind, s.kind, s.config, s.enabled,
+                    s.next_run_at, s.last_run_at, s.created_at, s.updated_at,
                     t.id, t.name, t.description, t.kind, t.config, t.max_duration_seconds, t.max_retries,
                     t.retry_delay_seconds, t.concurrency_policy, t.tags, t.agent_id, t.enabled, t.created_at, t.updated_at, t.project_id
              FROM schedules s
@@ -780,31 +782,33 @@ async fn load_owned_schedule(
                 let schedule = Schedule {
                     id: row.get(0)?,
                     task_id: row.get(1)?,
-                    kind: row.get(2)?,
-                    config: serde_json::from_str::<Value>(&row.get::<_, String>(3)?)
+                    workflow_id: row.get(2)?,
+                    target_kind: row.get(3)?,
+                    kind: row.get(4)?,
+                    config: serde_json::from_str::<Value>(&row.get::<_, String>(5)?)
                         .unwrap_or(Value::Null),
-                    enabled: row.get::<_, bool>(4)?,
-                    next_run_at: row.get(5)?,
-                    last_run_at: row.get(6)?,
-                    created_at: row.get(7)?,
-                    updated_at: row.get(8)?,
+                    enabled: row.get::<_, bool>(6)?,
+                    next_run_at: row.get(7)?,
+                    last_run_at: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
                 };
                 let tags: Vec<String> =
-                    serde_json::from_str(&row.get::<_, String>(18)?).unwrap_or_default();
-                let _: String = row.get(9)?;
-                let _: String = row.get(10)?;
-                let _: Option<String> = row.get(11)?;
+                    serde_json::from_str(&row.get::<_, String>(20)?).unwrap_or_default();
+                let _: String = row.get(11)?;
                 let _: String = row.get(12)?;
-                let _: String = row.get(13)?;
-                let _: i64 = row.get(14)?;
-                let _: i64 = row.get(15)?;
+                let _: Option<String> = row.get(13)?;
+                let _: String = row.get(14)?;
+                let _: String = row.get(15)?;
                 let _: i64 = row.get(16)?;
-                let _: String = row.get(17)?;
-                let _: Option<String> = row.get(19)?;
-                let _: bool = row.get(20)?;
-                let _: String = row.get(21)?;
-                let _: String = row.get(22)?;
-                let _: Option<String> = row.get(23)?;
+                let _: i64 = row.get(17)?;
+                let _: i64 = row.get(18)?;
+                let _: String = row.get(19)?;
+                let _: Option<String> = row.get(21)?;
+                let _: bool = row.get(22)?;
+                let _: String = row.get(23)?;
+                let _: String = row.get(24)?;
+                let _: Option<String> = row.get(25)?;
                 Ok(OwnedSchedule {
                     is_pulse: tags.iter().any(|tag| tag == "pulse"),
                     schedule,
@@ -902,13 +906,15 @@ async fn insert_schedule_record(
         let now = chrono::Utc::now().to_rfc3339();
         let config_str = serde_json::to_string(&config).map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO schedules (id, task_id, kind, config, enabled, next_run_at, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+            "INSERT INTO schedules (id, task_id, workflow_id, target_kind, kind, config, enabled,
+                                    next_run_at, created_at, updated_at)
+             VALUES (?1, ?2, NULL, 'task', ?3, ?4, ?5, ?6, ?7, ?7)",
             rusqlite::params![id, task_id, kind, config_str, enabled, next_run_at, now],
         )
         .map_err(|e| e.to_string())?;
         conn.query_row(
-            "SELECT id, task_id, kind, config, enabled, next_run_at, last_run_at, created_at, updated_at
+            "SELECT id, task_id, workflow_id, target_kind, kind, config, enabled,
+                    next_run_at, last_run_at, created_at, updated_at
              FROM schedules WHERE id = ?1",
             rusqlite::params![id],
             parse_schedule_row,
@@ -941,7 +947,8 @@ async fn update_schedule_record(
         )
         .map_err(|e| e.to_string())?;
         conn.query_row(
-            "SELECT id, task_id, kind, config, enabled, next_run_at, last_run_at, created_at, updated_at
+            "SELECT id, task_id, workflow_id, target_kind, kind, config, enabled,
+                    next_run_at, last_run_at, created_at, updated_at
              FROM schedules WHERE id = ?1",
             rusqlite::params![schedule_id],
             parse_schedule_row,
@@ -991,17 +998,19 @@ fn parse_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
 }
 
 fn parse_schedule_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Schedule> {
-    let config_str: String = row.get(3)?;
+    let config_str: String = row.get(5)?;
     Ok(Schedule {
         id: row.get(0)?,
         task_id: row.get(1)?,
-        kind: row.get(2)?,
+        workflow_id: row.get(2)?,
+        target_kind: row.get(3)?,
+        kind: row.get(4)?,
         config: serde_json::from_str(&config_str).unwrap_or(Value::Null),
-        enabled: row.get::<_, bool>(4)?,
-        next_run_at: row.get(5)?,
-        last_run_at: row.get(6)?,
-        created_at: row.get(7)?,
-        updated_at: row.get(8)?,
+        enabled: row.get::<_, bool>(6)?,
+        next_run_at: row.get(7)?,
+        last_run_at: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
     })
 }
 

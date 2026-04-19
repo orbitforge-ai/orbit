@@ -7,6 +7,7 @@ mod executor;
 mod memory_service;
 mod models;
 mod scheduler;
+mod workflows;
 
 use std::path::PathBuf;
 use tauri::menu::{Menu, MenuItem};
@@ -220,6 +221,7 @@ pub fn run() {
             // Schedules
             commands::schedules::list_schedules,
             commands::schedules::get_schedules_for_task,
+            commands::schedules::get_schedules_for_workflow,
             commands::schedules::create_schedule,
             commands::schedules::toggle_schedule,
             commands::schedules::delete_schedule,
@@ -327,6 +329,11 @@ pub fn run() {
             commands::project_workflows::update_project_workflow,
             commands::project_workflows::delete_project_workflow,
             commands::project_workflows::set_project_workflow_enabled,
+            // Workflow runs
+            commands::workflow_runs::start_workflow_run,
+            commands::workflow_runs::list_workflow_runs,
+            commands::workflow_runs::get_workflow_run,
+            commands::workflow_runs::cancel_workflow_run,
             // Users
             commands::users::list_users,
             commands::users::create_user,

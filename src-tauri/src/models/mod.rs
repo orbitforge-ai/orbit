@@ -10,3 +10,4 @@ pub mod task;
 pub mod user;
 pub mod work_item;
 pub mod work_item_comment;
+pub mod workflow_run;

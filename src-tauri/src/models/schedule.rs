@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct Schedule {
     pub id: String,
-    pub task_id: String,
+    pub task_id: Option<String>,
+    pub workflow_id: Option<String>,
+    /// 'task' | 'workflow' — distinct from `kind` (which is the cadence type).
+    pub target_kind: String,
     pub kind: String,
     /// JSON-encoded config: RecurringConfig, OneShotConfig, or TriggeredConfig
     pub config: serde_json::Value,
@@ -18,7 +21,10 @@ pub struct Schedule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSchedule {
-    pub task_id: String,
+    pub task_id: Option<String>,
+    pub workflow_id: Option<String>,
+    #[serde(default)]
+    pub target_kind: Option<String>,
     pub kind: String,
     pub config: serde_json::Value,
 }
