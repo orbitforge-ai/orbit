@@ -9,10 +9,12 @@
 //! See `docs/plugins/INTERNAL_ARCHITECTURE.md` (added alongside V1) for the
 //! extension-recipe reference.
 
+pub mod core_api;
 pub mod entities;
 pub mod hooks;
 pub mod install;
 pub mod manifest;
+pub mod mcp_client;
 pub mod oauth;
 pub mod registry;
 pub mod runtime;
@@ -24,6 +26,7 @@ use std::sync::{Arc, RwLock};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::db::DbPool;
+use core_api::CoreApiServer;
 use manifest::PluginManifest;
 use registry::{PluginRegistry, RegistryEntry};
 use runtime::RuntimeRegistry;
@@ -43,11 +46,19 @@ pub fn staging_dir() -> PathBuf {
     plugins_dir().join(".staging")
 }
 
+/// Path where a plugin's core-API unix socket lives. The subprocess reads
+/// this path from `ORBIT_CORE_API_SOCKET` and dials in via JSON-RPC.
+pub fn core_api_socket_path(plugin_id: &str) -> PathBuf {
+    plugins_dir().join(plugin_id).join(".orbit").join("core.sock")
+}
+
 /// Top-level plugin subsystem. Lives in Tauri managed state and is the only
 /// entry point for install/uninstall/enable/disable/reload and tool dispatch.
 pub struct PluginManager {
     inner: Arc<RwLock<PluginManagerInner>>,
-    runtime: RuntimeRegistry,
+    pub(crate) runtime: Arc<RuntimeRegistry>,
+    pub(crate) oauth_state: Arc<oauth::OAuthState>,
+    pub(crate) core_api: Arc<CoreApiServer>,
 }
 
 struct PluginManagerInner {
@@ -69,12 +80,18 @@ impl PluginManager {
             tracing::warn!("failed to create plugin staging dir: {}", e);
         }
 
-        let registry = PluginRegistry::load(&plugins_dir).unwrap_or_else(|e| {
+        // First-launch bootstrap: copy every bundled plugin not yet installed
+        // into the user's plugins dir. Bundled plugins are trusted so we skip
+        // the staging/review step.
+        let mut registry = PluginRegistry::load(&plugins_dir).unwrap_or_else(|e| {
             tracing::warn!("failed to load plugin registry.json ({}); starting empty", e);
             PluginRegistry::default()
         });
+        install::bootstrap_bundled_plugins(&mut registry);
+        let _ = registry.save(&plugins_dir);
 
         let mut manifests = Vec::new();
+        let registry = registry;
         for entry in registry.entries() {
             let manifest_path = plugins_dir.join(&entry.id).join("plugin.json");
             match manifest::load_from_path(&manifest_path) {
@@ -91,8 +108,54 @@ impl PluginManager {
 
         Self {
             inner: Arc::new(RwLock::new(PluginManagerInner { registry, manifests })),
-            runtime: RuntimeRegistry::new(),
+            runtime: Arc::new(RuntimeRegistry::new()),
+            oauth_state: Arc::new(oauth::OAuthState::new()),
+            core_api: Arc::new(CoreApiServer::new()),
         }
+    }
+
+    /// Spawn the unix-socket core-API listener for every enabled plugin.
+    /// Called once at startup; reload paths call [`respawn_core_api`] to
+    /// pick up manifest changes.
+    pub fn start_core_api_servers(&self, db: DbPool) {
+        let manifests = self.manifests();
+        let core_api = self.core_api.clone();
+        tauri::async_runtime::spawn(async move {
+            for manifest in manifests {
+                if let Err(e) = core_api.start(manifest.clone(), db.clone()).await {
+                    tracing::warn!(
+                        plugin_id = manifest.id.as_str(),
+                        "failed to start core-api socket: {}",
+                        e
+                    );
+                }
+            }
+        });
+    }
+
+    /// Start a single plugin's core-API socket. Used after install/enable so
+    /// the subprocess can dial in on first tool call.
+    pub fn respawn_core_api(&self, plugin_id: &str, db: DbPool) {
+        let Some(manifest) = self.manifest(plugin_id) else {
+            return;
+        };
+        let core_api = self.core_api.clone();
+        let plugin_id = plugin_id.to_string();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = core_api.start(manifest, db).await {
+                tracing::warn!(plugin_id = %plugin_id, "respawn core-api failed: {}", e);
+            }
+        });
+    }
+
+    /// Hook the runtime log ring to Tauri events so the Plugin detail drawer's
+    /// Live Log tab can stream stderr in real time.
+    pub fn attach_log_emitter<R: Runtime>(&self, app: &AppHandle<R>) {
+        let app = app.clone();
+        self.runtime.set_log_event_sender(move |plugin_id, line| {
+            let event = format!("plugin:log:{}", plugin_id);
+            let _ = app.emit(&event, line);
+        });
     }
 
     /// List a summary of every installed plugin (both enabled and disabled).

@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "hostApiVersion": "^1.0.0",
+  "id": "com.orbit.github",
+  "name": "GitHub",
+  "version": "0.1.0",
+  "description": "Bundled flagship plugin: clone repos, open PRs. Uses Orbit-registered OAuth via PKCE.",
+  "author": "Orbit",
+  "license": "MIT",
+  "runtime": {
+    "type": "mcp-stdio",
+    "command": "node",
+    "args": ["server.js"]
+  },
+  "permissions": {
+    "network": ["api.github.com", "github.com"],
+    "oauth": ["github"]
+  },
+  "tools": [
+    {
+      "name": "clone_repo",
+      "description": "Clone a GitHub repo into the agent workspace.",
+      "riskLevel": "moderate",
+      "inputSchema": {
+        "type": "object",
+        "required": ["repo"],
+        "properties": {
+          "repo": { "type": "string", "description": "owner/name" }
+        }
+      }
+    },
+    {
+      "name": "create_pr",
+      "description": "Open a pull request on a GitHub repo.",
+      "riskLevel": "moderate",
+      "inputSchema": {
+        "type": "object",
+        "required": ["repo", "title", "head", "base"],
+        "properties": {
+          "repo": { "type": "string" },
+          "title": { "type": "string" },
+          "body": { "type": "string" },
+          "head": { "type": "string" },
+          "base": { "type": "string" }
+        }
+      }
+    }
+  ],
+  "oauthProviders": [
+    {
+      "id": "github",
+      "name": "GitHub",
+      "authorizationUrl": "https://github.com/login/oauth/authorize",
+      "tokenUrl": "https://github.com/login/oauth/access_token",
+      "scopes": ["repo", "read:org"],
+      "clientType": "public",
+      "redirectUri": "orbit://oauth/callback"
+    }
+  ]
+}

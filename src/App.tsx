@@ -24,6 +24,7 @@ import { TaskEdit } from './screens/TaskEdit';
 import { ProjectInspector } from './screens/ProjectInspector';
 import { WorkflowEditor } from './screens/WorkflowEditor';
 import { Memory } from './screens/Memory';
+import { Plugins } from './screens/Plugins';
 import { Settings } from './screens/Settings';
 import { AuthScreen } from './screens/Auth';
 import { BootScreen } from './components/BootScreen';
@@ -164,6 +165,7 @@ function AppContent() {
       projects: <ProjectInspector />,
       'workflow-editor': <WorkflowEditor />,
       memory: <Memory />,
+      plugins: <Plugins />,
       'task-edit': <TaskEdit />,
     } as Record<string, React.ReactNode>
   )[screen] ?? <Dashboard />;

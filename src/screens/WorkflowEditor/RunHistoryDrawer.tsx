@@ -15,6 +15,7 @@ import {
   WorkflowRun,
   WorkflowRunStatus,
   WorkflowRunStepStatus,
+  WorkflowRunStep,
   WorkflowRunWithSteps,
 } from '../../types';
 
@@ -44,6 +45,28 @@ function formatRelative(iso: string, nowMs: number): string {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ago`;
   return new Date(iso).toLocaleString();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function resolveStepNodeSubtitle(step: WorkflowRunStep, detail: WorkflowRunWithSteps): string {
+  if (step.nodeType !== 'board.work_item.create') {
+    return step.nodeType;
+  }
+
+  const snapshotNode = detail.graphSnapshot.nodes.find((node) => node.id === step.nodeId);
+  const inputAction = isRecord(step.input) ? asString(step.input.action) : null;
+  const outputAction = isRecord(step.output) ? asString(step.output.action) : null;
+  const snapshotAction = snapshotNode ? asString(snapshotNode.data.action) : null;
+  const action = inputAction ?? outputAction ?? snapshotAction;
+
+  return action ? `board.work_item.${action}` : step.nodeType;
 }
 
 function StatusIcon({
@@ -287,7 +310,9 @@ function RunDetail({
                 <div className="flex items-center gap-2 px-3 py-2 border-b border-edge/50">
                   <StatusIcon status={step.status} />
                   <span className="text-xs font-mono text-white">{step.nodeId}</span>
-                  <span className="text-[10px] text-muted">{step.nodeType}</span>
+                  <span className="text-[10px] text-muted">
+                    {resolveStepNodeSubtitle(step, detail)}
+                  </span>
                   <div className="flex-1" />
                   <span className="text-[10px] text-muted">
                     {formatDuration(step.startedAt, step.completedAt, nowMs)}

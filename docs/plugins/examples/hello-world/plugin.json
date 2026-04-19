@@ -1,0 +1,25 @@
+{
+  "$schema": "../../plugin.schema.json",
+  "schemaVersion": 1,
+  "hostApiVersion": "^1.0.0",
+  "id": "com.example.hello",
+  "name": "Hello World",
+  "version": "0.1.0",
+  "description": "Minimal plugin that exposes a `greet` tool.",
+  "runtime": {
+    "type": "mcp-stdio",
+    "command": "node",
+    "args": ["server.js"]
+  },
+  "tools": [
+    {
+      "name": "greet",
+      "description": "Say hello.",
+      "riskLevel": "safe",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "name": { "type": "string" } }
+      }
+    }
+  ]
+}

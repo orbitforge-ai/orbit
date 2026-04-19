@@ -1,59 +1,35 @@
-# Orbit Plugins — V1
+# Orbit Plugins
 
-Orbit plugins extend the app with custom **tools**, **entity types**, **OAuth providers**, **workflow triggers/nodes**, and **UI surfaces** — all shipped as a local zip file (or symlinked directory in dev mode). No remote registry in V1.
+Orbit plugins are **local-install integrations** that add custom tools, entity types, OAuth providers, workflow triggers/nodes, and declarative UI surfaces to the Orbit desktop app. Plugins run as MCP stdio subprocesses owned by their plugin author — no plugin JavaScript runs inside Orbit's renderer.
 
-> **Status:** V1 backend foundation landed. The full author-facing docs
-> (quickstart, manifest reference, MCP server guide, entity-types, core-api,
-> oauth, packaging, security, INTERNAL_ARCHITECTURE, examples) are being
-> written in a follow-up slice alongside the Node SDK and `create-orbit-plugin`
-> CLI. See `plan.md` § "Plugin author documentation" for the full contents
-> outline.
+## Quick links
 
-## Backend capabilities shipped
+- [Quickstart](quickstart.md) — build and install a hello-world plugin in 10 minutes
+- [Manifest reference](manifest-reference.md) — every `plugin.json` field
+- [MCP server guide](mcp-server.md) — the protocol Orbit speaks to your plugin
+- [Entity types](entity-types.md) — declare custom entity types and relations
+- [Core API](core-api.md) — the methods plugins call back into Orbit
+- [OAuth](oauth.md) — PKCE + confidential-client flows
+- [Packaging](packaging.md) — how to ship a plugin zip
+- [Security](security.md) — what Orbit guarantees vs what plugins are trusted with
+- [Internal architecture](INTERNAL_ARCHITECTURE.md) — reference for contributors extending the plugin system itself
+- [JSON Schema](plugin.schema.json) — for editor validation; reference from `plugin.json` via `"$schema"`
 
-- Reverse-DNS plugin id + semver `hostApiVersion` range compat (currently `1.0.0`).
-- Zip-slip-safe install staging and atomic commit.
-- Dev-mode install from a directory (pointer file; gated on `developer.pluginDevMode`).
-- `~/.orbit/plugins/registry.json` as the source of truth for installed state.
-- Per-plugin Keychain namespace (`com.orbit.plugin.<id>`) with generic
-  `store_secret` / `retrieve_secret` / `delete_secret` helpers.
-- Manifest-declared tools bridged into the agent via `PluginToolHandler`
-  (subprocess MCP transport coming online in the next slice).
-- Auto-generated entity CRUD tool per manifest `entityTypes[]`, backed by the
-  generic `plugin_entities` + `plugin_entity_relations` tables (migration
-  `0024_plugin_entities.sql`).
-- Deep-link scheme `orbit://oauth/callback` registered via
-  `tauri-plugin-deep-link` on macOS, Windows, and Linux.
-- `tauri-plugin-mcp-bridge` (used by external debugging agents) now gated
-  behind the optional Cargo feature `debug-mcp-bridge`.
+## Worked examples
 
-## Installing a plugin (once the UI lands)
+- [hello-world](examples/hello-world/) — minimal tool-only plugin
+- [social-content](examples/social-content/) — entity type + relations + behavior tools
+- [github-oauth](examples/github-oauth/) — confidential-client OAuth
 
-1. Open the Plugins screen.
-2. Install → pick `.zip` → review modal renders the manifest (tools, entity
-   types, OAuth providers, workflow contributions, permissions).
-3. Confirm → plugin lands in `~/.orbit/plugins/<id>/` disabled by default.
-4. Flip the enable toggle → subprocess spawns lazily on first tool call.
+## What a plugin can do
 
-## Developer mode
+- **Tools** — agents call them directly (namespaced `<plugin-id-slug>__<tool-name>`).
+- **Entity types** — structured records agents can CRUD via auto-generated tools. Stored as JSON blobs in Orbit's SQLite; validated against the manifest JSON Schema.
+- **OAuth providers** — tokens stored in the macOS Keychain, delivered to the subprocess as `ORBIT_OAUTH_<PROVIDER>_ACCESS_TOKEN`.
+- **Workflow triggers + action nodes** — extend the workflow editor with custom event sources and action steps.
+- **Hook subscriptions** — get notified of core events (`session.started`, `entity.work_item.after_complete`, etc.).
+- **Declarative UI** — sidebar items, entity detail tabs, slash commands, settings panels. All rendered by Orbit; plugin logic stays in the MCP subprocess.
 
-Set `developer.pluginDevMode = true` in `settings.json` to unlock dev
-features:
+## Host API version
 
-- "Install from directory" (no zip required; symlink/pointer-installed)
-- MCP JSON-RPC frame logging in the Live Log pane
-- Relaxed zip size cap (default 50 MiB)
-- Manifest hash skipping (manifests change every save in dev)
-
-## Next slices
-
-- Full MCP stdio client (subprocess spawn, `tools/list` round trip, progress
-  notifications, graceful reload).
-- OAuth browser launch + callback token exchange.
-- Unix-socket core-API server that plugins call back into via
-  `ORBIT_CORE_API_SOCKET`.
-- `packages/plugin-sdk-node/` + `create-orbit-plugin` CLI.
-- Bundled `com.orbit.github` flagship plugin.
-- Plugins and Plugin Entities screens.
-- Integration tests in `src-tauri/tests/plugins/`.
-- Supabase mirror migration for `plugin_entities` + `plugin_entity_relations`.
+V1 host API is **`1.0.0`**. Declare compatibility with `"hostApiVersion": "^1.0.0"` in your manifest. Plugins whose declared range is unsatisfied by the current Orbit build are rejected at install time.

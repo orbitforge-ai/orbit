@@ -12,6 +12,8 @@ type Screen =
   | 'schedule-builder'
   | 'task-edit'
   | 'workflow-editor'
+  | 'plugins'
+  | 'plugin-entities'
   | 'settings';
 
 function getPersistedScreen(): Screen {

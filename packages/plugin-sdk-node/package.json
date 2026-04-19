@@ -1,0 +1,27 @@
+{
+  "name": "@orbit/plugin-sdk",
+  "version": "1.0.0",
+  "description": "SDK for building Orbit plugins in Node.js.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "bin": {
+    "create-orbit-plugin": "./dist/cli/create.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5.4.0"
+  }
+}

@@ -43,6 +43,7 @@ fn all_tools() -> Vec<Box<dyn ToolHandler>> {
         Box::new(tools::list_memories::ListMemoriesTool),
         Box::new(tools::finish::FinishTool),
         Box::new(tools::react_to_message::ReactToMessageTool),
+        Box::new(tools::plugin_management::PluginManagementTool),
     ]
 }
 

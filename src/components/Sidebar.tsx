@@ -34,6 +34,7 @@ import {
   Settings,
   KanbanSquare,
   Workflow,
+  Plug,
 } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { useUiStore } from '../store/uiStore';
@@ -54,6 +55,7 @@ const GLOBAL_NAV = [
   { id: 'history' as const, label: 'All History', icon: History },
   { id: 'schedules' as const, label: 'Schedules', icon: Clock },
   { id: 'memory' as const, label: 'Memory', icon: Brain },
+  { id: 'plugins' as const, label: 'Plugins', icon: Plug },
 ];
 
 const PROJECT_TABS = [

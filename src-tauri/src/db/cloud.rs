@@ -472,6 +472,57 @@ impl SupabaseClient {
         .await
     }
 
+    pub async fn upsert_plugin_entity(
+        &self,
+        e: &crate::plugins::entities::PluginEntity,
+    ) -> Result<(), String> {
+        self.upsert_single(
+            "plugin_entities",
+            serde_json::json!({
+                "user_id": self.user_id,
+                "id": e.id,
+                "plugin_id": e.plugin_id,
+                "entity_type": e.entity_type,
+                "project_id": e.project_id,
+                "data": e.data,
+                "created_by_agent_id": e.created_by_agent_id,
+                "created_at": e.created_at,
+                "updated_at": e.updated_at,
+            }),
+        )
+        .await
+    }
+
+    pub async fn delete_plugin_entity(&self, id: &str) -> Result<(), String> {
+        self.delete_by_id("plugin_entities", id).await
+    }
+
+    pub async fn upsert_plugin_entity_relation(
+        &self,
+        r: &crate::plugins::entities::PluginEntityRelation,
+    ) -> Result<(), String> {
+        self.upsert_single(
+            "plugin_entity_relations",
+            serde_json::json!({
+                "user_id": self.user_id,
+                "id": r.id,
+                "from_kind": r.from_kind,
+                "from_type": r.from_type,
+                "from_id": r.from_id,
+                "to_kind": r.to_kind,
+                "to_type": r.to_type,
+                "to_id": r.to_id,
+                "relation": r.relation,
+                "created_at": r.created_at,
+            }),
+        )
+        .await
+    }
+
+    pub async fn delete_plugin_entity_relation(&self, id: &str) -> Result<(), String> {
+        self.delete_by_id("plugin_entity_relations", id).await
+    }
+
     pub async fn upsert_project_board_column(
         &self,
         c: &crate::models::project_board_column::ProjectBoardColumn,

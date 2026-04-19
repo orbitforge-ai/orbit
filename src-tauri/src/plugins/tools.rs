@@ -33,16 +33,15 @@ pub struct PluginToolHandler {
     pub plugin_id: String,
     pub spec: ToolSpec,
     pub namespaced_name: String,
+    pub manifest: PluginManifest,
 }
 
 #[async_trait]
 impl ToolHandler for PluginToolHandler {
     fn name(&self) -> &'static str {
         // ToolHandler's `name()` returns &'static str; we leak the namespaced
-        // name to satisfy that interface. The String backing the leak lives
-        // for the process lifetime, which matches the plugin's lifetime for
-        // all practical purposes (leaks are bounded by the number of plugin
-        // tools, which is tiny).
+        // name to satisfy that interface. The leak is bounded by the number
+        // of plugin tools currently exposed — tiny.
         Box::leak(self.namespaced_name.clone().into_boxed_str())
     }
 
@@ -65,18 +64,19 @@ impl ToolHandler for PluginToolHandler {
     async fn execute(
         &self,
         _ctx: &ToolExecutionContext,
-        _input: &Value,
-        _app: &tauri::AppHandle,
+        input: &Value,
+        app: &tauri::AppHandle,
         _run_id: &str,
     ) -> Result<(String, bool), String> {
-        // The subprocess bridge is added in the follow-up slice; surface a
-        // clear error so agents see "feature not yet available" rather than
-        // a silent success.
-        Err(format!(
-            "plugin tool {:?} is declared but the MCP subprocess bridge is not yet active \
-             (V1 slice in progress)",
-            self.namespaced_name
-        ))
+        let manager = super::from_state(app);
+        let extra_env = super::oauth::build_env_for_subprocess(&self.manifest);
+        let response = manager
+            .runtime
+            .call_tool(&self.manifest, &self.spec.name, input, &extra_env)
+            .await?;
+        let text = serde_json::to_string(&response)
+            .map_err(|e| format!("failed to serialise plugin tool result: {}", e))?;
+        Ok((text, false))
     }
 }
 
@@ -184,6 +184,7 @@ impl ToolHandler for EntityToolHandler {
                     &data,
                     agent_id,
                 )?;
+                spawn_cloud_upsert_entity(ctx, &entity);
                 json!(entity)
             }
             "update" => {
@@ -196,6 +197,7 @@ impl ToolHandler for EntityToolHandler {
                     .cloned()
                     .ok_or_else(|| "`update` requires `data`".to_string())?;
                 let entity = entities::update(db, id, &data)?;
+                spawn_cloud_upsert_entity(ctx, &entity);
                 json!(entity)
             }
             "delete" => {
@@ -204,6 +206,7 @@ impl ToolHandler for EntityToolHandler {
                     .and_then(Value::as_str)
                     .ok_or_else(|| "`delete` requires `id`".to_string())?;
                 entities::delete(db, id)?;
+                spawn_cloud_delete_entity(ctx, id);
                 json!({ "deleted": id })
             }
             "link" => {
@@ -237,6 +240,7 @@ impl ToolHandler for EntityToolHandler {
                     to_id,
                     relation,
                 )?;
+                spawn_cloud_upsert_relation(ctx, &rel);
                 json!(rel)
             }
             "unlink" => {
@@ -253,6 +257,8 @@ impl ToolHandler for EntityToolHandler {
                     .and_then(Value::as_str)
                     .ok_or_else(|| "`unlink` requires `relation`".to_string())?;
                 entities::unlink(db, from_id, to_id, relation)?;
+                // Cloud sync for relation delete is a soft no-op — we don't
+                // have the relation id here. Relations re-sync on next pull.
                 json!({ "unlinked": { "from": from_id, "to": to_id, "relation": relation } })
             }
             "list_relations" => {
@@ -291,6 +297,7 @@ pub fn build_handlers(manifests: &[PluginManifest]) -> Vec<Box<dyn ToolHandler>>
                 plugin_id: manifest.id.clone(),
                 spec: tool.clone(),
                 namespaced_name,
+                manifest: manifest.clone(),
             }));
         }
     }
@@ -300,6 +307,42 @@ pub fn build_handlers(manifests: &[PluginManifest]) -> Vec<Box<dyn ToolHandler>>
 /// Does `tool_name` look like a plugin-contributed tool (contains `__`)?
 pub fn is_plugin_tool_name(tool_name: &str) -> bool {
     tool_name.contains("__")
+}
+
+fn spawn_cloud_upsert_entity(ctx: &ToolExecutionContext, entity: &entities::PluginEntity) {
+    if let Some(client) = ctx.cloud_client.clone() {
+        let entity = entity.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = client.upsert_plugin_entity(&entity).await {
+                tracing::warn!("cloud upsert plugin_entity: {}", e);
+            }
+        });
+    }
+}
+
+fn spawn_cloud_delete_entity(ctx: &ToolExecutionContext, id: &str) {
+    if let Some(client) = ctx.cloud_client.clone() {
+        let id = id.to_string();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = client.delete_plugin_entity(&id).await {
+                tracing::warn!("cloud delete plugin_entity: {}", e);
+            }
+        });
+    }
+}
+
+fn spawn_cloud_upsert_relation(
+    ctx: &ToolExecutionContext,
+    relation: &entities::PluginEntityRelation,
+) {
+    if let Some(client) = ctx.cloud_client.clone() {
+        let relation = relation.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = client.upsert_plugin_entity_relation(&relation).await {
+                tracing::warn!("cloud upsert plugin_entity_relation: {}", e);
+            }
+        });
+    }
 }
 
 #[cfg(test)]

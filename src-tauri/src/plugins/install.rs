@@ -14,6 +14,106 @@ use super::{plugins_dir, staging_dir};
 
 pub const MAX_ZIP_BYTES: u64 = 50 * 1024 * 1024; // 50 MiB in V1.
 
+/// Bootstrap bundled plugins shipped with the app. Walks `./bundled-plugins/`
+/// (relative to the binary's cwd — the Tauri bundle resource path in release)
+/// and, for every plugin not already in the registry, copies the files into
+/// `~/.orbit/plugins/<id>/` and registers it disabled by default.
+///
+/// In dev (cargo run), the bundle is the workspace root's `bundled-plugins/`.
+/// In release builds this should be pointed at the Tauri resources dir; left
+/// as best-effort here so absence is not an error.
+pub fn bootstrap_bundled_plugins(registry: &mut super::registry::PluginRegistry) {
+    let candidate_roots: Vec<std::path::PathBuf> = vec![
+        std::path::PathBuf::from("bundled-plugins"),
+        std::path::PathBuf::from("../bundled-plugins"),
+    ];
+    let Some(bundle_root) = candidate_roots.into_iter().find(|p| p.is_dir()) else {
+        return;
+    };
+
+    let Ok(iter) = std::fs::read_dir(&bundle_root) else {
+        return;
+    };
+    for entry in iter.flatten() {
+        let src = entry.path();
+        if !src.is_dir() {
+            continue;
+        }
+        let manifest_path = src.join("plugin.json");
+        if !manifest_path.is_file() {
+            continue;
+        }
+        let manifest = match super::manifest::load_from_path(&manifest_path) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!("bundled plugin {:?} invalid: {}", src, e);
+                continue;
+            }
+        };
+
+        let already_installed = registry
+            .entries()
+            .iter()
+            .any(|entry| entry.id == manifest.id);
+        if already_installed {
+            // Upgrade path: if bundled version is newer, replace files.
+            if let Some(installed) = super::plugins_dir().join(&manifest.id).canonicalize().ok() {
+                let _ = installed;
+                // V1: always overwrite if version differs, preserving the
+                // registry entry so enable state carries across upgrades.
+                if let Ok(installed_manifest) =
+                    super::manifest::load_from_path(&super::plugins_dir().join(&manifest.id).join("plugin.json"))
+                {
+                    if installed_manifest.version != manifest.version {
+                        let target = super::plugins_dir().join(&manifest.id);
+                        let _ = std::fs::remove_dir_all(&target);
+                        if let Err(e) = copy_dir_recursive(&src, &target) {
+                            tracing::warn!(
+                                "bundled plugin upgrade copy failed for {}: {}",
+                                manifest.id, e
+                            );
+                        } else {
+                            tracing::info!(
+                                "bundled plugin upgraded: {} {} -> {}",
+                                manifest.id, installed_manifest.version, manifest.version
+                            );
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        let target = super::plugins_dir().join(&manifest.id);
+        if target.exists() {
+            let _ = std::fs::remove_dir_all(&target);
+        }
+        if let Err(e) = copy_dir_recursive(&src, &target) {
+            tracing::warn!("bundled plugin install failed for {}: {}", manifest.id, e);
+            continue;
+        }
+        let mut entry = super::registry::RegistryEntry::new(manifest.id.clone());
+        entry.bundled = true;
+        let _ = registry.upsert(entry);
+        tracing::info!("bundled plugin installed: {} v{}", manifest.id, manifest.version);
+    }
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
 /// Stage a plugin zip. Returns the staging id and the parsed manifest so the
 /// install review modal can render it before the user confirms.
 pub fn stage_from_zip(zip_path: &Path) -> Result<(String, PluginManifest), String> {

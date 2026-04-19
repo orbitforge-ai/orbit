@@ -1,0 +1,10 @@
+{
+  "name": "com.orbit.github",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Bundled GitHub plugin for Orbit.",
+  "main": "server.js",
+  "dependencies": {
+    "@orbit/plugin-sdk": "file:../../packages/plugin-sdk-node"
+  }
+}

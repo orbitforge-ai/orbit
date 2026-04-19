@@ -6,7 +6,7 @@ mod events;
 mod executor;
 mod memory_service;
 mod models;
-mod plugins;
+pub mod plugins;
 mod scheduler;
 mod workflows;
 
@@ -176,6 +176,9 @@ pub fn run() {
             // Plugin subsystem — loads ~/.orbit/plugins/registry.json and
             // every installed plugin's manifest. Subprocesses are lazy.
             let plugin_manager = std::sync::Arc::new(PluginManager::init(db_pool.clone()));
+            plugin_manager.attach_log_emitter(app.handle());
+            plugin_manager.start_core_api_servers(db_pool.clone());
+            plugins::oauth::spawn_deep_link_listener(app.handle().clone(), plugin_manager.clone());
             app.manage(plugin_manager);
 
             // Start execution engine (now takes tx clone for retry scheduling)
@@ -399,6 +402,7 @@ pub fn run() {
             commands::plugins::reload_all_plugins,
             commands::plugins::uninstall_plugin,
             commands::plugins::set_plugin_oauth_config,
+            commands::plugins::start_plugin_oauth,
             commands::plugins::disconnect_plugin_oauth,
             commands::plugins::get_plugin_runtime_log,
             commands::plugins::list_plugin_entities,

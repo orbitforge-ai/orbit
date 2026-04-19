@@ -82,6 +82,10 @@ const BUILTIN_SKILLS: &[BuiltInSkill] = &[
         name: "write-tests",
         content: include_str!("builtin_skills/write-tests/SKILL.md"),
     },
+    BuiltInSkill {
+        name: "create-plugin",
+        content: include_str!("builtin_skills/create-plugin/SKILL.md"),
+    },
 ];
 
 // ─── SKILL.md parsing ───────────────────────────────────────────────────────

@@ -13,6 +13,7 @@ pub mod list_files;
 pub mod list_memories;
 pub mod message;
 pub mod notebook;
+pub mod plugin_management;
 pub mod react_to_message;
 pub mod read_file;
 pub mod remember;

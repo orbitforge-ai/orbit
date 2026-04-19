@@ -115,6 +115,17 @@ pub fn set_plugin_oauth_config(
 }
 
 #[tauri::command]
+pub async fn start_plugin_oauth(
+    plugin_id: String,
+    provider_id: String,
+    app: tauri::AppHandle,
+    manager: State<'_, Arc<PluginManager>>,
+) -> Result<(), String> {
+    let manager = manager.inner().clone();
+    plugins::oauth::start_flow(&app, &manager, &plugin_id, &provider_id).await
+}
+
+#[tauri::command]
 pub fn disconnect_plugin_oauth(plugin_id: String, provider_id: String) -> Result<(), String> {
     plugins::oauth::disconnect(&plugin_id, &provider_id);
     Ok(())

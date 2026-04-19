@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbit.dev/plugins/plugin.schema.json",
+  "title": "Orbit Plugin Manifest",
+  "type": "object",
+  "required": ["schemaVersion", "hostApiVersion", "id", "name", "version", "runtime"],
+  "additionalProperties": true,
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "hostApiVersion": { "type": "string", "description": "Semver range. V1 host API is 1.0.0." },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+){1,}$",
+      "description": "Reverse-DNS identifier."
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "version": { "type": "string" },
+    "description": { "type": "string" },
+    "author": { "type": "string" },
+    "homepage": { "type": "string", "format": "uri" },
+    "license": { "type": "string" },
+    "icon": { "type": "string" },
+    "runtime": {
+      "type": "object",
+      "required": ["type", "command"],
+      "properties": {
+        "type": { "type": "string", "enum": ["mcp-stdio"] },
+        "command": { "type": "string" },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "workingDir": { "type": "string" },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+          "description": { "type": "string" },
+          "riskLevel": { "type": "string", "enum": ["safe", "moderate", "dangerous"] },
+          "inputSchema": {}
+        }
+      }
+    },
+    "entityTypes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "schema"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+          "displayName": { "type": "string" },
+          "icon": { "type": "string" },
+          "schema": { "type": "object" },
+          "relations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name", "to"],
+              "properties": {
+                "name": { "type": "string" },
+                "to": { "type": "string" },
+                "cardinality": { "type": "string", "enum": ["one", "many"] }
+              }
+            }
+          },
+          "listFields": { "type": "array", "items": { "type": "string" } },
+          "titleField": { "type": "string" },
+          "indexedFields": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "oauthProviders": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "authorizationUrl", "tokenUrl"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+          "name": { "type": "string" },
+          "authorizationUrl": { "type": "string", "format": "uri" },
+          "tokenUrl": { "type": "string", "format": "uri" },
+          "scopes": { "type": "array", "items": { "type": "string" } },
+          "clientType": { "type": "string", "enum": ["public", "confidential"] },
+          "redirectUri": { "type": "string" }
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "properties": {
+        "network": { "type": "array", "items": { "type": "string" } },
+        "filesystem": { "type": "array", "items": { "type": "string" } },
+        "oauth": { "type": "array", "items": { "type": "string" } },
+        "coreEntities": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "hooks": {
+      "type": "object",
+      "properties": {
+        "subscribe": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "session.started",
+              "session.ended",
+              "agent.tool.before_call",
+              "agent.tool.after_call",
+              "entity.work_item.after_create",
+              "entity.work_item.after_complete",
+              "entity.work_item.before_delete",
+              "oauth.connected",
+              "plugin.enabled",
+              "plugin.disabled"
+            ]
+          }
+        }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "properties": {
+        "triggers": { "type": "array" },
+        "nodes": { "type": "array" }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "properties": {
+        "sidebarItems": { "type": "array" },
+        "entityDetailTabs": { "type": "array" },
+        "agentChatActions": { "type": "array" },
+        "slashCommands": { "type": "array" },
+        "settingsPanels": { "type": "array" }
+      }
+    }
+  }
+}

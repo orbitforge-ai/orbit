@@ -715,6 +715,14 @@ pub fn classify_tool_call(
             action => (RiskLevel::Prompt, format!("Subagent action: {}", action)),
         },
 
+        "plugin_management" => match input["action"].as_str().unwrap_or("list") {
+            "list" | "status" | "logs" | "oauth_status" => (RiskLevel::AutoAllow, String::new()),
+            action => (
+                RiskLevel::Prompt,
+                format!("Plugin management action: {}", action),
+            ),
+        },
+
         name if name.contains("__") => {
             // Plugin-contributed tool names are namespaced `<slug>__<name>`.
             // Never auto-allow in V1 — the user sees a permission prompt on

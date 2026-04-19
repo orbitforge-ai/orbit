@@ -116,6 +116,9 @@ export const pluginsApi = {
   ): Promise<void> =>
     invoke('set_plugin_oauth_config', { pluginId, providerId, clientId, clientSecret: clientSecret ?? null }),
 
+  startOAuth: (pluginId: string, providerId: string): Promise<void> =>
+    invoke('start_plugin_oauth', { pluginId, providerId }),
+
   disconnectOAuth: (pluginId: string, providerId: string): Promise<void> =>
     invoke('disconnect_plugin_oauth', { pluginId, providerId }),
 

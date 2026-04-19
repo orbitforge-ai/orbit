@@ -1,0 +1,46 @@
+{
+  "$schema": "../../plugin.schema.json",
+  "schemaVersion": 1,
+  "hostApiVersion": "^1.0.0",
+  "id": "com.example.social",
+  "name": "Social Content",
+  "version": "0.1.0",
+  "description": "A `content` entity type + tools for scheduling and posting.",
+  "runtime": { "type": "mcp-stdio", "command": "node", "args": ["server.js"] },
+  "permissions": { "coreEntities": ["work_item"] },
+  "entityTypes": [
+    {
+      "name": "content",
+      "displayName": "Content",
+      "icon": "send",
+      "schema": {
+        "type": "object",
+        "required": ["text", "platform"],
+        "properties": {
+          "platform": { "type": "string", "enum": ["twitter", "bluesky", "linkedin"] },
+          "text": { "type": "string", "maxLength": 500 },
+          "scheduledFor": { "type": "string", "format": "date-time" },
+          "status": { "type": "string", "enum": ["draft", "scheduled", "posted"] }
+        }
+      },
+      "relations": [
+        { "name": "parent_work_item", "to": "work_item", "cardinality": "one" }
+      ],
+      "listFields": ["platform", "status", "scheduledFor"],
+      "titleField": "text",
+      "indexedFields": ["status", "scheduledFor"]
+    }
+  ],
+  "tools": [
+    {
+      "name": "post_now",
+      "description": "Publish a content entity immediately.",
+      "riskLevel": "moderate",
+      "inputSchema": {
+        "type": "object",
+        "required": ["contentId"],
+        "properties": { "contentId": { "type": "string" } }
+      }
+    }
+  ]
+}
