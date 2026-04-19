@@ -14,15 +14,18 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use serde_json::{json, Value};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tracing::{info, warn};
 use ulid::Ulid;
 
+use crate::commands::work_items::create_work_item_with_db;
+use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
 use crate::executor::{keychain, llm_provider, workspace};
 use crate::models::project_workflow::{
     ProjectWorkflow, RuleNode, WorkflowEdge, WorkflowGraph, WorkflowNode,
 };
+use crate::models::work_item::CreateWorkItem;
 use crate::models::workflow_run::{WorkflowRun, WorkflowRunStep};
 use crate::workflows::rule_eval::eval_rule;
 
@@ -60,8 +63,9 @@ impl WorkflowOrchestrator {
 
         let this = self.clone();
         let run_clone = run.clone();
+        let project_id = workflow.project_id.clone();
         tokio::spawn(async move {
-            if let Err(e) = this.execute_run(run_clone).await {
+            if let Err(e) = this.execute_run(run_clone, project_id).await {
                 warn!("workflow run failed: {}", e);
             }
         });
@@ -165,7 +169,7 @@ impl WorkflowOrchestrator {
         Ok(run)
     }
 
-    async fn execute_run(&self, run: WorkflowRun) -> Result<(), String> {
+    async fn execute_run(&self, run: WorkflowRun, project_id: String) -> Result<(), String> {
         let started_at = Utc::now().to_rfc3339();
         self.update_run_status(&run.id, STATUS_RUNNING, None, Some(&started_at), None)
             .await
@@ -218,7 +222,7 @@ impl WorkflowOrchestrator {
 
             let outputs_val = Value::Object(outputs.clone());
             let exec = self
-                .execute_node(&run.id, node, &outputs_val, sequence)
+                .execute_node(&run.id, &project_id, node, &outputs_val, sequence)
                 .await;
 
             match exec {
@@ -248,6 +252,7 @@ impl WorkflowOrchestrator {
     async fn execute_node(
         &self,
         run_id: &str,
+        project_id: &str,
         node: &WorkflowNode,
         outputs: &Value,
         sequence: i64,
@@ -275,6 +280,10 @@ impl WorkflowOrchestrator {
             }),
             "agent.run" => self.run_agent_node(node, outputs).await,
             "logic.if" => self.run_logic_if(node, outputs).await,
+            "board.work_item.create" => {
+                self.run_create_work_item_node(run_id, project_id, node, outputs)
+                    .await
+            }
             other if other.starts_with("integration.") => Err(format!(
                 "integration node `{}` is not yet implemented",
                 other
@@ -389,6 +398,127 @@ impl WorkflowOrchestrator {
         Ok(NodeOutcome {
             output: json!({ "result": result, "branch": handle }),
             next_handle: Some(handle.to_string()),
+        })
+    }
+
+    async fn run_create_work_item_node(
+        &self,
+        run_id: &str,
+        project_id: &str,
+        node: &WorkflowNode,
+        outputs: &Value,
+    ) -> Result<NodeOutcome, String> {
+        let title_template = node
+            .data
+            .get("titleTemplate")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if title_template.is_empty() {
+            return Err("board.work_item.create requires data.titleTemplate".to_string());
+        }
+
+        let title = render_template(&title_template, outputs).trim().to_string();
+        if title.is_empty() {
+            return Err("board.work_item.create rendered an empty title".to_string());
+        }
+
+        let description = render_optional_template(
+            node.data.get("descriptionTemplate").and_then(|v| v.as_str()),
+            outputs,
+        );
+        let assignee_agent_id = render_optional_template(
+            node.data.get("assigneeAgentId").and_then(|v| v.as_str()),
+            outputs,
+        );
+        let parent_work_item_id = render_optional_template(
+            node.data.get("parentWorkItemId").and_then(|v| v.as_str()),
+            outputs,
+        );
+        let labels = parse_work_item_labels(
+            node.data.get("labelsText").and_then(|v| v.as_str()),
+            outputs,
+        );
+
+        let kind = node
+            .data
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("task")
+            .to_string();
+        if !matches!(kind.as_str(), "task" | "bug" | "story" | "spike" | "chore") {
+            return Err(format!(
+                "board.work_item.create has invalid kind '{}'",
+                kind
+            ));
+        }
+
+        let status = node
+            .data
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("backlog")
+            .to_string();
+        if !matches!(
+            status.as_str(),
+            "backlog" | "todo" | "in_progress" | "review" | "done" | "cancelled"
+        ) {
+            return Err(format!(
+                "board.work_item.create has invalid status '{}'",
+                status
+            ));
+        }
+
+        let priority = node
+            .data
+            .get("priority")
+            .and_then(json_number_to_i64)
+            .unwrap_or(0)
+            .clamp(0, 3);
+
+        let payload = CreateWorkItem {
+            project_id: project_id.to_string(),
+            title: title.clone(),
+            description: description.clone(),
+            kind: Some(kind.clone()),
+            status: Some(status.clone()),
+            priority: Some(priority),
+            assignee_agent_id: assignee_agent_id.clone(),
+            created_by_agent_id: None,
+            parent_work_item_id: parent_work_item_id.clone(),
+            position: None,
+            labels: Some(labels.clone()),
+            metadata: Some(json!({
+                "source": "workflow",
+                "workflowRunId": run_id,
+                "workflowNodeId": node.id,
+            })),
+        };
+
+        let item = create_work_item_with_db(&self.db, payload).await?;
+        if let Some(client) = self.app.state::<CloudClientState>().get() {
+            let work_item = item.clone();
+            tokio::spawn(async move {
+                if let Err(e) = client.upsert_work_item(&work_item).await {
+                    tracing::warn!("cloud upsert work_item (workflow): {}", e);
+                }
+            });
+        }
+
+        Ok(NodeOutcome {
+            output: json!({
+                "title": title,
+                "description": description,
+                "kind": kind,
+                "status": status,
+                "priority": priority,
+                "labels": labels,
+                "assigneeAgentId": assignee_agent_id,
+                "parentWorkItemId": parent_work_item_id,
+                "workItem": item,
+            }),
+            next_handle: None,
         })
     }
 
@@ -582,6 +712,33 @@ fn lookup_path(path: &str, outputs: &Value) -> String {
     }
 }
 
+fn render_optional_template(template: Option<&str>, outputs: &Value) -> Option<String> {
+    template
+        .map(|value| render_template(value, outputs))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn parse_work_item_labels(template: Option<&str>, outputs: &Value) -> Vec<String> {
+    let Some(rendered) = render_optional_template(template, outputs) else {
+        return Vec::new();
+    };
+
+    rendered
+        .split(|ch| ch == ',' || ch == '\n')
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn json_number_to_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|n| i64::try_from(n).ok()))
+        .or_else(|| value.as_f64().map(|n| n.round() as i64))
+}
+
 // ── Read helpers used by commands ───────────────────────────────────────────
 
 pub fn load_run_with_steps(
@@ -694,7 +851,9 @@ fn map_step_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkflowRunStep> {
 
 #[cfg(test)]
 mod tests {
-    use super::{group_edges, pick_next, render_template};
+    use super::{
+        group_edges, parse_work_item_labels, pick_next, render_optional_template, render_template,
+    };
     use crate::models::project_workflow::WorkflowEdge;
     use serde_json::json;
 
@@ -715,6 +874,27 @@ mod tests {
         assert_eq!(
             render_template("Hello {{missing.path}}!", &outputs),
             "Hello {{missing.path}}!"
+        );
+    }
+
+    #[test]
+    fn optional_template_trims_empty_values() {
+        let outputs = json!({ "trigger": { "data": { "value": "  hi  " } } });
+        assert_eq!(
+            render_optional_template(Some(" {{trigger.data.value}} "), &outputs),
+            Some("hi".into())
+        );
+        assert_eq!(render_optional_template(Some("   "), &outputs), None);
+    }
+
+    #[test]
+    fn label_parser_supports_commas_and_newlines() {
+        let outputs = json!({
+            "trigger": { "data": { "channel": "email" } }
+        });
+        assert_eq!(
+            parse_work_item_labels(Some("triage, {{trigger.data.channel}}\ncustomer"), &outputs),
+            vec!["triage", "email", "customer"]
         );
     }
 

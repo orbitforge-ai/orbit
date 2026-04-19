@@ -57,6 +57,51 @@ export function AgentNode({ data, type, selected }: NodeProps) {
   );
 }
 
+export function WorkItemNode({ data, type, selected }: NodeProps) {
+  const meta = nodeMeta(type);
+  const Icon = meta?.icon;
+  const d = data as {
+    titleTemplate?: string;
+    kind?: string;
+    status?: string;
+    priority?: number;
+    assigneeAgentId?: string;
+  };
+
+  const priorityLabel =
+    d.priority === 3 ? 'urgent' : d.priority === 2 ? 'high' : d.priority === 1 ? 'normal' : 'low';
+
+  return (
+    <div className={`${NODE_BASE} ${selected ? 'border-accent' : 'border-edge'}`}>
+      <Handle type="target" position={Position.Left} className="!bg-muted" />
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-edge bg-sky-500/5">
+        {Icon && <Icon size={12} className="text-sky-300" />}
+        <span className="font-semibold uppercase text-[10px] tracking-wider text-sky-300">
+          {meta?.label ?? type}
+        </span>
+      </div>
+      <div className="px-3 py-2 space-y-1">
+        <p className="text-white text-[11px] line-clamp-2">
+          {d.titleTemplate?.trim() || '(title template required)'}
+        </p>
+        <div className="flex items-center gap-2 text-[10px] text-muted font-mono">
+          <span>{d.kind || 'task'}</span>
+          <span>·</span>
+          <span>{d.status || 'backlog'}</span>
+          <span>·</span>
+          <span>{priorityLabel}</span>
+        </div>
+        {d.assigneeAgentId && (
+          <p className="text-muted text-[10px]">
+            Assignee: <span className="text-white font-mono">{d.assigneeAgentId}</span>
+          </p>
+        )}
+      </div>
+      <Handle type="source" position={Position.Right} className="!bg-accent" />
+    </div>
+  );
+}
+
 export function LogicIfNode({ data, type, selected }: NodeProps) {
   const meta = nodeMeta(type);
   const Icon = meta?.icon;
@@ -124,6 +169,7 @@ export const nodeTypes = {
   'trigger.manual': TriggerNode,
   'trigger.schedule': TriggerNode,
   'agent.run': AgentNode,
+  'board.work_item.create': WorkItemNode,
   'logic.if': LogicIfNode,
   'integration.gmail.read': IntegrationNode,
   'integration.gmail.send': IntegrationNode,

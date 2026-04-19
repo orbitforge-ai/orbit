@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { Node } from '@xyflow/react';
 import { agentsApi } from '../../api/agents';
-import { Agent, RuleGroup, RuleNode } from '../../types';
+import { projectsApi } from '../../api/projects';
+import { Agent, RuleGroup, RuleNode, WorkItemKind, WorkItemStatus } from '../../types';
 import { RecurringPicker } from '../ScheduleBuilder/RecurringPicker';
 import { nodeMeta } from './nodeRegistry';
 import { RuleBuilder } from './RuleBuilder';
@@ -10,11 +11,29 @@ import { getWorkflowScheduleConfig } from './scheduleConfig';
 
 interface Props {
   node: Node | null;
+  projectId: string;
   onChangeData: (nodeId: string, data: Record<string, unknown>) => void;
   onDelete: (nodeId: string) => void;
 }
 
-export function NodeInspector({ node, onChangeData, onDelete }: Props) {
+const WORK_ITEM_KIND_OPTIONS: Array<{ value: WorkItemKind; label: string }> = [
+  { value: 'task', label: 'Task' },
+  { value: 'bug', label: 'Bug' },
+  { value: 'story', label: 'Story' },
+  { value: 'spike', label: 'Spike' },
+  { value: 'chore', label: 'Chore' },
+];
+
+const CREATE_STATUS_OPTIONS: Array<{ value: Exclude<WorkItemStatus, 'blocked'>; label: string }> = [
+  { value: 'backlog', label: 'Backlog' },
+  { value: 'todo', label: 'Todo' },
+  { value: 'in_progress', label: 'In progress' },
+  { value: 'review', label: 'Review' },
+  { value: 'done', label: 'Done' },
+  { value: 'cancelled', label: 'Cancelled' },
+];
+
+export function NodeInspector({ node, projectId, onChangeData, onDelete }: Props) {
   if (!node) {
     return (
       <aside className="w-80 border-l border-edge bg-background/50 px-4 py-4">
@@ -53,6 +72,14 @@ export function NodeInspector({ node, onChangeData, onDelete }: Props) {
         {node.type === 'agent.run' && <AgentRunInspector data={data} onUpdate={update} />}
 
         {node.type === 'logic.if' && <LogicIfInspector data={data} onUpdate={update} />}
+
+        {node.type === 'board.work_item.create' && (
+          <WorkItemCreateInspector
+            data={data}
+            projectId={projectId}
+            onUpdate={update}
+          />
+        )}
 
         {node.type?.startsWith('integration.') && (
           <p className="text-xs text-muted italic">Integration nodes are coming in a later phase.</p>
@@ -173,6 +200,157 @@ function LogicIfInspector({
             className="w-full bg-background border border-edge rounded px-2 py-1 text-xs text-white outline-none focus:border-accent"
           />
         </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkItemCreateInspector({
+  data,
+  projectId,
+  onUpdate,
+}: {
+  data: Record<string, unknown>;
+  projectId: string;
+  onUpdate: (patch: Record<string, unknown>) => void;
+}) {
+  const { data: projectAgents = [] } = useQuery<Agent[]>({
+    queryKey: ['project-agents', projectId],
+    queryFn: () => projectsApi.listAgents(projectId),
+  });
+
+  const titleTemplate = (data.titleTemplate as string) ?? '';
+  const descriptionTemplate = (data.descriptionTemplate as string) ?? '';
+  const kind = ((data.kind as WorkItemKind | undefined) ?? 'task') as WorkItemKind;
+  const status =
+    ((data.status as Exclude<WorkItemStatus, 'blocked'> | undefined) ?? 'backlog') as Exclude<
+      WorkItemStatus,
+      'blocked'
+    >;
+  const priorityValue = data.priority;
+  const priority =
+    typeof priorityValue === 'number' && Number.isFinite(priorityValue) ? priorityValue : 0;
+  const labelsText = (data.labelsText as string) ?? '';
+  const assigneeAgentId = (data.assigneeAgentId as string) ?? '';
+  const parentWorkItemId = (data.parentWorkItemId as string) ?? '';
+
+  return (
+    <div className="space-y-3">
+      <p className="text-[10px] text-muted">
+        Creates a board card in this workflow&apos;s project. Template fields can reference earlier
+        node outputs like <span className="font-mono">{`{{trigger.data.subject}}`}</span> or{' '}
+        <span className="font-mono">{`{{nodeId.output.parsed.title}}`}</span>.
+      </p>
+
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Title template</label>
+        <textarea
+          value={titleTemplate}
+          onChange={(e) => onUpdate({ titleTemplate: e.target.value })}
+          rows={3}
+          placeholder="Follow up on {{agentNode.output.parsed.customerName}}"
+          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">
+          Description template
+        </label>
+        <textarea
+          value={descriptionTemplate}
+          onChange={(e) => onUpdate({ descriptionTemplate: e.target.value })}
+          rows={6}
+          placeholder={`Customer summary:\n{{agentNode.output.text}}`}
+          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+        />
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">Kind</label>
+          <select
+            value={kind}
+            onChange={(e) => onUpdate({ kind: e.target.value })}
+            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+          >
+            {WORK_ITEM_KIND_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">Status</label>
+          <select
+            value={status}
+            onChange={(e) => onUpdate({ status: e.target.value })}
+            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+          >
+            {CREATE_STATUS_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">Priority</label>
+          <select
+            value={String(priority)}
+            onChange={(e) => onUpdate({ priority: Number(e.target.value) })}
+            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+          >
+            <option value="0">Low</option>
+            <option value="1">Normal</option>
+            <option value="2">High</option>
+            <option value="3">Urgent</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">
+          Labels (comma or newline separated)
+        </label>
+        <textarea
+          value={labelsText}
+          onChange={(e) => onUpdate({ labelsText: e.target.value })}
+          rows={3}
+          placeholder="workflow, customer, {{trigger.data.channel}}"
+          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Assignee</label>
+        <select
+          value={assigneeAgentId}
+          onChange={(e) => onUpdate({ assigneeAgentId: e.target.value })}
+          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+        >
+          <option value="">Unassigned</option>
+          {projectAgents.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">
+          Parent work item ID
+        </label>
+        <input
+          value={parentWorkItemId}
+          onChange={(e) => onUpdate({ parentWorkItemId: e.target.value })}
+          placeholder="Optional parent card id or template"
+          className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono"
+        />
       </div>
     </div>
   );

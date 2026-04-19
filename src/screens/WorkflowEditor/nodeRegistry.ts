@@ -2,6 +2,7 @@ import {
   Bot,
   GitBranch,
   Globe,
+  KanbanSquare,
   LucideIcon,
   Mail,
   MailOpen,
@@ -15,7 +16,7 @@ import { DEFAULT_WORKFLOW_SCHEDULE } from './scheduleConfig';
 export interface NodeMeta {
   type: WorkflowNodeType;
   label: string;
-  group: 'Triggers' | 'Agents' | 'Logic' | 'Integrations';
+  group: 'Triggers' | 'Agents' | 'Logic' | 'Board' | 'Integrations';
   icon: LucideIcon;
   defaultData: Record<string, unknown>;
   comingSoon?: boolean;
@@ -52,6 +53,22 @@ export const NODE_REGISTRY: NodeMeta[] = [
       rule: { combinator: 'and', rules: [] },
       trueLabel: 'true',
       falseLabel: 'false',
+    },
+  },
+  {
+    type: 'board.work_item.create',
+    label: 'Board · Create task',
+    group: 'Board',
+    icon: KanbanSquare,
+    defaultData: {
+      titleTemplate: '',
+      descriptionTemplate: '',
+      kind: 'task',
+      status: 'backlog',
+      priority: 0,
+      labelsText: '',
+      assigneeAgentId: '',
+      parentWorkItemId: '',
     },
   },
   {

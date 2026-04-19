@@ -2,7 +2,7 @@ import { useDraggable } from '@dnd-kit/core';
 import { NODE_REGISTRY, NodeMeta } from './nodeRegistry';
 import { workflowNodeDraggableId } from './dnd';
 
-const GROUPS: NodeMeta['group'][] = ['Triggers', 'Agents', 'Logic', 'Integrations'];
+const GROUPS: NodeMeta['group'][] = ['Triggers', 'Agents', 'Logic', 'Board', 'Integrations'];
 
 export function NodePalette() {
   return (

@@ -32,6 +32,7 @@ import { useUiStore } from '../../store/uiStore';
 import { projectWorkflowsApi } from '../../api/projectWorkflows';
 import { workflowRunsApi } from '../../api/workflowRuns';
 import { ProjectWorkflow, WorkflowEdge, WorkflowGraph, WorkflowNode } from '../../types';
+import { edgeTypes } from './edges';
 import { nodeMeta, NODE_REGISTRY } from './nodeRegistry';
 import { nodeTypes } from './nodes';
 import { NodePalette } from './NodePalette';
@@ -43,6 +44,26 @@ import {
 } from './dnd';
 import { useAgentDndSensors } from '../../components/dnd/agentDnd';
 
+function toFlowEdge(edge: WorkflowEdge): Edge {
+  return {
+    id: edge.id,
+    type: 'deletable',
+    source: edge.source,
+    target: edge.target,
+    sourceHandle: edge.sourceHandle ?? undefined,
+    label:
+      edge.sourceHandle === 'true' || edge.sourceHandle === 'false'
+        ? edge.sourceHandle
+        : undefined,
+    style:
+      edge.sourceHandle === 'true'
+        ? { stroke: '#34d399' }
+        : edge.sourceHandle === 'false'
+          ? { stroke: '#fb7185' }
+          : undefined,
+  };
+}
+
 function workflowToFlow(graph: WorkflowGraph): { nodes: Node[]; edges: Edge[] } {
   return {
     nodes: graph.nodes.map((n) => ({
@@ -51,20 +72,7 @@ function workflowToFlow(graph: WorkflowGraph): { nodes: Node[]; edges: Edge[] } 
       position: n.position,
       data: n.data ?? {},
     })),
-    edges: graph.edges.map((e) => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      sourceHandle: e.sourceHandle ?? undefined,
-      label:
-        e.sourceHandle === 'true' || e.sourceHandle === 'false' ? e.sourceHandle : undefined,
-      style:
-        e.sourceHandle === 'true'
-          ? { stroke: '#34d399' }
-          : e.sourceHandle === 'false'
-            ? { stroke: '#fb7185' }
-            : undefined,
-    })),
+    edges: graph.edges.map(toFlowEdge),
   };
 }
 
@@ -137,23 +145,43 @@ function Editor({ workflowId }: { workflowId: string }) {
     [setCanvasDropRef],
   );
 
-  useEffect(() => {
-    if (!workflow) return;
-    const { nodes: ns, edges: es } = workflowToFlow(workflow.graph);
-    setNodes(ns);
-    setEdges(es);
-    setName(workflow.name);
-    setDescription(workflow.description ?? '');
-    setEnabled(workflow.enabled);
-    setDirty(false);
-  }, [workflow]);
-
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId],
   );
 
   const markDirty = useCallback(() => setDirty(true), []);
+
+  const deleteEdge = useCallback(
+    (edgeId: string) => {
+      setEdges((curr) => curr.filter((edge) => edge.id !== edgeId));
+      markDirty();
+    },
+    [markDirty],
+  );
+
+  const decorateEdge = useCallback(
+    (edge: Edge): Edge => ({
+      ...edge,
+      type: 'deletable',
+      data: {
+        ...(edge.data as Record<string, unknown> | undefined),
+        onDelete: deleteEdge,
+      },
+    }),
+    [deleteEdge],
+  );
+
+  useEffect(() => {
+    if (!workflow) return;
+    const { nodes: ns, edges: es } = workflowToFlow(workflow.graph);
+    setNodes(ns);
+    setEdges(es.map(decorateEdge));
+    setName(workflow.name);
+    setDescription(workflow.description ?? '');
+    setEnabled(workflow.enabled);
+    setDirty(false);
+  }, [decorateEdge, workflow]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
@@ -182,6 +210,7 @@ function Editor({ workflowId }: { workflowId: string }) {
       const handle = conn.sourceHandle ?? (isLogicIf ? 'true' : null);
       const newEdge: Edge = {
         id: `e_${crypto.randomUUID()}`,
+        type: 'deletable',
         source: conn.source!,
         target: conn.target!,
         sourceHandle: handle ?? undefined,
@@ -193,18 +222,18 @@ function Editor({ workflowId }: { workflowId: string }) {
               ? { stroke: '#fb7185' }
               : undefined,
       };
-      setEdges((curr) => addEdge(newEdge, curr));
+      setEdges((curr) => addEdge(decorateEdge(newEdge), curr));
       markDirty();
     },
-    [markDirty, nodes],
+    [decorateEdge, markDirty, nodes],
   );
 
   const onReconnect = useCallback(
     (oldEdge: Edge, newConn: Connection) => {
-      setEdges((curr) => reconnectEdge(oldEdge, newConn, curr));
+      setEdges((curr) => reconnectEdge(oldEdge, newConn, curr).map(decorateEdge));
       markDirty();
     },
-    [markDirty],
+    [decorateEdge, markDirty],
   );
 
   const updateNodeData = useCallback(
@@ -449,6 +478,7 @@ function Editor({ workflowId }: { workflowId: string }) {
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
@@ -475,6 +505,7 @@ function Editor({ workflowId }: { workflowId: string }) {
         </div>
         <NodeInspector
           node={selectedNode}
+          projectId={workflow.projectId}
           onChangeData={updateNodeData}
           onDelete={deleteNode}
         />

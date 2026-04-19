@@ -92,6 +92,77 @@ fn map_work_item_comment(row: &rusqlite::Row) -> rusqlite::Result<WorkItemCommen
 const WORK_ITEM_COMMENT_COLUMNS: &str =
     "id, work_item_id, author_kind, author_agent_id, body, created_at, updated_at";
 
+pub async fn create_work_item_with_db(
+    db: &DbPool,
+    payload: CreateWorkItem,
+) -> Result<WorkItem, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let id = Ulid::new().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let kind = payload.kind.unwrap_or_else(|| "task".to_string());
+        let status = payload.status.unwrap_or_else(|| "backlog".to_string());
+        let priority = payload.priority.unwrap_or(0);
+        let position = match payload.position {
+            Some(p) => p,
+            None => {
+                let max: Option<f64> = conn
+                    .query_row(
+                        "SELECT MAX(position) FROM work_items WHERE project_id = ?1 AND status = ?2",
+                        params![payload.project_id, status],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|e| e.to_string())?
+                    .flatten();
+                max.unwrap_or(0.0) + 1024.0
+            }
+        };
+        let labels_json = serde_json::to_string(&payload.labels.unwrap_or_default())
+            .map_err(|e| e.to_string())?;
+        let metadata_json = serde_json::to_string(
+            &payload.metadata.unwrap_or_else(|| serde_json::json!({})),
+        )
+        .map_err(|e| e.to_string())?;
+
+        if status == "blocked" {
+            return Err("work_item: cannot create a card with status='blocked' without a reason; create first then block".into());
+        }
+
+        conn.execute(
+            "INSERT INTO work_items (
+                id, project_id, title, description, kind, status, priority,
+                assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
+                labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,NULL,NULL,NULL,?14,?14)",
+            params![
+                id,
+                payload.project_id,
+                payload.title,
+                payload.description,
+                kind,
+                status,
+                priority,
+                payload.assignee_agent_id,
+                payload.created_by_agent_id,
+                payload.parent_work_item_id,
+                position,
+                labels_json,
+                metadata_json,
+                now,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
+        conn.query_row(&sql, params![id], map_work_item)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // ── Scope guard: reject cross-project agent writes ────────────────────────────
 //
 // Called from the agent tool path before any read or write. Ensures an agent
@@ -202,73 +273,7 @@ pub async fn create_work_item(
     cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<WorkItem, String> {
     let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
-    let item = tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let id = Ulid::new().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
-        let kind = payload.kind.unwrap_or_else(|| "task".to_string());
-        let status = payload.status.unwrap_or_else(|| "backlog".to_string());
-        let priority = payload.priority.unwrap_or(0);
-        // When position is not supplied, append to the end of the target column
-        // by using (max + 1024.0) — gap-based float ordering.
-        let position = match payload.position {
-            Some(p) => p,
-            None => {
-                let max: Option<f64> = conn
-                    .query_row(
-                        "SELECT MAX(position) FROM work_items WHERE project_id = ?1 AND status = ?2",
-                        params![payload.project_id, status],
-                        |row| row.get(0),
-                    )
-                    .optional()
-                    .map_err(|e| e.to_string())?
-                    .flatten();
-                max.unwrap_or(0.0) + 1024.0
-            }
-        };
-        let labels_json = serde_json::to_string(&payload.labels.unwrap_or_default())
-            .map_err(|e| e.to_string())?;
-        let metadata_json = serde_json::to_string(
-            &payload.metadata.unwrap_or_else(|| serde_json::json!({})),
-        )
-        .map_err(|e| e.to_string())?;
-
-        if status == "blocked" {
-            return Err("work_item: cannot create a card with status='blocked' without a reason; create first then block".into());
-        }
-
-        conn.execute(
-            "INSERT INTO work_items (
-                id, project_id, title, description, kind, status, priority,
-                assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
-                labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,NULL,NULL,NULL,?14,?14)",
-            params![
-                id,
-                payload.project_id,
-                payload.title,
-                payload.description,
-                kind,
-                status,
-                priority,
-                payload.assignee_agent_id,
-                payload.created_by_agent_id,
-                payload.parent_work_item_id,
-                position,
-                labels_json,
-                metadata_json,
-                now,
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-
-        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
-        conn.query_row(&sql, params![id], map_work_item)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let item = create_work_item_with_db(db.inner(), payload).await?;
 
     cloud_upsert_work_item!(cloud, item);
     Ok(item)

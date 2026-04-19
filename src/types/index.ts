@@ -209,6 +209,7 @@ export const KNOWN_NODE_TYPES = [
   'trigger.schedule',
   'agent.run',
   'logic.if',
+  'board.work_item.create',
   'integration.gmail.read',
   'integration.gmail.send',
   'integration.slack.send',

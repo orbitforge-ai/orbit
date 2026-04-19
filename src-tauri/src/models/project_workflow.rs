@@ -145,6 +145,7 @@ pub const KNOWN_NODE_TYPES: &[&str] = &[
     "trigger.schedule",
     "agent.run",
     "logic.if",
+    "board.work_item.create",
     // Integration stubs — placeable but inert in Phase 3.
     "integration.gmail.read",
     "integration.gmail.send",
