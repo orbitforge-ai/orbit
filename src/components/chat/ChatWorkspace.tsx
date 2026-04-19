@@ -43,6 +43,7 @@ export function ChatWorkspace({
       ? {
           key: controller.initialQueuedMessage.key,
           content: controller.initialQueuedMessage.content,
+          modelOverride: controller.initialQueuedMessage.modelOverride,
         }
       : null;
 

@@ -8,7 +8,7 @@ import {
   isDraftSessionId,
   useChatDraftStore,
 } from '../../store/chatDraftStore';
-import { ChatDraft, ChatSession, ContentBlock } from '../../types';
+import { ChatDraft, ChatModelOverride, ChatSession, ContentBlock } from '../../types';
 
 type ChatWorkspaceSelectionMode = 'empty' | 'latest-user-chat';
 
@@ -16,6 +16,7 @@ interface QueuedInitialMessage {
   key: string;
   sessionId: string;
   content: ContentBlock[];
+  modelOverride: ChatModelOverride | null;
 }
 
 interface PendingInitialSend extends QueuedInitialMessage {
@@ -40,7 +41,7 @@ export interface UseChatWorkspaceControllerResult {
   handleNewSession: () => void;
   handleDeleteDraft: () => void;
   handleDraftTextChange: (text: string) => void;
-  handleDraftSend: (content: ContentBlock[]) => Promise<void>;
+  handleDraftSend: (content: ContentBlock[], modelOverride?: ChatModelOverride | null) => Promise<void>;
   initialQueuedMessage: QueuedInitialMessage | null;
   handleInitialMessageHandled: (key: string) => void;
   handleInitialMessageFailed: (key: string) => void;
@@ -191,7 +192,7 @@ export function useChatWorkspaceController({
     updateDraftText(draftScope, text);
   }
 
-  async function handleDraftSend(content: ContentBlock[]) {
+  async function handleDraftSend(content: ContentBlock[], modelOverride?: ChatModelOverride | null) {
     if (!agentId || !draftScope || !draftScopeKey) return;
 
     const draft = useChatDraftStore.getState().drafts[draftScopeKey] ?? ensureDraft(draftScope);
@@ -204,6 +205,7 @@ export function useChatWorkspaceController({
       draftId: draft.id,
       projectId,
       content,
+      modelOverride: modelOverride ?? null,
     });
     setActiveSessionId(session.id);
   }
@@ -251,6 +253,7 @@ export function useChatWorkspaceController({
           key: pendingInitialSend.key,
           sessionId: pendingInitialSend.sessionId,
           content: pendingInitialSend.content,
+          modelOverride: pendingInitialSend.modelOverride,
         }
       : null,
     handleInitialMessageHandled,

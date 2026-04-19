@@ -1,14 +1,18 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Send, Paperclip, X, Image as ImageIcon, FileText } from 'lucide-react';
-import { ContentBlock } from '../../types';
+import { ChatModelOverride, ContentBlock } from '../../types';
 
 interface ChatInputProps {
-  onSend: (content: ContentBlock[]) => Promise<void> | void;
+  onSend: (
+    content: ContentBlock[],
+    modelOverride?: ChatModelOverride | null
+  ) => Promise<void> | void;
   disabled?: boolean;
   modelPicker?: React.ReactNode;
   contextGauge?: React.ReactNode;
   textValue?: string;
   onTextChange?: (text: string) => void;
+  selectedModelOverride?: ChatModelOverride | null;
 }
 
 interface Attachment {
@@ -28,6 +32,7 @@ export function ChatInput({
   contextGauge,
   textValue,
   onTextChange,
+  selectedModelOverride,
 }: ChatInputProps) {
   const [internalText, setInternalText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -74,10 +79,10 @@ export function ChatInput({
       blocks.push({ type: 'text', text: trimmed });
     }
 
-      const run = async () => {
-        setSending(true);
-        try {
-          await Promise.resolve(onSend(blocks));
+    const run = async () => {
+      setSending(true);
+      try {
+        await Promise.resolve(onSend(blocks, selectedModelOverride));
         setText('');
         setAttachments([]);
         if (textareaRef.current) {
@@ -91,7 +96,7 @@ export function ChatInput({
     };
 
     void run();
-  }, [attachments, onSend, sending, setText, text]);
+  }, [attachments, onSend, selectedModelOverride, sending, setText, text]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {

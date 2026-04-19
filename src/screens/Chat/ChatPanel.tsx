@@ -6,7 +6,7 @@ import { ArrowDown, Box, Check, ChevronDown, FolderOpen, Loader2, Shield } from 
 import { chatApi } from '../../api/chat';
 import { workspaceApi } from '../../api/workspace';
 import { useUiStore } from '../../store/uiStore';
-import { MODEL_OPTIONS, LLM_PROVIDERS } from '../../constants/providers';
+import { DEFAULT_MODEL_BY_PROVIDER, MODEL_OPTIONS, LLM_PROVIDERS } from '../../constants/providers';
 import { AgentIdentityConfig, ChatDraft, ChatModelOverride, ContentBlock } from '../../types';
 import { DisplayMessage, DisplayBlock } from '../../components/chat/types';
 import { chatMessagesToDisplay } from '../../components/chat/utils';
@@ -26,13 +26,14 @@ const PAGE_SIZE = 50;
 interface QueuedInitialMessage {
   key: string;
   content: ContentBlock[];
+  modelOverride: ChatModelOverride | null;
 }
 
 interface ChatPanelProps {
   sessionId?: string;
   draft?: ChatDraft | null;
   onDraftTextChange?: (text: string) => void;
-  onDraftSend?: (content: ContentBlock[]) => Promise<void>;
+  onDraftSend?: (content: ContentBlock[], modelOverride?: ChatModelOverride | null) => Promise<void>;
   initialQueuedMessage?: QueuedInitialMessage | null;
   onInitialMessageHandled?: (key: string) => void;
   onInitialMessageFailed?: (key: string) => void;
@@ -57,6 +58,7 @@ export function ChatPanel({
     null
   );
   const [modelPinned, setModelPinned] = useState(false);
+  const [modelHoverState, setModelHoverState] = useState<{ x: number; y: number } | null>(null);
 
   const prevScrollHeightRef = useRef(0);
   const prevScrollTopRef = useRef(0);
@@ -95,8 +97,8 @@ export function ChatPanel({
   useEffect(() => {
     setAutoScroll(true);
     consumedInitialMessageRef.current = null;
-    setSelectedModelOverride(null);
     setModelPinned(false);
+    setModelHoverState(null);
   }, [draft?.id, sessionId]);
 
   const { data: sessionMeta } = useQuery({
@@ -106,42 +108,47 @@ export function ChatPanel({
     staleTime: 60_000,
   });
 
+  const currentAgentId = sessionMeta?.agentId ?? draft?.agentId ?? null;
+
   const { data: agentConfig } = useQuery({
-    queryKey: ['agent-config', sessionMeta?.agentId],
-    queryFn: () => workspaceApi.getConfig(sessionMeta!.agentId),
-    enabled: Boolean(sessionMeta?.agentId),
+    queryKey: ['agent-config', currentAgentId],
+    queryFn: () => workspaceApi.getConfig(currentAgentId!),
+    enabled: Boolean(currentAgentId),
     staleTime: 60_000,
   });
 
   useEffect(() => {
-    if (!sessionMeta?.agentId) return;
+    if (!currentAgentId) return;
 
     const unsub = onAgentConfigChanged((payload) => {
-      if (payload.agentId !== sessionMeta.agentId) return;
-      queryClient.invalidateQueries({ queryKey: ['agent-config', sessionMeta.agentId] });
+      if (payload.agentId !== currentAgentId) return;
+      queryClient.invalidateQueries({ queryKey: ['agent-config', currentAgentId] });
     });
 
     return () => {
       unsub.then((fn) => fn()).catch(() => {});
     };
-  }, [queryClient, sessionMeta?.agentId]);
+  }, [currentAgentId, queryClient]);
 
   useEffect(() => {
-    if (!agentConfig) return;
-    if (modelPinned) return;
+    const nextOverride = agentConfig
+      ? {
+          provider: agentConfig.provider,
+          model: agentConfig.model,
+        }
+      : null;
+    if (!nextOverride) return;
+    if (modelPinned && selectedModelOverride) return;
     setSelectedModelOverride((current) => {
       if (
-        current?.provider === agentConfig.provider &&
-        current?.model === agentConfig.model
+        current?.provider === nextOverride.provider &&
+        current?.model === nextOverride.model
       ) {
         return current;
       }
-      return {
-        provider: agentConfig.provider,
-        model: agentConfig.model,
-      };
+      return nextOverride;
     });
-  }, [agentConfig, modelPinned]);
+  }, [agentConfig, modelPinned, selectedModelOverride]);
 
   const selectProject = useUiStore((state) => state.selectProject);
   const setProjectTab = useUiStore((state) => state.setProjectTab);
@@ -328,7 +335,7 @@ export function ChatPanel({
   }
 
   const handlePersistedSend = useCallback(
-    async (content: ContentBlock[]) => {
+    async (content: ContentBlock[], modelOverride?: ChatModelOverride | null) => {
       if (!sessionId) return;
       const currentStreamId = `chat:${sessionId}`;
       const localUserMessageId = useLiveChatStore
@@ -340,7 +347,7 @@ export function ChatPanel({
         const resp = await chatApi.sendMessage(
           sessionId,
           content,
-          selectedModelOverride ?? undefined
+          modelOverride ?? selectedModelOverride ?? undefined
         );
         useLiveChatStore
           .getState()
@@ -355,20 +362,21 @@ export function ChatPanel({
   );
 
   const handleSend = useCallback(
-    async (content: ContentBlock[]) => {
+    async (content: ContentBlock[], modelOverride?: ChatModelOverride | null) => {
       if (isDraft) {
         if (!onDraftSend) return;
-        await onDraftSend(content);
+        await onDraftSend(content, modelOverride ?? selectedModelOverride);
         return;
       }
 
-      await handlePersistedSend(content);
+      await handlePersistedSend(content, modelOverride);
     },
-    [handlePersistedSend, isDraft, onDraftSend]
+    [handlePersistedSend, isDraft, onDraftSend, selectedModelOverride]
   );
 
   const queuedMessageKey = initialQueuedMessage?.key;
   const queuedMessageContent = initialQueuedMessage?.content;
+  const queuedMessageModelOverride = initialQueuedMessage?.modelOverride;
 
   useEffect(() => {
     if (!sessionId || !queuedMessageKey || !queuedMessageContent) return;
@@ -378,7 +386,7 @@ export function ChatPanel({
 
     const run = async () => {
       try {
-        await handlePersistedSend(queuedMessageContent);
+        await handlePersistedSend(queuedMessageContent, queuedMessageModelOverride);
         onInitialMessageHandled?.(queuedMessageKey);
       } catch {
         consumedInitialMessageRef.current = null;
@@ -391,6 +399,7 @@ export function ChatPanel({
     handlePersistedSend,
     queuedMessageKey,
     queuedMessageContent,
+    queuedMessageModelOverride,
     onInitialMessageFailed,
     onInitialMessageHandled,
     sessionId,
@@ -421,90 +430,153 @@ export function ChatPanel({
   }, [pendingPermissionRequestMap, sessionId, streamId, visiblePermissionRequestIds]);
 
   const modelPicker = useMemo(() => {
-    if (!sessionId || !selectedModelOverride) return null;
+    const resolvedOverride =
+      selectedModelOverride ??
+      (agentConfig
+        ? {
+            provider: agentConfig.provider,
+            model: agentConfig.model,
+          }
+        : null);
+    const currentProviderValue =
+      resolvedOverride?.provider ?? agentConfig?.provider ?? null;
+    const currentModelValue =
+      resolvedOverride?.model ??
+      (agentConfig ? agentConfig.model : currentProviderValue ? DEFAULT_MODEL_BY_PROVIDER[currentProviderValue] : null);
+    if (!currentProviderValue || !currentModelValue) {
+      return (
+        <button
+          type="button"
+          disabled
+          aria-label="Choose reply model"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-edge bg-background px-2.5 py-2 text-xs text-muted opacity-50"
+        >
+          <Box size={14} />
+          <ChevronDown size={12} className="opacity-70" />
+        </button>
+      );
+    }
 
-    const currentProvider = LLM_PROVIDERS.find((provider) => provider.value === selectedModelOverride.provider);
-    const currentOption = (MODEL_OPTIONS[selectedModelOverride.provider] ?? []).find(
-      (option) => option.value === selectedModelOverride.model
+    const currentProvider = LLM_PROVIDERS.find((provider) => provider.value === currentProviderValue);
+    const currentOption = (MODEL_OPTIONS[currentProviderValue] ?? []).find(
+      (option) => option.value === currentModelValue
     );
-    const currentLabel = currentOption?.label ?? selectedModelOverride.model;
+    const currentLabel = currentOption?.label ?? currentModelValue;
     const triggerTitle = currentProvider
       ? `${currentProvider.label} • ${currentLabel}`
       : currentLabel;
 
     return (
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger asChild>
-          <button
-            type="button"
-            disabled={streaming}
-            aria-label="Choose reply model"
-            title={triggerTitle}
-            className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs transition-[border-color,background-color,color] disabled:opacity-50 ${
-              modelPinned
-                ? 'border-accent/40 bg-accent/10 text-accent-hover'
-                : 'border-edge bg-background text-muted hover:border-edge-hover hover:text-white'
-            }`}
-          >
-            <Box size={14} />
-            <ChevronDown size={12} className="opacity-70" />
-          </button>
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content
-            align="end"
-            side="top"
-            sideOffset={8}
-            className="z-50 w-72 rounded-xl border border-edge bg-surface p-1.5 shadow-xl"
-          >
-            <div className="px-2.5 py-2 border-b border-edge/70">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
-                Reply Model
-              </p>
-              <p className="mt-1 text-xs text-secondary">{triggerTitle}</p>
-            </div>
-            <div className="max-h-72 overflow-y-auto py-1">
-              {LLM_PROVIDERS.map((provider) => (
-                <div key={provider.value}>
-                  <p className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
-                    {provider.label}
-                  </p>
-                  {(MODEL_OPTIONS[provider.value] ?? []).map((option) => {
-                    const active =
-                      selectedModelOverride.provider === provider.value &&
-                      selectedModelOverride.model === option.value;
+      <>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <button
+              type="button"
+              disabled={streaming}
+              aria-label="Choose reply model"
+              onMouseEnter={(event) =>
+                setModelHoverState({ x: event.clientX, y: event.clientY })
+              }
+              onMouseMove={(event) =>
+                setModelHoverState({ x: event.clientX, y: event.clientY })
+              }
+              onMouseLeave={() => setModelHoverState(null)}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs transition-[border-color,background-color,color] disabled:opacity-50 ${
+                modelPinned
+                  ? 'border-accent/40 bg-accent/10 text-accent-hover'
+                  : 'border-edge bg-background text-muted hover:border-edge-hover hover:text-white'
+              }`}
+            >
+              <Box size={14} />
+              <ChevronDown size={12} className="opacity-70" />
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              align="end"
+              side="top"
+              sideOffset={8}
+              className="z-50 w-72 rounded-xl border border-edge bg-surface p-1.5 shadow-xl"
+            >
+              <div className="px-2.5 py-2 border-b border-edge/70">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
+                  Reply Model
+                </p>
+                <p className="mt-1 text-xs text-secondary">{triggerTitle}</p>
+              </div>
+              <div className="max-h-72 overflow-y-auto py-1">
+                {LLM_PROVIDERS.map((provider) => (
+                  <div key={provider.value}>
+                    <p className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
+                      {provider.label}
+                    </p>
+                    {(MODEL_OPTIONS[provider.value] ?? []).map((option) => {
+                      const active =
+                        currentProviderValue === provider.value &&
+                        currentModelValue === option.value;
 
-                    return (
-                      <DropdownMenu.Item
-                        key={`${provider.value}::${option.value}`}
-                        onSelect={() => {
-                          setSelectedModelOverride({
-                            provider: provider.value,
-                            model: option.value,
-                          });
-                          setModelPinned(true);
-                        }}
-                        className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10"
-                      >
-                        <Box
-                          size={14}
-                          className={active ? 'text-accent-light' : 'text-muted'}
-                        />
-                        <span className={`flex-1 ${active ? 'text-accent-light font-medium' : 'text-white'}`}>
-                          {option.label}
-                        </span>
-                        {active && <Check size={12} className="text-accent-light" />}
-                      </DropdownMenu.Item>
-                    );
-                  })}
-                </div>
-              ))}
+                      return (
+                        <DropdownMenu.Item
+                          key={`${provider.value}::${option.value}`}
+                          onSelect={() => {
+                            setSelectedModelOverride({
+                              provider: provider.value,
+                              model: option.value,
+                            });
+                            setModelPinned(true);
+                          }}
+                          className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10"
+                        >
+                          <Box
+                            size={14}
+                            className={active ? 'text-accent-light' : 'text-muted'}
+                          />
+                          <span className={`flex-1 ${active ? 'text-accent-light font-medium' : 'text-white'}`}>
+                            {option.label}
+                          </span>
+                          {active && <Check size={12} className="text-accent-light" />}
+                        </DropdownMenu.Item>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+        {modelHoverState && (() => {
+          const offset = 6;
+          const viewportPadding = 12;
+          const estimatedWidth = 260;
+          const estimatedHeight = 40;
+          const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 0;
+          const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 0;
+
+          let left = modelHoverState.x + offset;
+          let top = modelHoverState.y + offset;
+
+          if (viewportWidth && left + estimatedWidth > viewportWidth - viewportPadding) {
+            left = viewportWidth - estimatedWidth - viewportPadding;
+          }
+          if (viewportHeight && top + estimatedHeight > viewportHeight - viewportPadding) {
+            top = modelHoverState.y - estimatedHeight - offset;
+          }
+
+          left = Math.max(viewportPadding, left);
+          top = Math.max(viewportPadding, top);
+
+          return (
+            <div
+              className="pointer-events-none fixed z-[60] max-w-xs rounded-lg border border-edge bg-surface/95 px-2.5 py-1.5 text-[11px] text-secondary shadow-xl backdrop-blur-sm"
+              style={{ left, top }}
+            >
+              {triggerTitle}
             </div>
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
+          );
+        })()}
+      </>
     );
-  }, [modelPinned, selectedModelOverride, sessionId, streaming]);
+  }, [agentConfig, modelHoverState, modelPinned, selectedModelOverride, streaming]);
 
   return (
     <div className="flex flex-col h-full">
@@ -629,6 +701,7 @@ export function ChatPanel({
         onSend={handleSend}
         disabled={streaming}
         modelPicker={modelPicker}
+        selectedModelOverride={selectedModelOverride}
         textValue={isDraft ? (draft?.text ?? '') : undefined}
         onTextChange={isDraft ? onDraftTextChange : undefined}
         contextGauge={
