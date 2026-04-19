@@ -7,6 +7,7 @@ use crate::db::DbPool;
 use crate::executor::agent_tools::ToolExecutionContext;
 use crate::executor::anthropic::AnthropicProvider;
 use crate::executor::claude_cli::{ClaudeCliProvider, SessionFn};
+use crate::executor::codex_cli::CodexCliProvider;
 use crate::executor::mcp_server::{McpServerHandle, McpSession};
 use crate::executor::minimax::MiniMaxProvider;
 use crate::executor::permissions::PermissionRegistry;
@@ -253,9 +254,7 @@ pub fn create_provider(
         // use `create_provider_with_mcp` (or construct the CLI provider
         // directly) so they can attach an MCP handle + session factory.
         "claude-cli" => Ok(Box::new(ClaudeCliProvider::new(None))),
-        "codex-cli" => Err(
-            "codex-cli provider is not yet implemented. Select another provider for now.".to_string(),
-        ),
+        "codex-cli" => Ok(Box::new(CodexCliProvider::new(None))),
         other => Err(format!("unsupported LLM provider: {}", other)),
     }
 }
@@ -315,9 +314,16 @@ pub fn create_provider_with_mcp(
             };
             Ok(Box::new(provider))
         }
-        "codex-cli" => Err(
-            "codex-cli provider is not yet implemented. Select another provider for now.".to_string(),
-        ),
+        "codex-cli" => {
+            let provider = match wiring {
+                Some(w) => {
+                    let (handle, session_fn) = w.into_session_fn();
+                    CodexCliProvider::new(Some(handle)).with_session_fn(session_fn)
+                }
+                None => CodexCliProvider::new(None),
+            };
+            Ok(Box::new(provider))
+        }
         other => Err(format!("unsupported LLM provider: {}", other)),
     }
 }

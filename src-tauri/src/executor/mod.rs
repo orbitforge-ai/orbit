@@ -5,6 +5,7 @@ pub mod bg_processes;
 pub mod channels;
 pub mod claude_cli;
 pub mod cli_common;
+pub mod codex_cli;
 pub mod compaction;
 pub mod context;
 pub mod engine;

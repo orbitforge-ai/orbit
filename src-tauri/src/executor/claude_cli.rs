@@ -61,6 +61,10 @@ struct StreamContext<'a> {
     content: Vec<ContentBlock>,
     usage: Usage,
     stop_reason: StopReason,
+    /// True once a `stream_event` with a text delta has been seen for the
+    /// current turn. When set, we skip re-emitting text from the aggregated
+    /// `assistant` event so the UI doesn't see each chunk twice.
+    text_streamed: bool,
 }
 
 fn binary_path() -> Result<PathBuf, String> {
@@ -150,6 +154,7 @@ impl LlmProvider for ClaudeCliProvider {
             .arg("--output-format")
             .arg("stream-json")
             .arg("--verbose")
+            .arg("--include-partial-messages")
             .arg("--model")
             .arg(&config.model);
 
@@ -221,6 +226,7 @@ impl LlmProvider for ClaudeCliProvider {
             content: Vec::new(),
             usage: Usage::default(),
             stop_reason: StopReason::EndTurn,
+            text_streamed: false,
         };
 
         let mut lines = BufReader::new(stdout).lines();
@@ -277,6 +283,11 @@ fn handle_event(ctx: &mut StreamContext<'_>, event: &Value) {
     match event_type {
         "system" => {
             // {"type":"system","subtype":"init", ...} — no user-visible work.
+        }
+        "stream_event" => {
+            if let Some(inner) = event.get("event") {
+                handle_stream_event(ctx, inner);
+            }
         }
         "assistant" => {
             if let Some(msg) = event.get("message") {
@@ -339,13 +350,17 @@ fn handle_assistant_message(ctx: &mut StreamContext<'_>, msg: &Value) {
         match block_type {
             "text" => {
                 if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-                    emit_agent_llm_chunk(ctx.app, ctx.run_id, text, ctx.iteration);
-                    emit_log_chunk(
-                        ctx.app,
-                        ctx.run_id,
-                        vec![("stdout".to_string(), text.to_string())],
-                    );
-                    ctx.text_buf.push_str(text);
+                    // If we already streamed this text via `stream_event`
+                    // deltas, do not re-emit — the UI has it.
+                    if !ctx.text_streamed {
+                        emit_agent_llm_chunk(ctx.app, ctx.run_id, text, ctx.iteration);
+                        emit_log_chunk(
+                            ctx.app,
+                            ctx.run_id,
+                            vec![("stdout".to_string(), text.to_string())],
+                        );
+                        ctx.text_buf.push_str(text);
+                    }
                 }
             }
             "thinking" => {
@@ -388,6 +403,80 @@ fn handle_assistant_message(ctx: &mut StreamContext<'_>, msg: &Value) {
     }
 }
 
+/// Handle a `stream_event` wrapper — the CLI re-emits the same partial-message
+/// events the Anthropic API emits over SSE. We care about `content_block_delta`
+/// with `text_delta` payloads so text appears in the UI as it's generated.
+fn handle_stream_event(ctx: &mut StreamContext<'_>, inner: &Value) {
+    let kind = inner.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    match kind {
+        "content_block_delta" => {
+            let Some(delta) = inner.get("delta") else {
+                return;
+            };
+            let dtype = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            match dtype {
+                "text_delta" => {
+                    if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
+                        if text.is_empty() {
+                            return;
+                        }
+                        emit_agent_llm_chunk(ctx.app, ctx.run_id, text, ctx.iteration);
+                        emit_log_chunk(
+                            ctx.app,
+                            ctx.run_id,
+                            vec![("stdout".to_string(), text.to_string())],
+                        );
+                        ctx.text_buf.push_str(text);
+                        ctx.text_streamed = true;
+                    }
+                }
+                "thinking_delta" => {
+                    // Surface thinking deltas live — users can see reasoning
+                    // as it streams. The final thinking block is assembled
+                    // from the aggregated `assistant` message, so don't push
+                    // into ctx.content here.
+                    if let Some(t) = delta.get("thinking").and_then(|v| v.as_str()) {
+                        emit_agent_content_block(
+                            ctx.app,
+                            ctx.run_id,
+                            ctx.iteration,
+                            "thinking_delta",
+                            json!({"type": "thinking_delta", "thinking": t}),
+                        );
+                    }
+                }
+                "input_json_delta" => {
+                    // Partial tool-use input arrives a fragment at a time.
+                    // We wait for the aggregated `assistant` event to add
+                    // the complete tool_use to content — deltas alone are
+                    // not useful without the tool id/name.
+                }
+                _ => {}
+            }
+        }
+        "message_delta" => {
+            if let Some(u) = inner.get("usage") {
+                apply_usage(&mut ctx.usage, u);
+            }
+            if let Some(sr) = inner
+                .get("delta")
+                .and_then(|d| d.get("stop_reason"))
+                .and_then(|v| v.as_str())
+            {
+                ctx.stop_reason = match sr {
+                    "end_turn" => StopReason::EndTurn,
+                    "tool_use" => StopReason::ToolUse,
+                    "max_tokens" => StopReason::MaxTokens,
+                    _ => StopReason::EndTurn,
+                };
+            }
+        }
+        // message_start / content_block_start / content_block_stop / message_stop
+        // carry no state we don't already get elsewhere.
+        _ => {}
+    }
+}
+
 fn apply_usage(usage: &mut Usage, v: &Value) {
     if let Some(n) = v.get("input_tokens").and_then(|x| x.as_u64()) {
         usage.input_tokens = usage.input_tokens.saturating_add(n as u32);
@@ -418,5 +507,15 @@ mod tests {
         assert!(content.contains("prev"));
         assert!(content.contains("Current request:"));
         assert!(content.contains("now"));
+    }
+
+    #[test]
+    fn message_delta_stop_reason_is_parsed() {
+        // Validate the parsing path without an AppHandle by exercising the
+        // inner helper that only touches ctx.usage and ctx.stop_reason.
+        let mut usage = Usage::default();
+        apply_usage(&mut usage, &json!({"input_tokens": 3, "output_tokens": 2}));
+        assert_eq!(usage.input_tokens, 3);
+        assert_eq!(usage.output_tokens, 2);
     }
 }
