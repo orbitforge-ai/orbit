@@ -320,6 +320,13 @@ pub fn run() {
             commands::work_items::create_work_item_comment,
             commands::work_items::update_work_item_comment,
             commands::work_items::delete_work_item_comment,
+            // Project workflows
+            commands::project_workflows::list_project_workflows,
+            commands::project_workflows::get_project_workflow,
+            commands::project_workflows::create_project_workflow,
+            commands::project_workflows::update_project_workflow,
+            commands::project_workflows::delete_project_workflow,
+            commands::project_workflows::set_project_workflow_enabled,
             // Users
             commands::users::list_users,
             commands::users::create_user,

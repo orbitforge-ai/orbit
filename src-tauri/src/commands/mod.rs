@@ -6,6 +6,7 @@ pub mod global_settings;
 pub mod llm;
 pub mod memory;
 pub mod permissions;
+pub mod project_workflows;
 pub mod projects;
 pub mod pulse;
 pub mod runs;

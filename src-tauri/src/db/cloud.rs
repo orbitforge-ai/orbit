@@ -489,6 +489,33 @@ impl SupabaseClient {
         .await
     }
 
+    pub async fn upsert_project_workflow(
+        &self,
+        w: &crate::models::project_workflow::ProjectWorkflow,
+    ) -> Result<(), String> {
+        let graph = serde_json::to_string(&w.graph).unwrap_or_else(|_| "{}".into());
+        let trigger_config =
+            serde_json::to_string(&w.trigger_config).unwrap_or_else(|_| "{}".into());
+        self.upsert_single(
+            "project_workflows",
+            serde_json::json!({
+                "user_id": self.user_id,
+                "id": w.id,
+                "project_id": w.project_id,
+                "name": w.name,
+                "description": w.description,
+                "enabled": w.enabled,
+                "graph": graph,
+                "trigger_kind": w.trigger_kind,
+                "trigger_config": trigger_config,
+                "version": w.version,
+                "created_at": w.created_at,
+                "updated_at": w.updated_at,
+            }),
+        )
+        .await
+    }
+
     pub async fn upsert_project_agent(
         &self,
         pa: &crate::models::project::ProjectAgent,
@@ -681,19 +708,26 @@ impl SupabaseClient {
         // Read project tables + reactions separately to keep tuple sizes manageable
         let user_id2 = self.user_id.clone();
         let p2 = pool.clone();
-        let (projects, project_agents, reactions, work_items, work_item_comments) =
-            tokio::task::spawn_blocking(move || {
-                let conn = p2.get().map_err(|e| e.to_string())?;
-                Ok::<_, String>((
-                    read_projects(&conn, &user_id2)?,
-                    read_project_agents(&conn, &user_id2)?,
-                    read_message_reactions(&conn, &user_id2)?,
-                    read_work_items(&conn, &user_id2)?,
-                    read_work_item_comments(&conn, &user_id2)?,
-                ))
-            })
-            .await
-            .map_err(|e| e.to_string())??;
+        let (
+            projects,
+            project_agents,
+            reactions,
+            work_items,
+            work_item_comments,
+            project_workflows,
+        ) = tokio::task::spawn_blocking(move || {
+            let conn = p2.get().map_err(|e| e.to_string())?;
+            Ok::<_, String>((
+                read_projects(&conn, &user_id2)?,
+                read_project_agents(&conn, &user_id2)?,
+                read_message_reactions(&conn, &user_id2)?,
+                read_work_items(&conn, &user_id2)?,
+                read_work_item_comments(&conn, &user_id2)?,
+                read_project_workflows(&conn, &user_id2)?,
+            ))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
 
         // Batch upsert each table; log failures but don't abort
         macro_rules! push {
@@ -720,6 +754,7 @@ impl SupabaseClient {
         push!("message_reactions", reactions);
         push!("work_items", work_items);
         push!("work_item_comments", work_item_comments);
+        push!("project_workflows", project_workflows);
 
         info!("Pushed local data to Supabase");
         Ok(())
@@ -772,6 +807,7 @@ impl SupabaseClient {
         let reactions = fetch!("message_reactions");
         let work_items = fetch!("work_items");
         let work_item_comments = fetch!("work_item_comments");
+        let project_workflows = fetch!("project_workflows");
 
         let counts = std::collections::HashMap::from([
             ("agents".to_string(), agents.len()),
@@ -791,6 +827,7 @@ impl SupabaseClient {
             ("message_reactions".to_string(), reactions.len()),
             ("work_items".to_string(), work_items.len()),
             ("work_item_comments".to_string(), work_item_comments.len()),
+            ("project_workflows".to_string(), project_workflows.len()),
         ]);
 
         info!(
@@ -823,6 +860,7 @@ impl SupabaseClient {
             write_message_reactions(&conn, reactions)?;
             write_work_items(&conn, work_items)?;
             write_work_item_comments(&conn, work_item_comments)?;
+            write_project_workflows(&conn, project_workflows)?;
             Ok::<(), String>(())
         })
         .await
@@ -1355,6 +1393,41 @@ fn read_work_items(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Val
     Ok(rows)
 }
 
+fn read_project_workflows(
+    conn: &rusqlite::Connection,
+    user_id: &str,
+) -> Result<Vec<Value>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, project_id, name, description, enabled, graph,
+                    trigger_kind, trigger_config, version, created_at, updated_at
+             FROM project_workflows",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            let enabled: bool = row.get(4)?;
+            Ok(serde_json::json!({
+                "user_id": user_id,
+                "id": row.get::<_, String>(0)?,
+                "project_id": row.get::<_, String>(1)?,
+                "name": row.get::<_, String>(2)?,
+                "description": row.get::<_, Option<String>>(3)?,
+                "enabled": enabled,
+                "graph": row.get::<_, String>(5)?,
+                "trigger_kind": row.get::<_, String>(6)?,
+                "trigger_config": row.get::<_, String>(7)?,
+                "version": row.get::<_, i64>(8)?,
+                "created_at": row.get::<_, String>(9)?,
+                "updated_at": row.get::<_, String>(10)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
 fn read_work_item_comments(
     conn: &rusqlite::Connection,
     user_id: &str,
@@ -1802,6 +1875,35 @@ fn write_work_items(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(),
                 opt_str(&r, "blocked_reason"),
                 opt_str(&r, "started_at"),
                 opt_str(&r, "completed_at"),
+                str_val(&r, "created_at"),
+                str_val(&r, "updated_at"),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn write_project_workflows(
+    conn: &rusqlite::Connection,
+    rows: Vec<Value>,
+) -> Result<(), String> {
+    for r in rows {
+        conn.execute(
+            "INSERT OR REPLACE INTO project_workflows (
+                id, project_id, name, description, enabled, graph,
+                trigger_kind, trigger_config, version, created_at, updated_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            rusqlite::params![
+                str_val(&r, "id"),
+                str_val(&r, "project_id"),
+                str_val(&r, "name"),
+                opt_str(&r, "description"),
+                bool_val(&r, "enabled"),
+                json_str(&r, "graph", "{\"nodes\":[],\"edges\":[],\"schemaVersion\":1}"),
+                str_val(&r, "trigger_kind"),
+                json_str(&r, "trigger_config", "{}"),
+                int_val(&r, "version", 1),
                 str_val(&r, "created_at"),
                 str_val(&r, "updated_at"),
             ],

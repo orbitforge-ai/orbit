@@ -11,6 +11,7 @@ type Screen =
   | 'task-builder'
   | 'schedule-builder'
   | 'task-edit'
+  | 'workflow-editor'
   | 'settings';
 
 function getPersistedScreen(): Screen {
@@ -31,7 +32,13 @@ function getPersistedAgentId(): string | null {
 }
 
 type AgentTab = 'chat' | 'workspace' | 'config' | 'skills' | 'schedules' | 'bus';
-type ProjectTab = 'workspace' | 'agents' | 'board' | 'scheduled' | 'history';
+type ProjectTab =
+  | 'workspace'
+  | 'agents'
+  | 'board'
+  | 'scheduled'
+  | 'workflows'
+  | 'history';
 
 function getPersistedProjectId(): string | null {
   try {
@@ -48,6 +55,7 @@ interface UiStore {
   editingTaskId: string | null;
   selectedAgentId: string | null;
   selectedProjectId: string | null;
+  selectedWorkflowId: string | null;
   pendingChatSessionId: string | null;
   logPanelOpen: boolean;
   agentTab: AgentTab;
@@ -61,6 +69,8 @@ interface UiStore {
   editTask: (id: string) => void;
   selectAgent: (id: string) => void;
   selectProject: (id: string | null) => void;
+  openWorkflowEditor: (workflowId: string) => void;
+  closeWorkflowEditor: () => void;
   openAgentChat: (agentId: string, sessionId?: string | null) => void;
   clearPendingChatSession: () => void;
   setLogPanelOpen: (open: boolean) => void;
@@ -76,6 +86,7 @@ export const useUiStore = create<UiStore>((set) => ({
   editingTaskId: null,
   selectedAgentId: getPersistedAgentId(),
   selectedProjectId: getPersistedProjectId(),
+  selectedWorkflowId: null,
   pendingChatSessionId: null,
   logPanelOpen: false,
   agentTab: 'chat' as AgentTab,
@@ -127,6 +138,18 @@ export const useUiStore = create<UiStore>((set) => ({
     } catch {}
     set({ selectedProjectId: id, screen: 'projects', settingsOpen: false });
   },
+  openWorkflowEditor: (workflowId) =>
+    set({
+      selectedWorkflowId: workflowId,
+      screen: 'workflow-editor',
+      settingsOpen: false,
+    }),
+  closeWorkflowEditor: () =>
+    set({
+      selectedWorkflowId: null,
+      screen: 'projects',
+      projectTab: 'workflows',
+    }),
   clearPendingChatSession: () => set({ pendingChatSessionId: null }),
   setLogPanelOpen: (open) => set({ logPanelOpen: open }),
   setAgentTab: (tab) => set({ agentTab: tab }),

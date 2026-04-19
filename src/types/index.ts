@@ -96,6 +96,127 @@ export interface WorkItemComment {
 
 export type CommentAuthor = { kind: 'user' } | { kind: 'agent'; agentId: string };
 
+// ─── Project workflows ──────────────────────────────────────────────────────
+
+export interface NodePosition {
+  x: number;
+  y: number;
+}
+
+export interface WorkflowNode {
+  id: string;
+  type: string;
+  position: NodePosition;
+  data: Record<string, unknown>;
+}
+
+export interface WorkflowEdge {
+  id: string;
+  source: string;
+  target: string;
+  sourceHandle?: string | null;
+}
+
+export interface WorkflowGraph {
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  schemaVersion: number;
+}
+
+export interface ProjectWorkflow {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  graph: WorkflowGraph;
+  triggerKind: string;
+  triggerConfig: Record<string, unknown>;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateProjectWorkflow {
+  projectId: string;
+  name: string;
+  description?: string | null;
+  triggerKind?: string;
+  triggerConfig?: Record<string, unknown>;
+  graph?: WorkflowGraph;
+}
+
+export interface UpdateProjectWorkflow {
+  name?: string;
+  description?: string | null;
+  triggerKind?: string;
+  triggerConfig?: Record<string, unknown>;
+  graph?: WorkflowGraph;
+}
+
+export type RuleOperator =
+  | 'equals'
+  | 'notEquals'
+  | 'contains'
+  | 'notContains'
+  | 'startsWith'
+  | 'endsWith'
+  | 'greaterThan'
+  | 'greaterThanOrEqual'
+  | 'lessThan'
+  | 'lessThanOrEqual'
+  | 'exists'
+  | 'notExists'
+  | 'isTrue'
+  | 'isFalse'
+  | 'matchesRegex';
+
+export type RuleCombinator = 'and' | 'or';
+
+export interface RuleLeaf {
+  field: string;
+  operator: RuleOperator;
+  value?: unknown;
+}
+
+export interface RuleGroup {
+  combinator: RuleCombinator;
+  rules: RuleNode[];
+}
+
+export type RuleNode = RuleGroup | RuleLeaf;
+
+export const RULE_OPERATORS: RuleOperator[] = [
+  'equals',
+  'notEquals',
+  'contains',
+  'notContains',
+  'startsWith',
+  'endsWith',
+  'greaterThan',
+  'greaterThanOrEqual',
+  'lessThan',
+  'lessThanOrEqual',
+  'exists',
+  'notExists',
+  'isTrue',
+  'isFalse',
+  'matchesRegex',
+];
+
+export const KNOWN_NODE_TYPES = [
+  'trigger.manual',
+  'trigger.schedule',
+  'agent.run',
+  'logic.if',
+  'integration.gmail.read',
+  'integration.gmail.send',
+  'integration.slack.send',
+  'integration.http.request',
+] as const;
+
+export type WorkflowNodeType = (typeof KNOWN_NODE_TYPES)[number];
+
 // ─── Memory ──────────────────────────────────────────────────────────────────
 
 export type MemoryType = 'user' | 'feedback' | 'project' | 'reference';

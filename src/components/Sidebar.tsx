@@ -33,6 +33,7 @@ import {
   Users,
   Settings,
   KanbanSquare,
+  Workflow,
 } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { useUiStore } from '../store/uiStore';
@@ -60,6 +61,7 @@ const PROJECT_TABS = [
   { id: 'agents' as const, label: 'Agents', icon: Users },
   { id: 'board' as const, label: 'Board', icon: KanbanSquare },
   { id: 'scheduled' as const, label: 'Scheduled', icon: ListChecks },
+  { id: 'workflows' as const, label: 'Workflows', icon: Workflow },
   { id: 'history' as const, label: 'History', icon: History },
 ];
 
