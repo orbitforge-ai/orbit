@@ -18,14 +18,20 @@ use tauri::{Emitter, Manager};
 use tracing::{info, warn};
 use ulid::Ulid;
 
-use crate::commands::work_items::create_work_item_with_db;
+use crate::commands::work_items::{
+    block_work_item_with_db, claim_work_item_with_db, complete_work_item_with_db,
+    create_work_item_comment_with_db, create_work_item_with_db, delete_work_item_with_db,
+    get_work_item_with_db, list_work_item_comments_with_db, list_work_items_with_db,
+    move_work_item_with_db, update_work_item_with_db,
+};
 use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
 use crate::executor::{keychain, llm_provider, workspace};
 use crate::models::project_workflow::{
     ProjectWorkflow, RuleNode, WorkflowEdge, WorkflowGraph, WorkflowNode,
 };
-use crate::models::work_item::CreateWorkItem;
+use crate::models::work_item::{CreateWorkItem, UpdateWorkItem};
+use crate::models::work_item_comment::CommentAuthor;
 use crate::models::workflow_run::{WorkflowRun, WorkflowRunStep};
 use crate::workflows::rule_eval::eval_rule;
 
@@ -280,10 +286,7 @@ impl WorkflowOrchestrator {
             }),
             "agent.run" => self.run_agent_node(node, outputs).await,
             "logic.if" => self.run_logic_if(node, outputs).await,
-            "board.work_item.create" => {
-                self.run_create_work_item_node(run_id, project_id, node, outputs)
-                    .await
-            }
+            "board.work_item.create" => self.run_work_item_node(run_id, project_id, node, outputs).await,
             other if other.starts_with("integration.") => Err(format!(
                 "integration node `{}` is not yet implemented",
                 other
@@ -401,125 +404,335 @@ impl WorkflowOrchestrator {
         })
     }
 
-    async fn run_create_work_item_node(
+    async fn run_work_item_node(
         &self,
         run_id: &str,
         project_id: &str,
         node: &WorkflowNode,
         outputs: &Value,
     ) -> Result<NodeOutcome, String> {
-        let title_template = node
+        let action = node
             .data
-            .get("titleTemplate")
+            .get("action")
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if title_template.is_empty() {
-            return Err("board.work_item.create requires data.titleTemplate".to_string());
+            .unwrap_or("create");
+
+        match action {
+            "create" => {
+                let title_template = required_template(&node.data, "titleTemplate", action)?;
+                let title = render_template(&title_template, outputs).trim().to_string();
+                if title.is_empty() {
+                    return Err("board.work_item rendered an empty title".to_string());
+                }
+
+                let description = render_optional_template(
+                    node.data.get("descriptionTemplate").and_then(|v| v.as_str()),
+                    outputs,
+                );
+                let assignee_agent_id = render_optional_template(
+                    node.data.get("assigneeAgentId").and_then(|v| v.as_str()),
+                    outputs,
+                );
+                let parent_work_item_id = render_optional_template(
+                    node.data.get("parentWorkItemId").and_then(|v| v.as_str()),
+                    outputs,
+                );
+                let labels = parse_work_item_labels(
+                    node.data.get("labelsText").and_then(|v| v.as_str()),
+                    outputs,
+                );
+                let kind = parse_work_item_kind(node.data.get("kind").and_then(|v| v.as_str()))?;
+                let status =
+                    parse_work_item_status(node.data.get("status").and_then(|v| v.as_str()))?;
+                let priority = parse_priority(node.data.get("priority")).clamp(0, 3);
+
+                let payload = CreateWorkItem {
+                    project_id: project_id.to_string(),
+                    title: title.clone(),
+                    description: description.clone(),
+                    kind: Some(kind.clone()),
+                    status: Some(status.clone()),
+                    priority: Some(priority),
+                    assignee_agent_id: assignee_agent_id.clone(),
+                    created_by_agent_id: None,
+                    parent_work_item_id: parent_work_item_id.clone(),
+                    position: None,
+                    labels: Some(labels.clone()),
+                    metadata: Some(json!({
+                        "source": "workflow",
+                        "workflowRunId": run_id,
+                        "workflowNodeId": node.id,
+                    })),
+                };
+
+                let item = create_work_item_with_db(&self.db, payload).await?;
+                self.sync_work_item_cloud(item.clone());
+
+                Ok(NodeOutcome {
+                    output: json!({
+                        "action": action,
+                        "title": title,
+                        "description": description,
+                        "kind": kind,
+                        "status": status,
+                        "priority": priority,
+                        "labels": labels,
+                        "assigneeAgentId": assignee_agent_id,
+                        "parentWorkItemId": parent_work_item_id,
+                        "workItem": item,
+                    }),
+                    next_handle: None,
+                })
+            }
+            "list" => {
+                let mut items = list_work_items_with_db(&self.db, project_id.to_string()).await?;
+                let status_filter = parse_optional_work_item_status(
+                    node.data
+                        .get("listColumn")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| node.data.get("listStatus").and_then(|v| v.as_str())),
+                )?;
+                let kind_filter = parse_optional_work_item_kind(
+                    node.data.get("listKind").and_then(|v| v.as_str()),
+                )?;
+                let assignee_filter = render_optional_template(
+                    node.data.get("listAssignee").and_then(|v| v.as_str()),
+                    outputs,
+                );
+                let limit = node
+                    .data
+                    .get("limit")
+                    .and_then(json_number_to_i64)
+                    .filter(|v| *v > 0)
+                    .unwrap_or(100) as usize;
+
+                if let Some(status) = status_filter.as_ref() {
+                    items.retain(|item| item.status == status.as_str());
+                }
+                if let Some(kind) = kind_filter.as_ref() {
+                    items.retain(|item| item.kind == kind.as_str());
+                }
+                if let Some(assignee) = assignee_filter.clone() {
+                    match assignee.as_str() {
+                        "none" | "unassigned" | "null" => {
+                            items.retain(|item| item.assignee_agent_id.is_none());
+                        }
+                        _ => items.retain(|item| item.assignee_agent_id.as_deref() == Some(assignee.as_str())),
+                    }
+                }
+                if items.len() > limit {
+                    items.truncate(limit);
+                }
+
+                Ok(NodeOutcome {
+                    output: json!({
+                        "action": action,
+                        "count": items.len(),
+                        "items": items,
+                        "filters": {
+                            "column": status_filter.clone(),
+                            "status": status_filter,
+                            "kind": kind_filter,
+                            "assignee": assignee_filter,
+                            "limit": limit,
+                        },
+                    }),
+                    next_handle: None,
+                })
+            }
+            "get" => {
+                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
+                let item = get_work_item_with_db(&self.db, item_id.clone()).await?;
+                Ok(NodeOutcome {
+                    output: json!({
+                        "action": action,
+                        "itemId": item_id,
+                        "workItem": item,
+                    }),
+                    next_handle: None,
+                })
+            }
+            "update" => {
+                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
+                let kind = parse_optional_work_item_kind(node.data.get("kind").and_then(|v| v.as_str()))?;
+                let priority = parse_optional_priority(node.data.get("priority"));
+                let labels = optional_labels(
+                    node.data.get("labelsText").and_then(|v| v.as_str()),
+                    outputs,
+                );
+                let item = update_work_item_with_db(
+                    &self.db,
+                    item_id.clone(),
+                    UpdateWorkItem {
+                        title: render_optional_template(
+                            node.data.get("titleTemplate").and_then(|v| v.as_str()),
+                            outputs,
+                        ),
+                        description: render_optional_template(
+                            node.data.get("descriptionTemplate").and_then(|v| v.as_str()),
+                            outputs,
+                        ),
+                        kind,
+                        priority,
+                        labels,
+                        metadata: None,
+                    },
+                )
+                .await?;
+                self.sync_work_item_cloud(item.clone());
+                Ok(NodeOutcome {
+                    output: json!({
+                        "action": action,
+                        "itemId": item_id,
+                        "workItem": item,
+                    }),
+                    next_handle: None,
+                })
+            }
+            "move" => {
+                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
+                let status =
+                    parse_work_item_status(node.data.get("status").and_then(|v| v.as_str()))?;
+                let item =
+                    move_work_item_with_db(&self.db, item_id.clone(), status.clone(), None).await?;
+                self.sync_work_item_cloud(item.clone());
+                Ok(NodeOutcome {
+                    output: json!({
+                        "action": action,
+                        "itemId": item_id,
+                        "status": status,
+                        "workItem": item,
+                    }),
+                    next_handle: None,
+                })
+            }
+            "block" => {
+                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
+                let reason = render_required_field(&node.data, "reasonTemplate", action, outputs)?;
+                let item = block_work_item_with_db(&self.db, item_id.clone(), reason.clone()).await?;
+                self.sync_work_item_cloud(item.clone());
+                Ok(NodeOutcome {
+                    output: json!({
+                        "action": action,
+                        "itemId": item_id,
+                        "reason": reason,
+                        "workItem": item,
+                    }),
+                    next_handle: None,
+                })
+            }
+            "complete" => {
+                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
+                let item = complete_work_item_with_db(&self.db, item_id.clone()).await?;
+                self.sync_work_item_cloud(item.clone());
+                Ok(NodeOutcome {
+                    output: json!({
+                        "action": action,
+                        "itemId": item_id,
+                        "workItem": item,
+                    }),
+                    next_handle: None,
+                })
+            }
+            "comment" => {
+                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
+                let body = render_required_field(&node.data, "bodyTemplate", action, outputs)?;
+                let author = match render_optional_template(
+                    node.data.get("commentAuthorAgentId").and_then(|v| v.as_str()),
+                    outputs,
+                ) {
+                    Some(agent_id) => CommentAuthor::Agent { agent_id },
+                    None => CommentAuthor::User,
+                };
+                let comment =
+                    create_work_item_comment_with_db(&self.db, item_id.clone(), body.clone(), author)
+                        .await?;
+                self.sync_work_item_comment_cloud(comment.clone());
+                Ok(NodeOutcome {
+                    output: json!({
+                        "action": action,
+                        "itemId": item_id,
+                        "body": body,
+                        "comment": comment,
+                    }),
+                    next_handle: None,
+                })
+            }
+            "list_comments" => {
+                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
+                let comments = list_work_item_comments_with_db(&self.db, item_id.clone()).await?;
+                Ok(NodeOutcome {
+                    output: json!({
+                        "action": action,
+                        "itemId": item_id,
+                        "count": comments.len(),
+                        "comments": comments,
+                    }),
+                    next_handle: None,
+                })
+            }
+            "delete" => {
+                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
+                delete_work_item_with_db(&self.db, item_id.clone()).await?;
+                self.delete_work_item_cloud(item_id.clone());
+                Ok(NodeOutcome {
+                    output: json!({
+                        "action": action,
+                        "itemId": item_id,
+                        "deleted": true,
+                    }),
+                    next_handle: None,
+                })
+            }
+            "claim" => {
+                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
+                let agent_id =
+                    render_required_field(&node.data, "assigneeAgentId", action, outputs)?;
+                let item =
+                    claim_work_item_with_db(&self.db, item_id.clone(), agent_id.clone()).await?;
+                self.sync_work_item_cloud(item.clone());
+                Ok(NodeOutcome {
+                    output: json!({
+                        "action": action,
+                        "itemId": item_id,
+                        "agentId": agent_id,
+                        "workItem": item,
+                    }),
+                    next_handle: None,
+                })
+            }
+            other => Err(format!("board.work_item has unsupported action '{}'", other)),
         }
+    }
 
-        let title = render_template(&title_template, outputs).trim().to_string();
-        if title.is_empty() {
-            return Err("board.work_item.create rendered an empty title".to_string());
-        }
-
-        let description = render_optional_template(
-            node.data.get("descriptionTemplate").and_then(|v| v.as_str()),
-            outputs,
-        );
-        let assignee_agent_id = render_optional_template(
-            node.data.get("assigneeAgentId").and_then(|v| v.as_str()),
-            outputs,
-        );
-        let parent_work_item_id = render_optional_template(
-            node.data.get("parentWorkItemId").and_then(|v| v.as_str()),
-            outputs,
-        );
-        let labels = parse_work_item_labels(
-            node.data.get("labelsText").and_then(|v| v.as_str()),
-            outputs,
-        );
-
-        let kind = node
-            .data
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .unwrap_or("task")
-            .to_string();
-        if !matches!(kind.as_str(), "task" | "bug" | "story" | "spike" | "chore") {
-            return Err(format!(
-                "board.work_item.create has invalid kind '{}'",
-                kind
-            ));
-        }
-
-        let status = node
-            .data
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("backlog")
-            .to_string();
-        if !matches!(
-            status.as_str(),
-            "backlog" | "todo" | "in_progress" | "review" | "done" | "cancelled"
-        ) {
-            return Err(format!(
-                "board.work_item.create has invalid status '{}'",
-                status
-            ));
-        }
-
-        let priority = node
-            .data
-            .get("priority")
-            .and_then(json_number_to_i64)
-            .unwrap_or(0)
-            .clamp(0, 3);
-
-        let payload = CreateWorkItem {
-            project_id: project_id.to_string(),
-            title: title.clone(),
-            description: description.clone(),
-            kind: Some(kind.clone()),
-            status: Some(status.clone()),
-            priority: Some(priority),
-            assignee_agent_id: assignee_agent_id.clone(),
-            created_by_agent_id: None,
-            parent_work_item_id: parent_work_item_id.clone(),
-            position: None,
-            labels: Some(labels.clone()),
-            metadata: Some(json!({
-                "source": "workflow",
-                "workflowRunId": run_id,
-                "workflowNodeId": node.id,
-            })),
-        };
-
-        let item = create_work_item_with_db(&self.db, payload).await?;
+    fn sync_work_item_cloud(&self, item: crate::models::work_item::WorkItem) {
         if let Some(client) = self.app.state::<CloudClientState>().get() {
-            let work_item = item.clone();
             tokio::spawn(async move {
-                if let Err(e) = client.upsert_work_item(&work_item).await {
+                if let Err(e) = client.upsert_work_item(&item).await {
                     tracing::warn!("cloud upsert work_item (workflow): {}", e);
                 }
             });
         }
+    }
 
-        Ok(NodeOutcome {
-            output: json!({
-                "title": title,
-                "description": description,
-                "kind": kind,
-                "status": status,
-                "priority": priority,
-                "labels": labels,
-                "assigneeAgentId": assignee_agent_id,
-                "parentWorkItemId": parent_work_item_id,
-                "workItem": item,
-            }),
-            next_handle: None,
-        })
+    fn sync_work_item_comment_cloud(&self, comment: crate::models::work_item_comment::WorkItemComment) {
+        if let Some(client) = self.app.state::<CloudClientState>().get() {
+            tokio::spawn(async move {
+                if let Err(e) = client.upsert_work_item_comment(&comment).await {
+                    tracing::warn!("cloud upsert work_item_comment (workflow): {}", e);
+                }
+            });
+        }
+    }
+
+    fn delete_work_item_cloud(&self, id: String) {
+        if let Some(client) = self.app.state::<CloudClientState>().get() {
+            tokio::spawn(async move {
+                if let Err(e) = client.delete_by_id("work_items", &id).await {
+                    tracing::warn!("cloud delete work_item (workflow): {}", e);
+                }
+            });
+        }
     }
 
     // ── Persistence helpers ─────────────────────────────────────────────────
@@ -719,6 +932,37 @@ fn render_optional_template(template: Option<&str>, outputs: &Value) -> Option<S
         .filter(|value| !value.is_empty())
 }
 
+fn required_template(
+    data: &Value,
+    field: &str,
+    action: &str,
+) -> Result<String, String> {
+    data.get(field)
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("board.work_item {} requires data.{}", action, field))
+}
+
+fn render_required_field(
+    data: &Value,
+    field: &str,
+    action: &str,
+    outputs: &Value,
+) -> Result<String, String> {
+    let template = required_template(data, field, action)?;
+    let rendered = render_template(&template, outputs).trim().to_string();
+    if rendered.is_empty() {
+        Err(format!(
+            "board.work_item {} rendered an empty {}",
+            action, field
+        ))
+    } else {
+        Ok(rendered)
+    }
+}
+
 fn parse_work_item_labels(template: Option<&str>, outputs: &Value) -> Vec<String> {
     let Some(rendered) = render_optional_template(template, outputs) else {
         return Vec::new();
@@ -730,6 +974,56 @@ fn parse_work_item_labels(template: Option<&str>, outputs: &Value) -> Vec<String
         .filter(|label| !label.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+fn optional_labels(template: Option<&str>, outputs: &Value) -> Option<Vec<String>> {
+    template.map(|_| parse_work_item_labels(template, outputs))
+}
+
+fn parse_work_item_kind(value: Option<&str>) -> Result<String, String> {
+    let kind = value.map(str::trim).filter(|value| !value.is_empty()).unwrap_or("task");
+    if matches!(kind, "task" | "bug" | "story" | "spike" | "chore") {
+        Ok(kind.to_string())
+    } else {
+        Err(format!("board.work_item has invalid kind '{}'", kind))
+    }
+}
+
+fn parse_optional_work_item_kind(value: Option<&str>) -> Result<Option<String>, String> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some("any") | Some("all") | None => Ok(None),
+        Some(kind) => parse_work_item_kind(Some(kind)).map(Some),
+    }
+}
+
+fn parse_work_item_status(value: Option<&str>) -> Result<String, String> {
+    let status = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("backlog");
+    if matches!(
+        status,
+        "backlog" | "todo" | "in_progress" | "blocked" | "review" | "done" | "cancelled"
+    ) {
+        Ok(status.to_string())
+    } else {
+        Err(format!("board.work_item has invalid status '{}'", status))
+    }
+}
+
+fn parse_optional_work_item_status(value: Option<&str>) -> Result<Option<String>, String> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some("any") | Some("all") | None => Ok(None),
+        Some(status) => parse_work_item_status(Some(status)).map(Some),
+    }
+}
+
+fn parse_priority(value: Option<&Value>) -> i64 {
+    value.and_then(json_number_to_i64).unwrap_or(0)
+}
+
+fn parse_optional_priority(value: Option<&Value>) -> Option<i64> {
+    value.and_then(json_number_to_i64).map(|priority| priority.clamp(0, 3))
 }
 
 fn json_number_to_i64(value: &Value) -> Option<i64> {

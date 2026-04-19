@@ -33,6 +33,32 @@ const CREATE_STATUS_OPTIONS: Array<{ value: Exclude<WorkItemStatus, 'blocked'>; 
   { value: 'cancelled', label: 'Cancelled' },
 ];
 
+const ALL_STATUS_OPTIONS: Array<{ value: WorkItemStatus; label: string }> = [
+  { value: 'backlog', label: 'Backlog' },
+  { value: 'todo', label: 'Todo' },
+  { value: 'in_progress', label: 'In progress' },
+  { value: 'blocked', label: 'Blocked' },
+  { value: 'review', label: 'Review' },
+  { value: 'done', label: 'Done' },
+  { value: 'cancelled', label: 'Cancelled' },
+];
+
+const WORK_ITEM_ACTION_OPTIONS = [
+  { value: 'create', label: 'Create' },
+  { value: 'list', label: 'List' },
+  { value: 'get', label: 'Get by ID' },
+  { value: 'update', label: 'Update' },
+  { value: 'move', label: 'Move status' },
+  { value: 'block', label: 'Block' },
+  { value: 'complete', label: 'Complete' },
+  { value: 'comment', label: 'Comment' },
+  { value: 'list_comments', label: 'List comments' },
+  { value: 'claim', label: 'Claim' },
+  { value: 'delete', label: 'Delete' },
+] as const;
+
+type WorkItemNodeAction = (typeof WORK_ITEM_ACTION_OPTIONS)[number]['value'];
+
 export function NodeInspector({ node, projectId, onChangeData, onDelete }: Props) {
   if (!node) {
     return (
@@ -74,7 +100,7 @@ export function NodeInspector({ node, projectId, onChangeData, onDelete }: Props
         {node.type === 'logic.if' && <LogicIfInspector data={data} onUpdate={update} />}
 
         {node.type === 'board.work_item.create' && (
-          <WorkItemCreateInspector
+          <WorkItemInspector
             data={data}
             projectId={projectId}
             onUpdate={update}
@@ -205,7 +231,7 @@ function LogicIfInspector({
   );
 }
 
-function WorkItemCreateInspector({
+function WorkItemInspector({
   data,
   projectId,
   onUpdate,
@@ -219,139 +245,313 @@ function WorkItemCreateInspector({
     queryFn: () => projectsApi.listAgents(projectId),
   });
 
+  const action = ((data.action as WorkItemNodeAction | undefined) ?? 'create') as WorkItemNodeAction;
+  const itemIdTemplate = (data.itemIdTemplate as string) ?? '';
   const titleTemplate = (data.titleTemplate as string) ?? '';
   const descriptionTemplate = (data.descriptionTemplate as string) ?? '';
   const kind = ((data.kind as WorkItemKind | undefined) ?? 'task') as WorkItemKind;
-  const status =
-    ((data.status as Exclude<WorkItemStatus, 'blocked'> | undefined) ?? 'backlog') as Exclude<
-      WorkItemStatus,
-      'blocked'
-    >;
+  const status = ((data.status as WorkItemStatus | undefined) ?? 'backlog') as WorkItemStatus;
   const priorityValue = data.priority;
   const priority =
     typeof priorityValue === 'number' && Number.isFinite(priorityValue) ? priorityValue : 0;
   const labelsText = (data.labelsText as string) ?? '';
   const assigneeAgentId = (data.assigneeAgentId as string) ?? '';
   const parentWorkItemId = (data.parentWorkItemId as string) ?? '';
+  const reasonTemplate = (data.reasonTemplate as string) ?? '';
+  const bodyTemplate = (data.bodyTemplate as string) ?? '';
+  const commentAuthorAgentId = (data.commentAuthorAgentId as string) ?? '';
+  const listColumn = ((data.listColumn as string | undefined) ?? (data.listStatus as string | undefined) ?? 'all') as string;
+  const listStatus = ((data.listStatus as string | undefined) ?? 'all') as string;
+  const listKind = ((data.listKind as string | undefined) ?? 'all') as string;
+  const listAssignee = (data.listAssignee as string) ?? '';
+  const limitValue = data.limit;
+  const limit = typeof limitValue === 'number' && Number.isFinite(limitValue) ? limitValue : 25;
+
+  const showItemId = action !== 'create' && action !== 'list';
+  const showTitle = action === 'create' || action === 'update';
+  const showDescription = action === 'create' || action === 'update';
+  const showKind = action === 'create' || action === 'update' || action === 'list';
+  const showStatus = action === 'create' || action === 'move' || action === 'list';
+  const showPriority = action === 'create' || action === 'update';
+  const showLabels = action === 'create' || action === 'update';
+  const showAssignee = action === 'create' || action === 'claim';
+  const showParent = action === 'create';
+  const showReason = action === 'block';
+  const showBody = action === 'comment';
+  const showCommentAuthor = action === 'comment';
+  const showListAssignee = action === 'list';
+  const showLimit = action === 'list';
 
   return (
     <div className="space-y-3">
       <p className="text-[10px] text-muted">
-        Creates a board card in this workflow&apos;s project. Template fields can reference earlier
-        node outputs like <span className="font-mono">{`{{trigger.data.subject}}`}</span> or{' '}
+        Interacts with this workflow&apos;s board. Template fields can reference earlier node
+        outputs like <span className="font-mono">{`{{trigger.data.subject}}`}</span> or{' '}
         <span className="font-mono">{`{{nodeId.output.parsed.title}}`}</span>.
       </p>
 
       <div className="space-y-1.5">
-        <label className="text-[11px] uppercase tracking-wider text-muted">Title template</label>
-        <textarea
-          value={titleTemplate}
-          onChange={(e) => onUpdate({ titleTemplate: e.target.value })}
-          rows={3}
-          placeholder="Follow up on {{agentNode.output.parsed.customerName}}"
-          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <label className="text-[11px] uppercase tracking-wider text-muted">
-          Description template
-        </label>
-        <textarea
-          value={descriptionTemplate}
-          onChange={(e) => onUpdate({ descriptionTemplate: e.target.value })}
-          rows={6}
-          placeholder={`Customer summary:\n{{agentNode.output.text}}`}
-          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
-        />
-      </div>
-
-      <div className="grid grid-cols-3 gap-2">
-        <div className="space-y-1.5">
-          <label className="text-[11px] uppercase tracking-wider text-muted">Kind</label>
-          <select
-            value={kind}
-            onChange={(e) => onUpdate({ kind: e.target.value })}
-            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-          >
-            {WORK_ITEM_KIND_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="space-y-1.5">
-          <label className="text-[11px] uppercase tracking-wider text-muted">Status</label>
-          <select
-            value={status}
-            onChange={(e) => onUpdate({ status: e.target.value })}
-            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-          >
-            {CREATE_STATUS_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="space-y-1.5">
-          <label className="text-[11px] uppercase tracking-wider text-muted">Priority</label>
-          <select
-            value={String(priority)}
-            onChange={(e) => onUpdate({ priority: Number(e.target.value) })}
-            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-          >
-            <option value="0">Low</option>
-            <option value="1">Normal</option>
-            <option value="2">High</option>
-            <option value="3">Urgent</option>
-          </select>
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <label className="text-[11px] uppercase tracking-wider text-muted">
-          Labels (comma or newline separated)
-        </label>
-        <textarea
-          value={labelsText}
-          onChange={(e) => onUpdate({ labelsText: e.target.value })}
-          rows={3}
-          placeholder="workflow, customer, {{trigger.data.channel}}"
-          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <label className="text-[11px] uppercase tracking-wider text-muted">Assignee</label>
+        <label className="text-[11px] uppercase tracking-wider text-muted">Action</label>
         <select
-          value={assigneeAgentId}
-          onChange={(e) => onUpdate({ assigneeAgentId: e.target.value })}
+          value={action}
+          onChange={(e) => onUpdate({ action: e.target.value })}
           className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
         >
-          <option value="">Unassigned</option>
-          {projectAgents.map((agent) => (
-            <option key={agent.id} value={agent.id}>
-              {agent.name}
+          {WORK_ITEM_ACTION_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
             </option>
           ))}
         </select>
       </div>
 
+      {showItemId && (
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">Work item ID</label>
+          <input
+            value={itemIdTemplate}
+            onChange={(e) => onUpdate({ itemIdTemplate: e.target.value })}
+            placeholder="{{someNode.output.workItem.id}}"
+            className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono"
+          />
+        </div>
+      )}
+
       <div className="space-y-1.5">
-        <label className="text-[11px] uppercase tracking-wider text-muted">
-          Parent work item ID
-        </label>
-        <input
-          value={parentWorkItemId}
-          onChange={(e) => onUpdate({ parentWorkItemId: e.target.value })}
-          placeholder="Optional parent card id or template"
-          className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono"
-        />
+        {showTitle && (
+          <>
+            <label className="text-[11px] uppercase tracking-wider text-muted">Title template</label>
+            <textarea
+              value={titleTemplate}
+              onChange={(e) => onUpdate({ titleTemplate: e.target.value })}
+              rows={3}
+              placeholder="Follow up on {{agentNode.output.parsed.customerName}}"
+              className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+            />
+          </>
+        )}
       </div>
+
+      {showDescription && (
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">
+            Description template
+          </label>
+          <textarea
+            value={descriptionTemplate}
+            onChange={(e) => onUpdate({ descriptionTemplate: e.target.value })}
+            rows={6}
+            placeholder={`Customer summary:\n{{agentNode.output.text}}`}
+            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+          />
+        </div>
+      )}
+
+      {(showKind || showStatus || showPriority) && (
+        <div className="grid grid-cols-3 gap-2">
+          {showKind && (
+            <div className="space-y-1.5">
+              <label className="text-[11px] uppercase tracking-wider text-muted">
+                {action === 'list' ? 'Kind filter' : 'Kind'}
+              </label>
+              <select
+                value={action === 'list' ? listKind || 'all' : kind || 'task'}
+                onChange={(e) =>
+                  onUpdate(action === 'list' ? { listKind: e.target.value } : { kind: e.target.value })
+                }
+                className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+              >
+                {action === 'list' && <option value="all">All kinds</option>}
+                {WORK_ITEM_KIND_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {showStatus && (
+            <div className="space-y-1.5">
+              <label className="text-[11px] uppercase tracking-wider text-muted">
+                {action === 'list' ? 'Board column' : 'Status'}
+              </label>
+              <select
+                value={action === 'list' ? listColumn || listStatus || 'all' : status || 'backlog'}
+                onChange={(e) =>
+                  onUpdate(
+                    action === 'list'
+                      ? { listColumn: e.target.value, listStatus: e.target.value }
+                      : { status: e.target.value },
+                  )
+                }
+                className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+              >
+                {action === 'list' ? (
+                  <>
+                    <option value="all">All columns</option>
+                    {ALL_STATUS_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </>
+                ) : (
+                  (action === 'move' ? ALL_STATUS_OPTIONS : CREATE_STATUS_OPTIONS).map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
+          )}
+
+          {showPriority && (
+            <div className="space-y-1.5">
+              <label className="text-[11px] uppercase tracking-wider text-muted">Priority</label>
+              <select
+                value={String(priority)}
+                onChange={(e) => onUpdate({ priority: Number(e.target.value) })}
+                className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+              >
+                <option value="0">Low</option>
+                <option value="1">Normal</option>
+                <option value="2">High</option>
+                <option value="3">Urgent</option>
+              </select>
+            </div>
+          )}
+        </div>
+      )}
+
+      {showLabels && (
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">
+            Labels (comma or newline separated)
+          </label>
+          <textarea
+            value={labelsText}
+            onChange={(e) => onUpdate({ labelsText: e.target.value })}
+            rows={3}
+            placeholder="workflow, customer, {{trigger.data.channel}}"
+            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+          />
+        </div>
+      )}
+
+      {showAssignee && (
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">
+            {action === 'claim' ? 'Agent to claim with' : 'Assignee'}
+          </label>
+          <select
+            value={assigneeAgentId}
+            onChange={(e) => onUpdate({ assigneeAgentId: e.target.value })}
+            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+          >
+            {action !== 'claim' && <option value="">Unassigned</option>}
+            {projectAgents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {showParent && (
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">
+            Parent work item ID
+          </label>
+          <input
+            value={parentWorkItemId}
+            onChange={(e) => onUpdate({ parentWorkItemId: e.target.value })}
+            placeholder="Optional parent card id or template"
+            className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono"
+          />
+        </div>
+      )}
+
+      {showReason && (
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">Blocked reason</label>
+          <textarea
+            value={reasonTemplate}
+            onChange={(e) => onUpdate({ reasonTemplate: e.target.value })}
+            rows={4}
+            placeholder="Waiting on {{agentNode.output.parsed.owner}}"
+            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+          />
+        </div>
+      )}
+
+      {showBody && (
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">Comment body</label>
+          <textarea
+            value={bodyTemplate}
+            onChange={(e) => onUpdate({ bodyTemplate: e.target.value })}
+            rows={5}
+            placeholder="Summarized findings:\n{{agentNode.output.text}}"
+            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+          />
+        </div>
+      )}
+
+      {showCommentAuthor && (
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">
+            Comment author agent ID
+          </label>
+          <select
+            value={commentAuthorAgentId}
+            onChange={(e) => onUpdate({ commentAuthorAgentId: e.target.value })}
+            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+          >
+            <option value="">Workflow user</option>
+            {projectAgents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {showListAssignee && (
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">Assignee filter</label>
+          <select
+            value={listAssignee}
+            onChange={(e) => onUpdate({ listAssignee: e.target.value })}
+            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+          >
+            <option value="">Any assignee</option>
+            <option value="none">Unassigned only</option>
+            {projectAgents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {showLimit && (
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">Result limit</label>
+          <input
+            type="number"
+            min={1}
+            max={500}
+            value={limit}
+            onChange={(e) => onUpdate({ limit: Number(e.target.value) || 25 })}
+            className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent"
+          />
+        </div>
+      )}
     </div>
   );
 }

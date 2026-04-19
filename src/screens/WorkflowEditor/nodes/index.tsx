@@ -61,15 +61,29 @@ export function WorkItemNode({ data, type, selected }: NodeProps) {
   const meta = nodeMeta(type);
   const Icon = meta?.icon;
   const d = data as {
+    action?: string;
+    itemIdTemplate?: string;
     titleTemplate?: string;
     kind?: string;
     status?: string;
     priority?: number;
     assigneeAgentId?: string;
+    listColumn?: string;
+    listStatus?: string;
+    listKind?: string;
   };
+  const action = d.action || 'create';
+  const listColumn = d.listColumn || d.listStatus;
 
   const priorityLabel =
     d.priority === 3 ? 'urgent' : d.priority === 2 ? 'high' : d.priority === 1 ? 'normal' : 'low';
+
+  const summary =
+    action === 'create'
+      ? d.titleTemplate?.trim() || '(title template required)'
+      : action === 'list'
+        ? `list ${listColumn && listColumn !== 'all' ? listColumn : 'all'} items`
+        : d.itemIdTemplate?.trim() || '(work item id required)';
 
   return (
     <div className={`${NODE_BASE} ${selected ? 'border-accent' : 'border-edge'}`}>
@@ -82,14 +96,32 @@ export function WorkItemNode({ data, type, selected }: NodeProps) {
       </div>
       <div className="px-3 py-2 space-y-1">
         <p className="text-white text-[11px] line-clamp-2">
-          {d.titleTemplate?.trim() || '(title template required)'}
+          {summary}
         </p>
         <div className="flex items-center gap-2 text-[10px] text-muted font-mono">
-          <span>{d.kind || 'task'}</span>
-          <span>·</span>
-          <span>{d.status || 'backlog'}</span>
-          <span>·</span>
-          <span>{priorityLabel}</span>
+          <span>{action}</span>
+          {action === 'create' ? (
+            <>
+              <span>·</span>
+              <span>{d.kind || 'task'}</span>
+              <span>·</span>
+              <span>{d.status || 'backlog'}</span>
+              <span>·</span>
+              <span>{priorityLabel}</span>
+            </>
+          ) : action === 'update' ? (
+            <>
+              <span>·</span>
+              <span>{d.kind || 'task'}</span>
+              <span>·</span>
+              <span>{priorityLabel}</span>
+            </>
+          ) : action === 'list' ? (
+            <>
+              <span>·</span>
+              <span>{d.listKind || 'all kinds'}</span>
+            </>
+          ) : null}
         </div>
         {d.assigneeAgentId && (
           <p className="text-muted text-[10px]">

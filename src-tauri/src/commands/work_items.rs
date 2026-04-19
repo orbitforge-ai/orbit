@@ -163,6 +163,348 @@ pub async fn create_work_item_with_db(
     .map_err(|e| e.to_string())?
 }
 
+pub async fn list_work_items_with_db(
+    db: &DbPool,
+    project_id: String,
+) -> Result<Vec<WorkItem>, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let sql = format!(
+            "SELECT {} FROM work_items WHERE project_id = ?1
+             ORDER BY status, position ASC",
+            WORK_ITEM_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let items = stmt
+            .query_map(params![project_id], map_work_item)
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(items)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn get_work_item_with_db(db: &DbPool, id: String) -> Result<WorkItem, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
+        conn.query_row(&sql, params![id], map_work_item)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn update_work_item_with_db(
+    db: &DbPool,
+    id: String,
+    payload: UpdateWorkItem,
+) -> Result<WorkItem, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        if let Some(title) = &payload.title {
+            if title.trim().is_empty() {
+                return Err("work_item: title must be non-empty".into());
+            }
+            conn.execute(
+                "UPDATE work_items SET title = ?1, updated_at = ?2 WHERE id = ?3",
+                params![title, now, id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if let Some(description) = &payload.description {
+            conn.execute(
+                "UPDATE work_items SET description = ?1, updated_at = ?2 WHERE id = ?3",
+                params![description, now, id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if let Some(kind) = &payload.kind {
+            conn.execute(
+                "UPDATE work_items SET kind = ?1, updated_at = ?2 WHERE id = ?3",
+                params![kind, now, id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if let Some(priority) = payload.priority {
+            conn.execute(
+                "UPDATE work_items SET priority = ?1, updated_at = ?2 WHERE id = ?3",
+                params![priority, now, id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if let Some(labels) = &payload.labels {
+            let labels_json = serde_json::to_string(labels).map_err(|e| e.to_string())?;
+            conn.execute(
+                "UPDATE work_items SET labels = ?1, updated_at = ?2 WHERE id = ?3",
+                params![labels_json, now, id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if let Some(metadata) = &payload.metadata {
+            let metadata_json = serde_json::to_string(metadata).map_err(|e| e.to_string())?;
+            conn.execute(
+                "UPDATE work_items SET metadata = ?1, updated_at = ?2 WHERE id = ?3",
+                params![metadata_json, now, id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
+        conn.query_row(&sql, params![id], map_work_item)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn delete_work_item_with_db(db: &DbPool, id: String) -> Result<(), String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM work_items WHERE id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn claim_work_item_with_db(
+    db: &DbPool,
+    id: String,
+    agent_id: String,
+) -> Result<WorkItem, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE work_items
+                SET assignee_agent_id = ?1,
+                    status = 'in_progress',
+                    started_at = COALESCE(started_at, ?2),
+                    updated_at = ?2
+              WHERE id = ?3",
+            params![agent_id, now, id],
+        )
+        .map_err(|e| e.to_string())?;
+
+        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
+        conn.query_row(&sql, params![id], map_work_item)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn move_work_item_with_db(
+    db: &DbPool,
+    id: String,
+    status: String,
+    position: Option<f64>,
+) -> Result<WorkItem, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        let current_status: String = conn
+            .query_row(
+                "SELECT status FROM work_items WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let project_id: String = conn
+            .query_row(
+                "SELECT project_id FROM work_items WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+
+        if status == "blocked" {
+            let reason_ok: bool = conn
+                .query_row(
+                    "SELECT blocked_reason IS NOT NULL AND length(blocked_reason) > 0
+                       FROM work_items WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if !reason_ok {
+                return Err(
+                    "work_item: moving to 'blocked' requires a non-empty blocked_reason; use block() first"
+                        .into(),
+                );
+            }
+        }
+
+        let position = match position {
+            Some(p) => p,
+            None => {
+                let max: Option<f64> = conn
+                    .query_row(
+                        "SELECT MAX(position) FROM work_items WHERE project_id = ?1 AND status = ?2",
+                        params![project_id, status],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|e| e.to_string())?
+                    .flatten();
+                max.unwrap_or(0.0) + 1024.0
+            }
+        };
+
+        let started_at_expr = if current_status != "in_progress" && status == "in_progress" {
+            "COALESCE(started_at, ?4)"
+        } else {
+            "started_at"
+        };
+        let completed_at_expr = if status == "done" || status == "cancelled" {
+            "?4"
+        } else {
+            "completed_at"
+        };
+
+        let sql = format!(
+            "UPDATE work_items
+                SET status = ?1,
+                    position = ?2,
+                    started_at = {},
+                    completed_at = {},
+                    updated_at = ?4
+              WHERE id = ?3",
+            started_at_expr, completed_at_expr
+        );
+        conn.execute(&sql, params![status, position, id, now])
+            .map_err(|e| e.to_string())?;
+
+        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
+        conn.query_row(&sql, params![id], map_work_item)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn block_work_item_with_db(
+    db: &DbPool,
+    id: String,
+    reason: String,
+) -> Result<WorkItem, String> {
+    if reason.trim().is_empty() {
+        return Err("work_item: blocked_reason must be non-empty".into());
+    }
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE work_items
+                SET status = 'blocked', blocked_reason = ?1, updated_at = ?2
+              WHERE id = ?3",
+            params![reason, now, id],
+        )
+        .map_err(|e| e.to_string())?;
+        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
+        conn.query_row(&sql, params![id], map_work_item)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn complete_work_item_with_db(db: &DbPool, id: String) -> Result<WorkItem, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE work_items
+                SET status = 'done',
+                    completed_at = ?1,
+                    blocked_reason = NULL,
+                    updated_at = ?1
+              WHERE id = ?2",
+            params![now, id],
+        )
+        .map_err(|e| e.to_string())?;
+        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
+        conn.query_row(&sql, params![id], map_work_item)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn list_work_item_comments_with_db(
+    db: &DbPool,
+    work_item_id: String,
+) -> Result<Vec<WorkItemComment>, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let sql = format!(
+            "SELECT {} FROM work_item_comments WHERE work_item_id = ?1 ORDER BY created_at ASC",
+            WORK_ITEM_COMMENT_COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let comments = stmt
+            .query_map(params![work_item_id], map_work_item_comment)
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(comments)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub async fn create_work_item_comment_with_db(
+    db: &DbPool,
+    work_item_id: String,
+    body: String,
+    author: CommentAuthor,
+) -> Result<WorkItemComment, String> {
+    if body.trim().is_empty() {
+        return Err("work_item_comment: body must be non-empty".into());
+    }
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || -> Result<WorkItemComment, String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let id = Ulid::new().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let (author_kind, author_agent_id) = match author {
+            CommentAuthor::User => ("user", None),
+            CommentAuthor::Agent { agent_id } => ("agent", Some(agent_id)),
+        };
+        conn.execute(
+            "INSERT INTO work_item_comments (
+                id, work_item_id, author_kind, author_agent_id, body, created_at, updated_at
+             ) VALUES (?1,?2,?3,?4,?5,?6,?6)",
+            params![id, work_item_id, author_kind, author_agent_id, body, now],
+        )
+        .map_err(|e| e.to_string())?;
+        let sql = format!(
+            "SELECT {} FROM work_item_comments WHERE id = ?1",
+            WORK_ITEM_COMMENT_COLUMNS
+        );
+        conn.query_row(&sql, params![id], map_work_item_comment)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // ── Scope guard: reject cross-project agent writes ────────────────────────────
 //
 // Called from the agent tool path before any read or write. Ensures an agent
@@ -233,37 +575,12 @@ pub async fn list_work_items(
     project_id: String,
     db: tauri::State<'_, DbPool>,
 ) -> Result<Vec<WorkItem>, String> {
-    let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let sql = format!(
-            "SELECT {} FROM work_items WHERE project_id = ?1
-             ORDER BY status, position ASC",
-            WORK_ITEM_COLUMNS
-        );
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let items = stmt
-            .query_map(params![project_id], map_work_item)
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(items)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    list_work_items_with_db(db.inner(), project_id).await
 }
 
 #[tauri::command]
 pub async fn get_work_item(id: String, db: tauri::State<'_, DbPool>) -> Result<WorkItem, String> {
-    let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
-        conn.query_row(&sql, params![id], map_work_item)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    get_work_item_with_db(db.inner(), id).await
 }
 
 #[tauri::command]
@@ -287,65 +604,7 @@ pub async fn update_work_item(
     cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<WorkItem, String> {
     let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
-    let item = tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-
-        if let Some(title) = &payload.title {
-            if title.trim().is_empty() {
-                return Err("work_item: title must be non-empty".into());
-            }
-            conn.execute(
-                "UPDATE work_items SET title = ?1, updated_at = ?2 WHERE id = ?3",
-                params![title, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if let Some(description) = &payload.description {
-            conn.execute(
-                "UPDATE work_items SET description = ?1, updated_at = ?2 WHERE id = ?3",
-                params![description, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if let Some(kind) = &payload.kind {
-            conn.execute(
-                "UPDATE work_items SET kind = ?1, updated_at = ?2 WHERE id = ?3",
-                params![kind, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if let Some(priority) = payload.priority {
-            conn.execute(
-                "UPDATE work_items SET priority = ?1, updated_at = ?2 WHERE id = ?3",
-                params![priority, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if let Some(labels) = &payload.labels {
-            let labels_json = serde_json::to_string(labels).map_err(|e| e.to_string())?;
-            conn.execute(
-                "UPDATE work_items SET labels = ?1, updated_at = ?2 WHERE id = ?3",
-                params![labels_json, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if let Some(metadata) = &payload.metadata {
-            let metadata_json = serde_json::to_string(metadata).map_err(|e| e.to_string())?;
-            conn.execute(
-                "UPDATE work_items SET metadata = ?1, updated_at = ?2 WHERE id = ?3",
-                params![metadata_json, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-
-        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
-        conn.query_row(&sql, params![id], map_work_item)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let item = update_work_item_with_db(db.inner(), id, payload).await?;
 
     cloud_upsert_work_item!(cloud, item);
     Ok(item)
@@ -358,16 +617,7 @@ pub async fn delete_work_item(
     cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
     let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
-    let id_clone = id.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM work_items WHERE id = ?1", params![id_clone])
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    delete_work_item_with_db(db.inner(), id.clone()).await?;
 
     cloud_delete!(cloud, "work_items", id);
     Ok(())
@@ -381,27 +631,7 @@ pub async fn claim_work_item(
     cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<WorkItem, String> {
     let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
-    let item = tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE work_items
-                SET assignee_agent_id = ?1,
-                    status = 'in_progress',
-                    started_at = COALESCE(started_at, ?2),
-                    updated_at = ?2
-              WHERE id = ?3",
-            params![agent_id, now, id],
-        )
-        .map_err(|e| e.to_string())?;
-
-        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
-        conn.query_row(&sql, params![id], map_work_item)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let item = claim_work_item_with_db(db.inner(), id, agent_id).await?;
 
     cloud_upsert_work_item!(cloud, item);
     Ok(item)
@@ -416,92 +646,7 @@ pub async fn move_work_item(
     cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<WorkItem, String> {
     let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
-    let item = tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-
-        let current_status: String = conn
-            .query_row(
-                "SELECT status FROM work_items WHERE id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        let project_id: String = conn
-            .query_row(
-                "SELECT project_id FROM work_items WHERE id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-
-        if status == "blocked" {
-            let reason_ok: bool = conn
-                .query_row(
-                    "SELECT blocked_reason IS NOT NULL AND length(blocked_reason) > 0
-                       FROM work_items WHERE id = ?1",
-                    params![id],
-                    |row| row.get(0),
-                )
-                .map_err(|e| e.to_string())?;
-            if !reason_ok {
-                return Err(
-                    "work_item: moving to 'blocked' requires a non-empty blocked_reason; use block() first"
-                        .into(),
-                );
-            }
-        }
-
-        let position = match position {
-            Some(p) => p,
-            None => {
-                let max: Option<f64> = conn
-                    .query_row(
-                        "SELECT MAX(position) FROM work_items WHERE project_id = ?1 AND status = ?2",
-                        params![project_id, status],
-                        |row| row.get(0),
-                    )
-                    .optional()
-                    .map_err(|e| e.to_string())?
-                    .flatten();
-                max.unwrap_or(0.0) + 1024.0
-            }
-        };
-
-        // Stamp transition markers
-        let started_at_expr = if current_status != "in_progress" && status == "in_progress" {
-            "COALESCE(started_at, ?4)"
-        } else {
-            "started_at"
-        };
-        let completed_at_expr = if status == "done" {
-            "?4"
-        } else if status == "cancelled" {
-            "?4"
-        } else {
-            "completed_at"
-        };
-
-        let sql = format!(
-            "UPDATE work_items
-                SET status = ?1,
-                    position = ?2,
-                    started_at = {},
-                    completed_at = {},
-                    updated_at = ?4
-              WHERE id = ?3",
-            started_at_expr, completed_at_expr
-        );
-        conn.execute(&sql, params![status, position, id, now])
-            .map_err(|e| e.to_string())?;
-
-        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
-        conn.query_row(&sql, params![id], map_work_item)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let item = move_work_item_with_db(db.inner(), id, status, position).await?;
 
     cloud_upsert_work_item!(cloud, item);
     Ok(item)
@@ -543,27 +688,8 @@ pub async fn block_work_item(
     db: tauri::State<'_, DbPool>,
     cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<WorkItem, String> {
-    if reason.trim().is_empty() {
-        return Err("work_item: blocked_reason must be non-empty".into());
-    }
     let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
-    let item = tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE work_items
-                SET status = 'blocked', blocked_reason = ?1, updated_at = ?2
-              WHERE id = ?3",
-            params![reason, now, id],
-        )
-        .map_err(|e| e.to_string())?;
-        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
-        conn.query_row(&sql, params![id], map_work_item)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let item = block_work_item_with_db(db.inner(), id, reason).await?;
 
     cloud_upsert_work_item!(cloud, item);
     Ok(item)
@@ -576,26 +702,7 @@ pub async fn complete_work_item(
     cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<WorkItem, String> {
     let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
-    let item = tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE work_items
-                SET status = 'done',
-                    completed_at = ?1,
-                    blocked_reason = NULL,
-                    updated_at = ?1
-              WHERE id = ?2",
-            params![now, id],
-        )
-        .map_err(|e| e.to_string())?;
-        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
-        conn.query_row(&sql, params![id], map_work_item)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let item = complete_work_item_with_db(db.inner(), id).await?;
 
     cloud_upsert_work_item!(cloud, item);
     Ok(item)
@@ -608,23 +715,7 @@ pub async fn list_work_item_comments(
     work_item_id: String,
     db: tauri::State<'_, DbPool>,
 ) -> Result<Vec<WorkItemComment>, String> {
-    let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let sql = format!(
-            "SELECT {} FROM work_item_comments WHERE work_item_id = ?1 ORDER BY created_at ASC",
-            WORK_ITEM_COMMENT_COLUMNS
-        );
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let comments = stmt
-            .query_map(params![work_item_id], map_work_item_comment)
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(comments)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    list_work_item_comments_with_db(db.inner(), work_item_id).await
 }
 
 #[tauri::command]
@@ -635,35 +726,8 @@ pub async fn create_work_item_comment(
     db: tauri::State<'_, DbPool>,
     cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<WorkItemComment, String> {
-    if body.trim().is_empty() {
-        return Err("work_item_comment: body must be non-empty".into());
-    }
     let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
-    let comment = tokio::task::spawn_blocking(move || -> Result<WorkItemComment, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let id = Ulid::new().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
-        let (author_kind, author_agent_id) = match author {
-            CommentAuthor::User => ("user", None),
-            CommentAuthor::Agent { agent_id } => ("agent", Some(agent_id)),
-        };
-        conn.execute(
-            "INSERT INTO work_item_comments (
-                id, work_item_id, author_kind, author_agent_id, body, created_at, updated_at
-             ) VALUES (?1,?2,?3,?4,?5,?6,?6)",
-            params![id, work_item_id, author_kind, author_agent_id, body, now],
-        )
-        .map_err(|e| e.to_string())?;
-        let sql = format!(
-            "SELECT {} FROM work_item_comments WHERE id = ?1",
-            WORK_ITEM_COMMENT_COLUMNS
-        );
-        conn.query_row(&sql, params![id], map_work_item_comment)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let comment = create_work_item_comment_with_db(db.inner(), work_item_id, body, author).await?;
 
     cloud_upsert_work_item_comment!(cloud, comment);
     Ok(comment)
