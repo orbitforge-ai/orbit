@@ -201,6 +201,7 @@ fn seed_from_legacy() -> Result<GlobalSettings, String> {
         chat_display: ChatDisplaySettings::default(),
         agent_defaults: defaults,
         channels,
+        developer: Default::default(),
     };
     Ok(settings)
 }

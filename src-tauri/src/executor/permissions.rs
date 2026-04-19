@@ -715,6 +715,16 @@ pub fn classify_tool_call(
             action => (RiskLevel::Prompt, format!("Subagent action: {}", action)),
         },
 
+        name if name.contains("__") => {
+            // Plugin-contributed tool names are namespaced `<slug>__<name>`.
+            // Never auto-allow in V1 — the user sees a permission prompt on
+            // every plugin tool call and can grant an "always" rule.
+            (
+                RiskLevel::Prompt,
+                format!("Plugin tool: '{}'", tool_name),
+            )
+        }
+
         _ => {
             // Unknown tools default to prompt in strict, auto-allow in normal
             if permission_mode == "strict" {

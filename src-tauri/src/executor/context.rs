@@ -623,7 +623,7 @@ impl ContextStage for BasePromptStage {
 
         // Tool names from actual resolved definitions (matches what the LLM receives)
         let (tool_names, has_task, has_work_item) = {
-            let mut tools = agent_tools::build_tool_definitions(&request.allowed_tools);
+            let mut tools = agent_tools::build_tool_definitions(&request.allowed_tools, None);
             if !request.allow_sub_agents {
                 tools.retain(|t| t.name != "spawn_sub_agents");
             }
@@ -1035,7 +1035,7 @@ impl ContextStage for ToolResolutionStage {
     ) -> Result<ContextSnapshot, String> {
         match request.mode {
             ContextMode::AgentLoop | ContextMode::Chat | ContextMode::Pulse => {
-                let mut tools = agent_tools::build_tool_definitions(&request.allowed_tools);
+                let mut tools = agent_tools::build_tool_definitions(&request.allowed_tools, None);
                 if !request.allow_sub_agents {
                     tools.retain(|t| t.name != "spawn_sub_agents");
                 }

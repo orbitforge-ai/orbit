@@ -9,7 +9,7 @@ use crate::executor::channels::ChannelConfig;
 use crate::executor::workspace::{AgentWorkspaceConfig, PermissionRule};
 
 /// Current schema version for the global settings file.
-pub const GLOBAL_SETTINGS_VERSION: u32 = 1;
+pub const GLOBAL_SETTINGS_VERSION: u32 = 2;
 
 const DEFAULT_ALLOWED_TOOLS: &[&str] = &[
     "shell_command",
@@ -94,6 +94,16 @@ impl Default for AgentDefaults {
     }
 }
 
+/// Developer-mode toggles. Unlocks install-from-directory, MCP wire logs, and
+/// a relaxed zip-size cap. Requires a prominent UI warning that plugins are
+/// running unsandboxed from disk.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeveloperSettings {
+    #[serde(default)]
+    pub plugin_dev_mode: bool,
+}
+
 /// Machine-local global settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -106,6 +116,8 @@ pub struct GlobalSettings {
     pub agent_defaults: AgentDefaults,
     #[serde(default)]
     pub channels: Vec<ChannelConfig>,
+    #[serde(default)]
+    pub developer: DeveloperSettings,
 }
 
 fn default_version() -> u32 {
@@ -119,6 +131,7 @@ impl Default for GlobalSettings {
             chat_display: ChatDisplaySettings::default(),
             agent_defaults: AgentDefaults::default(),
             channels: Vec::new(),
+            developer: DeveloperSettings::default(),
         }
     }
 }

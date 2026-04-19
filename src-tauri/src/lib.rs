@@ -6,6 +6,7 @@ mod events;
 mod executor;
 mod memory_service;
 mod models;
+mod plugins;
 mod scheduler;
 mod workflows;
 
@@ -24,6 +25,7 @@ use executor::engine::{
 };
 use executor::mcp_server as mcp_bridge;
 use executor::permissions::PermissionRegistry;
+use plugins::PluginManager;
 use scheduler::SchedulerEngine;
 use std::sync::Arc;
 use tauri_plugin_log::{Builder, Target, TargetKind};
@@ -41,11 +43,16 @@ fn log_dir() -> PathBuf {
     data_dir().join("logs")
 }
 
+pub fn plugins_dir() -> PathBuf {
+    plugins::plugins_dir()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(
             Builder::new()
                 .targets([
@@ -59,7 +66,7 @@ pub fn run() {
                 .build(),
         );
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "debug-mcp-bridge"))]
     let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
 
     builder
@@ -165,6 +172,11 @@ pub fn run() {
             app.manage(memory_state);
             app.manage(ActiveUser::new("default_user".to_string()));
             app.manage(mcp_handle);
+
+            // Plugin subsystem — loads ~/.orbit/plugins/registry.json and
+            // every installed plugin's manifest. Subprocesses are lazy.
+            let plugin_manager = std::sync::Arc::new(PluginManager::init(db_pool.clone()));
+            app.manage(plugin_manager);
 
             // Start execution engine (now takes tx clone for retry scheduling)
             let engine = ExecutorEngine::new(
@@ -374,7 +386,23 @@ pub fn run() {
             commands::memory::add_memory,
             commands::memory::delete_memory,
             commands::memory::update_memory,
-            commands::memory::get_memory_health
+            commands::memory::get_memory_health,
+            // Plugins
+            commands::plugins::list_plugins,
+            commands::plugins::get_plugin_manifest,
+            commands::plugins::stage_plugin_install,
+            commands::plugins::confirm_plugin_install,
+            commands::plugins::cancel_plugin_install,
+            commands::plugins::install_plugin_from_directory,
+            commands::plugins::set_plugin_enabled,
+            commands::plugins::reload_plugin,
+            commands::plugins::reload_all_plugins,
+            commands::plugins::uninstall_plugin,
+            commands::plugins::set_plugin_oauth_config,
+            commands::plugins::disconnect_plugin_oauth,
+            commands::plugins::get_plugin_runtime_log,
+            commands::plugins::list_plugin_entities,
+            commands::plugins::get_plugin_entity,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,8 +1,13 @@
 pub use super::tools::context::ToolExecutionContext;
 
+use std::sync::Arc;
+
 use super::tools::{self, ToolHandler};
 use crate::executor::llm_provider::ToolDefinition;
+use crate::plugins::PluginManager;
 
+/// Build the baseline set of builtin tools. Plugin tools are appended via
+/// [`all_tools_with_plugins`]; call that when you have an AppHandle.
 fn all_tools() -> Vec<Box<dyn ToolHandler>> {
     vec![
         Box::new(tools::shell_command::ShellCommandTool),
@@ -41,8 +46,14 @@ fn all_tools() -> Vec<Box<dyn ToolHandler>> {
     ]
 }
 
-/// Build the tool definitions that are exposed to the LLM.
-pub fn build_tool_definitions(allowed: &[String]) -> Vec<ToolDefinition> {
+/// Build the tool definitions that are exposed to the LLM. Plugin-contributed
+/// tools are appended unconditionally — they bypass the `allowed` filter so
+/// installing a plugin doesn't require a separate settings change. Per-call
+/// permission prompts gate their actual invocation.
+pub fn build_tool_definitions(
+    allowed: &[String],
+    plugin_manager: Option<&Arc<PluginManager>>,
+) -> Vec<ToolDefinition> {
     let tools = all_tools();
     let mut definitions: Vec<ToolDefinition> = if allowed.is_empty() {
         tools.iter().map(|tool| tool.definition()).collect()
@@ -59,6 +70,18 @@ pub fn build_tool_definitions(allowed: &[String]) -> Vec<ToolDefinition> {
             .map(|tool| tool.definition())
             .collect()
     };
+
+    if let Some(manager) = plugin_manager {
+        let enabled_manifests: Vec<_> = manager
+            .manifests()
+            .into_iter()
+            .filter(|m| manager.is_enabled(&m.id))
+            .collect();
+        let plugin_handlers = crate::plugins::tools::build_handlers(&enabled_manifests);
+        for handler in &plugin_handlers {
+            definitions.push(handler.definition());
+        }
+    }
 
     if !definitions
         .iter()
@@ -79,7 +102,9 @@ pub fn build_tool_definitions(allowed: &[String]) -> Vec<ToolDefinition> {
     definitions
 }
 
-/// Execute a single tool call. Returns (result_text, is_finish).
+/// Execute a single tool call. Returns (result_text, is_finish). Plugin tool
+/// names (containing `__`) are routed through the plugin tools layer; every
+/// other tool falls back to the builtin list.
 pub async fn execute_tool(
     ctx: &ToolExecutionContext,
     tool_name: &str,
@@ -87,6 +112,21 @@ pub async fn execute_tool(
     app: &tauri::AppHandle,
     run_id: &str,
 ) -> Result<(String, bool), String> {
+    if crate::plugins::tools::is_plugin_tool_name(tool_name) {
+        let manager = crate::plugins::from_state(app);
+        let enabled_manifests: Vec<_> = manager
+            .manifests()
+            .into_iter()
+            .filter(|m| manager.is_enabled(&m.id))
+            .collect();
+        for handler in crate::plugins::tools::build_handlers(&enabled_manifests) {
+            if handler.name() == tool_name {
+                return handler.execute(ctx, input, app, run_id).await;
+            }
+        }
+        return Err(format!("unknown plugin tool: {}", tool_name));
+    }
+
     for tool in all_tools() {
         if tool.name() == tool_name {
             return tool.execute(ctx, input, app, run_id).await;
@@ -102,7 +142,7 @@ mod tests {
 
     #[test]
     fn finish_is_always_exposed_even_if_not_in_allowed_list() {
-        let defs = build_tool_definitions(&["read_file".to_string()]);
+        let defs = build_tool_definitions(&["read_file".to_string()], None);
         assert!(defs.iter().any(|tool| tool.name == "read_file"));
         assert!(defs.iter().any(|tool| tool.name == "finish"));
         assert!(defs.iter().any(|tool| tool.name == "activate_skill"));
@@ -111,7 +151,7 @@ mod tests {
 
     #[test]
     fn react_to_message_is_always_exposed_even_if_not_in_allowed_list() {
-        let defs = build_tool_definitions(&["read_file".to_string()]);
+        let defs = build_tool_definitions(&["read_file".to_string()], None);
         assert!(defs.iter().any(|tool| tool.name == "react_to_message"));
     }
 }
