@@ -1,7 +1,8 @@
 // Shared tool catalog used by the global settings screen (for the shared
 // allowed-tools editor) and the per-agent config tab (for the disabled-tools
 // multi-select). Keep this aligned with user-configurable runtime tools.
-// Internal tools like `finish` and `react_to_message` are intentionally omitted.
+// Internal tools like `finish`, `activate_skill`, `yield_turn`, and
+// `react_to_message` are intentionally omitted.
 
 export interface ToolDescriptor {
   id: string;
@@ -64,8 +65,6 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
       { id: 'config', label: 'Self-Config' },
       { id: 'spawn_sub_agents', label: 'Spawn Sub-Agents' },
       { id: 'subagents', label: 'Manage Sub-Agents' },
-      { id: 'yield_turn', label: 'Yield Turn' },
-      { id: 'activate_skill', label: 'Activate Skill' },
     ],
   },
   {

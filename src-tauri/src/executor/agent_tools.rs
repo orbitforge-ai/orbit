@@ -52,6 +52,8 @@ pub fn build_tool_definitions(allowed: &[String]) -> Vec<ToolDefinition> {
             .filter(|tool| {
                 tool.name() == "react_to_message"
                     || tool.name() == "finish"
+                    || tool.name() == "activate_skill"
+                    || tool.name() == "yield_turn"
                     || allowed.contains(&tool.name().to_string())
             })
             .map(|tool| tool.definition())
@@ -66,6 +68,12 @@ pub fn build_tool_definitions(allowed: &[String]) -> Vec<ToolDefinition> {
     }
     if !definitions.iter().any(|tool| tool.name == "finish") {
         definitions.push(tools::finish::FinishTool.definition());
+    }
+    if !definitions.iter().any(|tool| tool.name == "activate_skill") {
+        definitions.push(tools::activate_skill::ActivateSkillTool.definition());
+    }
+    if !definitions.iter().any(|tool| tool.name == "yield_turn") {
+        definitions.push(tools::yield_turn::YieldTurnTool.definition());
     }
 
     definitions
@@ -97,6 +105,8 @@ mod tests {
         let defs = build_tool_definitions(&["read_file".to_string()]);
         assert!(defs.iter().any(|tool| tool.name == "read_file"));
         assert!(defs.iter().any(|tool| tool.name == "finish"));
+        assert!(defs.iter().any(|tool| tool.name == "activate_skill"));
+        assert!(defs.iter().any(|tool| tool.name == "yield_turn"));
     }
 
     #[test]

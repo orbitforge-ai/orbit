@@ -34,9 +34,7 @@ const DEFAULT_ALLOWED_TOOLS: &[&str] = &[
     "sessions_spawn",
     "subagents",
     "message",
-    "yield_turn",
     "ask_user",
-    "activate_skill",
     "remember",
     "search_memory",
 ];
@@ -390,6 +388,8 @@ mod tests {
         assert!(defaults.allowed_tools.contains(&"message".to_string()));
         assert!(defaults.allowed_tools.contains(&"work_item".to_string()));
         assert!(!defaults.allowed_tools.contains(&"finish".to_string()));
+        assert!(!defaults.allowed_tools.contains(&"activate_skill".to_string()));
+        assert!(!defaults.allowed_tools.contains(&"yield_turn".to_string()));
     }
 
     #[test]
