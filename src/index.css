@@ -80,6 +80,23 @@ body {
     linear-gradient(180deg, #121522 0%, #0f1117 58%, #0a0c12 100%);
 }
 
+.workflow-editor-flow .react-flow__viewport,
+.workflow-editor-flow .react-flow__nodes,
+.workflow-editor-flow .react-flow__node {
+  will-change: auto;
+}
+
+.workflow-editor-flow .react-flow__node,
+.workflow-editor-flow .react-flow__edge-text,
+.workflow-editor-flow .react-flow__edgelabel-renderer {
+  -webkit-font-smoothing: subpixel-antialiased;
+  text-rendering: geometricPrecision;
+}
+
+.workflow-editor-flow .react-flow__node {
+  backface-visibility: hidden;
+}
+
 #root {
   isolation: isolate;
 }

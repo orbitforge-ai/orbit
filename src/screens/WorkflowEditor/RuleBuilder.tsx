@@ -7,6 +7,7 @@ import {
   RuleNode,
   RuleOperator,
 } from '../../types';
+import { useOutputInsertionField } from './outputInsertion';
 
 const VALUELESS_OPS: RuleOperator[] = ['exists', 'notExists', 'isTrue', 'isFalse'];
 const BOOL_OPS: RuleOperator[] = [];
@@ -161,13 +162,19 @@ function LeafView({
   const valueless = VALUELESS_OPS.includes(leaf.operator);
   const numeric = NUMERIC_OPS.includes(leaf.operator);
   const boolean = BOOL_OPS.includes(leaf.operator);
+  const fieldBinding = useOutputInsertionField<HTMLInputElement>({
+    mode: 'raw',
+    onChange: setField,
+    value: leaf.field,
+  });
 
   return (
     <div className="flex flex-wrap items-center gap-2 p-2 rounded border border-edge bg-background">
       <input
+        {...fieldBinding.bind}
         value={leaf.field}
         onChange={(e) => setField(e.target.value)}
-        placeholder="field (e.g. n2.output.category)"
+        placeholder="field (e.g. triage-agent.output.category)"
         className="flex-1 min-w-[140px] bg-surface border border-edge rounded px-2 py-1 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono"
       />
       <select

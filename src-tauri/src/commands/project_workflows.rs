@@ -7,6 +7,7 @@ use crate::models::project_workflow::{
 use crate::models::schedule::RecurringConfig;
 use crate::scheduler::converter::next_n_runs;
 use rusqlite::params;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use ulid::Ulid;
 
@@ -79,12 +80,28 @@ pub fn validate_graph(graph: &WorkflowGraph) -> Result<(), String> {
         return Err("workflow: duplicate node ids".into());
     }
 
+    let mut reference_keys = HashSet::new();
+
     for node in &graph.nodes {
         if !KNOWN_NODE_TYPES.contains(&node.node_type.as_str()) {
             return Err(format!(
                 "workflow: unknown node type '{}' on node '{}'",
                 node.node_type, node.id
             ));
+        }
+        if let Some(reference_key) = workflow_node_reference_key(&node.data) {
+            if !is_valid_reference_key(reference_key) {
+                return Err(format!(
+                    "workflow: node '{}' has invalid referenceKey '{}'; use kebab-case letters, numbers, and hyphens",
+                    node.id, reference_key
+                ));
+            }
+            if !reference_keys.insert(reference_key.to_string()) {
+                return Err(format!(
+                    "workflow: duplicate referenceKey '{}' found; each node reference name must be unique",
+                    reference_key
+                ));
+            }
         }
         if node.node_type == "logic.if" {
             if let Some(rule_value) = node.data.get("rule") {
@@ -166,6 +183,31 @@ pub fn validate_graph(graph: &WorkflowGraph) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn workflow_node_reference_key(data: &Value) -> Option<&str> {
+    data.get("referenceKey")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn is_valid_reference_key(value: &str) -> bool {
+    if value == "trigger" || value == "__aliases" || value.starts_with('-') || value.ends_with('-')
+    {
+        return false;
+    }
+    let mut saw_alnum = false;
+    for ch in value.chars() {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+            saw_alnum = true;
+            continue;
+        }
+        if ch != '-' {
+            return false;
+        }
+    }
+    saw_alnum
 }
 
 fn validate_rule(rule: &RuleNode) -> Result<(), String> {

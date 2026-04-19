@@ -2,6 +2,8 @@ use serde_json::Value;
 
 use crate::models::project_workflow::{RuleGroup, RuleLeaf, RuleNode};
 
+const OUTPUT_ALIASES_KEY: &str = "__aliases";
+
 /// Evaluate a rule tree against a `serde_json::Value` representing the
 /// outputs of upstream nodes (typically `{ "<nodeId>": { "output": ... }, ... }`).
 ///
@@ -52,14 +54,27 @@ fn eval_leaf(leaf: &RuleLeaf, outputs: &Value) -> bool {
 }
 
 fn lookup_field(path: &str, outputs: &Value) -> Option<Value> {
-    let mut cur = outputs;
-    for segment in path.split('.') {
+    let mut segments = path.split('.');
+    let first = segments.next()?;
+    let resolved_first = resolve_output_root_segment(first, outputs)?;
+    let mut cur = outputs.get(resolved_first)?;
+    for segment in segments {
         match cur.get(segment) {
             Some(next) => cur = next,
             None => return None,
         }
     }
     Some(cur.clone())
+}
+
+fn resolve_output_root_segment<'a>(segment: &'a str, outputs: &'a Value) -> Option<&'a str> {
+    if outputs.get(segment).is_some() {
+        return Some(segment);
+    }
+    outputs
+        .get(OUTPUT_ALIASES_KEY)?
+        .get(segment)?
+        .as_str()
 }
 
 /// If `value` is a `{ "field": "..." }` reference, resolve it; otherwise return as-is.
@@ -114,6 +129,9 @@ mod tests {
 
     fn outputs() -> Value {
         json!({
+            "__aliases": {
+                "triage-agent": "n2"
+            },
             "n2": {
                 "output": {
                     "category": "reply_needed",
@@ -209,5 +227,15 @@ mod tests {
             value: Value::Null,
         };
         assert!(!eval_leaf(&f, &outputs()));
+    }
+
+    #[test]
+    fn reference_key_aliases_work() {
+        let leaf = RuleLeaf {
+            field: "triage-agent.output.category".into(),
+            operator: "equals".into(),
+            value: json!("reply_needed"),
+        };
+        assert!(eval_leaf(&leaf, &outputs()));
     }
 }

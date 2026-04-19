@@ -47,6 +47,7 @@ const STATUS_FAILED: &str = "failed";
 const STATUS_SKIPPED: &str = "skipped";
 
 const MAX_STEPS: usize = 100;
+const OUTPUT_ALIASES_KEY: &str = "__aliases";
 
 #[derive(Clone)]
 pub struct WorkflowOrchestrator {
@@ -216,6 +217,10 @@ impl WorkflowOrchestrator {
         outputs.insert(
             "trigger".to_string(),
             json!({ "data": run.trigger_data, "kind": run.trigger_kind }),
+        );
+        outputs.insert(
+            OUTPUT_ALIASES_KEY.to_string(),
+            Value::Object(build_reference_aliases(&graph)),
         );
 
         let mut current = Some(trigger.id.clone());
@@ -1298,8 +1303,20 @@ fn find_close(bytes: &[u8]) -> Option<usize> {
 }
 
 fn lookup_path(path: &str, outputs: &Value) -> String {
-    let mut cur = outputs;
-    for segment in path.split('.') {
+    let mut segments = path.split('.');
+    let Some(first) = segments.next() else {
+        return format!("{{{{{}}}}}", path);
+    };
+
+    let Some(resolved_first) = resolve_output_root_segment(first, outputs) else {
+        return format!("{{{{{}}}}}", path);
+    };
+
+    let Some(mut cur) = outputs.get(resolved_first) else {
+        return format!("{{{{{}}}}}", path);
+    };
+
+    for segment in segments {
         match cur.get(segment) {
             Some(v) => cur = v,
             None => return format!("{{{{{}}}}}", path),
@@ -1312,11 +1329,41 @@ fn lookup_path(path: &str, outputs: &Value) -> String {
 }
 
 fn lookup_json_path(path: &str, outputs: &Value) -> Option<Value> {
-    let mut cur = outputs;
-    for segment in path.split('.') {
+    let mut segments = path.split('.');
+    let first = segments.next()?;
+    let resolved_first = resolve_output_root_segment(first, outputs)?;
+    let mut cur = outputs.get(resolved_first)?;
+    for segment in segments {
         cur = cur.get(segment)?;
     }
     Some(cur.clone())
+}
+
+fn build_reference_aliases(graph: &WorkflowGraph) -> serde_json::Map<String, Value> {
+    let mut aliases = serde_json::Map::new();
+    for node in &graph.nodes {
+        if let Some(reference_key) = workflow_node_reference_key(&node.data) {
+            aliases.insert(reference_key.to_string(), Value::String(node.id.clone()));
+        }
+    }
+    aliases
+}
+
+fn workflow_node_reference_key(data: &Value) -> Option<&str> {
+    data.get("referenceKey")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn resolve_output_root_segment<'a>(segment: &'a str, outputs: &'a Value) -> Option<&'a str> {
+    if outputs.get(segment).is_some() {
+        return Some(segment);
+    }
+    outputs
+        .get(OUTPUT_ALIASES_KEY)?
+        .get(segment)?
+        .as_str()
 }
 
 fn render_agent_prompt(
@@ -1665,6 +1712,18 @@ mod tests {
         assert_eq!(
             render_template("Hello {{missing.path}}!", &outputs),
             "Hello {{missing.path}}!"
+        );
+    }
+
+    #[test]
+    fn template_renders_reference_key_aliases() {
+        let outputs = json!({
+            "__aliases": { "triage-agent": "n2" },
+            "n2": { "output": { "text": "Hello" } }
+        });
+        assert_eq!(
+            render_template("Reply: {{triage-agent.output.text}}", &outputs),
+            "Reply: Hello"
         );
     }
 

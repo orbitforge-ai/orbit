@@ -1,5 +1,8 @@
 import { Handle, NodeProps, Position } from '@xyflow/react';
+import type { RuleNode } from '../../../types';
+import { getNodeReferenceKey } from '../nodeReferences';
 import { nodeMeta } from '../nodeRegistry';
+import { ruleToSentence } from '../ruleSentence';
 import { describeWorkflowSchedule } from '../scheduleConfig';
 
 const NODE_BASE =
@@ -31,10 +34,11 @@ export function TriggerNode({ data, type, selected }: NodeProps) {
   );
 }
 
-export function AgentNode({ data, type, selected }: NodeProps) {
+export function AgentNode({ id, data, type, selected }: NodeProps) {
   const meta = nodeMeta(type);
   const Icon = meta?.icon;
   const d = data as { agentId?: string; promptTemplate?: string };
+  const referenceKey = getNodeReferenceKey({ id, type, data: (data as Record<string, unknown>) ?? {} });
   return (
     <div className={`${NODE_BASE} ${selected ? 'border-accent' : 'border-edge'}`}>
       <Handle type="target" position={Position.Left} className="!bg-muted" />
@@ -45,6 +49,9 @@ export function AgentNode({ data, type, selected }: NodeProps) {
         </span>
       </div>
       <div className="px-3 py-2 space-y-1">
+        <p className="text-muted text-[10px]">
+          Ref: <span className="text-white font-mono">{referenceKey}</span>
+        </p>
         <p className="text-muted">
           Agent: <span className="text-white font-mono">{d.agentId || '(unset)'}</span>
         </p>
@@ -57,7 +64,7 @@ export function AgentNode({ data, type, selected }: NodeProps) {
   );
 }
 
-export function WorkItemNode({ data, type, selected }: NodeProps) {
+export function WorkItemNode({ id, data, type, selected }: NodeProps) {
   const meta = nodeMeta(type);
   const Icon = meta?.icon;
   const d = data as {
@@ -74,6 +81,7 @@ export function WorkItemNode({ data, type, selected }: NodeProps) {
   };
   const action = d.action || 'create';
   const listColumn = d.listColumn || d.listStatus;
+  const referenceKey = getNodeReferenceKey({ id, type, data: (data as Record<string, unknown>) ?? {} });
 
   const priorityLabel =
     d.priority === 3 ? 'urgent' : d.priority === 2 ? 'high' : d.priority === 1 ? 'normal' : 'low';
@@ -95,6 +103,9 @@ export function WorkItemNode({ data, type, selected }: NodeProps) {
         </span>
       </div>
       <div className="px-3 py-2 space-y-1">
+        <p className="text-muted text-[10px]">
+          Ref: <span className="text-white font-mono">{referenceKey}</span>
+        </p>
         <p className="text-white text-[11px] line-clamp-2">
           {summary}
         </p>
@@ -134,10 +145,11 @@ export function WorkItemNode({ data, type, selected }: NodeProps) {
   );
 }
 
-export function ProposalQueueNode({ data, type, selected }: NodeProps) {
+export function ProposalQueueNode({ id, data, type, selected }: NodeProps) {
   const meta = nodeMeta(type);
   const Icon = meta?.icon;
   const d = data as { candidatesPath?: string; reviewColumnId?: string };
+  const referenceKey = getNodeReferenceKey({ id, type, data: (data as Record<string, unknown>) ?? {} });
   return (
     <div className={`${NODE_BASE} ${selected ? 'border-accent' : 'border-edge'}`}>
       <Handle type="target" position={Position.Left} className="!bg-muted" />
@@ -148,6 +160,9 @@ export function ProposalQueueNode({ data, type, selected }: NodeProps) {
         </span>
       </div>
       <div className="px-3 py-2 space-y-1">
+        <p className="text-muted text-[10px]">
+          Ref: <span className="text-white font-mono">{referenceKey}</span>
+        </p>
         <p className="text-muted text-[10px] line-clamp-2">
           {d.candidatesPath || '(candidates path required)'}
         </p>
@@ -160,10 +175,12 @@ export function ProposalQueueNode({ data, type, selected }: NodeProps) {
   );
 }
 
-export function LogicIfNode({ data, type, selected }: NodeProps) {
+export function LogicIfNode({ id, data, type, selected }: NodeProps) {
   const meta = nodeMeta(type);
   const Icon = meta?.icon;
-  const d = data as { trueLabel?: string; falseLabel?: string };
+  const d = data as { rule?: RuleNode; trueLabel?: string; falseLabel?: string };
+  const referenceKey = getNodeReferenceKey({ id, type, data: (data as Record<string, unknown>) ?? {} });
+  const conditionSummary = ruleToSentence(d.rule) || '(no conditions)';
   return (
     <div className={`${NODE_BASE} ${selected ? 'border-accent' : 'border-edge'} min-w-[180px]`}>
       <Handle type="target" position={Position.Left} className="!bg-muted" />
@@ -174,6 +191,12 @@ export function LogicIfNode({ data, type, selected }: NodeProps) {
         </span>
       </div>
       <div className="px-3 py-2 space-y-1.5">
+        <div className="text-[10px] text-muted">
+          Ref: <span className="text-white font-mono">{referenceKey}</span>
+        </div>
+        <p className="text-[11px] text-white/90 line-clamp-3 leading-relaxed">
+          {conditionSummary}
+        </p>
         <div className="flex items-center justify-between text-[10px]">
           <span className="text-muted">true →</span>
           <span className="text-emerald-300 font-mono">{d.trueLabel || 'true'}</span>
@@ -201,9 +224,10 @@ export function LogicIfNode({ data, type, selected }: NodeProps) {
   );
 }
 
-export function IntegrationNode({ type, selected }: NodeProps) {
+export function IntegrationNode({ id, data, type, selected }: NodeProps) {
   const meta = nodeMeta(type);
   const Icon = meta?.icon;
+  const referenceKey = getNodeReferenceKey({ id, type, data: (data as Record<string, unknown>) ?? {} });
   return (
     <div className={`${NODE_BASE} ${selected ? 'border-accent' : 'border-edge'} opacity-80`}>
       <Handle type="target" position={Position.Left} className="!bg-muted" />
@@ -214,6 +238,9 @@ export function IntegrationNode({ type, selected }: NodeProps) {
         </span>
       </div>
       <div className="px-3 py-2">
+        <p className="text-muted text-[10px] mb-1">
+          Ref: <span className="text-white font-mono">{referenceKey}</span>
+        </p>
         <span className="inline-block px-1.5 py-0.5 rounded bg-muted/15 text-[9px] uppercase tracking-wider text-muted font-mono">
           Integration
         </span>

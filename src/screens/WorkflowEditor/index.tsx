@@ -34,6 +34,12 @@ import { workflowRunsApi } from '../../api/workflowRuns';
 import { ProjectWorkflow, WorkflowEdge, WorkflowGraph, WorkflowNode } from '../../types';
 import { edgeTypes } from './edges';
 import { nodeMeta, NODE_REGISTRY } from './nodeRegistry';
+import {
+  ensureFlowNodeReferenceKeysForGraph,
+  ensureWorkflowNodeReferenceKeys,
+  generateReferenceKeyForNewNode,
+  nodeHasLinkedOutputs,
+} from './nodeReferences';
 import { nodeTypes } from './nodes';
 import { NodePalette } from './NodePalette';
 import { NodeInspector } from './NodeInspector';
@@ -65,8 +71,9 @@ function toFlowEdge(edge: WorkflowEdge): Edge {
 }
 
 function workflowToFlow(graph: WorkflowGraph): { nodes: Node[]; edges: Edge[] } {
+  const normalizedNodes = ensureWorkflowNodeReferenceKeys(graph.nodes, graph.edges);
   return {
-    nodes: graph.nodes.map((n) => ({
+    nodes: normalizedNodes.map((n) => ({
       id: n.id,
       type: n.type,
       position: n.position,
@@ -77,9 +84,10 @@ function workflowToFlow(graph: WorkflowGraph): { nodes: Node[]; edges: Edge[] } 
 }
 
 function flowToWorkflow(nodes: Node[], edges: Edge[]): WorkflowGraph {
+  const normalizedNodes = ensureFlowNodeReferenceKeysForGraph(nodes, edges);
   return {
     schemaVersion: 1,
-    nodes: nodes.map<WorkflowNode>((n) => ({
+    nodes: normalizedNodes.map<WorkflowNode>((n) => ({
       id: n.id,
       type: n.type ?? 'unknown',
       position: { x: n.position.x, y: n.position.y },
@@ -92,6 +100,46 @@ function flowToWorkflow(nodes: Node[], edges: Edge[]): WorkflowGraph {
       sourceHandle: e.sourceHandle ?? null,
     })),
   };
+}
+
+function getUpstreamNodes(nodes: Node[], edges: Edge[], selectedNodeId: string | null): Node[] {
+  if (!selectedNodeId) {
+    return [];
+  }
+
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const nodeOrder = new Map(nodes.map((node, index) => [node.id, index]));
+  const incomingByTarget = new Map<string, Edge[]>();
+
+  for (const edge of edges) {
+    const incoming = incomingByTarget.get(edge.target) ?? [];
+    incoming.push(edge);
+    incomingByTarget.set(edge.target, incoming);
+  }
+
+  const ordered: Node[] = [];
+  const visited = new Set<string>();
+
+  const visit = (nodeId: string) => {
+    const incoming = [...(incomingByTarget.get(nodeId) ?? [])].sort((a, b) => {
+      return (nodeOrder.get(a.source) ?? 0) - (nodeOrder.get(b.source) ?? 0);
+    });
+
+    for (const edge of incoming) {
+      if (visited.has(edge.source)) {
+        continue;
+      }
+      visited.add(edge.source);
+      visit(edge.source);
+      const sourceNode = nodeById.get(edge.source);
+      if (sourceNode) {
+        ordered.push(sourceNode);
+      }
+    }
+  };
+
+  visit(selectedNodeId);
+  return ordered;
 }
 
 export function WorkflowEditor() {
@@ -148,6 +196,19 @@ function Editor({ workflowId }: { workflowId: string }) {
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId],
+  );
+  const upstreamNodes = useMemo(
+    () => getUpstreamNodes(nodes, edges, selectedNodeId),
+    [edges, nodes, selectedNodeId],
+  );
+  const nodesWithDownstreamLinks = useMemo(
+    () => new Set(edges.map((edge) => edge.source)),
+    [edges],
+  );
+  const selectedNodeHasLinkedOutputs = useMemo(
+    () =>
+      selectedNode ? nodeHasLinkedOutputs(selectedNode, nodesWithDownstreamLinks) : false,
+    [nodesWithDownstreamLinks, selectedNode],
   );
 
   const markDirty = useCallback(() => setDirty(true), []);
@@ -272,13 +333,18 @@ function Editor({ workflowId }: { workflowId: string }) {
 
       const position = screenToFlowPosition({ x: clientX, y: clientY });
       const id = `n_${crypto.randomUUID()}`;
-      const newNode: Node = {
-        id,
-        type,
-        position,
-        data: { ...meta.defaultData },
-      };
-      setNodes((curr) => curr.concat(newNode));
+      setNodes((curr) => {
+        const newNode: Node = {
+          id,
+          type,
+          position,
+          data: {
+            ...meta.defaultData,
+            referenceKey: generateReferenceKeyForNewNode(type, curr),
+          },
+        };
+        return curr.concat(newNode);
+      });
       markDirty();
       return true;
     },
@@ -475,6 +541,7 @@ function Editor({ workflowId }: { workflowId: string }) {
           className={`flex-1 relative ${isCanvasOver ? 'ring-1 ring-accent bg-accent/5' : ''}`}
         >
           <ReactFlow
+            className="workflow-editor-flow"
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
@@ -505,7 +572,10 @@ function Editor({ workflowId }: { workflowId: string }) {
         </div>
         <NodeInspector
           node={selectedNode}
+          nodeHasLinkedOutputs={selectedNodeHasLinkedOutputs}
+          upstreamNodes={upstreamNodes}
           projectId={workflow.projectId}
+          workflowId={workflowId}
           onChangeData={updateNodeData}
           onDelete={deleteNode}
         />

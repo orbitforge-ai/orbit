@@ -1,5 +1,8 @@
+import { useEffect, useMemo, useState } from 'react';
+import type { ComponentPropsWithoutRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Node } from '@xyflow/react';
+import { workflowRunsApi } from '../../api/workflowRuns';
 import { agentsApi } from '../../api/agents';
 import { projectsApi } from '../../api/projects';
 import {
@@ -7,10 +10,24 @@ import {
   ProjectBoardColumn,
   RuleGroup,
   RuleNode,
+  WorkflowRunWithSteps,
   WorkItemKind,
   WorkItemStatus,
 } from '../../types';
 import { RecurringPicker } from '../ScheduleBuilder/RecurringPicker';
+import {
+  getObservedOutputHintEntries,
+  getOutputReferenceLabel,
+  getStaticOutputHintEntries,
+  OutputHintEntry,
+} from './outputHints';
+import { getNodeReferenceKey, slugifyReferenceKey } from './nodeReferences';
+import {
+  OutputInsertionMode,
+  OutputInsertionProvider,
+  useOutputInsertion,
+  useOutputInsertionField,
+} from './outputInsertion';
 import { nodeMeta } from './nodeRegistry';
 import { RuleBuilder } from './RuleBuilder';
 import { ruleToSentence } from './ruleSentence';
@@ -18,7 +35,10 @@ import { getWorkflowScheduleConfig } from './scheduleConfig';
 
 interface Props {
   node: Node | null;
+  nodeHasLinkedOutputs: boolean;
   projectId: string;
+  upstreamNodes: Node[];
+  workflowId: string;
   onChangeData: (nodeId: string, data: Record<string, unknown>) => void;
   onDelete: (nodeId: string) => void;
 }
@@ -66,7 +86,18 @@ const WORK_ITEM_ACTION_OPTIONS = [
 
 type WorkItemNodeAction = (typeof WORK_ITEM_ACTION_OPTIONS)[number]['value'];
 
-export function NodeInspector({ node, projectId, onChangeData, onDelete }: Props) {
+const TEMPLATE_FIELD_CLASSNAME =
+  'w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono';
+
+export function NodeInspector({
+  node,
+  nodeHasLinkedOutputs,
+  projectId,
+  upstreamNodes,
+  workflowId,
+  onChangeData,
+  onDelete,
+}: Props) {
   if (!node) {
     return (
       <aside className="w-80 border-l border-edge bg-background/50 px-4 py-4">
@@ -74,65 +105,136 @@ export function NodeInspector({ node, projectId, onChangeData, onDelete }: Props
       </aside>
     );
   }
+
   const meta = nodeMeta(node.type ?? '');
-  const data = (node.data ?? {}) as Record<string, unknown>;
+  const data = normalizeData(node.data);
   const update = (patch: Record<string, unknown>) => onChangeData(node.id, { ...data, ...patch });
+  const showOutputHelper = nodeSupportsOutputReferences(node.type ?? '');
+  const storedReferenceKey = asString(data.referenceKey);
+  const referenceKey = node.type?.startsWith('trigger.')
+    ? 'trigger'
+    : storedReferenceKey;
+  const [referenceKeyDraft, setReferenceKeyDraft] = useState(referenceKey);
+
+  useEffect(() => {
+    setReferenceKeyDraft(referenceKey);
+  }, [node.id, referenceKey]);
+
+  const { data: latestRunDetail, isLoading: isLoadingLatestRun } = useQuery<WorkflowRunWithSteps | null>({
+    queryKey: ['workflow-runs', workflowId, 'latest-output-hints'],
+    queryFn: async () => {
+      const runs = await workflowRunsApi.list(workflowId, 1);
+      const latestRun = runs[0];
+      if (!latestRun) {
+        return null;
+      }
+      return workflowRunsApi.get(latestRun.id);
+    },
+    enabled: showOutputHelper && upstreamNodes.length > 0,
+    staleTime: 30_000,
+  });
+
+  const observedOutputsByNodeId = useMemo(() => {
+    const outputs = new Map<string, unknown>();
+    for (const step of latestRunDetail?.steps ?? []) {
+      outputs.set(step.nodeId, step.output);
+    }
+    return outputs;
+  }, [latestRunDetail]);
 
   return (
-    <aside className="w-80 border-l border-edge bg-background/50 overflow-y-auto">
-      <div className="px-4 py-3 border-b border-edge flex items-center justify-between">
-        <div>
-          <p className="text-[10px] uppercase tracking-wider text-muted">Node</p>
-          <p className="text-sm font-semibold text-white">{meta?.label ?? node.type}</p>
+    <OutputInsertionProvider>
+      <aside className="w-80 border-l border-edge bg-background/50 overflow-y-auto">
+        <div className="px-4 py-3 border-b border-edge flex items-center justify-between">
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-muted">Node</p>
+            <p className="text-sm font-semibold text-white">{meta?.label ?? node.type}</p>
+          </div>
+          <button
+            onClick={() => onDelete(node.id)}
+            className="text-[11px] text-muted hover:text-red-400 transition-colors"
+          >
+            Delete
+          </button>
         </div>
-        <button
-          onClick={() => onDelete(node.id)}
-          className="text-[11px] text-muted hover:text-red-400 transition-colors"
-        >
-          Delete
-        </button>
-      </div>
 
-      <div className="px-4 py-3 space-y-4">
-        {node.type === 'trigger.manual' && (
-          <p className="text-xs text-muted">No configuration. Run from the editor toolbar.</p>
-        )}
+        <div className="px-4 py-3 space-y-4">
+          {!node.type?.startsWith('trigger.') && (
+            <div className="space-y-1.5">
+              <label className="text-[11px] uppercase tracking-wider text-muted">Reference name</label>
+              <HintableInput
+                mode="raw"
+                value={referenceKeyDraft}
+                onValueChange={setReferenceKeyDraft}
+                onBlur={() => {
+                  const nextValue = slugifyReferenceKey(referenceKeyDraft);
+                  const committedValue = nextValue || (nodeHasLinkedOutputs ? referenceKey : '');
+                  setReferenceKeyDraft(committedValue);
+                  update({
+                    referenceKey: committedValue,
+                  });
+                }}
+                placeholder="run-agent-1"
+                className={TEMPLATE_FIELD_CLASSNAME}
+              />
+              <p className="text-[10px] text-muted">
+                {nodeHasLinkedOutputs ? (
+                  <>
+                    Use this name in templates and rules, for example{' '}
+                    <span className="font-mono">{`{{${referenceKey}.output.text}}`}</span>.
+                  </>
+                ) : (
+                  'This node is not feeding any downstream nodes, so the reference name can be left empty.'
+                )}
+              </p>
+            </div>
+          )}
 
-        {node.type === 'trigger.schedule' && (
-          <ScheduleInspector data={data} onUpdate={update} />
-        )}
+          {node.type === 'trigger.manual' && (
+            <p className="text-xs text-muted">No configuration. Run from the editor toolbar.</p>
+          )}
 
-        {node.type === 'agent.run' && <AgentRunInspector data={data} onUpdate={update} />}
+          {node.type === 'trigger.schedule' && (
+            <ScheduleInspector data={data} onUpdate={update} />
+          )}
 
-        {node.type === 'logic.if' && <LogicIfInspector data={data} onUpdate={update} />}
+          {node.type === 'agent.run' && <AgentRunInspector data={data} onUpdate={update} />}
 
-        {node.type === 'board.work_item.create' && (
-          <WorkItemInspector
-            data={data}
-            projectId={projectId}
-            onUpdate={update}
-          />
-        )}
+          {node.type === 'logic.if' && <LogicIfInspector data={data} onUpdate={update} />}
 
-        {node.type === 'board.proposal.enqueue' && (
-          <ProposalQueueInspector data={data} projectId={projectId} onUpdate={update} />
-        )}
+          {node.type === 'board.work_item.create' && (
+            <WorkItemInspector data={data} projectId={projectId} onUpdate={update} />
+          )}
 
-        {node.type === 'integration.feed.fetch' && (
-          <FeedFetchInspector data={data} onUpdate={update} />
-        )}
+          {node.type === 'board.proposal.enqueue' && (
+            <ProposalQueueInspector data={data} projectId={projectId} onUpdate={update} />
+          )}
 
-        {node.type === 'integration.http.request' && (
-          <HttpRequestInspector data={data} onUpdate={update} />
-        )}
+          {node.type === 'integration.feed.fetch' && (
+            <FeedFetchInspector data={data} onUpdate={update} />
+          )}
 
-        {(node.type === 'integration.gmail.read' ||
-          node.type === 'integration.gmail.send' ||
-          node.type === 'integration.slack.send') && (
-          <p className="text-xs text-muted italic">Integration nodes are coming in a later phase.</p>
-        )}
-      </div>
-    </aside>
+          {node.type === 'integration.http.request' && (
+            <HttpRequestInspector data={data} onUpdate={update} />
+          )}
+
+          {(node.type === 'integration.gmail.read' ||
+            node.type === 'integration.gmail.send' ||
+            node.type === 'integration.slack.send') && (
+            <p className="text-xs text-muted italic">Integration nodes are coming in a later phase.</p>
+          )}
+
+          {showOutputHelper && (
+            <OutputReferencePanel
+              isLoadingLatestRun={isLoadingLatestRun}
+              latestRunDetail={latestRunDetail}
+              observedOutputsByNodeId={observedOutputsByNodeId}
+              upstreamNodes={upstreamNodes}
+            />
+          )}
+        </div>
+      </aside>
+    </OutputInsertionProvider>
   );
 }
 
@@ -166,10 +268,10 @@ function AgentRunInspector({
     queryKey: ['agents'],
     queryFn: agentsApi.list,
   });
-  const agentId = (data.agentId as string) ?? '';
-  const promptTemplate = (data.promptTemplate as string) ?? '';
-  const contextTemplate = (data.contextTemplate as string) ?? '';
-  const outputMode = (data.outputMode as string) ?? 'text';
+  const agentId = asString(data.agentId);
+  const promptTemplate = asString(data.promptTemplate);
+  const contextTemplate = asString(data.contextTemplate);
+  const outputMode = asString(data.outputMode) || 'text';
 
   return (
     <div className="space-y-3">
@@ -181,36 +283,36 @@ function AgentRunInspector({
           className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
         >
           <option value="">Select agent…</option>
-          {agents.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
+          {agents.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.name}
             </option>
           ))}
         </select>
       </div>
       <div className="space-y-1.5">
         <label className="text-[11px] uppercase tracking-wider text-muted">Prompt template</label>
-        <textarea
+        <HintableTextarea
           value={promptTemplate}
-          onChange={(e) => onUpdate({ promptTemplate: e.target.value })}
+          onValueChange={(value) => onUpdate({ promptTemplate: value })}
           rows={6}
           placeholder="Categorize this email: {{trigger.body}}"
-          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+          className={`${TEMPLATE_FIELD_CLASSNAME} resize-none`}
         />
         <p className="text-[10px] text-muted">
           Use <span className="font-mono">{`{{trigger.body}}`}</span> or{' '}
-          <span className="font-mono">{`{{<nodeId>.output.<field>}}`}</span> to reference upstream
+          <span className="font-mono">{`{{run-agent-1.output.text}}`}</span> to reference upstream
           data.
         </p>
       </div>
       <div className="space-y-1.5">
         <label className="text-[11px] uppercase tracking-wider text-muted">Fit context</label>
-        <textarea
+        <HintableTextarea
           value={contextTemplate}
-          onChange={(e) => onUpdate({ contextTemplate: e.target.value })}
+          onValueChange={(value) => onUpdate({ contextTemplate: value })}
           rows={5}
           placeholder="Candidate profile, writing preferences, exclusions, portfolio notes…"
-          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+          className={`${TEMPLATE_FIELD_CLASSNAME} resize-none`}
         />
       </div>
       <div className="space-y-1.5">
@@ -237,8 +339,8 @@ function LogicIfInspector({
   onUpdate: (patch: Record<string, unknown>) => void;
 }) {
   const rule = (data.rule as RuleNode | undefined) ?? { combinator: 'and', rules: [] };
-  const trueLabel = (data.trueLabel as string) ?? 'true';
-  const falseLabel = (data.falseLabel as string) ?? 'false';
+  const trueLabel = asString(data.trueLabel) || 'true';
+  const falseLabel = asString(data.falseLabel) || 'false';
 
   return (
     <div className="space-y-3">
@@ -294,26 +396,25 @@ function WorkItemInspector({
     queryFn: () => projectsApi.listBoardColumns(projectId),
   });
 
-  const action = ((data.action as WorkItemNodeAction | undefined) ?? 'create') as WorkItemNodeAction;
-  const itemIdTemplate = (data.itemIdTemplate as string) ?? '';
-  const titleTemplate = (data.titleTemplate as string) ?? '';
-  const descriptionTemplate = (data.descriptionTemplate as string) ?? '';
-  const columnId = (data.columnId as string) ?? '';
-  const kind = ((data.kind as WorkItemKind | undefined) ?? 'task') as WorkItemKind;
-  const status = ((data.status as WorkItemStatus | undefined) ?? 'backlog') as WorkItemStatus;
+  const action = (asString(data.action) || 'create') as WorkItemNodeAction;
+  const itemIdTemplate = asString(data.itemIdTemplate);
+  const titleTemplate = asString(data.titleTemplate);
+  const descriptionTemplate = asString(data.descriptionTemplate);
+  const columnId = asString(data.columnId);
+  const kind = (asString(data.kind) || 'task') as WorkItemKind;
+  const status = (asString(data.status) || 'backlog') as WorkItemStatus;
   const priorityValue = data.priority;
   const priority =
     typeof priorityValue === 'number' && Number.isFinite(priorityValue) ? priorityValue : 0;
-  const labelsText = (data.labelsText as string) ?? '';
-  const assigneeAgentId = (data.assigneeAgentId as string) ?? '';
-  const parentWorkItemId = (data.parentWorkItemId as string) ?? '';
-  const reasonTemplate = (data.reasonTemplate as string) ?? '';
-  const bodyTemplate = (data.bodyTemplate as string) ?? '';
-  const commentAuthorAgentId = (data.commentAuthorAgentId as string) ?? '';
-  const listColumn = ((data.listColumn as string | undefined) ?? (data.listStatus as string | undefined) ?? 'all') as string;
-  const listStatus = ((data.listStatus as string | undefined) ?? 'all') as string;
-  const listKind = ((data.listKind as string | undefined) ?? 'all') as string;
-  const listAssignee = (data.listAssignee as string) ?? '';
+  const labelsText = asString(data.labelsText);
+  const assigneeAgentId = asString(data.assigneeAgentId);
+  const parentWorkItemId = asString(data.parentWorkItemId);
+  const reasonTemplate = asString(data.reasonTemplate);
+  const bodyTemplate = asString(data.bodyTemplate);
+  const commentAuthorAgentId = asString(data.commentAuthorAgentId);
+  const listColumn = (asString(data.listColumn) || asString(data.listStatus) || 'all') as string;
+  const listKind = (asString(data.listKind) || 'all') as string;
+  const listAssignee = asString(data.listAssignee);
   const limitValue = data.limit;
   const limit = typeof limitValue === 'number' && Number.isFinite(limitValue) ? limitValue : 25;
 
@@ -338,7 +439,7 @@ function WorkItemInspector({
       <p className="text-[10px] text-muted">
         Interacts with this workflow&apos;s board. Template fields can reference earlier node
         outputs like <span className="font-mono">{`{{trigger.data.subject}}`}</span> or{' '}
-        <span className="font-mono">{`{{nodeId.output.parsed.title}}`}</span>.
+        <span className="font-mono">{`{{run-agent-1.output.parsed.title}}`}</span>.
       </p>
 
       <div className="space-y-1.5">
@@ -359,41 +460,39 @@ function WorkItemInspector({
       {showItemId && (
         <div className="space-y-1.5">
           <label className="text-[11px] uppercase tracking-wider text-muted">Work item ID</label>
-          <input
+          <HintableInput
             value={itemIdTemplate}
-            onChange={(e) => onUpdate({ itemIdTemplate: e.target.value })}
+            onValueChange={(value) => onUpdate({ itemIdTemplate: value })}
             placeholder="{{someNode.output.workItem.id}}"
-            className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono"
+            className={TEMPLATE_FIELD_CLASSNAME}
           />
         </div>
       )}
 
-      <div className="space-y-1.5">
-        {showTitle && (
-          <>
-            <label className="text-[11px] uppercase tracking-wider text-muted">Title template</label>
-            <textarea
-              value={titleTemplate}
-              onChange={(e) => onUpdate({ titleTemplate: e.target.value })}
-              rows={3}
-              placeholder="Follow up on {{agentNode.output.parsed.customerName}}"
-              className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
-            />
-          </>
-        )}
-      </div>
+      {showTitle && (
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">Title template</label>
+          <HintableTextarea
+            value={titleTemplate}
+            onValueChange={(value) => onUpdate({ titleTemplate: value })}
+            rows={3}
+            placeholder="Follow up on {{agentNode.output.parsed.customerName}}"
+            className={`${TEMPLATE_FIELD_CLASSNAME} resize-none`}
+          />
+        </div>
+      )}
 
       {showDescription && (
         <div className="space-y-1.5">
           <label className="text-[11px] uppercase tracking-wider text-muted">
             Description template
           </label>
-          <textarea
+          <HintableTextarea
             value={descriptionTemplate}
-            onChange={(e) => onUpdate({ descriptionTemplate: e.target.value })}
+            onValueChange={(value) => onUpdate({ descriptionTemplate: value })}
             rows={6}
             placeholder={`Customer summary:\n{{agentNode.output.text}}`}
-            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+            className={`${TEMPLATE_FIELD_CLASSNAME} resize-none`}
           />
         </div>
       )}
@@ -446,7 +545,7 @@ function WorkItemInspector({
                 {action === 'list' ? 'Board column' : 'Status'}
               </label>
               <select
-                value={action === 'list' ? listColumn || listStatus || 'all' : status || 'backlog'}
+                value={action === 'list' ? listColumn || 'all' : status || 'backlog'}
                 onChange={(e) =>
                   onUpdate(
                     action === 'list'
@@ -499,12 +598,12 @@ function WorkItemInspector({
           <label className="text-[11px] uppercase tracking-wider text-muted">
             Labels (comma or newline separated)
           </label>
-          <textarea
+          <HintableTextarea
             value={labelsText}
-            onChange={(e) => onUpdate({ labelsText: e.target.value })}
+            onValueChange={(value) => onUpdate({ labelsText: value })}
             rows={3}
             placeholder="workflow, customer, {{trigger.data.channel}}"
-            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+            className={`${TEMPLATE_FIELD_CLASSNAME} resize-none`}
           />
         </div>
       )}
@@ -534,11 +633,11 @@ function WorkItemInspector({
           <label className="text-[11px] uppercase tracking-wider text-muted">
             Parent work item ID
           </label>
-          <input
+          <HintableInput
             value={parentWorkItemId}
-            onChange={(e) => onUpdate({ parentWorkItemId: e.target.value })}
+            onValueChange={(value) => onUpdate({ parentWorkItemId: value })}
             placeholder="Optional parent card id or template"
-            className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono"
+            className={TEMPLATE_FIELD_CLASSNAME}
           />
         </div>
       )}
@@ -546,12 +645,12 @@ function WorkItemInspector({
       {showReason && (
         <div className="space-y-1.5">
           <label className="text-[11px] uppercase tracking-wider text-muted">Blocked reason</label>
-          <textarea
+          <HintableTextarea
             value={reasonTemplate}
-            onChange={(e) => onUpdate({ reasonTemplate: e.target.value })}
+            onValueChange={(value) => onUpdate({ reasonTemplate: value })}
             rows={4}
             placeholder="Waiting on {{agentNode.output.parsed.owner}}"
-            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+            className={`${TEMPLATE_FIELD_CLASSNAME} resize-none`}
           />
         </div>
       )}
@@ -559,12 +658,12 @@ function WorkItemInspector({
       {showBody && (
         <div className="space-y-1.5">
           <label className="text-[11px] uppercase tracking-wider text-muted">Comment body</label>
-          <textarea
+          <HintableTextarea
             value={bodyTemplate}
-            onChange={(e) => onUpdate({ bodyTemplate: e.target.value })}
+            onValueChange={(value) => onUpdate({ bodyTemplate: value })}
             rows={5}
             placeholder="Summarized findings:\n{{agentNode.output.text}}"
-            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+            className={`${TEMPLATE_FIELD_CLASSNAME} resize-none`}
           />
         </div>
       )}
@@ -638,25 +737,26 @@ function ProposalQueueInspector({
     queryKey: ['project-board-columns', projectId],
     queryFn: () => projectsApi.listBoardColumns(projectId),
   });
-  const candidatesPath = (data.candidatesPath as string) ?? '';
-  const reviewColumnId = (data.reviewColumnId as string) ?? '';
-  const kind = ((data.kind as WorkItemKind | undefined) ?? 'task') as WorkItemKind;
+  const candidatesPath = asString(data.candidatesPath);
+  const reviewColumnId = asString(data.reviewColumnId);
+  const kind = (asString(data.kind) || 'task') as WorkItemKind;
   const priority = typeof data.priority === 'number' ? data.priority : 1;
-  const labelsText = (data.labelsText as string) ?? '';
+  const labelsText = asString(data.labelsText);
 
   return (
     <div className="space-y-3">
       <p className="text-[10px] text-muted">
         Expects an upstream array of proposal candidates. Point this at something like{' '}
-        <span className="font-mono">agentNode.output.parsed</span>.
+        <span className="font-mono">run-agent-1.output.parsed</span>.
       </p>
       <div className="space-y-1.5">
         <label className="text-[11px] uppercase tracking-wider text-muted">Candidates path</label>
-        <input
+        <HintableInput
+          mode="raw"
           value={candidatesPath}
-          onChange={(e) => onUpdate({ candidatesPath: e.target.value })}
+          onValueChange={(value) => onUpdate({ candidatesPath: value })}
           placeholder="agentNode.output.parsed"
-          className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono"
+          className={TEMPLATE_FIELD_CLASSNAME}
         />
       </div>
       <div className="space-y-1.5">
@@ -705,12 +805,12 @@ function ProposalQueueInspector({
       </div>
       <div className="space-y-1.5">
         <label className="text-[11px] uppercase tracking-wider text-muted">Labels</label>
-        <textarea
+        <HintableTextarea
           value={labelsText}
-          onChange={(e) => onUpdate({ labelsText: e.target.value })}
+          onValueChange={(value) => onUpdate({ labelsText: value })}
           rows={2}
           placeholder="proposal-review, freelance"
-          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+          className={`${TEMPLATE_FIELD_CLASSNAME} resize-none`}
         />
       </div>
     </div>
@@ -724,18 +824,18 @@ function FeedFetchInspector({
   data: Record<string, unknown>;
   onUpdate: (patch: Record<string, unknown>) => void;
 }) {
-  const feedUrlsText = (data.feedUrlsText as string) ?? '';
+  const feedUrlsText = asString(data.feedUrlsText);
   const limit = typeof data.limit === 'number' ? data.limit : 50;
   return (
     <div className="space-y-3">
       <div className="space-y-1.5">
         <label className="text-[11px] uppercase tracking-wider text-muted">Feed URLs</label>
-        <textarea
+        <HintableTextarea
           value={feedUrlsText}
-          onChange={(e) => onUpdate({ feedUrlsText: e.target.value })}
+          onValueChange={(value) => onUpdate({ feedUrlsText: value })}
           rows={6}
           placeholder={'https://example.com/jobs.xml\nhttps://example.com/feed'}
-          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+          className={`${TEMPLATE_FIELD_CLASSNAME} resize-none`}
         />
       </div>
       <div className="space-y-1.5">
@@ -760,16 +860,16 @@ function HttpRequestInspector({
   data: Record<string, unknown>;
   onUpdate: (patch: Record<string, unknown>) => void;
 }) {
-  const url = (data.url as string) ?? '';
+  const url = asString(data.url);
   return (
     <div className="space-y-3">
       <div className="space-y-1.5">
         <label className="text-[11px] uppercase tracking-wider text-muted">URL template</label>
-        <input
+        <HintableInput
           value={url}
-          onChange={(e) => onUpdate({ url: e.target.value, method: 'GET' })}
+          onValueChange={(value) => onUpdate({ url: value, method: 'GET' })}
           placeholder="https://example.com/jobs/{{trigger.data.slug}}"
-          className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono"
+          className={TEMPLATE_FIELD_CLASSNAME}
         />
       </div>
       <p className="text-[10px] text-muted">
@@ -778,4 +878,225 @@ function HttpRequestInspector({
       </p>
     </div>
   );
+}
+
+function OutputReferencePanel({
+  isLoadingLatestRun,
+  latestRunDetail,
+  observedOutputsByNodeId,
+  upstreamNodes,
+}: {
+  isLoadingLatestRun: boolean;
+  latestRunDetail: WorkflowRunWithSteps | null | undefined;
+  observedOutputsByNodeId: Map<string, unknown>;
+  upstreamNodes: Node[];
+}) {
+  const insertion = useOutputInsertion();
+  const hasActiveField = insertion?.hasActiveField ?? false;
+  const latestRunExists = latestRunDetail !== null && latestRunDetail !== undefined;
+
+  return (
+    <section className="space-y-3 rounded-xl border border-edge bg-surface/60 p-3">
+      <div className="space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-[11px] uppercase tracking-wider text-muted">Output references</h3>
+          <span className="text-[10px] text-muted font-mono">
+            {hasActiveField ? 'click to insert' : 'select a field first'}
+          </span>
+        </div>
+        <p className="text-[10px] text-muted">
+          Suggestions come from connected upstream nodes only. Template fields insert with braces;
+          rule fields and raw path inputs insert the plain path.
+        </p>
+      </div>
+
+      {upstreamNodes.length === 0 ? (
+        <p className="text-[10px] text-muted">
+          Connect at least one earlier node to see available outputs here.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {upstreamNodes.map((upstreamNode) => {
+            const normalizedNode = {
+              data: normalizeData(upstreamNode.data),
+              id: upstreamNode.id,
+              type: upstreamNode.type ?? 'unknown',
+            };
+            const referenceKey = getNodeReferenceKey(normalizedNode);
+            const staticEntries = getStaticOutputHintEntries(normalizedNode);
+            const observedEntries = getObservedOutputHintEntries(
+              normalizedNode,
+              observedOutputsByNodeId.get(upstreamNode.id),
+            );
+
+            return (
+              <div key={upstreamNode.id} className="space-y-2 rounded-lg border border-edge/70 p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-medium text-white">
+                    {getOutputReferenceLabel(normalizedNode)}
+                  </p>
+                  <span className="text-[10px] text-muted font-mono">{referenceKey}</span>
+                </div>
+
+                <ReferenceSection
+                  entries={staticEntries}
+                  label="Likely paths"
+                  onInsert={(path) => insertion?.insertPath(path)}
+                  disabled={!hasActiveField}
+                />
+
+                {observedEntries.length > 0 && (
+                  <ReferenceSection
+                    entries={observedEntries}
+                    label="Latest run examples"
+                    onInsert={(path) => insertion?.insertPath(path)}
+                    disabled={!hasActiveField}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {isLoadingLatestRun && (
+        <p className="text-[10px] text-muted">Loading examples from the latest workflow run…</p>
+      )}
+
+      {!isLoadingLatestRun && !latestRunExists && upstreamNodes.length > 0 && (
+        <p className="text-[10px] text-muted">
+          No recent workflow runs yet, so only static path hints are available.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function ReferenceSection({
+  entries,
+  label,
+  onInsert,
+  disabled,
+}: {
+  entries: OutputHintEntry[];
+  label: string;
+  onInsert: (path: string) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[10px] uppercase tracking-wide text-muted">{label}</p>
+      <div className="space-y-1.5">
+        {entries.map((entry) => (
+          <ReferenceButton
+            key={`${label}:${entry.path}`}
+            entry={entry}
+            onInsert={onInsert}
+            disabled={disabled}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ReferenceButton({
+  entry,
+  onInsert,
+  disabled,
+}: {
+  entry: OutputHintEntry;
+  onInsert: (path: string) => void;
+  disabled: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => onInsert(entry.path)}
+      className="w-full rounded-md border border-edge/70 bg-background/60 px-2 py-1.5 text-left transition-colors hover:border-accent/60 hover:bg-accent/5 disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      <div className="text-[11px] text-white font-mono break-all">{entry.path}</div>
+      {entry.description && (
+        <div className="mt-1 text-[10px] text-muted">{entry.description}</div>
+      )}
+      {entry.preview && (
+        <div className="mt-1 text-[10px] text-muted font-mono break-all">{entry.preview}</div>
+      )}
+    </button>
+  );
+}
+
+function HintableInput({
+  mode = 'template',
+  onValueChange,
+  value,
+  ...props
+}: Omit<ComponentPropsWithoutRef<'input'>, 'onChange' | 'value'> & {
+  mode?: OutputInsertionMode;
+  onValueChange: (value: string) => void;
+  value: string;
+}) {
+  const binding = useOutputInsertionField<HTMLInputElement>({
+    mode,
+    onChange: onValueChange,
+    value,
+  });
+
+  return (
+    <input
+      {...props}
+      {...binding.bind}
+      value={value}
+      onChange={(event) => onValueChange(event.target.value)}
+    />
+  );
+}
+
+function HintableTextarea({
+  mode = 'template',
+  onValueChange,
+  value,
+  ...props
+}: Omit<ComponentPropsWithoutRef<'textarea'>, 'onChange' | 'value'> & {
+  mode?: OutputInsertionMode;
+  onValueChange: (value: string) => void;
+  value: string;
+}) {
+  const binding = useOutputInsertionField<HTMLTextAreaElement>({
+    mode,
+    onChange: onValueChange,
+    value,
+  });
+
+  return (
+    <textarea
+      {...props}
+      {...binding.bind}
+      value={value}
+      onChange={(event) => onValueChange(event.target.value)}
+    />
+  );
+}
+
+function nodeSupportsOutputReferences(type: string): boolean {
+  return (
+    type === 'agent.run' ||
+    type === 'logic.if' ||
+    type === 'board.work_item.create' ||
+    type === 'board.proposal.enqueue' ||
+    type === 'integration.feed.fetch' ||
+    type === 'integration.http.request'
+  );
+}
+
+function normalizeData(data: unknown): Record<string, unknown> {
+  return data && typeof data === 'object' && !Array.isArray(data)
+    ? (data as Record<string, unknown>)
+    : {};
+}
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
 }
