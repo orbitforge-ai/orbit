@@ -50,4 +50,10 @@ export const projectsApi = {
 
   deleteFile: (projectId: string, path: string): Promise<void> =>
     invoke('delete_project_workspace_file', { projectId, path }),
+
+  createDir: (projectId: string, path: string): Promise<void> =>
+    invoke('create_project_workspace_dir', { projectId, path }),
+
+  renameEntry: (projectId: string, from: string, to: string): Promise<void> =>
+    invoke('rename_project_workspace_entry', { projectId, from, to }),
 };

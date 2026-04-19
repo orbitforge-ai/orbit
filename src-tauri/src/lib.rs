@@ -265,6 +265,8 @@ pub fn run() {
             commands::workspace::read_workspace_file,
             commands::workspace::write_workspace_file,
             commands::workspace::delete_workspace_file,
+            commands::workspace::create_workspace_dir,
+            commands::workspace::rename_workspace_entry,
             commands::workspace::get_agent_config,
             commands::workspace::update_agent_config,
             commands::workspace::update_system_prompt,
@@ -309,6 +311,8 @@ pub fn run() {
             commands::projects::read_project_workspace_file,
             commands::projects::write_project_workspace_file,
             commands::projects::delete_project_workspace_file,
+            commands::projects::create_project_workspace_dir,
+            commands::projects::rename_project_workspace_entry,
             // Work items (project board)
             commands::work_items::list_work_items,
             commands::work_items::get_work_item,

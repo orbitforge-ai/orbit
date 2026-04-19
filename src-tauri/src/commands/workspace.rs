@@ -95,6 +95,24 @@ pub async fn delete_workspace_file(agent_id: String, path: String) -> Result<(),
 }
 
 #[tauri::command]
+pub async fn create_workspace_dir(agent_id: String, path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || workspace::create_workspace_dir(&agent_id, &path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn rename_workspace_entry(
+    agent_id: String,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || workspace::rename_workspace_entry(&agent_id, &from, &to))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn get_agent_config(agent_id: String) -> Result<AgentWorkspaceConfig, String> {
     tokio::task::spawn_blocking(move || workspace::load_agent_config(&agent_id))
         .await

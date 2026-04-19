@@ -17,6 +17,7 @@ import { Memory } from './screens/Memory';
 import { Settings } from './screens/Settings';
 import { AuthScreen } from './screens/Auth';
 import { BootScreen } from './components/BootScreen';
+import { ToastContainer } from './components/Toast';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -74,6 +75,7 @@ function AppContent() {
         {content}
         {settingsOpen ? <Settings onClose={closeSettings} /> : null}
       </main>
+      <ToastContainer />
     </div>
   );
 }

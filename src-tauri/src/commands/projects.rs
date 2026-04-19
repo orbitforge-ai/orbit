@@ -518,3 +518,25 @@ pub async fn delete_project_workspace_file(project_id: String, path: String) -> 
     .await
     .map_err(|e| e.to_string())?
 }
+
+#[tauri::command]
+pub async fn create_project_workspace_dir(project_id: String, path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        workspace::create_project_workspace_dir(&project_id, &path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn rename_project_workspace_entry(
+    project_id: String,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        workspace::rename_project_workspace_entry(&project_id, &from, &to)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}

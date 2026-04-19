@@ -150,6 +150,36 @@ pub fn delete_project_workspace_file(project_id: &str, relative_path: &str) -> R
     }
 }
 
+/// Create a directory inside a project workspace (path-sandboxed).
+pub fn create_project_workspace_dir(project_id: &str, relative_path: &str) -> Result<(), String> {
+    let root = project_workspace_dir(project_id);
+    if !root.exists() {
+        fs::create_dir_all(&root)
+            .map_err(|e| format!("failed to create project workspace: {}", e))?;
+    }
+    let path = validate_path(&root, relative_path)?;
+    fs::create_dir_all(&path).map_err(|e| format!("failed to create directory: {}", e))
+}
+
+/// Rename a file or folder inside a project workspace (path-sandboxed on both sides).
+pub fn rename_project_workspace_entry(
+    project_id: &str,
+    from: &str,
+    to: &str,
+) -> Result<(), String> {
+    let root = project_workspace_dir(project_id);
+    let from_path = validate_path(&root, from)?;
+    let to_path = validate_path(&root, to)?;
+    if to_path.exists() {
+        return Err(format!("destination already exists: {}", to));
+    }
+    if let Some(parent) = to_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create parent directories: {}", e))?;
+    }
+    fs::rename(&from_path, &to_path).map_err(|e| format!("failed to rename: {}", e))
+}
+
 /// Agent workspace configuration stored in config.json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -736,6 +766,35 @@ pub fn delete_workspace_file(agent_id: &str, relative_path: &str) -> Result<(), 
     } else {
         fs::remove_file(&path).map_err(|e| format!("failed to delete file: {}", e))
     }
+}
+
+/// Create a directory inside the agent's workspace (path-sandboxed).
+pub fn create_workspace_dir(agent_id: &str, relative_path: &str) -> Result<(), String> {
+    let root = agent_dir(agent_id);
+    let path = validate_path(&root, relative_path)?;
+    fs::create_dir_all(&path).map_err(|e| format!("failed to create directory: {}", e))
+}
+
+const PROTECTED_AGENT_FILES: &[&str] = &["system_prompt.md", "config.json", "pulse.md"];
+
+/// Rename a file or folder inside the agent's workspace (path-sandboxed on both sides).
+/// Refuses to rename the protected files at the agent root.
+pub fn rename_workspace_entry(agent_id: &str, from: &str, to: &str) -> Result<(), String> {
+    let root = agent_dir(agent_id);
+    let from_path = validate_path(&root, from)?;
+    let to_path = validate_path(&root, to)?;
+
+    if PROTECTED_AGENT_FILES.contains(&from) {
+        return Err(format!("cannot rename protected file: {}", from));
+    }
+    if to_path.exists() {
+        return Err(format!("destination already exists: {}", to));
+    }
+    if let Some(parent) = to_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create parent directories: {}", e))?;
+    }
+    fs::rename(&from_path, &to_path).map_err(|e| format!("failed to rename: {}", e))
 }
 
 /// Load the agent's workspace configuration from config.json.
