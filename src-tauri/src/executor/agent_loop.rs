@@ -25,6 +25,8 @@ const DEFAULT_MAX_TOTAL_TOKENS: u32 = 200_000;
 const DEFAULT_MAX_TOKENS_PER_CALL: u32 = 16384;
 const LLM_RETRY_ATTEMPTS: u32 = 3;
 const LLM_RETRY_BASE_DELAY_MS: u64 = 2000;
+const MAX_AUTO_CONTINUATIONS: u32 = 2;
+const AUTO_CONTINUE_REMINDER: &str = "You are not done yet. Continue working until the current task is complete. Do not stop after partial progress. If you are blocked, state the blocker explicitly and ask only for the missing input or permission.";
 
 // ─── Log writer ─────────────────────────────────────────────────────────────
 
@@ -235,6 +237,7 @@ pub async fn run_agent_loop(
     let mut cumulative_output_tokens: u32 = 0;
     let mut iteration: u32 = 0;
     let mut finish_summary: Option<String> = None;
+    let mut auto_continue_count: u32 = 0;
 
     // ── Main loop ────────────────────────────────────────────────────────
     loop {
@@ -377,18 +380,19 @@ pub async fn run_agent_loop(
                         }
                     }
                 }
-                let should_auto_continue =
-                    session_agent::should_auto_continue_after_end_turn(&response.content);
+                let should_auto_continue = auto_continue_count < MAX_AUTO_CONTINUATIONS
+                    && session_agent::should_auto_continue_after_end_turn(&response.content);
                 messages.push(ChatMessage {
                     role: "assistant".to_string(),
                     content: response.content.clone(),
                     created_at: None,
                 });
                 if should_auto_continue {
+                    auto_continue_count += 1;
                     messages.push(ChatMessage {
                         role: "user".to_string(),
                         content: vec![ContentBlock::Text {
-                            text: "You are not done yet. Continue working until the current task is complete. Do not stop after partial progress. If you are blocked, state the blocker explicitly and ask only for the missing input or permission.".to_string(),
+                            text: AUTO_CONTINUE_REMINDER.to_string(),
                         }],
                         created_at: None,
                     });
