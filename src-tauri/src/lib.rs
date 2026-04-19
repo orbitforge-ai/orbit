@@ -29,6 +29,9 @@ use std::sync::Arc;
 use tauri_plugin_log::{Builder, Target, TargetKind};
 use tracing::info;
 
+#[derive(Clone)]
+pub struct RuntimeAppHandleState(pub tauri::AppHandle);
+
 pub fn data_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     PathBuf::from(home).join(".orbit")
@@ -152,6 +155,7 @@ pub fn run() {
             app.manage(auth_state);
             app.manage(cloud_state);
             app.manage(db_pool.clone());
+            app.manage(RuntimeAppHandleState(app.handle().clone()));
             app.manage(executor_tx_state);
             app.manage(agent_semaphores.clone());
             app.manage(session_registry.clone());

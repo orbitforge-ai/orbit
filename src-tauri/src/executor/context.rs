@@ -41,6 +41,7 @@ pub struct ContextRequest {
     pub mode: ContextMode,
     pub session_id: Option<String>,
     pub session_type: Option<String>,
+    pub project_id: Option<String>,
     pub goal: Option<String>,
     pub ws_config: AgentWorkspaceConfig,
     /// Effective allowed-tool list, computed from the global allow-list minus
@@ -528,19 +529,97 @@ impl ContextStage for BasePromptStage {
             None
         };
 
+        let project_info = if let Some(ref project_id) = request.project_id {
+            let pool = db.0.clone();
+            let project_id = project_id.clone();
+            tokio::task::spawn_blocking(
+                move || -> Option<(String, String, i64, i64, Vec<(String, String, String)>)> {
+                    let conn = pool.get().ok()?;
+                    let project_name: String = conn
+                        .query_row(
+                            "SELECT name FROM projects WHERE id = ?1",
+                            rusqlite::params![project_id.clone()],
+                            |row| row.get(0),
+                        )
+                        .ok()?;
+                    let open_count: i64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM work_items
+                             WHERE project_id = ?1 AND status NOT IN ('done', 'cancelled')",
+                            rusqlite::params![project_id.clone()],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or(0);
+                    let active_count: i64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM work_items
+                             WHERE project_id = ?1 AND status IN ('in_progress', 'review', 'blocked')",
+                            rusqlite::params![project_id.clone()],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or(0);
+
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT id, title, status FROM work_items
+                             WHERE project_id = ?1 AND status IN ('in_progress', 'review', 'blocked')
+                             ORDER BY
+                               CASE status
+                                 WHEN 'blocked' THEN 0
+                                 WHEN 'in_progress' THEN 1
+                                 WHEN 'review' THEN 2
+                                 ELSE 3
+                               END,
+                               updated_at DESC
+                             LIMIT 5",
+                        )
+                        .ok()?;
+                    let items: Vec<(String, String, String)> = stmt
+                        .query_map(rusqlite::params![project_id.clone()], |row| {
+                            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                        })
+                        .ok()?
+                        .filter_map(|row| row.ok())
+                        .collect();
+
+                    Some((project_id, project_name, open_count, active_count, items))
+                },
+            )
+            .await
+            .ok()
+            .flatten()
+        } else {
+            None
+        };
+
         // List workspace files (top-level only, lightweight)
-        let workspace_files = workspace::list_workspace_files(&request.agent_id, "workspace")
-            .unwrap_or_default()
-            .iter()
-            .map(|f| {
-                if f.is_dir {
-                    format!("{}/", f.name)
-                } else {
-                    f.name.clone()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
+        let workspace_files = if let Some(project_id) = request.project_id.as_deref() {
+            workspace::list_project_workspace_files(project_id, "")
+                .unwrap_or_default()
+                .iter()
+                .map(|f| {
+                    if f.is_dir {
+                        format!("{}/", f.name)
+                    } else {
+                        f.name.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            workspace::list_workspace_files(&request.agent_id, "workspace")
+                .unwrap_or_default()
+                .iter()
+                .map(|f| {
+                    if f.is_dir {
+                        format!("{}/", f.name)
+                    } else {
+                        f.name.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
 
         // Tool names from actual resolved definitions (matches what the LLM receives)
         let (tool_names, has_task, has_work_item) = {
@@ -577,9 +656,36 @@ impl ContextStage for BasePromptStage {
             ));
         }
 
+        if let Some((project_id, project_name, open_count, active_count, active_items)) =
+            project_info
+        {
+            context_section.push_str(&format!(
+                "- Project: <data type=\"project_name\">{}</data> (id: `{}`)\n",
+                project_name, project_id
+            ));
+            context_section.push_str(&format!(
+                "- Project board: {} open items, {} active items\n",
+                open_count, active_count
+            ));
+            if !active_items.is_empty() {
+                context_section.push_str("\n### Active Project Work\n");
+                for (id, title, status) in active_items {
+                    context_section.push_str(&format!(
+                        "- `{}` [{}] <data type=\"work_item_title\">{}</data>\n",
+                        id, status, title
+                    ));
+                }
+            }
+        }
+
         if !workspace_files.is_empty() {
             context_section.push_str(&format!(
-                "- Workspace files: <data type=\"file_listing\">{}</data>\n",
+                "- {}: <data type=\"file_listing\">{}</data>\n",
+                if request.project_id.is_some() {
+                    "Project workspace files"
+                } else {
+                    "Workspace files"
+                },
                 workspace_files
             ));
         }

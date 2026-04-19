@@ -974,6 +974,14 @@ async fn do_llm_chat(
     let api_key = keychain::retrieve_api_key(provider_name)
         .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
 
+    let chat_project_id = session_worktree::load_session_project_id(db, session_id).await?;
+    if let Some(pid) = chat_project_id.as_deref() {
+        crate::commands::projects::assert_agent_in_project(db, pid, agent_id).await?;
+        if let Err(e) = workspace::init_project_workspace(pid) {
+            warn!(project_id = pid, "failed to init project workspace: {}", e);
+        }
+    }
+
     // Build context via pipeline (messages already loaded, pass them to avoid re-query)
     let pipeline = context::default_pipeline(memory_client.cloned());
     let allowed_tools = ContextRequest::effective_allowed_tools(&ws_config);
@@ -982,6 +990,7 @@ async fn do_llm_chat(
         mode: ContextMode::Chat,
         session_id: Some(session_id.to_string()),
         session_type: Some(session_type.to_string()),
+        project_id: chat_project_id.clone(),
         goal: None,
         ws_config: ws_config.clone(),
         allowed_tools,
@@ -1005,13 +1014,6 @@ async fn do_llm_chat(
     };
 
     let chat_worktree = session_worktree::load_session_worktree_state(db, session_id).await?;
-    let chat_project_id = session_worktree::load_session_project_id(db, session_id).await?;
-    if let Some(pid) = chat_project_id.as_deref() {
-        crate::commands::projects::assert_agent_in_project(db, pid, agent_id).await?;
-        if let Err(e) = workspace::init_project_workspace(pid) {
-            warn!(project_id = pid, "failed to init project workspace: {}", e);
-        }
-    }
     let tool_ctx = ToolExecutionContext::new_with_bus(
         agent_id,
         stream_id,

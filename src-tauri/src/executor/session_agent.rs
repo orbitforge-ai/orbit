@@ -93,6 +93,7 @@ pub async fn run_agent_session(
         mode: ContextMode::Chat,
         session_id: Some(session_id.to_string()),
         session_type,
+        project_id: project_id.clone(),
         goal: None,
         ws_config: ws_config.clone(),
         allowed_tools,

@@ -71,13 +71,15 @@ function StatusIcon({
 
 export function RunHistoryDrawer({
   workflowId,
+  focusRunId,
   onClose,
 }: {
   workflowId: string;
+  focusRunId?: string | null;
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(focusRunId ?? null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -91,6 +93,12 @@ export function RunHistoryDrawer({
     queryKey: ['workflow-runs', workflowId],
     queryFn: () => workflowRunsApi.list(workflowId),
   });
+
+  useEffect(() => {
+    if (focusRunId) {
+      setSelectedRunId(focusRunId);
+    }
+  }, [focusRunId]);
 
   useEffect(() => {
     if (!selectedRunId && runs.length > 0) {

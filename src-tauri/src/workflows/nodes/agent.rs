@@ -1,6 +1,15 @@
-use serde_json::json;
+use std::path::PathBuf;
 
-use crate::executor::{keychain, llm_provider, workspace};
+use serde_json::json;
+use tauri::Manager;
+
+use crate::auth::{AuthMode, AuthState};
+use crate::commands::users::ActiveUser;
+use crate::db::cloud::CloudClientState;
+use crate::executor::engine::{AgentSemaphores, ExecutorTx, SessionExecutionRegistry};
+use crate::executor::{agent_loop, workspace};
+use crate::memory_service::MemoryServiceState;
+use crate::models::task::AgentLoopConfig;
 use crate::workflows::nodes::{NodeExecutionContext, NodeOutcome};
 use crate::workflows::template::{
     parse_agent_output, render_agent_prompt, render_optional_template,
@@ -36,43 +45,72 @@ pub(super) async fn execute<R: tauri::Runtime>(
         .get("outputMode")
         .and_then(|v| v.as_str())
         .unwrap_or("text");
+    let max_iterations = ctx
+        .node
+        .data
+        .get("maxIterations")
+        .and_then(|v| v.as_u64())
+        .map(|value| value.min(u32::MAX as u64) as u32);
+    let max_total_tokens = ctx
+        .node
+        .data
+        .get("maxTotalTokens")
+        .and_then(|v| v.as_u64())
+        .map(|value| value.min(u32::MAX as u64) as u32);
     let prompt = render_agent_prompt(&template, context.as_deref(), output_mode, ctx.outputs);
 
     let ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
     if ws_config.provider.is_empty() {
         return Err(format!("agent {} has no provider configured", agent_id));
     }
-    let api_key = keychain::retrieve_api_key(&ws_config.provider).map_err(|_| {
-        format!(
-            "no API key configured for provider `{}`",
-            ws_config.provider
-        )
-    })?;
-    let provider = llm_provider::create_provider(&ws_config.provider, api_key)?;
+    let runtime_app = ctx
+        .app
+        .try_state::<crate::RuntimeAppHandleState>()
+        .map(|state| state.0.clone())
+        .ok_or_else(|| "agent.run requires the managed runtime app handle".to_string())?;
+    let executor_tx = runtime_app.state::<ExecutorTx>().0.clone();
+    let agent_semaphores = runtime_app.state::<AgentSemaphores>().inner().clone();
+    let session_registry = runtime_app
+        .state::<SessionExecutionRegistry>()
+        .inner()
+        .clone();
+    let permission_registry = runtime_app.state::<crate::executor::permissions::PermissionRegistry>();
+    let memory_client = ctx
+        .app
+        .state::<Option<MemoryServiceState>>()
+        .as_ref()
+        .map(|state| state.client.clone());
+    let memory_user_id = resolve_memory_user_id(ctx.app).await;
+    let cloud_client = ctx.app.state::<CloudClientState>().get();
 
-    let llm_config = llm_provider::LlmConfig {
-        model: ws_config.model.clone(),
-        max_tokens: 4_096,
-        temperature: Some(ws_config.temperature),
-        system_prompt: ws_config
-            .role_system_instructions
-            .clone()
-            .unwrap_or_default(),
+    let run_cfg = AgentLoopConfig {
+        goal: prompt.clone(),
+        model: None,
+        max_iterations,
+        max_total_tokens,
+        template_vars: None,
     };
-    let messages = vec![llm_provider::ChatMessage {
-        role: "user".to_string(),
-        content: vec![llm_provider::ContentBlock::Text {
-            text: prompt.clone(),
-        }],
-        created_at: None,
-    }];
+    let log_path = workflow_agent_log_path(&agent_id, ctx.workflow_id, &ctx.node.id);
+    let outcome = agent_loop::run_agent_loop_for_workflow(
+        ctx.run_id,
+        &agent_id,
+        &run_cfg,
+        &log_path,
+        &runtime_app,
+        ctx.db,
+        &executor_tx,
+        Some(ctx.project_id),
+        &agent_semaphores,
+        &session_registry,
+        &permission_registry,
+        memory_client.as_ref(),
+        &memory_user_id,
+        cloud_client,
+    )
+    .await
+    .map_err(|e| format!("agent.run LLM loop failed: {}", e))?;
 
-    let response = provider
-        .chat_complete(&llm_config, &messages, &[])
-        .await
-        .map_err(|e| format!("agent.run LLM call failed: {}", e))?;
-
-    let text = llm_provider::extract_text_response(&response).unwrap_or_default();
+    let text = outcome.finish_summary.unwrap_or_default();
     let parsed = parse_agent_output(output_mode, &text)?;
 
     Ok(NodeOutcome {
@@ -81,9 +119,28 @@ pub(super) async fn execute<R: tauri::Runtime>(
             "prompt": prompt,
             "context": context,
             "outputMode": output_mode,
+            "iterations": outcome.iterations,
+            "usage": {
+                "inputTokens": outcome.input_tokens,
+                "outputTokens": outcome.output_tokens,
+                "totalTokens": outcome.input_tokens + outcome.output_tokens,
+            },
             "text": text,
             "parsed": parsed,
         }),
         next_handle: None,
     })
+}
+
+async fn resolve_memory_user_id<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
+    match app.state::<AuthState>().get().await {
+        AuthMode::Cloud(session) => session.user_id,
+        _ => app.state::<ActiveUser>().get().await,
+    }
+}
+
+fn workflow_agent_log_path(agent_id: &str, workflow_id: &str, node_id: &str) -> PathBuf {
+    workspace::agent_dir(agent_id)
+        .join("workflow_runs")
+        .join(format!("{}-{}.log", workflow_id, node_id))
 }

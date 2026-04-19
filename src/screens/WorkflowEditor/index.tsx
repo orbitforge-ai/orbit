@@ -279,6 +279,7 @@ function Editor({ workflowId }: { workflowId: string }) {
   const [dirty, setDirty] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [runDrawerOpen, setRunDrawerOpen] = useState(false);
+  const [runDrawerFocusRunId, setRunDrawerFocusRunId] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [pendingCreateConnection, setPendingCreateConnection] = useState<PendingCreateConnection | null>(null);
   const connectStartRef = useRef<Pick<PendingCreateConnection, 'source' | 'sourceHandle'> | null>(null);
@@ -618,10 +619,12 @@ function Editor({ workflowId }: { workflowId: string }) {
 
   const runMutation = useMutation({
     mutationFn: () => workflowRunsApi.start(workflowId, {}),
-    onSuccess: () => {
+    onSuccess: (run) => {
       setRunError(null);
+      setRunDrawerFocusRunId(run.id);
       setRunDrawerOpen(true);
       queryClient.invalidateQueries({ queryKey: ['workflow-runs', workflowId] });
+      queryClient.invalidateQueries({ queryKey: ['workflow-run', run.id] });
     },
     onError: (err) => {
       setRunError(String(err));
@@ -723,7 +726,10 @@ function Editor({ workflowId }: { workflowId: string }) {
           Enabled
         </label>
         <button
-          onClick={() => setRunDrawerOpen(true)}
+          onClick={() => {
+            setRunDrawerFocusRunId(null);
+            setRunDrawerOpen(true);
+          }}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-edge hover:bg-edge/30 text-white text-xs font-medium transition-colors"
         >
           <History size={12} />
@@ -838,7 +844,11 @@ function Editor({ workflowId }: { workflowId: string }) {
       {runDrawerOpen && (
         <RunHistoryDrawer
           workflowId={workflowId}
-          onClose={() => setRunDrawerOpen(false)}
+          focusRunId={runDrawerFocusRunId}
+          onClose={() => {
+            setRunDrawerOpen(false);
+            setRunDrawerFocusRunId(null);
+          }}
         />
       )}
       </div>

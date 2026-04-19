@@ -7,8 +7,9 @@ use ulid::Ulid;
 
 use crate::commands::work_items::{
     assert_agent_in_project, block_work_item_with_db, claim_work_item_with_db,
-    complete_work_item_with_db, create_work_item_with_db, fetch_work_item_project,
-    move_work_item_with_db, unblock_work_item_with_db, update_work_item_with_db, WorkItemError,
+    complete_work_item_with_db, create_work_item_with_db, delete_work_item_with_db,
+    fetch_work_item_project, move_work_item_with_db, unblock_work_item_with_db,
+    update_work_item_with_db, WorkItemError,
 };
 use crate::db::DbPool;
 use crate::executor::llm_provider::ToolDefinition;
@@ -28,14 +29,14 @@ impl ToolHandler for WorkItemTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Manipulate the project kanban board. Work items are persistent, project-scoped cards visible to every agent assigned to the project. When a user asks to create, update, or track a task for the project, prefer this tool over the session-local `task` tool. Actions: list, get, create, update, claim, move, block, unblock, complete, comment, list_comments. `project_id` is inferred from the current session when omitted. `review` means 'another agent should verify'; `in_progress` means 'I am actively on it'.".to_string(),
+            description: "Manipulate the project kanban board. Work items are persistent, project-scoped cards visible to every agent assigned to the project. When a user asks to create, update, or track a task for the project, prefer this tool over the session-local `task` tool. Actions: list, get, create, update, delete, claim, move, block, unblock, complete, comment, list_comments. `project_id` is inferred from the current session when omitted. `review` means 'another agent should verify'; `in_progress` means 'I am actively on it'.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "enum": [
-                            "list", "get", "create", "update", "claim",
+                            "list", "get", "create", "update", "delete", "claim",
                             "move", "block", "unblock", "complete",
                             "comment", "list_comments"
                         ],
@@ -142,6 +143,20 @@ impl ToolHandler for WorkItemTool {
                     update_work_item(db, id, title, description, kind, priority, labels).await?;
                 spawn_cloud_upsert(ctx, &item);
                 let result = mutation_result("updated", &item)?;
+                Ok((result, false))
+            }
+            "delete" => {
+                let id = required_str(input, "id", "delete")?;
+                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
+                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                delete_work_item(db, id).await?;
+                spawn_cloud_delete(ctx, id);
+                let result = serde_json::to_string_pretty(&json!({
+                    "status": "deleted",
+                    "id": id,
+                    "project_id": project_id,
+                }))
+                .map_err(|e| format!("work_item: serialize: {}", e))?;
                 Ok((result, false))
             }
             "claim" => {
@@ -408,6 +423,17 @@ fn spawn_cloud_upsert_comment(ctx: &ToolExecutionContext, comment: &WorkItemComm
     }
 }
 
+fn spawn_cloud_delete(ctx: &ToolExecutionContext, id: &str) {
+    if let Some(client) = ctx.cloud_client.clone() {
+        let id = id.to_string();
+        tokio::spawn(async move {
+            if let Err(e) = client.delete_by_id("work_items", &id).await {
+                tracing::warn!("cloud delete work_item (tool): {}", e);
+            }
+        });
+    }
+}
+
 // ── DB operations (async wrappers that reuse the command helpers) ────────────
 
 const WORK_ITEM_COLUMNS: &str =
@@ -489,6 +515,10 @@ async fn get_work_item(db: &DbPool, id: &str) -> Result<WorkItem, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+async fn delete_work_item(db: &DbPool, id: &str) -> Result<(), String> {
+    delete_work_item_with_db(db, id.to_string()).await
 }
 
 #[allow(clippy::too_many_arguments)]

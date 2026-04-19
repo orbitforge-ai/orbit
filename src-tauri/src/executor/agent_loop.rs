@@ -72,27 +72,36 @@ impl AgentLog {
     }
 }
 
+pub(crate) struct AgentLoopOutcome {
+    pub finish_summary: Option<String>,
+    pub iterations: u32,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub duration_ms: i64,
+}
+
 // ─── Agent loop ─────────────────────────────────────────────────────────────
 
-pub async fn run_agent_loop(
+async fn execute_agent_loop_internal(
     run_id: &str,
     agent_id: &str,
     cfg: &AgentLoopConfig,
     log_path: &PathBuf,
-    _timeout_secs: u64,
     app: &tauri::AppHandle,
-    mut cancel: oneshot::Receiver<()>,
+    mut cancel: Option<&mut oneshot::Receiver<()>>,
     db: &DbPool,
     executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
     chain_depth: i64,
     is_sub_agent: bool,
+    project_id: Option<&str>,
+    persist_run_metadata: bool,
     agent_semaphores: &AgentSemaphores,
     session_registry: &SessionExecutionRegistry,
     permission_registry: &PermissionRegistry,
     memory_client: Option<&MemoryClient>,
     memory_user_id: &str,
     cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
-) -> Result<ProcessResult, String> {
+) -> Result<AgentLoopOutcome, String> {
     let start = std::time::Instant::now();
     let log = AgentLog::new();
 
@@ -128,6 +137,13 @@ pub async fn run_agent_loop(
         }
     }
 
+    if let Some(pid) = project_id {
+        crate::commands::projects::assert_agent_in_project(db, pid, agent_id).await?;
+        if let Err(e) = workspace::init_project_workspace(pid) {
+            warn!(project_id = pid, "failed to init project workspace: {}", e);
+        }
+    }
+
     // ── Build context via pipeline ──────────────────────────────────────
     let pipeline = context::default_pipeline(memory_client.cloned());
     let allowed_tools = ContextRequest::effective_allowed_tools(&ws_config);
@@ -136,6 +152,7 @@ pub async fn run_agent_loop(
         mode: ContextMode::AgentLoop,
         session_id: None,
         session_type: None,
+        project_id: project_id.map(str::to_string),
         goal: Some(goal.clone()),
         ws_config: ws_config.clone(),
         allowed_tools,
@@ -171,7 +188,7 @@ pub async fn run_agent_loop(
             agent_semaphores.clone(),
             session_registry.clone(),
             None,
-            None,
+            project_id,
         )
         .with_permission_registry(permission_registry.clone())
         .with_allow_sub_agents(false)
@@ -190,7 +207,7 @@ pub async fn run_agent_loop(
             agent_semaphores.clone(),
             session_registry.clone(),
             None,
-            None,
+            project_id,
         )
         .with_permission_registry(permission_registry.clone())
         .with_memory_client(memory_client.cloned())
@@ -252,22 +269,22 @@ pub async fn run_agent_loop(
 
     // ── Main loop ────────────────────────────────────────────────────────
     loop {
-        // Check cancellation (Ok = explicit cancel, Closed = sender dropped)
-        match cancel.try_recv() {
-            Ok(()) => {
-                info!(run_id = run_id, "agent loop cancelled");
-                log.flush_to_file(log_path);
-                return Err("cancelled".to_string());
+        if let Some(cancel_rx) = cancel.as_mut() {
+            match cancel_rx.try_recv() {
+                Ok(()) => {
+                    info!(run_id = run_id, "agent loop cancelled");
+                    log.flush_to_file(log_path);
+                    return Err("cancelled".to_string());
+                }
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    info!(run_id = run_id, "agent loop cancel channel closed");
+                    log.flush_to_file(log_path);
+                    return Err("cancelled".to_string());
+                }
+                Err(oneshot::error::TryRecvError::Empty) => {}
             }
-            Err(oneshot::error::TryRecvError::Closed) => {
-                info!(run_id = run_id, "agent loop cancel channel closed");
-                log.flush_to_file(log_path);
-                return Err("cancelled".to_string());
-            }
-            Err(oneshot::error::TryRecvError::Empty) => { /* not cancelled, continue */ }
         }
 
-        // Check iteration limit
         if iteration >= max_iterations {
             warn!(run_id = run_id, "agent loop hit iteration limit");
             log.log(
@@ -281,15 +298,13 @@ pub async fn run_agent_loop(
                     ),
                 )],
             );
-            // Ask for summary before breaking
             messages.push(ChatMessage {
-        role: "user".to_string(),
-        content: vec![ContentBlock::Text {
-          text: "You have reached the maximum number of iterations. Please provide a final summary of what you accomplished and what remains to be done.".to_string(),
-        }],
-        created_at: None,
-      });
-            // One more LLM call for the summary
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "You have reached the maximum number of iterations. Please provide a final summary of what you accomplished and what remains to be done.".to_string(),
+                }],
+                created_at: None,
+            });
             if let Ok(resp) = call_llm_with_retry(
                 provider.as_ref(),
                 &llm_config,
@@ -304,11 +319,18 @@ pub async fn run_agent_loop(
             {
                 cumulative_input_tokens += resp.usage.input_tokens;
                 cumulative_output_tokens += resp.usage.output_tokens;
+                if finish_summary.is_none() {
+                    finish_summary = extract_text_summary(&resp.content);
+                }
+                messages.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: resp.content,
+                    created_at: None,
+                });
             }
             break;
         }
 
-        // Check token budget
         let total_tokens = cumulative_input_tokens + cumulative_output_tokens;
         if total_tokens >= max_total_tokens {
             warn!(run_id = run_id, "agent loop hit token budget");
@@ -337,7 +359,6 @@ pub async fn run_agent_loop(
         );
         emit_agent_iteration(app, run_id, iteration, "llm_call", None, total_tokens);
 
-        // ── LLM call ────────────────────────────────────────────────
         let response = match call_llm_with_retry(
             provider.as_ref(),
             &llm_config,
@@ -360,7 +381,6 @@ pub async fn run_agent_loop(
         cumulative_input_tokens += response.usage.input_tokens;
         cumulative_output_tokens += response.usage.output_tokens;
 
-        // Buffer the streamed LLM text into the log
         for block in &response.content {
             if let ContentBlock::Text { text } = block {
                 let mut buf = log.buffer.lock().unwrap();
@@ -368,28 +388,20 @@ pub async fn run_agent_loop(
             }
         }
 
-        // Update run metadata in DB
-        update_run_metadata(
-            db,
-            run_id,
-            iteration,
-            cumulative_input_tokens,
-            cumulative_output_tokens,
-        );
+        if persist_run_metadata {
+            update_run_metadata(
+                db,
+                run_id,
+                iteration,
+                cumulative_input_tokens,
+                cumulative_output_tokens,
+            );
+        }
 
-        // ── Handle response ─────────────────────────────────────────
         match response.stop_reason {
             llm_provider::StopReason::EndTurn => {
-                // Capture last text as finish_summary if finish tool wasn't called
                 if finish_summary.is_none() {
-                    for block in response.content.iter().rev() {
-                        if let ContentBlock::Text { text } = block {
-                            if !text.trim().is_empty() {
-                                finish_summary = Some(text.clone());
-                                break;
-                            }
-                        }
-                    }
+                    finish_summary = extract_text_summary(&response.content);
                 }
                 let should_auto_continue = auto_continue_count < MAX_AUTO_CONTINUATIONS
                     && session_agent::should_auto_continue_after_end_turn(&response.content);
@@ -459,11 +471,10 @@ pub async fn run_agent_loop(
                         .await
                         {
                             Ok((result, is_finish)) => {
-                                // Wrap tool output in data tags to signal untrusted content
                                 let wrapped = format!(
-                  "<tool_result name=\"{}\" data_source=\"untrusted\">{}</tool_result>",
-                  name, result
-                );
+                                    "<tool_result name=\"{}\" data_source=\"untrusted\">{}</tool_result>",
+                                    name, result
+                                );
                                 tool_results.push(ContentBlock::ToolResult {
                                     tool_use_id: id.clone(),
                                     content: wrapped,
@@ -512,18 +523,15 @@ pub async fn run_agent_loop(
             }
 
             llm_provider::StopReason::MaxTokens => {
-                // When max_tokens truncates mid-tool-use, the tool input JSON is
-                // incomplete. We must still provide tool_result blocks so the next
-                // API call doesn't fail with a missing-tool-result 400 error.
                 let mut tool_error_results: Vec<ContentBlock> = Vec::new();
                 for block in &response.content {
                     if let ContentBlock::ToolUse { id, name, .. } = block {
                         warn!(run_id = run_id, tool = %name, "tool_use truncated by max_tokens");
                         tool_error_results.push(ContentBlock::ToolResult {
-              tool_use_id: id.clone(),
-              content: "Error: your previous tool call was truncated because the response exceeded the token limit. Please retry with a shorter input, or break the work into smaller steps.".to_string(),
-              is_error: true,
-            });
+                            tool_use_id: id.clone(),
+                            content: "Error: your previous tool call was truncated because the response exceeded the token limit. Please retry with a shorter input, or break the work into smaller steps.".to_string(),
+                            is_error: true,
+                        });
                     }
                 }
 
@@ -542,12 +550,12 @@ pub async fn run_agent_loop(
                 }
 
                 messages.push(ChatMessage {
-          role: "user".to_string(),
-          content: vec![ContentBlock::Text {
-            text: "Your response was cut off due to the token limit. Please continue where you left off. If you were writing a file, try breaking the content into smaller pieces.".to_string(),
-          }],
-          created_at: None,
-        });
+                    role: "user".to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: "Your response was cut off due to the token limit. Please continue where you left off. If you were writing a file, try breaking the content into smaller pieces.".to_string(),
+                    }],
+                    created_at: None,
+                });
                 log.log(
                     app,
                     run_id,
@@ -560,7 +568,6 @@ pub async fn run_agent_loop(
         }
     }
 
-    // ── Save conversation to memory ──────────────────────────────────────
     let total_tokens = cumulative_input_tokens + cumulative_output_tokens;
     emit_agent_iteration(app, run_id, iteration, "finished", None, total_tokens);
 
@@ -589,16 +596,16 @@ pub async fn run_agent_loop(
             run_id,
             vec![("stdout".to_string(), format!("Summary: {}", summary))],
         );
-        // Persist finish_summary into run metadata so callers (e.g. spawn_sub_agents) can read it
-        if let Ok(conn) = db.get() {
-            let _ = conn.execute(
-        "UPDATE runs SET metadata = json_set(COALESCE(metadata, '{}'), '$.finish_summary', ?1) WHERE id = ?2",
-        rusqlite::params![summary, run_id],
-      );
+        if persist_run_metadata {
+            if let Ok(conn) = db.get() {
+                let _ = conn.execute(
+                    "UPDATE runs SET metadata = json_set(COALESCE(metadata, '{}'), '$.finish_summary', ?1) WHERE id = ?2",
+                    rusqlite::params![summary, run_id],
+                );
+            }
         }
     }
 
-    // Persist conversation history
     let conversation_json = serde_json::to_string_pretty(&messages).unwrap_or_default();
     let memory_path = format!("memory/conversation_{}.json", run_id);
     let _ = workspace::write_workspace_file(agent_id, &memory_path, &conversation_json);
@@ -613,14 +620,102 @@ pub async fn run_agent_loop(
         iteration,
     );
 
-    // Write log file to disk
     log.flush_to_file(log_path);
 
     let duration_ms = start.elapsed().as_millis() as i64;
-    Ok(ProcessResult {
-        exit_code: 0,
+    Ok(AgentLoopOutcome {
+        finish_summary,
+        iterations: iteration,
+        input_tokens: cumulative_input_tokens,
+        output_tokens: cumulative_output_tokens,
         duration_ms,
     })
+}
+
+pub async fn run_agent_loop(
+    run_id: &str,
+    agent_id: &str,
+    cfg: &AgentLoopConfig,
+    log_path: &PathBuf,
+    _timeout_secs: u64,
+    app: &tauri::AppHandle,
+    mut cancel: oneshot::Receiver<()>,
+    db: &DbPool,
+    executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
+    chain_depth: i64,
+    is_sub_agent: bool,
+    agent_semaphores: &AgentSemaphores,
+    session_registry: &SessionExecutionRegistry,
+    permission_registry: &PermissionRegistry,
+    memory_client: Option<&MemoryClient>,
+    memory_user_id: &str,
+    cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+) -> Result<ProcessResult, String> {
+    let outcome = execute_agent_loop_internal(
+        run_id,
+        agent_id,
+        cfg,
+        log_path,
+        app,
+        Some(&mut cancel),
+        db,
+        executor_tx,
+        chain_depth,
+        is_sub_agent,
+        None,
+        true,
+        agent_semaphores,
+        session_registry,
+        permission_registry,
+        memory_client,
+        memory_user_id,
+        cloud_client,
+    )
+    .await?;
+
+    Ok(ProcessResult {
+        exit_code: 0,
+        duration_ms: outcome.duration_ms,
+    })
+}
+
+pub async fn run_agent_loop_for_workflow(
+    run_id: &str,
+    agent_id: &str,
+    cfg: &AgentLoopConfig,
+    log_path: &PathBuf,
+    app: &tauri::AppHandle,
+    db: &DbPool,
+    executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
+    project_id: Option<&str>,
+    agent_semaphores: &AgentSemaphores,
+    session_registry: &SessionExecutionRegistry,
+    permission_registry: &PermissionRegistry,
+    memory_client: Option<&MemoryClient>,
+    memory_user_id: &str,
+    cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+) -> Result<AgentLoopOutcome, String> {
+    execute_agent_loop_internal(
+        run_id,
+        agent_id,
+        cfg,
+        log_path,
+        app,
+        None,
+        db,
+        executor_tx,
+        0,
+        false,
+        project_id,
+        false,
+        agent_semaphores,
+        session_registry,
+        permission_registry,
+        memory_client,
+        memory_user_id,
+        cloud_client,
+    )
+    .await
 }
 
 // ─── Agent prompt (single-shot) ─────────────────────────────────────────────
@@ -677,6 +772,7 @@ pub async fn run_agent_prompt(
         mode: ContextMode::SingleShot,
         session_id: None,
         session_type: None,
+        project_id: None,
         goal: Some(cfg.prompt.clone()),
         ws_config: ws_config.clone(),
         allowed_tools,
@@ -936,6 +1032,14 @@ pub async fn run_pulse(
     }).await
     .map_err(|e| e.to_string())??;
 
+    let pulse_project_id = session_worktree::load_session_project_id(db, &session_id).await?;
+    if let Some(pid) = pulse_project_id.as_deref() {
+        crate::commands::projects::assert_agent_in_project(db, pid, agent_id).await?;
+        if let Err(e) = crate::executor::workspace::init_project_workspace(pid) {
+            tracing::warn!(project_id = pid, "failed to init project workspace: {}", e);
+        }
+    }
+
     // ── Build context via pipeline ──────────────────────────────────────
     let pipeline = context::default_pipeline(memory_client.cloned());
     let allowed_tools = ContextRequest::effective_allowed_tools(&ws_config);
@@ -944,6 +1048,7 @@ pub async fn run_pulse(
         mode: ContextMode::Pulse,
         session_id: Some(session_id.clone()),
         session_type: Some("pulse".to_string()),
+        project_id: pulse_project_id.clone(),
         goal: Some(goal.to_string()),
         ws_config: ws_config.clone(),
         allowed_tools,
@@ -984,13 +1089,6 @@ pub async fn run_pulse(
 
     // ── Build tool execution context ────────────────────────────────────
     let pulse_worktree = session_worktree::load_session_worktree_state(db, &session_id).await?;
-    let pulse_project_id = session_worktree::load_session_project_id(db, &session_id).await?;
-    if let Some(pid) = pulse_project_id.as_deref() {
-        crate::commands::projects::assert_agent_in_project(db, pid, agent_id).await?;
-        if let Err(e) = crate::executor::workspace::init_project_workspace(pid) {
-            tracing::warn!(project_id = pid, "failed to init project workspace: {}", e);
-        }
-    }
     let tool_ctx = ToolExecutionContext::new_with_bus(
         agent_id,
         &stream_id,
@@ -1231,4 +1329,11 @@ fn save_conversation_to_db(
       ]
     );
     }
+}
+
+fn extract_text_summary(content: &[ContentBlock]) -> Option<String> {
+    content.iter().rev().find_map(|block| match block {
+        ContentBlock::Text { text } if !text.trim().is_empty() => Some(text.clone()),
+        _ => None,
+    })
 }
