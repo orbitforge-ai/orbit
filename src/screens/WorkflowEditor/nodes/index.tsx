@@ -1,5 +1,6 @@
 import { Handle, NodeProps, Position } from '@xyflow/react';
 import { nodeMeta } from '../nodeRegistry';
+import { describeWorkflowSchedule } from '../scheduleConfig';
 
 const NODE_BASE =
   'rounded-lg border bg-surface text-white text-xs shadow-sm min-w-[160px] ' +
@@ -8,6 +9,10 @@ const NODE_BASE =
 export function TriggerNode({ data, type, selected }: NodeProps) {
   const meta = nodeMeta(type);
   const Icon = meta?.icon;
+  const description =
+    type === 'trigger.schedule'
+      ? describeWorkflowSchedule((data as Record<string, unknown>) ?? {})
+      : (data as { description?: string }).description ?? 'Trigger';
   return (
     <div
       className={`${NODE_BASE} ${selected ? 'border-accent' : 'border-edge'}`}
@@ -19,7 +24,7 @@ export function TriggerNode({ data, type, selected }: NodeProps) {
         </span>
       </div>
       <div className="px-3 py-2 text-muted">
-        {(data as { description?: string }).description ?? 'Trigger'}
+        {description}
       </div>
       <Handle type="source" position={Position.Right} className="!bg-accent" />
     </div>

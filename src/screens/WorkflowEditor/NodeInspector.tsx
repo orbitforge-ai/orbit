@@ -2,9 +2,11 @@ import { useQuery } from '@tanstack/react-query';
 import { Node } from '@xyflow/react';
 import { agentsApi } from '../../api/agents';
 import { Agent, RuleGroup, RuleNode } from '../../types';
+import { RecurringPicker } from '../ScheduleBuilder/RecurringPicker';
 import { nodeMeta } from './nodeRegistry';
 import { RuleBuilder } from './RuleBuilder';
 import { ruleToSentence } from './ruleSentence';
+import { getWorkflowScheduleConfig } from './scheduleConfig';
 
 interface Props {
   node: Node | null;
@@ -67,17 +69,14 @@ function ScheduleInspector({
   data: Record<string, unknown>;
   onUpdate: (patch: Record<string, unknown>) => void;
 }) {
-  const cron = (data.cron as string) ?? '';
+  const config = getWorkflowScheduleConfig(data);
   return (
     <div className="space-y-2">
-      <label className="text-[11px] uppercase tracking-wider text-muted">Cron expression</label>
-      <input
-        value={cron}
-        onChange={(e) => onUpdate({ cron: e.target.value })}
-        placeholder="0 * * * *"
-        className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono"
+      <label className="text-[11px] uppercase tracking-wider text-muted">Schedule</label>
+      <RecurringPicker
+        value={config}
+        onChange={(next) => onUpdate({ ...next, cron: undefined })}
       />
-      <p className="text-[10px] text-muted">Standard cron — minute hour day month weekday.</p>
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
   Timer,
 } from 'lucide-react';
 import type { WorkflowNodeType } from '../../types';
+import { DEFAULT_WORKFLOW_SCHEDULE } from './scheduleConfig';
 
 export interface NodeMeta {
   type: WorkflowNodeType;
@@ -33,7 +34,7 @@ export const NODE_REGISTRY: NodeMeta[] = [
     label: 'Schedule',
     group: 'Triggers',
     icon: Timer,
-    defaultData: { cron: '0 * * * *' },
+    defaultData: DEFAULT_WORKFLOW_SCHEDULE as unknown as Record<string, unknown>,
   },
   {
     type: 'agent.run',

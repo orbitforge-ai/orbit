@@ -16,6 +16,7 @@ import { WorkflowEditor } from './screens/WorkflowEditor';
 import { Memory } from './screens/Memory';
 import { Settings } from './screens/Settings';
 import { AuthScreen } from './screens/Auth';
+import { BootScreen } from './components/BootScreen';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -45,8 +46,7 @@ function AppContent() {
     return () => { unlisten.then(f => f()); };
   }, [queryClient]);
 
-  // Not yet loaded — render nothing (avoids flash)
-  if (state === null) return null;
+  if (state === null) return <BootScreen />;
 
   // Show auth screen on first launch or after logout
   if (state.mode === 'unset') return <AuthScreen />;

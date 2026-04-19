@@ -74,6 +74,143 @@ body,
   -webkit-font-smoothing: antialiased;
 }
 
+body {
+  background:
+    radial-gradient(circle at top, rgba(99, 102, 241, 0.2), transparent 38%),
+    linear-gradient(180deg, #121522 0%, #0f1117 58%, #0a0c12 100%);
+}
+
+#root {
+  isolation: isolate;
+}
+
+.boot-screen {
+  position: relative;
+  display: flex;
+  min-height: 100%;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top, rgba(99, 102, 241, 0.18), transparent 34%),
+    linear-gradient(180deg, rgba(15, 17, 23, 0.96) 0%, rgba(10, 12, 18, 1) 100%);
+}
+
+.boot-screen__halo {
+  position: absolute;
+  inset: auto auto 12% 50%;
+  width: min(72vw, 42rem);
+  height: min(72vw, 42rem);
+  transform: translateX(-50%);
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.24), transparent 68%);
+  filter: blur(24px);
+  pointer-events: none;
+}
+
+.boot-screen__panel {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: min(calc(100vw - 3rem), 28rem);
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  border: 1px solid rgba(74, 77, 110, 0.32);
+  border-radius: 1.5rem;
+  background: linear-gradient(180deg, rgba(26, 29, 39, 0.92), rgba(15, 17, 23, 0.88));
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.45);
+  padding: 2rem;
+  text-align: center;
+  backdrop-filter: blur(14px);
+}
+
+.boot-screen__mark {
+  position: relative;
+  width: 5rem;
+  height: 5rem;
+}
+
+.boot-screen__ring,
+.boot-screen__core {
+  position: absolute;
+  inset: 50%;
+  border-radius: 9999px;
+  transform: translate(-50%, -50%);
+}
+
+.boot-screen__ring--outer {
+  width: 100%;
+  height: 100%;
+  border: 1px solid rgba(129, 140, 248, 0.28);
+  box-shadow: 0 0 40px rgba(99, 102, 241, 0.18);
+  animation: boot-orbit 1.8s linear infinite;
+}
+
+.boot-screen__ring--inner {
+  width: 66%;
+  height: 66%;
+  border: 2px solid rgba(165, 180, 252, 0.72);
+  border-top-color: rgba(165, 180, 252, 0.18);
+  animation: boot-spin 1s linear infinite;
+}
+
+.boot-screen__core {
+  width: 26%;
+  height: 26%;
+  background: radial-gradient(circle at 30% 30%, #c7d2fe 0%, #818cf8 45%, #4f46e5 100%);
+  box-shadow: 0 0 30px rgba(99, 102, 241, 0.5);
+}
+
+.boot-screen__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.boot-screen__eyebrow {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: rgba(165, 180, 252, 0.9);
+}
+
+.boot-screen__title {
+  margin: 0;
+  font-size: clamp(1.5rem, 4vw, 2rem);
+  font-weight: 650;
+  line-height: 1.1;
+  color: var(--color-bright);
+}
+
+.boot-screen__subtitle {
+  margin: 0;
+  max-width: 24rem;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--color-secondary);
+}
+
+@media (max-width: 640px) {
+  .boot-screen__panel {
+    width: min(calc(100vw - 1.5rem), 28rem);
+    gap: 1.25rem;
+    padding: 1.5rem;
+    border-radius: 1.25rem;
+  }
+
+  .boot-screen__mark {
+    width: 4.25rem;
+    height: 4.25rem;
+  }
+
+  .boot-screen__subtitle {
+    font-size: 0.9rem;
+  }
+}
+
 /* Custom scrollbar for macOS feel */
 ::-webkit-scrollbar {
   width: 6px;
@@ -116,6 +253,17 @@ body,
 @keyframes tool-badge-spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
+}
+
+@keyframes boot-spin {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to   { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+@keyframes boot-orbit {
+  0%,
+  100% { transform: translate(-50%, -50%) scale(0.96); opacity: 0.7; }
+  50%  { transform: translate(-50%, -50%) scale(1.04); opacity: 1; }
 }
 
 @keyframes bubble-appear {

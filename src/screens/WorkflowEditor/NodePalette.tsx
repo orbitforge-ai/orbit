@@ -1,14 +1,10 @@
-import { DragEvent } from 'react';
+import { useDraggable } from '@dnd-kit/core';
 import { NODE_REGISTRY, NodeMeta } from './nodeRegistry';
+import { workflowNodeDraggableId } from './dnd';
 
 const GROUPS: NodeMeta['group'][] = ['Triggers', 'Agents', 'Logic', 'Integrations'];
 
 export function NodePalette() {
-  function onDragStart(event: DragEvent<HTMLDivElement>, type: string) {
-    event.dataTransfer.setData('application/orbit-node-type', type);
-    event.dataTransfer.effectAllowed = 'move';
-  }
-
   return (
     <aside className="w-56 border-r border-edge bg-background/50 overflow-y-auto">
       <div className="px-3 py-3 border-b border-edge">
@@ -24,28 +20,40 @@ export function NodePalette() {
             </div>
             <div className="space-y-1">
               {items.map((node) => {
-                const Icon = node.icon;
-                return (
-                  <div
-                    key={node.type}
-                    draggable
-                    onDragStart={(e) => onDragStart(e, node.type)}
-                    className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-edge bg-surface hover:border-accent hover:bg-accent/5 cursor-grab active:cursor-grabbing transition-colors"
-                  >
-                    <Icon size={12} className="text-muted" />
-                    <span className="text-xs text-white flex-1 truncate">{node.label}</span>
-                    {node.comingSoon && (
-                      <span className="text-[9px] uppercase tracking-wider text-muted px-1 rounded bg-muted/15">
-                        Soon
-                      </span>
-                    )}
-                  </div>
-                );
+                return <DraggablePaletteNode key={node.type} node={node} />;
               })}
             </div>
           </div>
         );
       })}
     </aside>
+  );
+}
+
+function DraggablePaletteNode({ node }: { node: NodeMeta }) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: workflowNodeDraggableId(node.type),
+  });
+  const Icon = node.icon;
+
+  return (
+    <div
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
+      className={
+        'flex items-center gap-2 px-2 py-1.5 rounded-md border border-edge bg-surface ' +
+        'hover:border-accent hover:bg-accent/5 cursor-grab active:cursor-grabbing ' +
+        `transition-colors ${isDragging ? 'opacity-50 border-accent bg-accent/10' : ''}`
+      }
+    >
+      <Icon size={12} className="text-muted" />
+      <span className="text-xs text-white flex-1 truncate">{node.label}</span>
+      {node.comingSoon && (
+        <span className="text-[9px] uppercase tracking-wider text-muted px-1 rounded bg-muted/15">
+          Soon
+        </span>
+      )}
+    </div>
   );
 }

@@ -1,5 +1,13 @@
-import { DragEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  DndContext,
+  DragEndEvent,
+  DragOverlay,
+  DragStartEvent,
+  pointerWithin,
+  useDroppable,
+} from '@dnd-kit/core';
 import {
   addEdge,
   applyEdgeChanges,
@@ -29,6 +37,11 @@ import { nodeTypes } from './nodes';
 import { NodePalette } from './NodePalette';
 import { NodeInspector } from './NodeInspector';
 import { RunHistoryDrawer } from './RunHistoryDrawer';
+import {
+  parseWorkflowNodeDraggableId,
+  WORKFLOW_CANVAS_DROPPABLE_ID,
+} from './dnd';
+import { useAgentDndSensors } from '../../components/dnd/agentDnd';
 
 function workflowToFlow(graph: WorkflowGraph): { nodes: Node[]; edges: Edge[] } {
   return {
@@ -93,6 +106,12 @@ function Editor({ workflowId }: { workflowId: string }) {
   const { closeWorkflowEditor } = useUiStore();
   const queryClient = useQueryClient();
   const { screenToFlowPosition } = useReactFlow();
+  const canvasHostRef = useRef<HTMLDivElement | null>(null);
+  const sensors = useAgentDndSensors();
+  const [draggingNodeType, setDraggingNodeType] = useState<string | null>(null);
+  const { setNodeRef: setCanvasDropRef, isOver: isCanvasOver } = useDroppable({
+    id: WORKFLOW_CANVAS_DROPPABLE_ID,
+  });
 
   const { data: workflow, isLoading } = useQuery<ProjectWorkflow>({
     queryKey: ['project-workflow', workflowId],
@@ -109,6 +128,14 @@ function Editor({ workflowId }: { workflowId: string }) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [runDrawerOpen, setRunDrawerOpen] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+
+  const setCanvasHostRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      canvasHostRef.current = node;
+      setCanvasDropRef(node);
+    },
+    [setCanvasDropRef],
+  );
 
   useEffect(() => {
     if (!workflow) return;
@@ -200,29 +227,73 @@ function Editor({ workflowId }: { workflowId: string }) {
     [markDirty, selectedNodeId],
   );
 
-  const onDrop = useCallback(
-    (event: DragEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      const type = event.dataTransfer.getData('application/orbit-node-type');
-      if (!type) return;
+  const addNodeAtClientPoint = useCallback(
+    (type: string, clientX: number, clientY: number) => {
       const meta = nodeMeta(type);
-      const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      if (!meta) return false;
+
+      const hostRect = canvasHostRef.current?.getBoundingClientRect() ?? null;
+      const insideHost = hostRect
+        ? clientX >= hostRect.left &&
+          clientX <= hostRect.right &&
+          clientY >= hostRect.top &&
+          clientY <= hostRect.bottom
+        : true;
+      if (!insideHost) return false;
+
+      const position = screenToFlowPosition({ x: clientX, y: clientY });
       const id = `n_${crypto.randomUUID()}`;
       const newNode: Node = {
         id,
         type,
         position,
-        data: { ...(meta?.defaultData ?? {}) },
+        data: { ...meta.defaultData },
       };
       setNodes((curr) => curr.concat(newNode));
       markDirty();
+      return true;
     },
     [markDirty, screenToFlowPosition],
   );
 
-  const onDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    const type = parseWorkflowNodeDraggableId(event.active.id);
+    setDraggingNodeType(type);
+  }, []);
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const type = parseWorkflowNodeDraggableId(event.active.id);
+      const overId = event.over?.id ?? null;
+      const hostRect = canvasHostRef.current?.getBoundingClientRect() ?? null;
+      const activatorEvent = event.activatorEvent;
+      const fallbackX = hostRect ? hostRect.left + hostRect.width / 2 : 0;
+      const fallbackY = hostRect ? hostRect.top + hostRect.height / 2 : 0;
+      const clientX =
+        activatorEvent instanceof MouseEvent
+          ? activatorEvent.clientX + event.delta.x
+          : fallbackX;
+      const clientY =
+        activatorEvent instanceof MouseEvent
+          ? activatorEvent.clientY + event.delta.y
+          : fallbackY;
+      const endedInsideCanvas = hostRect
+        ? clientX >= hostRect.left &&
+          clientX <= hostRect.right &&
+          clientY >= hostRect.top &&
+          clientY <= hostRect.bottom
+        : false;
+      setDraggingNodeType(null);
+      if (!type) return;
+      if (overId !== WORKFLOW_CANVAS_DROPPABLE_ID && !endedInsideCanvas) return;
+
+      addNodeAtClientPoint(type, clientX, clientY);
+    },
+    [addNodeAtClientPoint],
+  );
+
+  const handleDragCancel = useCallback(() => {
+    setDraggingNodeType(null);
   }, []);
 
   const saveMutation = useMutation({
@@ -270,8 +341,17 @@ function Editor({ workflowId }: { workflowId: string }) {
     );
   }
 
+  const draggingNodeMeta = draggingNodeType ? nodeMeta(draggingNodeType) : null;
+
   return (
-    <div className="flex flex-col h-full">
+    <DndContext
+      collisionDetection={pointerWithin}
+      sensors={sensors}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
+    >
+      <div className="flex flex-col h-full">
       <header className="flex items-center gap-3 px-4 py-3 border-b border-edge">
         <button
           onClick={closeWorkflowEditor}
@@ -361,7 +441,10 @@ function Editor({ workflowId }: { workflowId: string }) {
 
       <div className="flex flex-1 min-h-0">
         <NodePalette />
-        <div className="flex-1 relative" onDrop={onDrop} onDragOver={onDragOver}>
+        <div
+          ref={setCanvasHostRef}
+          className={`flex-1 relative ${isCanvasOver ? 'ring-1 ring-accent bg-accent/5' : ''}`}
+        >
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -403,6 +486,15 @@ function Editor({ workflowId }: { workflowId: string }) {
           onClose={() => setRunDrawerOpen(false)}
         />
       )}
-    </div>
+      </div>
+      <DragOverlay>
+        {draggingNodeMeta ? (
+          <div className="pointer-events-none flex items-center gap-2 rounded-md border border-accent bg-surface px-3 py-2 text-xs font-medium text-white shadow-xl">
+            <draggingNodeMeta.icon size={12} className="text-accent-hover" />
+            <span>{draggingNodeMeta.label}</span>
+          </div>
+        ) : null}
+      </DragOverlay>
+    </DndContext>
   );
 }
