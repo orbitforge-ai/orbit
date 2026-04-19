@@ -34,6 +34,7 @@ import { ruleToSentence } from './ruleSentence';
 import { getWorkflowScheduleConfig } from './scheduleConfig';
 
 interface Props {
+  isOpen: boolean;
   node: Node | null;
   nodeHasLinkedOutputs: boolean;
   projectId: string;
@@ -90,6 +91,7 @@ const TEMPLATE_FIELD_CLASSNAME =
   'w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono';
 
 export function NodeInspector({
+  isOpen,
   node,
   nodeHasLinkedOutputs,
   projectId,
@@ -98,27 +100,23 @@ export function NodeInspector({
   onChangeData,
   onDelete,
 }: Props) {
-  if (!node) {
-    return (
-      <aside className="w-80 border-l border-edge bg-background/50 px-4 py-4">
-        <p className="text-xs text-muted">Select a node to edit its settings.</p>
-      </aside>
-    );
-  }
-
-  const meta = nodeMeta(node.type ?? '');
-  const data = normalizeData(node.data);
-  const update = (patch: Record<string, unknown>) => onChangeData(node.id, { ...data, ...patch });
-  const showOutputHelper = nodeSupportsOutputReferences(node.type ?? '');
+  const meta = node ? nodeMeta(node.type ?? '') : null;
+  const data = normalizeData(node?.data);
+  const update = (patch: Record<string, unknown>) => {
+    if (!node) return;
+    onChangeData(node.id, { ...data, ...patch });
+  };
+  const showOutputHelper = node ? nodeSupportsOutputReferences(node.type ?? '') : false;
   const storedReferenceKey = asString(data.referenceKey);
-  const referenceKey = node.type?.startsWith('trigger.')
-    ? 'trigger'
-    : storedReferenceKey;
+  const referenceKey =
+    node?.type?.startsWith('trigger.')
+      ? 'trigger'
+      : storedReferenceKey;
   const [referenceKeyDraft, setReferenceKeyDraft] = useState(referenceKey);
 
   useEffect(() => {
     setReferenceKeyDraft(referenceKey);
-  }, [node.id, referenceKey]);
+  }, [node?.id, referenceKey]);
 
   const { data: latestRunDetail, isLoading: isLoadingLatestRun } = useQuery<WorkflowRunWithSteps | null>({
     queryKey: ['workflow-runs', workflowId, 'latest-output-hints'],
@@ -130,7 +128,7 @@ export function NodeInspector({
       }
       return workflowRunsApi.get(latestRun.id);
     },
-    enabled: showOutputHelper && upstreamNodes.length > 0,
+    enabled: Boolean(node) && showOutputHelper && upstreamNodes.length > 0,
     staleTime: 30_000,
   });
 
@@ -144,95 +142,103 @@ export function NodeInspector({
 
   return (
     <OutputInsertionProvider>
-      <aside className="w-80 border-l border-edge bg-background/50 overflow-y-auto">
-        <div className="px-4 py-3 border-b border-edge flex items-center justify-between">
-          <div>
-            <p className="text-[10px] uppercase tracking-wider text-muted">Node</p>
-            <p className="text-sm font-semibold text-white">{meta?.label ?? node.type}</p>
-          </div>
-          <button
-            onClick={() => onDelete(node.id)}
-            className="text-[11px] text-muted hover:text-red-400 transition-colors"
-          >
-            Delete
-          </button>
-        </div>
-
-        <div className="px-4 py-3 space-y-4">
-          {!node.type?.startsWith('trigger.') && (
-            <div className="space-y-1.5">
-              <label className="text-[11px] uppercase tracking-wider text-muted">Reference name</label>
-              <HintableInput
-                mode="raw"
-                value={referenceKeyDraft}
-                onValueChange={setReferenceKeyDraft}
-                onBlur={() => {
-                  const nextValue = slugifyReferenceKey(referenceKeyDraft);
-                  const committedValue = nextValue || (nodeHasLinkedOutputs ? referenceKey : '');
-                  setReferenceKeyDraft(committedValue);
-                  update({
-                    referenceKey: committedValue,
-                  });
-                }}
-                placeholder="run-agent-1"
-                className={TEMPLATE_FIELD_CLASSNAME}
-              />
-              <p className="text-[10px] text-muted">
-                {nodeHasLinkedOutputs ? (
-                  <>
-                    Use this name in templates and rules, for example{' '}
-                    <span className="font-mono">{`{{${referenceKey}.output.text}}`}</span>.
-                  </>
-                ) : (
-                  'This node is not feeding any downstream nodes, so the reference name can be left empty.'
-                )}
-              </p>
+      <aside
+        className={`h-full w-80 border-l border-edge bg-background/50 overflow-y-auto transition-all duration-300 ease-out ${
+          isOpen ? 'translate-x-0 opacity-100' : 'translate-x-6 opacity-0 pointer-events-none'
+        }`}
+      >
+        {node ? (
+          <>
+            <div className="px-4 py-3 border-b border-edge flex items-center justify-between">
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-muted">Node</p>
+                <p className="text-sm font-semibold text-white">{meta?.label ?? node.type}</p>
+              </div>
+              <button
+                onClick={() => onDelete(node.id)}
+                className="text-[11px] text-muted hover:text-red-400 transition-colors"
+              >
+                Delete
+              </button>
             </div>
-          )}
 
-          {node.type === 'trigger.manual' && (
-            <p className="text-xs text-muted">No configuration. Run from the editor toolbar.</p>
-          )}
+            <div className="px-4 py-3 space-y-4">
+              {!node.type?.startsWith('trigger.') && (
+                <div className="space-y-1.5">
+                  <label className="text-[11px] uppercase tracking-wider text-muted">Reference name</label>
+                  <HintableInput
+                    mode="raw"
+                    value={referenceKeyDraft}
+                    onValueChange={setReferenceKeyDraft}
+                    onBlur={() => {
+                      const nextValue = slugifyReferenceKey(referenceKeyDraft);
+                      const committedValue = nextValue || (nodeHasLinkedOutputs ? referenceKey : '');
+                      setReferenceKeyDraft(committedValue);
+                      update({
+                        referenceKey: committedValue,
+                      });
+                    }}
+                    placeholder="run-agent-1"
+                    className={TEMPLATE_FIELD_CLASSNAME}
+                  />
+                  <p className="text-[10px] text-muted">
+                    {nodeHasLinkedOutputs ? (
+                      <>
+                        Use this name in templates and rules, for example{' '}
+                        <span className="font-mono">{`{{${referenceKey}.output.text}}`}</span>.
+                      </>
+                    ) : (
+                      'This node is not feeding any downstream nodes, so the reference name can be left empty.'
+                    )}
+                  </p>
+                </div>
+              )}
 
-          {node.type === 'trigger.schedule' && (
-            <ScheduleInspector data={data} onUpdate={update} />
-          )}
+              {node.type === 'trigger.manual' && (
+                <p className="text-xs text-muted">No configuration. Run from the editor toolbar.</p>
+              )}
 
-          {node.type === 'agent.run' && <AgentRunInspector data={data} onUpdate={update} />}
+              {node.type === 'trigger.schedule' && (
+                <ScheduleInspector data={data} onUpdate={update} />
+              )}
 
-          {node.type === 'logic.if' && <LogicIfInspector data={data} onUpdate={update} />}
+              {node.type === 'agent.run' && <AgentRunInspector data={data} onUpdate={update} />}
 
-          {node.type === 'board.work_item.create' && (
-            <WorkItemInspector data={data} projectId={projectId} onUpdate={update} />
-          )}
+              {node.type === 'logic.if' && <LogicIfInspector data={data} onUpdate={update} />}
 
-          {node.type === 'board.proposal.enqueue' && (
-            <ProposalQueueInspector data={data} projectId={projectId} onUpdate={update} />
-          )}
+              {node.type === 'board.work_item.create' && (
+                <WorkItemInspector data={data} projectId={projectId} onUpdate={update} />
+              )}
 
-          {node.type === 'integration.feed.fetch' && (
-            <FeedFetchInspector data={data} onUpdate={update} />
-          )}
+              {node.type === 'board.proposal.enqueue' && (
+                <ProposalQueueInspector data={data} projectId={projectId} onUpdate={update} />
+              )}
 
-          {node.type === 'integration.http.request' && (
-            <HttpRequestInspector data={data} onUpdate={update} />
-          )}
+              {node.type === 'integration.feed.fetch' && (
+                <FeedFetchInspector data={data} onUpdate={update} />
+              )}
 
-          {(node.type === 'integration.gmail.read' ||
-            node.type === 'integration.gmail.send' ||
-            node.type === 'integration.slack.send') && (
-            <p className="text-xs text-muted italic">Integration nodes are coming in a later phase.</p>
-          )}
+              {node.type === 'integration.http.request' && (
+                <HttpRequestInspector data={data} onUpdate={update} />
+              )}
 
-          {showOutputHelper && (
-            <OutputReferencePanel
-              isLoadingLatestRun={isLoadingLatestRun}
-              latestRunDetail={latestRunDetail}
-              observedOutputsByNodeId={observedOutputsByNodeId}
-              upstreamNodes={upstreamNodes}
-            />
-          )}
-        </div>
+              {(node.type === 'integration.gmail.read' ||
+                node.type === 'integration.gmail.send' ||
+                node.type === 'integration.slack.send') && (
+                <p className="text-xs text-muted italic">Integration nodes are coming in a later phase.</p>
+              )}
+
+              {showOutputHelper && (
+                <OutputReferencePanel
+                  isLoadingLatestRun={isLoadingLatestRun}
+                  latestRunDetail={latestRunDetail}
+                  observedOutputsByNodeId={observedOutputsByNodeId}
+                  upstreamNodes={upstreamNodes}
+                />
+              )}
+            </div>
+          </>
+        ) : null}
       </aside>
     </OutputInsertionProvider>
   );

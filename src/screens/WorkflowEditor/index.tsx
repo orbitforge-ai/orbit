@@ -770,7 +770,7 @@ function Editor({ workflowId }: { workflowId: string }) {
         </div>
       )}
 
-      <div className="flex flex-1 min-h-0">
+      <div className="flex flex-1 min-h-0 overflow-hidden">
         <NodePalette />
         <div
           ref={setCanvasHostRef}
@@ -817,15 +817,22 @@ function Editor({ workflowId }: { workflowId: string }) {
             </div>
           )}
         </div>
-        <NodeInspector
-          node={selectedNode}
-          nodeHasLinkedOutputs={selectedNodeHasLinkedOutputs}
-          upstreamNodes={upstreamNodes}
-          projectId={workflow.projectId}
-          workflowId={workflowId}
-          onChangeData={updateNodeData}
-          onDelete={deleteNode}
-        />
+        <div
+          className={`shrink-0 overflow-hidden transition-[width] duration-300 ease-out ${
+            selectedNode ? 'w-80' : 'w-0'
+          }`}
+        >
+          <NodeInspector
+            isOpen={Boolean(selectedNode)}
+            node={selectedNode}
+            nodeHasLinkedOutputs={selectedNodeHasLinkedOutputs}
+            upstreamNodes={upstreamNodes}
+            projectId={workflow.projectId}
+            workflowId={workflowId}
+            onChangeData={updateNodeData}
+            onDelete={deleteNode}
+          />
+        </div>
       </div>
 
       {runDrawerOpen && (

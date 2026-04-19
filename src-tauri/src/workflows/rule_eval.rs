@@ -87,7 +87,14 @@ fn resolve_value(value: &Value, outputs: &Value) -> Option<Value> {
 }
 
 fn values_equal(a: &Option<Value>, b: &Option<Value>) -> bool {
-    matches!((a, b), (Some(x), Some(y)) if x == y)
+    match (a, b) {
+        (Some(x), Some(y)) if x == y => true,
+        (Some(x), Some(y)) => match (to_number(x), to_number(y)) {
+            (Some(lhs), Some(rhs)) => lhs == rhs,
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 fn contains(a: &Option<Value>, b: &Option<Value>) -> bool {
@@ -106,7 +113,20 @@ fn string_op<F: Fn(&str, &str) -> bool>(a: &Option<Value>, b: &Option<Value>, op
 }
 
 fn to_number(v: &Value) -> Option<f64> {
-    v.as_f64().or_else(|| v.as_i64().map(|n| n as f64))
+    v.as_f64()
+        .or_else(|| v.as_i64().map(|n| n as f64))
+        .or_else(|| v.as_u64().map(|n| n as f64))
+        .or_else(|| v.as_str().and_then(parse_numeric_string))
+}
+
+fn parse_numeric_string(raw: &str) -> Option<f64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    serde_json::from_str::<Value>(trimmed)
+        .ok()
+        .and_then(|value| value.as_f64())
 }
 
 fn number_op<F: Fn(f64, f64) -> bool>(a: &Option<Value>, b: &Option<Value>, op: F) -> bool {
@@ -208,6 +228,26 @@ mod tests {
             value: json!({ "field": "n2.output.priority" }),
         };
         assert!(eval_leaf(&leaf, &outputs()));
+    }
+
+    #[test]
+    fn numeric_string_equals_number() {
+        let leaf = RuleLeaf {
+            field: "n2.output.priority".into(),
+            operator: "equals".into(),
+            value: json!("3"),
+        };
+        assert!(eval_leaf(&leaf, &outputs()));
+    }
+
+    #[test]
+    fn numeric_string_not_equals_number_is_false() {
+        let leaf = RuleLeaf {
+            field: "n2.output.priority".into(),
+            operator: "notEquals".into(),
+            value: json!("3"),
+        };
+        assert!(!eval_leaf(&leaf, &outputs()));
     }
 
     #[test]
