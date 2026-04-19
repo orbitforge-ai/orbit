@@ -15,19 +15,22 @@ import {
   Background,
   BackgroundVariant,
   Connection,
+  FinalConnectionState,
   Controls,
   Edge,
   EdgeChange,
   MiniMap,
   Node,
   NodeChange,
+  OnConnectStartParams,
   ReactFlow,
   ReactFlowProvider,
   reconnectEdge,
+  XYPosition,
   useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { ArrowLeft, History, Play, Save } from 'lucide-react';
+import { ArrowLeft, History, Play, Save, X } from 'lucide-react';
 import { useUiStore } from '../../store/uiStore';
 import { projectWorkflowsApi } from '../../api/projectWorkflows';
 import { workflowRunsApi } from '../../api/workflowRuns';
@@ -157,6 +160,47 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
 }
 
+type PendingCreateConnection = {
+  source: string;
+  sourceHandle: string | null;
+  clientX: number;
+  clientY: number;
+};
+
+const EDGE_DROP_NODE_GROUPS = ['Agents', 'Logic', 'Board', 'Integrations'] as const;
+
+const EDGE_DROP_NODE_OPTIONS = NODE_REGISTRY.filter((node) => !node.type.startsWith('trigger.'));
+
+function getEdgeHandleDisplay(handle: string | null | undefined) {
+  if (handle === 'true' || handle === 'false') {
+    return handle;
+  }
+  return undefined;
+}
+
+function getEdgeStyle(handle: string | null | undefined) {
+  if (handle === 'true') {
+    return { stroke: '#34d399' };
+  }
+  if (handle === 'false') {
+    return { stroke: '#fb7185' };
+  }
+  return undefined;
+}
+
+function getEventClientPosition(event: MouseEvent | TouchEvent): XYPosition | null {
+  if (event instanceof MouseEvent) {
+    return { x: event.clientX, y: event.clientY };
+  }
+
+  const touch = event.changedTouches[0] ?? event.touches[0];
+  if (!touch) {
+    return null;
+  }
+
+  return { x: touch.clientX, y: touch.clientY };
+}
+
 export function WorkflowEditor() {
   const { selectedWorkflowId } = useUiStore();
   if (!selectedWorkflowId) {
@@ -225,6 +269,8 @@ function Editor({ workflowId }: { workflowId: string }) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [runDrawerOpen, setRunDrawerOpen] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  const [pendingCreateConnection, setPendingCreateConnection] = useState<PendingCreateConnection | null>(null);
+  const connectStartRef = useRef<Pick<PendingCreateConnection, 'source' | 'sourceHandle'> | null>(null);
 
   const setCanvasHostRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -283,6 +329,8 @@ function Editor({ workflowId }: { workflowId: string }) {
     setDescription(workflow.description ?? '');
     setEnabled(workflow.enabled);
     setDirty(false);
+    setPendingCreateConnection(null);
+    connectStartRef.current = null;
   }, [decorateEdge, workflow]);
 
   const onNodesChange = useCallback(
@@ -316,13 +364,8 @@ function Editor({ workflowId }: { workflowId: string }) {
         source: conn.source!,
         target: conn.target!,
         sourceHandle: handle ?? undefined,
-        label: handle === 'true' || handle === 'false' ? handle : undefined,
-        style:
-          handle === 'true'
-            ? { stroke: '#34d399' }
-            : handle === 'false'
-              ? { stroke: '#fb7185' }
-              : undefined,
+        label: getEdgeHandleDisplay(handle),
+        style: getEdgeStyle(handle),
       };
       setEdges((curr) => addEdge(decorateEdge(newEdge), curr));
       markDirty();
@@ -358,10 +401,10 @@ function Editor({ workflowId }: { workflowId: string }) {
     [markDirty, selectedNodeId],
   );
 
-  const addNodeAtClientPoint = useCallback(
+  const createNodeAtClientPoint = useCallback(
     (type: string, clientX: number, clientY: number) => {
       const meta = nodeMeta(type);
-      if (!meta) return false;
+      if (!meta) return null;
 
       const hostRect = canvasHostRef.current?.getBoundingClientRect() ?? null;
       const insideHost = hostRect
@@ -370,7 +413,7 @@ function Editor({ workflowId }: { workflowId: string }) {
           clientY >= hostRect.top &&
           clientY <= hostRect.bottom
         : true;
-      if (!insideHost) return false;
+      if (!insideHost) return null;
 
       const position = screenToFlowPosition({ x: clientX, y: clientY });
       const id = `n_${crypto.randomUUID()}`;
@@ -386,11 +429,116 @@ function Editor({ workflowId }: { workflowId: string }) {
         };
         return curr.concat(newNode);
       });
+      return { id };
+    },
+    [screenToFlowPosition],
+  );
+
+  const addNodeAtClientPoint = useCallback(
+    (type: string, clientX: number, clientY: number) => {
+      const created = createNodeAtClientPoint(type, clientX, clientY);
+      if (!created) {
+        return false;
+      }
       markDirty();
       return true;
     },
-    [markDirty, screenToFlowPosition],
+    [createNodeAtClientPoint, markDirty],
   );
+
+  const handleConnectStart = useCallback(
+    (_event: MouseEvent | TouchEvent, params: OnConnectStartParams) => {
+      if (!params.nodeId || params.handleType !== 'source') {
+        connectStartRef.current = null;
+        return;
+      }
+
+      connectStartRef.current = {
+        source: params.nodeId,
+        sourceHandle: params.handleId,
+      };
+      setPendingCreateConnection(null);
+    },
+    [],
+  );
+
+  const handleConnectEnd = useCallback(
+    (event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
+      const start = connectStartRef.current;
+      connectStartRef.current = null;
+
+      if (!start || connectionState.toNode) {
+        return;
+      }
+
+      const pointer = getEventClientPosition(event);
+      const hostRect = canvasHostRef.current?.getBoundingClientRect() ?? null;
+      if (!pointer || !hostRect) {
+        return;
+      }
+
+      const insideHost =
+        pointer.x >= hostRect.left &&
+        pointer.x <= hostRect.right &&
+        pointer.y >= hostRect.top &&
+        pointer.y <= hostRect.bottom;
+      if (!insideHost) {
+        return;
+      }
+
+      setPendingCreateConnection({
+        source: start.source,
+        sourceHandle: start.sourceHandle,
+        clientX: pointer.x,
+        clientY: pointer.y,
+      });
+    },
+    [],
+  );
+
+  const handleCreateConnectedNode = useCallback(
+    (type: string) => {
+      if (!pendingCreateConnection) {
+        return;
+      }
+
+      const created = createNodeAtClientPoint(
+        type,
+        pendingCreateConnection.clientX,
+        pendingCreateConnection.clientY,
+      );
+      if (!created) {
+        setPendingCreateConnection(null);
+        return;
+      }
+
+      const sourceNode = nodes.find((node) => node.id === pendingCreateConnection.source);
+      const isLogicIf = sourceNode?.type === 'logic.if';
+      const handle =
+        pendingCreateConnection.sourceHandle ?? (isLogicIf ? 'true' : null);
+
+      const newEdge: Edge = {
+        id: `e_${crypto.randomUUID()}`,
+        type: 'deletable',
+        source: pendingCreateConnection.source,
+        target: created.id,
+        sourceHandle: handle ?? undefined,
+        label: getEdgeHandleDisplay(handle),
+        style: getEdgeStyle(handle),
+      };
+
+      setEdges((curr) => addEdge(decorateEdge(newEdge), curr));
+      setSelectedNodeId(created.id);
+      setPendingCreateConnection(null);
+      markDirty();
+    },
+    [createNodeAtClientPoint, decorateEdge, markDirty, nodes, pendingCreateConnection],
+  );
+
+  const closePendingCreateConnection = useCallback(() => {
+    connectStartRef.current = null;
+    setPendingCreateConnection(null);
+  }, []);
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     const type = parseWorkflowNodeDraggableId(event.active.id);
@@ -626,9 +774,14 @@ function Editor({ workflowId }: { workflowId: string }) {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            onConnectStart={handleConnectStart}
+            onConnectEnd={handleConnectEnd}
             onReconnect={onReconnect}
             onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-            onPaneClick={() => setSelectedNodeId(null)}
+            onPaneClick={() => {
+              setSelectedNodeId(null);
+              setPendingCreateConnection(null);
+            }}
             fitView
             proOptions={{ hideAttribution: true }}
           >
@@ -636,6 +789,15 @@ function Editor({ workflowId }: { workflowId: string }) {
             <Controls />
             <MiniMap pannable zoomable className="!bg-surface" />
           </ReactFlow>
+          {pendingCreateConnection && (
+            <CreateConnectedNodeMenu
+              clientX={pendingCreateConnection.clientX}
+              clientY={pendingCreateConnection.clientY}
+              host={canvasHostRef.current}
+              onClose={closePendingCreateConnection}
+              onSelect={handleCreateConnectedNode}
+            />
+          )}
           {nodes.length === 0 && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <div className="text-center text-muted text-sm">
@@ -674,5 +836,114 @@ function Editor({ workflowId }: { workflowId: string }) {
         ) : null}
       </DragOverlay>
     </DndContext>
+  );
+}
+
+function CreateConnectedNodeMenu({
+  clientX,
+  clientY,
+  host,
+  onClose,
+  onSelect,
+}: {
+  clientX: number;
+  clientY: number;
+  host: HTMLDivElement | null;
+  onClose: () => void;
+  onSelect: (type: string) => void;
+}) {
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  const hostRect = host?.getBoundingClientRect();
+  if (!hostRect) {
+    return null;
+  }
+
+  const panelWidth = 280;
+  const panelHeight = 360;
+  const margin = 12;
+  const left = Math.min(
+    Math.max(clientX - hostRect.left, margin),
+    Math.max(margin, hostRect.width - panelWidth - margin),
+  );
+  const top = Math.min(
+    Math.max(clientY - hostRect.top, margin),
+    Math.max(margin, hostRect.height - panelHeight - margin),
+  );
+
+  return (
+    <div
+      className="absolute inset-0 z-20"
+      onPointerDown={onClose}
+    >
+      <div
+        className="absolute w-[280px] rounded-xl border border-edge bg-surface/95 shadow-2xl backdrop-blur-sm"
+        style={{ left, top }}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-edge px-3 py-2.5">
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-muted">Create And Connect</p>
+            <p className="text-xs text-white">Choose the next node to add on the canvas.</p>
+          </div>
+          <button
+            type="button"
+            aria-label="Close create node menu"
+            onClick={onClose}
+            className="rounded-md p-1 text-muted transition-colors hover:bg-edge hover:text-white"
+          >
+            <X size={12} />
+          </button>
+        </div>
+
+        <div className="max-h-[320px] overflow-y-auto px-2 py-2">
+          {EDGE_DROP_NODE_GROUPS.map((group) => {
+            const options = EDGE_DROP_NODE_OPTIONS.filter((node) => node.group === group);
+            if (options.length === 0) {
+              return null;
+            }
+
+            return (
+              <div key={group} className="mb-2 last:mb-0">
+                <div className="px-2 pb-1 text-[10px] uppercase tracking-wider text-muted">
+                  {group}
+                </div>
+                <div className="space-y-1">
+                  {options.map((node, index) => {
+                    const Icon = node.icon;
+                    return (
+                      <button
+                        key={node.type}
+                        type="button"
+                        autoFocus={index === 0 && group === EDGE_DROP_NODE_GROUPS[0]}
+                        onClick={() => onSelect(node.type)}
+                        className="flex w-full items-center gap-2 rounded-lg border border-edge bg-background/60 px-2.5 py-2 text-left transition-colors hover:border-accent hover:bg-accent/5"
+                      >
+                        <Icon size={12} className="text-muted" />
+                        <span className="flex-1 text-xs text-white">{node.label}</span>
+                        {node.comingSoon ? (
+                          <span className="rounded bg-muted/15 px-1 py-0.5 text-[9px] uppercase tracking-wider text-muted">
+                            Soon
+                          </span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }

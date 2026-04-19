@@ -11,63 +11,20 @@
 //!   recovery, parallel branches, and async wait states are out of scope.
 
 use std::collections::HashMap;
-use std::io::Cursor;
 
 use chrono::Utc;
-use feed_rs::parser;
-use reqwest::header::CONTENT_TYPE;
-use rusqlite::OptionalExtension;
-use serde::Serialize;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
-use tauri::{Emitter, Manager};
 use tracing::{info, warn};
 use ulid::Ulid;
 
-use crate::commands::work_items::{
-    block_work_item_with_db, claim_work_item_with_db, complete_work_item_with_db,
-    create_work_item_comment_with_db, create_work_item_with_db, delete_work_item_with_db,
-    get_work_item_with_db, list_work_item_comments_with_db, list_work_items_with_db,
-    move_work_item_with_db, update_work_item_with_db,
-};
-use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
-use crate::executor::{keychain, llm_provider, workspace};
-use crate::models::project_workflow::{
-    ProjectWorkflow, RuleNode, WorkflowEdge, WorkflowGraph, WorkflowNode,
-};
-use crate::models::work_item::{CreateWorkItem, UpdateWorkItem};
-use crate::models::work_item_comment::CommentAuthor;
+use crate::models::project_workflow::{WorkflowEdge, WorkflowGraph, WorkflowNode};
 use crate::models::workflow_run::{WorkflowRun, WorkflowRunStep};
-use crate::workflows::rule_eval::eval_rule;
-
-const STATUS_QUEUED: &str = "queued";
-const STATUS_RUNNING: &str = "running";
-const STATUS_SUCCESS: &str = "success";
-const STATUS_FAILED: &str = "failed";
-const STATUS_SKIPPED: &str = "skipped";
+use crate::workflows::nodes::{self, NodeExecutionContext, NodeOutcome};
+use crate::workflows::store;
+use crate::workflows::template::{build_reference_aliases, OUTPUT_ALIASES_KEY};
 
 const MAX_STEPS: usize = 100;
-const OUTPUT_ALIASES_KEY: &str = "__aliases";
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkflowRunEventPayload {
-    workflow_id: String,
-    run_id: String,
-    status: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkflowRunStepEventPayload {
-    workflow_id: String,
-    run_id: String,
-    step_id: String,
-    node_id: String,
-    node_type: String,
-    status: String,
-}
 
 #[derive(Clone)]
 pub struct WorkflowOrchestrator {
@@ -88,10 +45,9 @@ impl WorkflowOrchestrator {
         trigger_kind: &str,
         trigger_data: Value,
     ) -> Result<WorkflowRun, String> {
-        let workflow = self.load_workflow(&workflow_id).await?;
-        let run = self
-            .insert_run(&workflow, trigger_kind, &trigger_data)
-            .await?;
+        let workflow = store::load_workflow(&self.db, &workflow_id).await?;
+        let run =
+            store::insert_run(&self.db, &self.app, &workflow, trigger_kind, &trigger_data).await?;
 
         let this = self.clone();
         let run_clone = run.clone();
@@ -106,109 +62,6 @@ impl WorkflowOrchestrator {
         Ok(run)
     }
 
-    async fn load_workflow(&self, workflow_id: &str) -> Result<ProjectWorkflow, String> {
-        let pool = self.db.0.clone();
-        let id = workflow_id.to_string();
-        tokio::task::spawn_blocking(move || -> Result<ProjectWorkflow, String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
-            conn.query_row(
-                "SELECT id, project_id, name, description, enabled, graph, trigger_kind,
-                        trigger_config, version, created_at, updated_at
-                 FROM project_workflows WHERE id = ?1",
-                rusqlite::params![id],
-                |row| {
-                    let graph_str: String = row.get(5)?;
-                    let trigger_cfg_str: String = row.get(7)?;
-                    let graph: WorkflowGraph = serde_json::from_str(&graph_str).unwrap_or_default();
-                    let trigger_config: Value =
-                        serde_json::from_str(&trigger_cfg_str).unwrap_or(Value::Null);
-                    Ok(ProjectWorkflow {
-                        id: row.get(0)?,
-                        project_id: row.get(1)?,
-                        name: row.get(2)?,
-                        description: row.get(3)?,
-                        enabled: row.get::<_, bool>(4)?,
-                        graph,
-                        trigger_kind: row.get(6)?,
-                        trigger_config,
-                        version: row.get(8)?,
-                        created_at: row.get(9)?,
-                        updated_at: row.get(10)?,
-                    })
-                },
-            )
-            .map_err(|e| format!("workflow {} not found: {}", id, e))
-        })
-        .await
-        .map_err(|e| e.to_string())?
-    }
-
-    async fn insert_run(
-        &self,
-        workflow: &ProjectWorkflow,
-        trigger_kind: &str,
-        trigger_data: &Value,
-    ) -> Result<WorkflowRun, String> {
-        let pool = self.db.0.clone();
-        let id = Ulid::new().to_string();
-        let now = Utc::now().to_rfc3339();
-        let workflow_id = workflow.id.clone();
-        let workflow_version = workflow.version;
-        let graph_str = serde_json::to_string(&workflow.graph).unwrap_or_else(|_| "{}".into());
-        let trigger_kind = trigger_kind.to_string();
-        let trigger_data_str = serde_json::to_string(trigger_data).unwrap_or_else(|_| "{}".into());
-
-        let id_clone = id.clone();
-        let now_clone = now.clone();
-        let trigger_kind_clone = trigger_kind.clone();
-        let trigger_data_str_clone = trigger_data_str.clone();
-        tokio::task::spawn_blocking(move || -> Result<(), String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
-            conn.execute(
-                "INSERT INTO workflow_runs (id, workflow_id, workflow_version, graph_snapshot,
-                                            trigger_kind, trigger_data, status, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                rusqlite::params![
-                    id_clone,
-                    workflow_id,
-                    workflow_version,
-                    graph_str,
-                    trigger_kind_clone,
-                    trigger_data_str_clone,
-                    STATUS_QUEUED,
-                    now_clone,
-                ],
-            )
-            .map_err(|e| e.to_string())?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| e.to_string())??;
-
-        let run = WorkflowRun {
-            id,
-            workflow_id: workflow.id.clone(),
-            workflow_version,
-            graph_snapshot: serde_json::to_value(&workflow.graph).unwrap_or(Value::Null),
-            trigger_kind,
-            trigger_data: trigger_data.clone(),
-            status: STATUS_QUEUED.to_string(),
-            error: None,
-            started_at: None,
-            completed_at: None,
-            created_at: now,
-        };
-        let _ = self.app.emit(
-            "workflow_run:created",
-            WorkflowRunEventPayload {
-                workflow_id: run.workflow_id.clone(),
-                run_id: run.id.clone(),
-                status: run.status.clone(),
-            },
-        );
-        Ok(run)
-    }
-
     async fn execute_run(
         &self,
         run: WorkflowRun,
@@ -216,10 +69,12 @@ impl WorkflowOrchestrator {
         project_id: String,
     ) -> Result<(), String> {
         let started_at = Utc::now().to_rfc3339();
-        self.update_run_status(
+        store::update_run_status(
+            &self.db,
+            &self.app,
             &workflow_id,
             &run.id,
-            STATUS_RUNNING,
+            store::STATUS_RUNNING,
             None,
             Some(&started_at),
             None,
@@ -242,7 +97,9 @@ impl WorkflowOrchestrator {
             Some(t) => t,
             None => {
                 let err = "no trigger node in workflow graph";
-                self.fail_run(&workflow_id, &run.id, err).await.ok();
+                store::fail_run(&self.db, &self.app, &workflow_id, &run.id, err)
+                    .await
+                    .ok();
                 return Err(err.into());
             }
         };
@@ -263,7 +120,9 @@ impl WorkflowOrchestrator {
         while let Some(node_id) = current {
             if sequence as usize >= MAX_STEPS {
                 let err = format!("workflow exceeded {} steps; aborting", MAX_STEPS);
-                self.fail_run(&workflow_id, &run.id, &err).await.ok();
+                store::fail_run(&self.db, &self.app, &workflow_id, &run.id, &err)
+                    .await
+                    .ok();
                 return Err(err);
             }
 
@@ -271,7 +130,9 @@ impl WorkflowOrchestrator {
                 Some(n) => *n,
                 None => {
                     let err = format!("node {} referenced by edge not found", node_id);
-                    self.fail_run(&workflow_id, &run.id, &err).await.ok();
+                    store::fail_run(&self.db, &self.app, &workflow_id, &run.id, &err)
+                        .await
+                        .ok();
                     return Err(err);
                 }
             };
@@ -298,17 +159,21 @@ impl WorkflowOrchestrator {
                     current = pick_next(&outgoing, &node.id, next_handle.as_deref());
                 }
                 Err(err_msg) => {
-                    self.fail_run(&workflow_id, &run.id, &err_msg).await.ok();
+                    store::fail_run(&self.db, &self.app, &workflow_id, &run.id, &err_msg)
+                        .await
+                        .ok();
                     return Err(err_msg);
                 }
             }
         }
 
         let completed_at = Utc::now().to_rfc3339();
-        self.update_run_status(
+        store::update_run_status(
+            &self.db,
+            &self.app,
             &workflow_id,
             &run.id,
-            STATUS_SUCCESS,
+            store::STATUS_SUCCESS,
             None,
             None,
             Some(&completed_at),
@@ -332,51 +197,44 @@ impl WorkflowOrchestrator {
         let started_at = Utc::now().to_rfc3339();
         let input = json!({ "node_data": node.data, "upstream": outputs });
 
-        self.insert_step(
+        store::insert_step(
+            &self.db,
+            &self.app,
             workflow_id,
             &step_id,
             run_id,
             &node.id,
             &node.node_type,
-            STATUS_RUNNING,
+            store::STATUS_RUNNING,
             &input,
             Some(&started_at),
             sequence,
         )
         .await?;
 
-        let result = match node.node_type.as_str() {
-            "trigger.manual" | "trigger.schedule" => Ok(NodeOutcome {
-                output: outputs.get("trigger").cloned().unwrap_or(Value::Null),
-                next_handle: None,
-            }),
-            "agent.run" => self.run_agent_node(node, outputs).await,
-            "logic.if" => self.run_logic_if(node, outputs).await,
-            "integration.feed.fetch" => self.run_feed_fetch_node(workflow_id, node, outputs).await,
-            "integration.http.request" => {
-                self.run_http_request_node(workflow_id, node, outputs).await
-            }
-            "board.proposal.enqueue" => {
-                self.run_proposal_enqueue_node(run_id, project_id, node, outputs)
-                    .await
-            }
-            "board.work_item.create" => {
-                self.run_work_item_node(run_id, project_id, node, outputs)
-                    .await
-            }
-            other => Err(format!("unknown node type `{}`", other)),
-        };
+        let result = nodes::execute(NodeExecutionContext {
+            db: &self.db,
+            app: &self.app,
+            run_id,
+            workflow_id,
+            project_id,
+            node,
+            outputs,
+        })
+        .await;
 
         let completed_at = Utc::now().to_rfc3339();
         match &result {
             Ok(outcome) => {
-                self.finish_step(
+                store::finish_step(
+                    &self.db,
+                    &self.app,
                     workflow_id,
                     run_id,
                     &step_id,
                     &node.id,
                     &node.node_type,
-                    STATUS_SUCCESS,
+                    store::STATUS_SUCCESS,
                     Some(&outcome.output),
                     None,
                     &completed_at,
@@ -384,13 +242,15 @@ impl WorkflowOrchestrator {
                 .await?;
             }
             Err(err) => {
-                self.finish_step(
+                store::finish_step(
+                    &self.db,
+                    &self.app,
                     workflow_id,
                     run_id,
                     &step_id,
                     &node.id,
                     &node.node_type,
-                    STATUS_FAILED,
+                    store::STATUS_FAILED,
                     None,
                     Some(err),
                     &completed_at,
@@ -400,947 +260,12 @@ impl WorkflowOrchestrator {
         }
         result
     }
-
-    // ── Node executors ──────────────────────────────────────────────────────
-
-    async fn run_agent_node(
-        &self,
-        node: &WorkflowNode,
-        outputs: &Value,
-    ) -> Result<NodeOutcome, String> {
-        let agent_id = node
-            .data
-            .get("agentId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "agent.run requires data.agentId".to_string())?
-            .to_string();
-        let template = node
-            .data
-            .get("promptTemplate")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let context = render_optional_template(
-            node.data.get("contextTemplate").and_then(|v| v.as_str()),
-            outputs,
-        );
-        let output_mode = node
-            .data
-            .get("outputMode")
-            .and_then(|v| v.as_str())
-            .unwrap_or("text");
-        let prompt = render_agent_prompt(&template, context.as_deref(), output_mode, outputs);
-
-        let ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
-        if ws_config.provider.is_empty() {
-            return Err(format!("agent {} has no provider configured", agent_id));
-        }
-        let api_key = keychain::retrieve_api_key(&ws_config.provider).map_err(|_| {
-            format!(
-                "no API key configured for provider `{}`",
-                ws_config.provider
-            )
-        })?;
-        let provider = llm_provider::create_provider(&ws_config.provider, api_key)?;
-
-        let llm_config = llm_provider::LlmConfig {
-            model: ws_config.model.clone(),
-            max_tokens: 4_096,
-            temperature: Some(ws_config.temperature),
-            system_prompt: ws_config
-                .role_system_instructions
-                .clone()
-                .unwrap_or_default(),
-        };
-        let messages = vec![llm_provider::ChatMessage {
-            role: "user".to_string(),
-            content: vec![llm_provider::ContentBlock::Text {
-                text: prompt.clone(),
-            }],
-            created_at: None,
-        }];
-
-        let response = provider
-            .chat_complete(&llm_config, &messages, &[])
-            .await
-            .map_err(|e| format!("agent.run LLM call failed: {}", e))?;
-
-        let text = llm_provider::extract_text_response(&response).unwrap_or_default();
-        let parsed = parse_agent_output(output_mode, &text)?;
-
-        Ok(NodeOutcome {
-            output: json!({
-                "agentId": agent_id,
-                "prompt": prompt,
-                "context": context,
-                "outputMode": output_mode,
-                "text": text,
-                "parsed": parsed,
-            }),
-            next_handle: None,
-        })
-    }
-
-    async fn run_feed_fetch_node(
-        &self,
-        workflow_id: &str,
-        node: &WorkflowNode,
-        outputs: &Value,
-    ) -> Result<NodeOutcome, String> {
-        let feed_urls_text =
-            required_template(&node.data, "feedUrlsText", "integration.feed.fetch")?;
-        let feed_urls = parse_multiline_templates(&feed_urls_text, outputs);
-        if feed_urls.is_empty() {
-            return Err("integration.feed.fetch requires at least one feed URL".to_string());
-        }
-
-        let limit = node
-            .data
-            .get("limit")
-            .and_then(json_number_to_i64)
-            .filter(|value| *value > 0)
-            .unwrap_or(50) as usize;
-        let client = reqwest::Client::builder()
-            .user_agent("Orbit/0.1 workflow feed fetch")
-            .build()
-            .map_err(|e| format!("integration.feed.fetch client error: {}", e))?;
-
-        let mut unseen_items = Vec::new();
-        let mut fetched = Vec::new();
-        let mut total_items = 0usize;
-
-        for url in feed_urls {
-            let response =
-                client.get(&url).send().await.map_err(|e| {
-                    format!("integration.feed.fetch request failed for {}: {}", url, e)
-                })?;
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|e| format!("integration.feed.fetch body failed for {}: {}", url, e))?;
-            let feed = parser::parse(Cursor::new(bytes))
-                .map_err(|e| format!("integration.feed.fetch parse failed for {}: {}", url, e))?;
-            fetched.push(url.clone());
-
-            let mut normalized = Vec::new();
-            let feed_title = feed.title.as_ref().map(|title| title.content.clone());
-            for entry in feed.entries {
-                let item = json!({
-                    "source": url,
-                    "feedTitle": feed_title.clone(),
-                    "id": entry.id,
-                    "title": entry.title.as_ref().map(|title| title.content.clone()).unwrap_or_default(),
-                    "url": entry.links.first().map(|link| link.href.clone()),
-                    "summary": entry.summary.as_ref().map(|summary| summary.content.clone()),
-                    "content": entry.content.and_then(|content| content.body),
-                    "publishedAt": entry.published.map(|value| value.to_rfc3339()),
-                    "updatedAt": entry.updated.map(|value| value.to_rfc3339()),
-                    "authors": entry.authors.iter().map(|author| author.name.clone()).collect::<Vec<_>>(),
-                });
-                normalized.push(item);
-            }
-
-            total_items += normalized.len();
-            if normalized.len() > limit {
-                normalized.truncate(limit);
-            }
-            let mut new_items = self
-                .filter_unseen_items(workflow_id, &node.id, &url, normalized)
-                .await?;
-            unseen_items.append(&mut new_items);
-        }
-
-        Ok(NodeOutcome {
-            output: json!({
-                "sourceUrls": fetched,
-                "count": unseen_items.len(),
-                "totalFetched": total_items,
-                "items": unseen_items,
-            }),
-            next_handle: None,
-        })
-    }
-
-    async fn run_http_request_node(
-        &self,
-        workflow_id: &str,
-        node: &WorkflowNode,
-        outputs: &Value,
-    ) -> Result<NodeOutcome, String> {
-        let url_template = required_template(&node.data, "url", "integration.http.request")?;
-        let url = render_template(&url_template, outputs).trim().to_string();
-        if url.is_empty() {
-            return Err("integration.http.request rendered an empty URL".to_string());
-        }
-        let client = reqwest::Client::builder()
-            .user_agent("Orbit/0.1 workflow http request")
-            .build()
-            .map_err(|e| format!("integration.http.request client error: {}", e))?;
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("integration.http.request failed: {}", e))?;
-        let status = response.status().as_u16();
-        let content_type = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-        let raw_body = response
-            .text()
-            .await
-            .map_err(|e| format!("integration.http.request body read failed: {}", e))?;
-        let body_text = normalize_http_body(&content_type, &raw_body);
-        let parsed_json = serde_json::from_str::<Value>(&raw_body).ok();
-        let fingerprint_item = json!({
-            "url": url,
-            "title": "",
-            "publishedAt": Value::Null,
-            "source": "http",
-            "bodyHash": hash_text(&body_text),
-        });
-        let is_new = self
-            .filter_unseen_items(workflow_id, &node.id, &url, vec![fingerprint_item])
-            .await?
-            .len()
-            == 1;
-
-        Ok(NodeOutcome {
-            output: json!({
-                "url": url,
-                "status": status,
-                "contentType": content_type,
-                "bodyText": body_text,
-                "json": parsed_json,
-                "fetchedAt": Utc::now().to_rfc3339(),
-                "isNew": is_new,
-            }),
-            next_handle: None,
-        })
-    }
-
-    async fn run_proposal_enqueue_node(
-        &self,
-        run_id: &str,
-        project_id: &str,
-        node: &WorkflowNode,
-        outputs: &Value,
-    ) -> Result<NodeOutcome, String> {
-        let candidates_path =
-            required_template(&node.data, "candidatesPath", "board.proposal.enqueue")?;
-        let review_column_id =
-            required_template(&node.data, "reviewColumnId", "board.proposal.enqueue")?;
-        let kind = parse_work_item_kind(node.data.get("kind").and_then(|v| v.as_str()))?;
-        let priority = parse_priority(node.data.get("priority")).clamp(0, 3);
-        let labels = parse_work_item_labels(
-            node.data.get("labelsText").and_then(|v| v.as_str()),
-            outputs,
-        );
-        let candidates = lookup_json_path(&candidates_path, outputs)
-            .and_then(|value| value.as_array().cloned())
-            .ok_or_else(|| {
-                format!(
-                    "board.proposal.enqueue requires candidatesPath '{}' to resolve to an array",
-                    candidates_path
-                )
-            })?;
-
-        let mut work_items = Vec::new();
-        for candidate in candidates {
-            if !candidate
-                .get("shouldReview")
-                .and_then(Value::as_bool)
-                .unwrap_or(true)
-            {
-                continue;
-            }
-
-            let listing = candidate.get("listing").cloned().unwrap_or(Value::Null);
-            let title = listing
-                .get("title")
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| "Freelance job proposal review".to_string());
-            let proposal_draft = candidate
-                .get("proposalDraft")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            if proposal_draft.trim().is_empty() {
-                return Err("board.proposal.enqueue candidate is missing proposalDraft".to_string());
-            }
-            let fit_score = candidate.get("fitScore").cloned().unwrap_or(Value::Null);
-            let fit_reason = candidate
-                .get("fitReason")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-
-            let description = Some(format!(
-                "Proposal draft:\n\n{}\n\nFit reason:\n{}\n",
-                proposal_draft,
-                if fit_reason.is_empty() {
-                    "(not provided)"
-                } else {
-                    fit_reason.as_str()
-                }
-            ));
-
-            let payload = CreateWorkItem {
-                project_id: project_id.to_string(),
-                title,
-                description,
-                kind: Some(kind.clone()),
-                column_id: Some(review_column_id.clone()),
-                status: None,
-                priority: Some(priority),
-                assignee_agent_id: None,
-                created_by_agent_id: None,
-                parent_work_item_id: None,
-                position: None,
-                labels: Some(labels.clone()),
-                metadata: Some(json!({
-                    "source": "workflow.proposal",
-                    "workflowRunId": run_id,
-                    "workflowNodeId": node.id,
-                    "proposalCandidate": candidate,
-                    "listing": listing,
-                    "fitScore": fit_score,
-                })),
-            };
-            let item = create_work_item_with_db(&self.db, payload).await?;
-            self.sync_work_item_cloud(item.clone());
-            work_items.push(item);
-        }
-
-        Ok(NodeOutcome {
-            output: json!({
-                "action": "enqueue",
-                "reviewColumnId": review_column_id,
-                "count": work_items.len(),
-                "workItems": work_items,
-            }),
-            next_handle: None,
-        })
-    }
-
-    async fn run_logic_if(
-        &self,
-        node: &WorkflowNode,
-        outputs: &Value,
-    ) -> Result<NodeOutcome, String> {
-        let rule_value = node
-            .data
-            .get("rule")
-            .ok_or_else(|| "logic.if requires data.rule".to_string())?;
-        let rule: RuleNode = serde_json::from_value(rule_value.clone())
-            .map_err(|e| format!("invalid logic.if rule: {}", e))?;
-
-        let result = eval_rule(&rule, outputs);
-        let handle = if result { "true" } else { "false" };
-        Ok(NodeOutcome {
-            output: json!({ "result": result, "branch": handle }),
-            next_handle: Some(handle.to_string()),
-        })
-    }
-
-    async fn run_work_item_node(
-        &self,
-        run_id: &str,
-        project_id: &str,
-        node: &WorkflowNode,
-        outputs: &Value,
-    ) -> Result<NodeOutcome, String> {
-        let action = node
-            .data
-            .get("action")
-            .and_then(|v| v.as_str())
-            .unwrap_or("create");
-
-        match action {
-            "create" => {
-                let title_template = required_template(&node.data, "titleTemplate", action)?;
-                let title = render_template(&title_template, outputs).trim().to_string();
-                if title.is_empty() {
-                    return Err("board.work_item rendered an empty title".to_string());
-                }
-
-                let description = render_optional_template(
-                    node.data
-                        .get("descriptionTemplate")
-                        .and_then(|v| v.as_str()),
-                    outputs,
-                );
-                let assignee_agent_id = render_optional_template(
-                    node.data.get("assigneeAgentId").and_then(|v| v.as_str()),
-                    outputs,
-                );
-                let parent_work_item_id = render_optional_template(
-                    node.data.get("parentWorkItemId").and_then(|v| v.as_str()),
-                    outputs,
-                );
-                let labels = parse_work_item_labels(
-                    node.data.get("labelsText").and_then(|v| v.as_str()),
-                    outputs,
-                );
-                let kind = parse_work_item_kind(node.data.get("kind").and_then(|v| v.as_str()))?;
-                let status =
-                    parse_work_item_status(node.data.get("status").and_then(|v| v.as_str()))?;
-                let column_id = render_optional_template(
-                    node.data.get("columnId").and_then(|v| v.as_str()),
-                    outputs,
-                );
-                let priority = parse_priority(node.data.get("priority")).clamp(0, 3);
-
-                let payload = CreateWorkItem {
-                    project_id: project_id.to_string(),
-                    title: title.clone(),
-                    description: description.clone(),
-                    kind: Some(kind.clone()),
-                    column_id: column_id.clone(),
-                    status: Some(status.clone()),
-                    priority: Some(priority),
-                    assignee_agent_id: assignee_agent_id.clone(),
-                    created_by_agent_id: None,
-                    parent_work_item_id: parent_work_item_id.clone(),
-                    position: None,
-                    labels: Some(labels.clone()),
-                    metadata: Some(json!({
-                        "source": "workflow",
-                        "workflowRunId": run_id,
-                        "workflowNodeId": node.id,
-                    })),
-                };
-
-                let item = create_work_item_with_db(&self.db, payload).await?;
-                self.sync_work_item_cloud(item.clone());
-
-                Ok(NodeOutcome {
-                    output: json!({
-                        "action": action,
-                        "title": title,
-                        "description": description,
-                        "kind": kind,
-                        "columnId": column_id,
-                        "status": status,
-                        "priority": priority,
-                        "labels": labels,
-                        "assigneeAgentId": assignee_agent_id,
-                        "parentWorkItemId": parent_work_item_id,
-                        "workItem": item,
-                    }),
-                    next_handle: None,
-                })
-            }
-            "list" => {
-                let mut items = list_work_items_with_db(&self.db, project_id.to_string()).await?;
-                let status_filter = parse_optional_work_item_status(
-                    node.data
-                        .get("listColumn")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| node.data.get("listStatus").and_then(|v| v.as_str())),
-                )?;
-                let kind_filter = parse_optional_work_item_kind(
-                    node.data.get("listKind").and_then(|v| v.as_str()),
-                )?;
-                let assignee_filter = render_optional_template(
-                    node.data.get("listAssignee").and_then(|v| v.as_str()),
-                    outputs,
-                );
-                let limit = node
-                    .data
-                    .get("limit")
-                    .and_then(json_number_to_i64)
-                    .filter(|v| *v > 0)
-                    .unwrap_or(100) as usize;
-
-                if let Some(status) = status_filter.as_ref() {
-                    items.retain(|item| item.status == status.as_str());
-                }
-                if let Some(kind) = kind_filter.as_ref() {
-                    items.retain(|item| item.kind == kind.as_str());
-                }
-                if let Some(assignee) = assignee_filter.clone() {
-                    match assignee.as_str() {
-                        "none" | "unassigned" | "null" => {
-                            items.retain(|item| item.assignee_agent_id.is_none());
-                        }
-                        _ => items.retain(|item| {
-                            item.assignee_agent_id.as_deref() == Some(assignee.as_str())
-                        }),
-                    }
-                }
-                if items.len() > limit {
-                    items.truncate(limit);
-                }
-
-                Ok(NodeOutcome {
-                    output: json!({
-                        "action": action,
-                        "count": items.len(),
-                        "items": items,
-                        "filters": {
-                            "column": status_filter.clone(),
-                            "status": status_filter,
-                            "kind": kind_filter,
-                            "assignee": assignee_filter,
-                            "limit": limit,
-                        },
-                    }),
-                    next_handle: None,
-                })
-            }
-            "get" => {
-                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
-                let item = get_work_item_with_db(&self.db, item_id.clone()).await?;
-                Ok(NodeOutcome {
-                    output: json!({
-                        "action": action,
-                        "itemId": item_id,
-                        "workItem": item,
-                    }),
-                    next_handle: None,
-                })
-            }
-            "update" => {
-                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
-                let kind =
-                    parse_optional_work_item_kind(node.data.get("kind").and_then(|v| v.as_str()))?;
-                let priority = parse_optional_priority(node.data.get("priority"));
-                let labels = optional_labels(
-                    node.data.get("labelsText").and_then(|v| v.as_str()),
-                    outputs,
-                );
-                let item = update_work_item_with_db(
-                    &self.db,
-                    item_id.clone(),
-                    UpdateWorkItem {
-                        title: render_optional_template(
-                            node.data.get("titleTemplate").and_then(|v| v.as_str()),
-                            outputs,
-                        ),
-                        description: render_optional_template(
-                            node.data
-                                .get("descriptionTemplate")
-                                .and_then(|v| v.as_str()),
-                            outputs,
-                        ),
-                        kind,
-                        column_id: render_optional_template(
-                            node.data.get("columnId").and_then(|v| v.as_str()),
-                            outputs,
-                        ),
-                        priority,
-                        labels,
-                        metadata: None,
-                    },
-                )
-                .await?;
-                self.sync_work_item_cloud(item.clone());
-                Ok(NodeOutcome {
-                    output: json!({
-                        "action": action,
-                        "itemId": item_id,
-                        "workItem": item,
-                    }),
-                    next_handle: None,
-                })
-            }
-            "move" => {
-                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
-                let status =
-                    parse_work_item_status(node.data.get("status").and_then(|v| v.as_str()))?;
-                let column_id = render_optional_template(
-                    node.data.get("columnId").and_then(|v| v.as_str()),
-                    outputs,
-                );
-                let item = move_work_item_with_db(
-                    &self.db,
-                    item_id.clone(),
-                    Some(status.clone()),
-                    column_id.clone(),
-                    None,
-                )
-                .await?;
-                self.sync_work_item_cloud(item.clone());
-                Ok(NodeOutcome {
-                    output: json!({
-                        "action": action,
-                        "itemId": item_id,
-                        "columnId": column_id,
-                        "status": status,
-                        "workItem": item,
-                    }),
-                    next_handle: None,
-                })
-            }
-            "block" => {
-                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
-                let reason = render_required_field(&node.data, "reasonTemplate", action, outputs)?;
-                let item =
-                    block_work_item_with_db(&self.db, item_id.clone(), reason.clone()).await?;
-                self.sync_work_item_cloud(item.clone());
-                Ok(NodeOutcome {
-                    output: json!({
-                        "action": action,
-                        "itemId": item_id,
-                        "reason": reason,
-                        "workItem": item,
-                    }),
-                    next_handle: None,
-                })
-            }
-            "complete" => {
-                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
-                let item = complete_work_item_with_db(&self.db, item_id.clone()).await?;
-                self.sync_work_item_cloud(item.clone());
-                Ok(NodeOutcome {
-                    output: json!({
-                        "action": action,
-                        "itemId": item_id,
-                        "workItem": item,
-                    }),
-                    next_handle: None,
-                })
-            }
-            "comment" => {
-                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
-                let body = render_required_field(&node.data, "bodyTemplate", action, outputs)?;
-                let author = match render_optional_template(
-                    node.data
-                        .get("commentAuthorAgentId")
-                        .and_then(|v| v.as_str()),
-                    outputs,
-                ) {
-                    Some(agent_id) => CommentAuthor::Agent { agent_id },
-                    None => CommentAuthor::User,
-                };
-                let comment = create_work_item_comment_with_db(
-                    &self.db,
-                    item_id.clone(),
-                    body.clone(),
-                    author,
-                )
-                .await?;
-                self.sync_work_item_comment_cloud(comment.clone());
-                Ok(NodeOutcome {
-                    output: json!({
-                        "action": action,
-                        "itemId": item_id,
-                        "body": body,
-                        "comment": comment,
-                    }),
-                    next_handle: None,
-                })
-            }
-            "list_comments" => {
-                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
-                let comments = list_work_item_comments_with_db(&self.db, item_id.clone()).await?;
-                Ok(NodeOutcome {
-                    output: json!({
-                        "action": action,
-                        "itemId": item_id,
-                        "count": comments.len(),
-                        "comments": comments,
-                    }),
-                    next_handle: None,
-                })
-            }
-            "delete" => {
-                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
-                delete_work_item_with_db(&self.db, item_id.clone()).await?;
-                self.delete_work_item_cloud(item_id.clone());
-                Ok(NodeOutcome {
-                    output: json!({
-                        "action": action,
-                        "itemId": item_id,
-                        "deleted": true,
-                    }),
-                    next_handle: None,
-                })
-            }
-            "claim" => {
-                let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
-                let agent_id =
-                    render_required_field(&node.data, "assigneeAgentId", action, outputs)?;
-                let item =
-                    claim_work_item_with_db(&self.db, item_id.clone(), agent_id.clone()).await?;
-                self.sync_work_item_cloud(item.clone());
-                Ok(NodeOutcome {
-                    output: json!({
-                        "action": action,
-                        "itemId": item_id,
-                        "agentId": agent_id,
-                        "workItem": item,
-                    }),
-                    next_handle: None,
-                })
-            }
-            other => Err(format!(
-                "board.work_item has unsupported action '{}'",
-                other
-            )),
-        }
-    }
-
-    async fn filter_unseen_items(
-        &self,
-        workflow_id: &str,
-        node_id: &str,
-        source_key: &str,
-        items: Vec<Value>,
-    ) -> Result<Vec<Value>, String> {
-        let pool = self.db.0.clone();
-        let workflow_id = workflow_id.to_string();
-        let node_id = node_id.to_string();
-        let source_key = source_key.to_string();
-        tokio::task::spawn_blocking(move || -> Result<Vec<Value>, String> {
-            let mut conn = pool.get().map_err(|e| e.to_string())?;
-            let tx = conn.transaction().map_err(|e| e.to_string())?;
-            let now = Utc::now().to_rfc3339();
-            let mut unseen = Vec::new();
-
-            for item in items {
-                let fingerprint = fingerprint_listing(&item, &source_key);
-                let exists: Option<String> = tx
-                    .query_row(
-                        "SELECT id FROM workflow_seen_items
-                         WHERE workflow_id = ?1 AND node_id = ?2 AND source_key = ?3 AND fingerprint = ?4",
-                        rusqlite::params![workflow_id, node_id, source_key, fingerprint],
-                        |row| row.get(0),
-                    )
-                    .optional()
-                    .map_err(|e| e.to_string())?;
-                if exists.is_some() {
-                    continue;
-                }
-
-                tx.execute(
-                    "INSERT INTO workflow_seen_items (
-                        id, workflow_id, node_id, source_key, fingerprint, created_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    rusqlite::params![
-                        Ulid::new().to_string(),
-                        workflow_id,
-                        node_id,
-                        source_key,
-                        fingerprint,
-                        now,
-                    ],
-                )
-                .map_err(|e| e.to_string())?;
-                unseen.push(item);
-            }
-
-            tx.commit().map_err(|e| e.to_string())?;
-            Ok(unseen)
-        })
-        .await
-        .map_err(|e| e.to_string())?
-    }
-
-    fn sync_work_item_cloud(&self, item: crate::models::work_item::WorkItem) {
-        if let Some(client) = self.app.state::<CloudClientState>().get() {
-            tokio::spawn(async move {
-                if let Err(e) = client.upsert_work_item(&item).await {
-                    tracing::warn!("cloud upsert work_item (workflow): {}", e);
-                }
-            });
-        }
-    }
-
-    fn sync_work_item_comment_cloud(
-        &self,
-        comment: crate::models::work_item_comment::WorkItemComment,
-    ) {
-        if let Some(client) = self.app.state::<CloudClientState>().get() {
-            tokio::spawn(async move {
-                if let Err(e) = client.upsert_work_item_comment(&comment).await {
-                    tracing::warn!("cloud upsert work_item_comment (workflow): {}", e);
-                }
-            });
-        }
-    }
-
-    fn delete_work_item_cloud(&self, id: String) {
-        if let Some(client) = self.app.state::<CloudClientState>().get() {
-            tokio::spawn(async move {
-                if let Err(e) = client.delete_by_id("work_items", &id).await {
-                    tracing::warn!("cloud delete work_item (workflow): {}", e);
-                }
-            });
-        }
-    }
-
-    // ── Persistence helpers ─────────────────────────────────────────────────
-
-    async fn update_run_status(
-        &self,
-        workflow_id: &str,
-        run_id: &str,
-        status: &str,
-        error: Option<&str>,
-        started_at: Option<&str>,
-        completed_at: Option<&str>,
-    ) -> Result<(), String> {
-        let pool = self.db.0.clone();
-        let workflow_id = workflow_id.to_string();
-        let run_id = run_id.to_string();
-        let status = status.to_string();
-        let error = error.map(String::from);
-        let started_at = started_at.map(String::from);
-        let completed_at = completed_at.map(String::from);
-        let app = self.app.clone();
-        tokio::task::spawn_blocking(move || -> Result<(), String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
-            conn.execute(
-                "UPDATE workflow_runs SET status = ?1, error = COALESCE(?2, error),
-                                          started_at = COALESCE(?3, started_at),
-                                          completed_at = COALESCE(?4, completed_at)
-                 WHERE id = ?5",
-                rusqlite::params![status, error, started_at, completed_at, run_id],
-            )
-            .map_err(|e| e.to_string())?;
-            let _ = app.emit(
-                "workflow_run:updated",
-                WorkflowRunEventPayload {
-                    workflow_id,
-                    run_id,
-                    status,
-                },
-            );
-            Ok(())
-        })
-        .await
-        .map_err(|e| e.to_string())?
-    }
-
-    async fn fail_run(&self, workflow_id: &str, run_id: &str, err: &str) -> Result<(), String> {
-        let now = Utc::now().to_rfc3339();
-        self.update_run_status(
-            workflow_id,
-            run_id,
-            STATUS_FAILED,
-            Some(err),
-            None,
-            Some(&now),
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn insert_step(
-        &self,
-        workflow_id: &str,
-        step_id: &str,
-        run_id: &str,
-        node_id: &str,
-        node_type: &str,
-        status: &str,
-        input: &Value,
-        started_at: Option<&str>,
-        sequence: i64,
-    ) -> Result<(), String> {
-        let pool = self.db.0.clone();
-        let workflow_id = workflow_id.to_string();
-        let step_id = step_id.to_string();
-        let run_id = run_id.to_string();
-        let node_id = node_id.to_string();
-        let node_type = node_type.to_string();
-        let status = status.to_string();
-        let input_str = serde_json::to_string(input).unwrap_or_else(|_| "{}".into());
-        let started_at = started_at.map(String::from);
-        let app = self.app.clone();
-        tokio::task::spawn_blocking(move || -> Result<(), String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
-            conn.execute(
-                "INSERT INTO workflow_run_steps (id, run_id, node_id, node_type, status, input,
-                                                  started_at, sequence)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                rusqlite::params![
-                    step_id, run_id, node_id, node_type, status, input_str, started_at, sequence,
-                ],
-            )
-            .map_err(|e| e.to_string())?;
-            let _ = app.emit(
-                "workflow_run:step",
-                WorkflowRunStepEventPayload {
-                    workflow_id,
-                    run_id,
-                    step_id,
-                    node_id,
-                    node_type,
-                    status,
-                },
-            );
-            Ok(())
-        })
-        .await
-        .map_err(|e| e.to_string())?
-    }
-
-    async fn finish_step(
-        &self,
-        workflow_id: &str,
-        run_id: &str,
-        step_id: &str,
-        node_id: &str,
-        node_type: &str,
-        status: &str,
-        output: Option<&Value>,
-        error: Option<&str>,
-        completed_at: &str,
-    ) -> Result<(), String> {
-        let pool = self.db.0.clone();
-        let workflow_id = workflow_id.to_string();
-        let run_id = run_id.to_string();
-        let step_id = step_id.to_string();
-        let node_id = node_id.to_string();
-        let node_type = node_type.to_string();
-        let status = status.to_string();
-        let output_str = output.map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".into()));
-        let error = error.map(String::from);
-        let completed_at = completed_at.to_string();
-        let app = self.app.clone();
-        tokio::task::spawn_blocking(move || -> Result<(), String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
-            conn.execute(
-                "UPDATE workflow_run_steps SET status = ?1, output = ?2, error = ?3,
-                                                completed_at = ?4
-                 WHERE id = ?5",
-                rusqlite::params![status, output_str, error, completed_at, step_id],
-            )
-            .map_err(|e| e.to_string())?;
-            let _ = app.emit(
-                "workflow_run:step",
-                WorkflowRunStepEventPayload {
-                    workflow_id,
-                    run_id,
-                    step_id,
-                    node_id,
-                    node_type,
-                    status,
-                },
-            );
-            Ok(())
-        })
-        .await
-        .map_err(|e| e.to_string())?
-    }
-}
-
-struct NodeOutcome {
-    output: Value,
-    next_handle: Option<String>,
 }
 
 fn group_edges(edges: &[WorkflowEdge]) -> HashMap<String, Vec<&WorkflowEdge>> {
     let mut map: HashMap<String, Vec<&WorkflowEdge>> = HashMap::new();
-    for e in edges {
-        map.entry(e.source.clone()).or_default().push(e);
+    for edge in edges {
+        map.entry(edge.source.clone()).or_default().push(edge);
     }
     map
 }
@@ -1352,366 +277,22 @@ fn pick_next(
 ) -> Option<String> {
     let edges = outgoing.get(source_id)?;
     if let Some(h) = handle {
-        for e in edges {
-            if e.source_handle.as_deref() == Some(h) {
-                return Some(e.target.clone());
+        for edge in edges {
+            if edge.source_handle.as_deref() == Some(h) {
+                return Some(edge.target.clone());
             }
         }
-        // No matching handle: this branch dead-ends.
         None
     } else {
-        edges.first().map(|e| e.target.clone())
+        edges.first().map(|edge| edge.target.clone())
     }
 }
-
-/// Tiny mustache-style `{{path.to.value}}` renderer for prompt templates.
-/// Resolves against the `outputs` map produced by upstream nodes.
-fn render_template(template: &str, outputs: &Value) -> String {
-    let mut out = String::with_capacity(template.len());
-    let bytes = template.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if i + 1 < bytes.len() && bytes[i] == b'{' && bytes[i + 1] == b'{' {
-            if let Some(end) = find_close(&bytes[i + 2..]) {
-                let path = template[i + 2..i + 2 + end].trim();
-                let value = lookup_path(path, outputs);
-                out.push_str(&value);
-                i += 2 + end + 2;
-                continue;
-            }
-        }
-        out.push(bytes[i] as char);
-        i += 1;
-    }
-    out
-}
-
-fn find_close(bytes: &[u8]) -> Option<usize> {
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        if bytes[i] == b'}' && bytes[i + 1] == b'}' {
-            return Some(i);
-        }
-        i += 1;
-    }
-    None
-}
-
-fn lookup_path(path: &str, outputs: &Value) -> String {
-    let mut segments = path.split('.');
-    let Some(first) = segments.next() else {
-        return format!("{{{{{}}}}}", path);
-    };
-
-    let Some(resolved_first) = resolve_output_root_segment(first, outputs) else {
-        return format!("{{{{{}}}}}", path);
-    };
-
-    let Some(mut cur) = outputs.get(resolved_first) else {
-        return format!("{{{{{}}}}}", path);
-    };
-
-    for segment in segments {
-        match cur.get(segment) {
-            Some(v) => cur = v,
-            None => return format!("{{{{{}}}}}", path),
-        }
-    }
-    match cur {
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
-    }
-}
-
-fn lookup_json_path(path: &str, outputs: &Value) -> Option<Value> {
-    let mut segments = path.split('.');
-    let first = segments.next()?;
-    let resolved_first = resolve_output_root_segment(first, outputs)?;
-    let mut cur = outputs.get(resolved_first)?;
-    for segment in segments {
-        cur = cur.get(segment)?;
-    }
-    Some(cur.clone())
-}
-
-fn build_reference_aliases(graph: &WorkflowGraph) -> serde_json::Map<String, Value> {
-    let mut aliases = serde_json::Map::new();
-    for node in &graph.nodes {
-        if let Some(reference_key) = workflow_node_reference_key(&node.data) {
-            aliases.insert(reference_key.to_string(), Value::String(node.id.clone()));
-        }
-    }
-    aliases
-}
-
-fn workflow_node_reference_key(data: &Value) -> Option<&str> {
-    data.get("referenceKey")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
-fn resolve_output_root_segment<'a>(segment: &'a str, outputs: &'a Value) -> Option<&'a str> {
-    if outputs.get(segment).is_some() {
-        return Some(segment);
-    }
-    outputs.get(OUTPUT_ALIASES_KEY)?.get(segment)?.as_str()
-}
-
-fn render_agent_prompt(
-    template: &str,
-    context: Option<&str>,
-    output_mode: &str,
-    outputs: &Value,
-) -> String {
-    let prompt = render_template(template, outputs);
-    match output_mode {
-        "proposal_candidates" => {
-            let context_block = context
-                .filter(|value| !value.trim().is_empty())
-                .map(|value| format!("\n\nFit context:\n{}", value))
-                .unwrap_or_default();
-            format!(
-                "{}{}\n\nReturn only valid JSON as an array. Each array item must include: listing, fitScore, fitReason, proposalDraft, shouldReview.",
-                prompt, context_block
-            )
-        }
-        "json" => {
-            let context_block = context
-                .filter(|value| !value.trim().is_empty())
-                .map(|value| format!("\n\nContext:\n{}", value))
-                .unwrap_or_default();
-            format!("{}{}\n\nReturn only valid JSON.", prompt, context_block)
-        }
-        _ => match context {
-            Some(value) if !value.trim().is_empty() => format!("{}\n\nContext:\n{}", prompt, value),
-            _ => prompt,
-        },
-    }
-}
-
-fn parse_agent_output(output_mode: &str, text: &str) -> Result<Value, String> {
-    match output_mode {
-        "proposal_candidates" => {
-            let parsed: Value = serde_json::from_str(text)
-                .map_err(|e| format!("agent.run expected JSON array output: {}", e))?;
-            let items = parsed.as_array().ok_or_else(|| {
-                "agent.run proposal_candidates output must be an array".to_string()
-            })?;
-            for (idx, item) in items.iter().enumerate() {
-                let obj = item.as_object().ok_or_else(|| {
-                    format!(
-                        "agent.run proposal_candidates item {} must be an object",
-                        idx
-                    )
-                })?;
-                for field in [
-                    "listing",
-                    "fitScore",
-                    "fitReason",
-                    "proposalDraft",
-                    "shouldReview",
-                ] {
-                    if !obj.contains_key(field) {
-                        return Err(format!(
-                            "agent.run proposal_candidates item {} is missing '{}'",
-                            idx, field
-                        ));
-                    }
-                }
-            }
-            Ok(parsed)
-        }
-        "json" => {
-            serde_json::from_str(text).map_err(|e| format!("agent.run expected JSON output: {}", e))
-        }
-        _ => Ok(serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string()))),
-    }
-}
-
-fn parse_multiline_templates(template: &str, outputs: &Value) -> Vec<String> {
-    render_template(template, outputs)
-        .split('\n')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-fn normalize_http_body(content_type: &str, raw_body: &str) -> String {
-    if content_type.contains("html") {
-        html2md::parse_html(raw_body)
-    } else {
-        raw_body.to_string()
-    }
-}
-
-fn hash_text(input: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_bytes());
-    format!("{:x}", hasher.finalize())
-}
-
-fn fingerprint_listing(item: &Value, source_key: &str) -> String {
-    if let Some(url) = item
-        .get("url")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    {
-        return hash_text(url);
-    }
-
-    let title = item.get("title").and_then(Value::as_str).unwrap_or("");
-    let published = item
-        .get("publishedAt")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let body_hash = item.get("bodyHash").and_then(Value::as_str).unwrap_or("");
-    hash_text(&format!(
-        "{}|{}|{}|{}",
-        source_key, title, published, body_hash
-    ))
-}
-
-fn render_optional_template(template: Option<&str>, outputs: &Value) -> Option<String> {
-    template
-        .map(|value| render_template(value, outputs))
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn required_template(data: &Value, field: &str, action: &str) -> Result<String, String> {
-    data.get(field)
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| format!("board.work_item {} requires data.{}", action, field))
-}
-
-fn render_required_field(
-    data: &Value,
-    field: &str,
-    action: &str,
-    outputs: &Value,
-) -> Result<String, String> {
-    let template = required_template(data, field, action)?;
-    let rendered = render_template(&template, outputs).trim().to_string();
-    if rendered.is_empty() {
-        Err(format!(
-            "board.work_item {} rendered an empty {}",
-            action, field
-        ))
-    } else {
-        Ok(rendered)
-    }
-}
-
-fn parse_work_item_labels(template: Option<&str>, outputs: &Value) -> Vec<String> {
-    let Some(rendered) = render_optional_template(template, outputs) else {
-        return Vec::new();
-    };
-
-    rendered
-        .split(|ch| ch == ',' || ch == '\n')
-        .map(str::trim)
-        .filter(|label| !label.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-fn optional_labels(template: Option<&str>, outputs: &Value) -> Option<Vec<String>> {
-    template.map(|_| parse_work_item_labels(template, outputs))
-}
-
-fn parse_work_item_kind(value: Option<&str>) -> Result<String, String> {
-    let kind = value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("task");
-    if matches!(kind, "task" | "bug" | "story" | "spike" | "chore") {
-        Ok(kind.to_string())
-    } else {
-        Err(format!("board.work_item has invalid kind '{}'", kind))
-    }
-}
-
-fn parse_optional_work_item_kind(value: Option<&str>) -> Result<Option<String>, String> {
-    match value.map(str::trim).filter(|value| !value.is_empty()) {
-        Some("any") | Some("all") | None => Ok(None),
-        Some(kind) => parse_work_item_kind(Some(kind)).map(Some),
-    }
-}
-
-fn parse_work_item_status(value: Option<&str>) -> Result<String, String> {
-    let status = value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("backlog");
-    if matches!(
-        status,
-        "backlog" | "todo" | "in_progress" | "blocked" | "review" | "done" | "cancelled"
-    ) {
-        Ok(status.to_string())
-    } else {
-        Err(format!("board.work_item has invalid status '{}'", status))
-    }
-}
-
-fn parse_optional_work_item_status(value: Option<&str>) -> Result<Option<String>, String> {
-    match value.map(str::trim).filter(|value| !value.is_empty()) {
-        Some("any") | Some("all") | None => Ok(None),
-        Some(status) => parse_work_item_status(Some(status)).map(Some),
-    }
-}
-
-fn parse_priority(value: Option<&Value>) -> i64 {
-    value.and_then(json_number_to_i64).unwrap_or(0)
-}
-
-fn parse_optional_priority(value: Option<&Value>) -> Option<i64> {
-    value
-        .and_then(json_number_to_i64)
-        .map(|priority| priority.clamp(0, 3))
-}
-
-fn json_number_to_i64(value: &Value) -> Option<i64> {
-    value
-        .as_i64()
-        .or_else(|| value.as_u64().and_then(|n| i64::try_from(n).ok()))
-        .or_else(|| value.as_f64().map(|n| n.round() as i64))
-}
-
-// ── Read helpers used by commands ───────────────────────────────────────────
 
 pub fn load_run_with_steps(
     pool: &DbPool,
     run_id: &str,
 ) -> Result<(WorkflowRun, Vec<WorkflowRunStep>), String> {
-    let conn = pool.get().map_err(|e| e.to_string())?;
-    let run = conn
-        .query_row(
-            "SELECT id, workflow_id, workflow_version, graph_snapshot, trigger_kind,
-                    trigger_data, status, error, started_at, completed_at, created_at
-             FROM workflow_runs WHERE id = ?1",
-            rusqlite::params![run_id],
-            map_run_row,
-        )
-        .map_err(|e| format!("workflow run {} not found: {}", run_id, e))?;
-
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, run_id, node_id, node_type, status, input, output, error,
-                    started_at, completed_at, sequence
-             FROM workflow_run_steps WHERE run_id = ?1 ORDER BY sequence ASC",
-        )
-        .map_err(|e| e.to_string())?;
-    let steps = stmt
-        .query_map(rusqlite::params![run_id], map_step_row)
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok((run, steps))
+    store::load_run_with_steps(pool, run_id)
 }
 
 pub fn list_runs_for_workflow(
@@ -1719,138 +300,58 @@ pub fn list_runs_for_workflow(
     workflow_id: &str,
     limit: i64,
 ) -> Result<Vec<WorkflowRun>, String> {
-    let conn = pool.get().map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, workflow_id, workflow_version, graph_snapshot, trigger_kind,
-                    trigger_data, status, error, started_at, completed_at, created_at
-             FROM workflow_runs WHERE workflow_id = ?1
-             ORDER BY created_at DESC LIMIT ?2",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map(rusqlite::params![workflow_id, limit], map_run_row)
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(rows)
+    store::list_runs_for_workflow(pool, workflow_id, limit)
 }
 
 pub fn cancel_run(pool: &DbPool, run_id: &str) -> Result<(), String> {
-    let conn = pool.get().map_err(|e| e.to_string())?;
-    let now = Utc::now().to_rfc3339();
-    conn.execute(
-        "UPDATE workflow_runs
-         SET status = ?1, error = COALESCE(error, 'cancelled'), completed_at = ?2
-         WHERE id = ?3 AND status IN ('queued', 'running')",
-        rusqlite::params![STATUS_FAILED, now, run_id],
-    )
-    .map_err(|e| e.to_string())?;
-    conn.execute(
-        "UPDATE workflow_run_steps
-         SET status = ?1, error = COALESCE(error, 'cancelled'), completed_at = ?2
-         WHERE run_id = ?3 AND status IN ('queued', 'running')",
-        rusqlite::params![STATUS_SKIPPED, now, run_id],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-fn map_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkflowRun> {
-    let graph_str: String = row.get(3)?;
-    let trigger_str: String = row.get(5)?;
-    Ok(WorkflowRun {
-        id: row.get(0)?,
-        workflow_id: row.get(1)?,
-        workflow_version: row.get(2)?,
-        graph_snapshot: serde_json::from_str(&graph_str).unwrap_or(Value::Null),
-        trigger_kind: row.get(4)?,
-        trigger_data: serde_json::from_str(&trigger_str).unwrap_or(Value::Null),
-        status: row.get(6)?,
-        error: row.get(7)?,
-        started_at: row.get(8)?,
-        completed_at: row.get(9)?,
-        created_at: row.get(10)?,
-    })
-}
-
-fn map_step_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkflowRunStep> {
-    let input_str: String = row.get(5)?;
-    let output_opt: Option<String> = row.get(6)?;
-    Ok(WorkflowRunStep {
-        id: row.get(0)?,
-        run_id: row.get(1)?,
-        node_id: row.get(2)?,
-        node_type: row.get(3)?,
-        status: row.get(4)?,
-        input: serde_json::from_str(&input_str).unwrap_or(Value::Null),
-        output: output_opt.and_then(|s| serde_json::from_str(&s).ok()),
-        error: row.get(7)?,
-        started_at: row.get(8)?,
-        completed_at: row.get(9)?,
-        sequence: row.get(10)?,
-    })
+    store::cancel_run(pool, run_id)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        group_edges, parse_work_item_labels, pick_next, render_optional_template, render_template,
+    use super::{group_edges, pick_next, WorkflowOrchestrator};
+    use crate::db::cloud::CloudClientState;
+    use crate::db::connection::init as init_db;
+    use crate::models::project_workflow::ProjectWorkflow;
+    use crate::models::project_workflow::{
+        NodePosition, WorkflowEdge, WorkflowGraph, WorkflowNode,
     };
-    use crate::models::project_workflow::WorkflowEdge;
-    use serde_json::json;
+    use crate::workflows::orchestrator::load_run_with_steps;
+    use crate::workflows::store;
+    use serde_json::{json, Value};
+    use std::path::PathBuf;
+    use tauri::test::{mock_builder, mock_context, noop_assets};
 
-    #[test]
-    fn template_renders_known_paths() {
-        let outputs = json!({
-            "trigger": { "data": { "subject": "Hi" } }
-        });
-        assert_eq!(
-            render_template("Subject: {{trigger.data.subject}}", &outputs),
-            "Subject: Hi"
-        );
+    fn temp_db_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("orbit-workflow-{}-{}", name, ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
-    #[test]
-    fn template_leaves_unknown_paths_intact() {
-        let outputs = json!({});
-        assert_eq!(
-            render_template("Hello {{missing.path}}!", &outputs),
-            "Hello {{missing.path}}!"
-        );
+    fn trigger_node() -> WorkflowNode {
+        WorkflowNode {
+            id: "trigger-1".into(),
+            node_type: "trigger.manual".into(),
+            position: NodePosition { x: 0.0, y: 0.0 },
+            data: json!({}),
+        }
     }
 
-    #[test]
-    fn template_renders_reference_key_aliases() {
-        let outputs = json!({
-            "__aliases": { "triage-agent": "n2" },
-            "n2": { "output": { "text": "Hello" } }
-        });
-        assert_eq!(
-            render_template("Reply: {{triage-agent.output.text}}", &outputs),
-            "Reply: Hello"
-        );
-    }
-
-    #[test]
-    fn optional_template_trims_empty_values() {
-        let outputs = json!({ "trigger": { "data": { "value": "  hi  " } } });
-        assert_eq!(
-            render_optional_template(Some(" {{trigger.data.value}} "), &outputs),
-            Some("hi".into())
-        );
-        assert_eq!(render_optional_template(Some("   "), &outputs), None);
-    }
-
-    #[test]
-    fn label_parser_supports_commas_and_newlines() {
-        let outputs = json!({
-            "trigger": { "data": { "channel": "email" } }
-        });
-        assert_eq!(
-            parse_work_item_labels(Some("triage, {{trigger.data.channel}}\ncustomer"), &outputs),
-            vec!["triage", "email", "customer"]
-        );
+    fn workflow(id: &str, project_id: &str, graph: WorkflowGraph) -> ProjectWorkflow {
+        ProjectWorkflow {
+            id: id.into(),
+            project_id: project_id.into(),
+            name: "Workflow".into(),
+            description: None,
+            enabled: true,
+            graph,
+            trigger_kind: "manual".into(),
+            trigger_config: Value::Null,
+            version: 1,
+            created_at: "2024-01-01T00:00:00Z".into(),
+            updated_at: "2024-01-01T00:00:00Z".into(),
+        }
     }
 
     #[test]
@@ -1879,5 +380,99 @@ mod tests {
             Some("no".into())
         );
         assert_eq!(pick_next(&outgoing, "if1", Some("other")), None);
+    }
+
+    #[tokio::test]
+    async fn execute_run_completes_simple_trigger_workflow() {
+        let dir = temp_db_dir("happy");
+        let db = init_db(dir.clone()).unwrap();
+        let app = mock_builder()
+            .manage(CloudClientState::empty())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let orchestrator = WorkflowOrchestrator::new(db.clone(), app.handle().clone());
+        let wf = workflow(
+            "wf-happy",
+            "project-1",
+            WorkflowGraph {
+                nodes: vec![trigger_node()],
+                edges: Vec::new(),
+                schema_version: 1,
+            },
+        );
+        let run = store::insert_run(
+            &db,
+            &app.handle().clone(),
+            &wf,
+            "manual",
+            &json!({"ok": true}),
+        )
+        .await
+        .unwrap();
+
+        orchestrator
+            .execute_run(run.clone(), wf.id.clone(), wf.project_id.clone())
+            .await
+            .unwrap();
+
+        let (stored_run, steps) = load_run_with_steps(&db, &run.id).unwrap();
+        assert_eq!(stored_run.status, store::STATUS_SUCCESS);
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].status, store::STATUS_SUCCESS);
+        assert_eq!(steps[0].node_type, "trigger.manual");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn execute_run_marks_failed_node_and_run() {
+        let dir = temp_db_dir("failure");
+        let db = init_db(dir.clone()).unwrap();
+        let app = mock_builder()
+            .manage(CloudClientState::empty())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let orchestrator = WorkflowOrchestrator::new(db.clone(), app.handle().clone());
+        let wf = workflow(
+            "wf-failure",
+            "project-1",
+            WorkflowGraph {
+                nodes: vec![
+                    trigger_node(),
+                    WorkflowNode {
+                        id: "bad-1".into(),
+                        node_type: "integration.unknown".into(),
+                        position: NodePosition { x: 1.0, y: 0.0 },
+                        data: json!({}),
+                    },
+                ],
+                edges: vec![WorkflowEdge {
+                    id: "edge-1".into(),
+                    source: "trigger-1".into(),
+                    target: "bad-1".into(),
+                    source_handle: None,
+                }],
+                schema_version: 1,
+            },
+        );
+        let run = store::insert_run(&db, &app.handle().clone(), &wf, "manual", &Value::Null)
+            .await
+            .unwrap();
+
+        let err = orchestrator
+            .execute_run(run.clone(), wf.id.clone(), wf.project_id.clone())
+            .await
+            .unwrap_err();
+
+        assert!(err.contains("unknown node type"));
+
+        let (stored_run, steps) = load_run_with_steps(&db, &run.id).unwrap();
+        assert_eq!(stored_run.status, store::STATUS_FAILED);
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].status, store::STATUS_SUCCESS);
+        assert_eq!(steps[1].status, store::STATUS_FAILED);
+        assert_eq!(steps[1].node_id, "bad-1");
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

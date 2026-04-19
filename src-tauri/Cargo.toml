@@ -64,3 +64,6 @@ walkdir = "2"
 tauri-plugin-log = "2"
 tracing = "0.1"
 tauri-plugin-dialog = "2"
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
