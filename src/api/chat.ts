@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   ChatSession,
   ChatMessage,
+  ChatModelOverride,
   ContentBlock,
   ContextUsage,
   PaginatedChatMessages,
@@ -47,8 +48,16 @@ export const chatApi = {
     offset: number
   ): Promise<PaginatedChatMessages> => invoke('get_chat_messages', { sessionId, limit, offset }),
 
-  sendMessage: (sessionId: string, content: ContentBlock[]): Promise<SendChatMessageResponse> =>
-    invoke('send_chat_message', { sessionId, content: JSON.stringify(content) }),
+  sendMessage: (
+    sessionId: string,
+    content: ContentBlock[],
+    modelOverride?: ChatModelOverride
+  ): Promise<SendChatMessageResponse> =>
+    invoke('send_chat_message', {
+      sessionId,
+      content: JSON.stringify(content),
+      modelOverride,
+    }),
 
   respondToUserQuestion: (requestId: string, response: string): Promise<void> =>
     invoke('respond_to_user_question', { requestId, response }),
@@ -68,8 +77,8 @@ export const chatApi = {
   cancelAgentSession: (sessionId: string): Promise<void> =>
     invoke('cancel_agent_session', { sessionId }),
 
-  getContextUsage: (sessionId: string): Promise<ContextUsage> =>
-    invoke('get_context_usage', { sessionId }),
+  getContextUsage: (sessionId: string, modelOverride?: ChatModelOverride): Promise<ContextUsage> =>
+    invoke('get_context_usage', { sessionId, modelOverride }),
 
   compactSession: (sessionId: string): Promise<void> =>
     invoke('compact_chat_session', { sessionId }),

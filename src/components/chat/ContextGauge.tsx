@@ -3,10 +3,12 @@ import { Check, AlertTriangle } from 'lucide-react';
 import { chatApi } from '../../api/chat';
 import { onAgentConfigChanged } from '../../events/agentEvents';
 import { onChatContextUpdate, onCompactionStatus } from '../../events/runEvents';
+import { ChatModelOverride } from '../../types';
 
 interface ContextGaugeProps {
   sessionId: string;
   agentId?: string;
+  modelOverride?: ChatModelOverride;
   onCompacted?: () => void;
 }
 
@@ -23,7 +25,12 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-export function ContextGauge({ sessionId, agentId, onCompacted }: ContextGaugeProps) {
+export function ContextGauge({
+  sessionId,
+  agentId,
+  modelOverride,
+  onCompacted,
+}: ContextGaugeProps) {
   const [inputTokens, setInputTokens] = useState(0);
   const [contextWindow, setContextWindow] = useState(0);
   const [usagePercent, setUsagePercent] = useState(0);
@@ -32,7 +39,7 @@ export function ContextGauge({ sessionId, agentId, onCompacted }: ContextGaugePr
   const [compactionFailed, setCompactionFailed] = useState(false);
 
   async function refreshContextUsage() {
-    const usage = await chatApi.getContextUsage(sessionId);
+    const usage = await chatApi.getContextUsage(sessionId, modelOverride);
     setInputTokens(usage.inputTokens);
     setContextWindow(usage.contextWindowSize);
     setUsagePercent(usage.usagePercent);
@@ -41,7 +48,7 @@ export function ContextGauge({ sessionId, agentId, onCompacted }: ContextGaugePr
   // Load initial context usage on mount
   useEffect(() => {
     refreshContextUsage().catch(() => {});
-  }, [sessionId]);
+  }, [sessionId, modelOverride]);
 
   // Subscribe to real-time context updates
   useEffect(() => {
@@ -69,7 +76,7 @@ export function ContextGauge({ sessionId, agentId, onCompacted }: ContextGaugePr
     return () => {
       unsub.then((fn) => fn()).catch(() => {});
     };
-  }, [agentId, sessionId]);
+  }, [agentId, sessionId, modelOverride]);
 
   // Subscribe to background compaction status events
   useEffect(() => {

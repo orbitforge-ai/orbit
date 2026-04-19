@@ -115,25 +115,42 @@ pub trait LlmProvider: Send + Sync {
 
 // ─── Model context window lookup ────────────────────────────────────────────
 
-/// Returns the maximum context window size (in tokens) for a given model.
-pub fn model_context_window(model: &str) -> u32 {
-    match model {
-        // Anthropic models
-        "claude-opus-4-20250415"
-        | "claude-sonnet-4-20250514"
-        | "claude-opus-4-20250514"
-        | "claude-haiku-4-5-20251001"
-        | "claude-3-5-sonnet-20241022"
-        | "claude-3-5-haiku-20241022" => 200_000,
-        // MiniMax models
-        "MiniMax-M2.7" | "MiniMax-M2.7-highspeed" => 1_000_000,
-        "MiniMax-M2.5" | "MiniMax-M2.5-highspeed" => 1_000_000,
-        "MiniMax-M2.1" | "MiniMax-M2.1-highspeed" => 1_000_000,
-        "MiniMax-M2" => 1_000_000,
+/// Returns the maximum context window size (in tokens) for a given provider/model pair.
+pub fn model_context_window(provider_name: &str, model: &str) -> u32 {
+    match provider_name {
+        "anthropic" => match model {
+            "claude-opus-4-7" | "claude-opus-4-6" | "claude-sonnet-4-6" => 1_000_000,
+            "claude-haiku-4-5-20251001"
+            | "claude-opus-4-20250415"
+            | "claude-opus-4-20250514"
+            | "claude-sonnet-4-20250514"
+            | "claude-3-5-sonnet-20241022"
+            | "claude-3-5-haiku-20241022" => 200_000,
+            other => {
+                warn!(
+                    "Unknown anthropic model '{}' — falling back to 200k context window",
+                    other
+                );
+                200_000
+            }
+        },
+        "minimax" => match model {
+            "MiniMax-M2.7" | "MiniMax-M2.7-highspeed" => 204_800,
+            "MiniMax-M2.5" | "MiniMax-M2.5-highspeed" => 204_800,
+            "MiniMax-M2.1" | "MiniMax-M2.1-highspeed" => 204_800,
+            "MiniMax-M2" => 204_800,
+            other => {
+                warn!(
+                    "Unknown minimax model '{}' — falling back to 200k context window",
+                    other
+                );
+                200_000
+            }
+        },
         other => {
             warn!(
-                "Unknown model '{}' — falling back to 200k context window",
-                other
+                "Unknown provider '{}' for model '{}' — falling back to 200k context window",
+                other, model
             );
             200_000
         }
@@ -145,7 +162,10 @@ pub fn model_supports_images(provider_name: &str, model: &str) -> bool {
     match provider_name {
         "anthropic" => matches!(
             model,
-            "claude-opus-4-20250415"
+            "claude-opus-4-7"
+                | "claude-opus-4-6"
+                | "claude-sonnet-4-6"
+                | "claude-opus-4-20250415"
                 | "claude-sonnet-4-20250514"
                 | "claude-haiku-4-5-20251001"
                 | "claude-opus-4-20250514"
@@ -218,22 +238,37 @@ mod tests {
 
     #[test]
     fn known_models_have_expected_context_windows() {
-        assert_eq!(model_context_window("claude-opus-4-20250415"), 200_000);
-        assert_eq!(model_context_window("claude-opus-4-20250514"), 200_000);
-        assert_eq!(model_context_window("MiniMax-M2.7"), 1_000_000);
+        assert_eq!(
+            model_context_window("anthropic", "claude-opus-4-7"),
+            1_000_000
+        );
+        assert_eq!(
+            model_context_window("anthropic", "claude-opus-4-6"),
+            1_000_000
+        );
+        assert_eq!(
+            model_context_window("anthropic", "claude-sonnet-4-6"),
+            1_000_000
+        );
+        assert_eq!(
+            model_context_window("anthropic", "claude-haiku-4-5-20251001"),
+            200_000
+        );
+        assert_eq!(model_context_window("minimax", "MiniMax-M2.7"), 204_800);
+        assert_eq!(model_context_window("minimax", "MiniMax-M2.5"), 204_800);
     }
 
     #[test]
     fn unknown_models_fall_back_conservatively() {
-        assert_eq!(model_context_window("unknown-model"), 200_000);
+        assert_eq!(
+            model_context_window("unknown-provider", "unknown-model"),
+            200_000
+        );
     }
 
     #[test]
     fn image_support_checks_known_models() {
-        assert!(model_supports_images(
-            "anthropic",
-            "claude-sonnet-4-20250514"
-        ));
+        assert!(model_supports_images("anthropic", "claude-sonnet-4-6"));
         assert!(model_supports_images("minimax", "MiniMax-M2.7"));
         assert!(!model_supports_images("anthropic", "unknown-model"));
     }

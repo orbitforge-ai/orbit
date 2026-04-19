@@ -5,9 +5,10 @@ export const LLM_PROVIDERS = [
 
 export const MODEL_OPTIONS: Record<string, { label: string; value: string }[]> = {
   anthropic: [
-    { label: 'Claude Opus 4.6', value: 'claude-opus-4-20250415' },
-    { label: 'Claude Sonnet 4.6', value: 'claude-sonnet-4-20250514' },
-    { label: 'Claude Haiku 3.5', value: 'claude-haiku-4-5-20251001' },
+    { label: 'Claude Opus 4.7', value: 'claude-opus-4-7' },
+    { label: 'Claude Opus 4.6', value: 'claude-opus-4-6' },
+    { label: 'Claude Sonnet 4.6', value: 'claude-sonnet-4-6' },
+    { label: 'Claude Haiku 4.5', value: 'claude-haiku-4-5-20251001' },
   ],
   minimax: [
     { label: 'MiniMax M2.7', value: 'MiniMax-M2.7' },
@@ -18,7 +19,7 @@ export const MODEL_OPTIONS: Record<string, { label: string; value: string }[]> =
 };
 
 export const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
-  anthropic: 'claude-sonnet-4-20250514',
+  anthropic: 'claude-sonnet-4-6',
   minimax: 'MiniMax-M2.7',
 };
 

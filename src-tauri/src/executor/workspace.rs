@@ -317,7 +317,7 @@ impl Default for AgentWorkspaceConfig {
     fn default() -> Self {
         Self {
             provider: "anthropic".to_string(),
-            model: "claude-sonnet-4-20250514".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             temperature: 0.7,
             max_iterations: default_max_iterations(),
             max_total_tokens: default_max_total_tokens(),
@@ -847,7 +847,7 @@ mod tests {
         let parsed: AgentWorkspaceConfig = serde_json::from_str(
             r#"{
                 "provider": "anthropic",
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-6",
                 "temperature": 0.7,
                 "maxIterations": 25,
                 "maxTotalTokens": 200000,

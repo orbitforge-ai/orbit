@@ -5,6 +5,7 @@ import { ContentBlock } from '../../types';
 interface ChatInputProps {
   onSend: (content: ContentBlock[]) => Promise<void> | void;
   disabled?: boolean;
+  modelPicker?: React.ReactNode;
   contextGauge?: React.ReactNode;
   textValue?: string;
   onTextChange?: (text: string) => void;
@@ -23,6 +24,7 @@ let attachId = 0;
 export function ChatInput({
   onSend,
   disabled,
+  modelPicker,
   contextGauge,
   textValue,
   onTextChange,
@@ -72,10 +74,10 @@ export function ChatInput({
       blocks.push({ type: 'text', text: trimmed });
     }
 
-    const run = async () => {
-      setSending(true);
-      try {
-        await Promise.resolve(onSend(blocks));
+      const run = async () => {
+        setSending(true);
+        try {
+          await Promise.resolve(onSend(blocks));
         setText('');
         setAttachments([]);
         if (textareaRef.current) {
@@ -152,26 +154,28 @@ export function ChatInput({
   return (
     <div className="border-t border-edge bg-panel">
       {attachments.length > 0 && (
-        <div className="flex gap-2 px-4 pt-3 flex-wrap">
-          {attachments.map((att) => (
-            <div
-              key={att.id}
-              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-surface border border-edge text-xs"
-            >
-              {att.type === 'image' ? (
-                <ImageIcon size={12} className="text-accent-hover" />
-              ) : (
-                <FileText size={12} className="text-warning" />
-              )}
-              <span className="text-secondary max-w-[120px] truncate">{att.name}</span>
-              <button
-                onClick={() => removeAttachment(att.id)}
-                className="text-muted hover:text-white"
+        <div className="px-4 pt-3">
+          <div className="flex gap-2 flex-wrap">
+            {attachments.map((att) => (
+              <div
+                key={att.id}
+                className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-surface border border-edge text-xs"
               >
-                <X size={10} />
-              </button>
-            </div>
-          ))}
+                {att.type === 'image' ? (
+                  <ImageIcon size={12} className="text-accent-hover" />
+                ) : (
+                  <FileText size={12} className="text-warning" />
+                )}
+                <span className="text-secondary max-w-[120px] truncate">{att.name}</span>
+                <button
+                  onClick={() => removeAttachment(att.id)}
+                  className="text-muted hover:text-white"
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -204,6 +208,7 @@ export function ChatInput({
           style={{ maxHeight: 200 }}
         />
 
+        {modelPicker && <div className="shrink-0 mb-0.5">{modelPicker}</div>}
         {contextGauge && <div className="shrink-0 mb-0.5">{contextGauge}</div>}
 
         <button

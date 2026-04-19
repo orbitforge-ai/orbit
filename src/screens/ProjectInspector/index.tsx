@@ -46,6 +46,7 @@ export function ProjectInspector() {
   if (selectedProject) {
     return (
       <ProjectDetail
+        key={selectedProject.id}
         project={selectedProject}
         onDeleted={() => {
           selectProject(null);

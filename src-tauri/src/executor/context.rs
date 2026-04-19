@@ -22,7 +22,8 @@ pub struct ContextSnapshot {
 
 impl ContextSnapshot {
     pub fn empty(request: &ContextRequest) -> Self {
-        let context_window = model_context_window(&request.ws_config.model);
+        let context_window =
+            model_context_window(&request.ws_config.provider, &request.ws_config.model);
 
         Self {
             system_prompt: String::new(),

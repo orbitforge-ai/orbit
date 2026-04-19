@@ -340,9 +340,9 @@ pub fn content_preview(content: &[ContentBlock], max_chars: usize) -> String {
 
 pub fn estimate_input_cost_usd(model: &str, input_tokens: u32) -> Option<f64> {
     let rate_per_million = match model {
-        "claude-opus-4-20250514" => 15.0,
-        "claude-sonnet-4-20250514" | "claude-3-5-sonnet-20241022" => 3.0,
-        "claude-haiku-4-5-20251001" | "claude-3-5-haiku-20241022" => 0.8,
+        "claude-opus-4-7" | "claude-opus-4-6" | "claude-opus-4-20250514" => 5.0,
+        "claude-sonnet-4-6" | "claude-sonnet-4-20250514" | "claude-3-5-sonnet-20241022" => 3.0,
+        "claude-haiku-4-5-20251001" | "claude-3-5-haiku-20241022" => 1.0,
         "MiniMax-M2.7" | "MiniMax-M2.7-highspeed" => 0.6,
         "MiniMax-M2.5" | "MiniMax-M2.5-highspeed" => 0.6,
         "MiniMax-M2.1" | "MiniMax-M2.1-highspeed" => 0.6,
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn cost_estimate_handles_known_models() {
-        assert!(estimate_input_cost_usd("claude-sonnet-4-20250514", 1000).is_some());
+        assert!(estimate_input_cost_usd("claude-sonnet-4-6", 1000).is_some());
         assert!(estimate_input_cost_usd("unknown", 1000).is_none());
     }
 }

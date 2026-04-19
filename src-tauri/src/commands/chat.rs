@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use serde::Serialize;
 use tracing::{debug, info, warn};
 use ulid::Ulid;
@@ -628,6 +629,7 @@ pub async fn get_chat_messages(
 pub async fn send_chat_message(
     session_id: String,
     content: String, // JSON-serialized Vec<ContentBlock>
+    model_override: Option<ChatModelOverride>,
     app: tauri::AppHandle,
     db: tauri::State<'_, DbPool>,
     executor_tx: tauri::State<'_, ExecutorTx>,
@@ -826,6 +828,7 @@ pub async fn send_chat_message(
     let perm_registry = permission_registry.inner().clone();
     let question_registry = user_question_registry.inner().clone();
     let mem_client = memory_state.as_ref().map(|s| s.client.clone());
+    let model_override_bg = model_override.clone();
 
     tauri::async_runtime::spawn(async move {
         if let Err(e) = do_llm_chat(
@@ -844,6 +847,7 @@ pub async fn send_chat_message(
             question_registry,
             mem_client.as_ref(),
             &memory_user_id,
+            model_override_bg.as_ref(),
             cloud_client.clone(),
         )
         .await
@@ -955,10 +959,15 @@ async fn do_llm_chat(
     user_question_registry: UserQuestionRegistry,
     memory_client: Option<&MemoryClient>,
     memory_user_id: &str,
+    model_override: Option<&ChatModelOverride>,
     cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<(), String> {
     // Load agent config
-    let ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
+    let mut ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
+    if let Some(model_override) = model_override {
+        ws_config.provider = model_override.provider.clone();
+        ws_config.model = model_override.model.clone();
+    }
 
     let provider_name = &ws_config.provider;
     let api_key = keychain::retrieve_api_key(provider_name)
@@ -1473,9 +1482,17 @@ pub struct ContextUsage {
     pub usage_percent: f64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatModelOverride {
+    pub provider: String,
+    pub model: String,
+}
+
 #[tauri::command]
 pub async fn get_context_usage(
     session_id: String,
+    model_override: Option<ChatModelOverride>,
     db: tauri::State<'_, DbPool>,
 ) -> Result<ContextUsage, String> {
     let pool = db.0.clone();
@@ -1498,7 +1515,11 @@ pub async fn get_context_usage(
     .await
     .map_err(|e| e.to_string())??;
 
-    let ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
+    let mut ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
+    if let Some(model_override) = model_override {
+        ws_config.provider = model_override.provider;
+        ws_config.model = model_override.model;
+    }
     let context_window = compaction::effective_context_window(&ws_config);
     let input_tokens = last_input_tokens.unwrap_or(0);
 

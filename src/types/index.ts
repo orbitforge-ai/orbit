@@ -692,6 +692,11 @@ export interface MessageReaction {
   createdAt: string;
 }
 
+export interface ChatModelOverride {
+  provider: string;
+  model: string;
+}
+
 export interface SendChatMessageResponse {
   streamId: string;
   userMessageId: string;
