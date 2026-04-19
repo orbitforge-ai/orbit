@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { History } from 'lucide-react';
 import { runsApi } from '../../api/runs';
-import { RunSummary } from '../../types';
+import { workflowRunsApi } from '../../api/workflowRuns';
+import { RunSummary, WorkflowRunSummary } from '../../types';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useUiStore } from '../../store/uiStore';
 
@@ -20,28 +21,88 @@ function timeAgo(iso: string): string {
   return `${Math.floor(diff / 86400000)}d ago`;
 }
 
-export function ProjectHistoryTab({ projectId }: { projectId: string }) {
-  const { selectRun, navigate } = useUiStore();
+type ProjectHistoryEntry =
+  | {
+      id: string;
+      createdAt: string;
+      status: string;
+      durationLabel: string;
+      subtitle: string;
+      title: string;
+      kind: 'run';
+      run: RunSummary;
+    }
+  | {
+      id: string;
+      createdAt: string;
+      status: string;
+      durationLabel: string;
+      subtitle: string;
+      title: string;
+      kind: 'workflow-run';
+      run: WorkflowRunSummary;
+    };
 
-  const { data: runs = [], isLoading } = useQuery<RunSummary[]>({
+function formatWorkflowDuration(run: WorkflowRunSummary): string {
+  if (!run.startedAt) return '—';
+  const end = run.completedAt ? new Date(run.completedAt).getTime() : Date.now();
+  const start = new Date(run.startedAt).getTime();
+  return formatDuration(Math.max(0, end - start));
+}
+
+export function ProjectHistoryTab({ projectId }: { projectId: string }) {
+  const { navigate, openWorkflowEditor, selectRun } = useUiStore();
+
+  const { data: runs = [], isLoading: runsLoading } = useQuery<RunSummary[]>({
     queryKey: ['runs', 'project', projectId],
     queryFn: () => runsApi.list({ projectId, limit: 50 }),
     refetchInterval: 10_000,
   });
 
-  if (isLoading) {
+  const { data: workflowRuns = [], isLoading: workflowRunsLoading } = useQuery<WorkflowRunSummary[]>(
+    {
+      queryKey: ['workflow-runs', 'project', projectId],
+      queryFn: () => workflowRunsApi.listForProject(projectId, 50),
+      refetchInterval: 10_000,
+    }
+  );
+
+  const history: ProjectHistoryEntry[] = [
+    ...runs.map((run) => ({
+      id: run.id,
+      createdAt: run.createdAt,
+      status: run.state,
+      durationLabel: formatDuration(run.durationMs),
+      subtitle: `${run.agentName ?? 'unknown agent'} · ${timeAgo(run.createdAt)}`,
+      title: run.taskName,
+      kind: 'run' as const,
+      run,
+    })),
+    ...workflowRuns.map((run) => ({
+      id: run.id,
+      createdAt: run.createdAt,
+      status: run.status,
+      durationLabel: formatWorkflowDuration(run),
+      subtitle: `${run.triggerKind} workflow · ${timeAgo(run.createdAt)}`,
+      title: run.workflowName,
+      kind: 'workflow-run' as const,
+      run,
+    })),
+  ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  if (runsLoading || workflowRunsLoading) {
     return (
       <div className="flex items-center justify-center h-32 text-muted text-sm">Loading…</div>
     );
   }
 
-  if (runs.length === 0) {
+  if (history.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-2 text-muted">
         <History size={32} className="opacity-30" />
         <p className="text-sm">No runs yet</p>
         <p className="text-xs text-center max-w-xs">
-          Runs from tasks assigned to this project will appear here.
+          Task runs and workflow runs for this project will appear here.
         </p>
       </div>
     );
@@ -52,30 +113,35 @@ export function ProjectHistoryTab({ projectId }: { projectId: string }) {
       <div className="px-4 py-3 border-b border-edge">
         <h3 className="text-sm font-semibold text-white">
           Run History
-          <span className="ml-2 text-xs text-muted font-normal">({runs.length})</span>
+          <span className="ml-2 text-xs text-muted font-normal">({history.length})</span>
         </h3>
       </div>
 
       <ul className="divide-y divide-edge">
-        {runs.map((run) => (
+        {history.map((entry) => (
           <li
-            key={run.id}
+            key={`${entry.kind}-${entry.id}`}
             onClick={() => {
-              selectRun(run.id);
-              navigate('history');
+              if (entry.kind === 'run') {
+                selectRun(entry.run.id);
+                navigate('history');
+                return;
+              }
+              openWorkflowEditor(entry.run.workflowId);
             }}
             className="flex items-center gap-3 px-4 py-3 hover:bg-surface cursor-pointer transition-colors"
           >
-            <StatusBadge state={run.state} />
+            <StatusBadge state={entry.status} />
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-white truncate">{run.taskName}</p>
-              <p className="text-xs text-muted">
-                {run.agentName ?? 'unknown agent'} · {timeAgo(run.createdAt)}
-              </p>
+              <div className="flex items-center gap-2 min-w-0">
+                <p className="text-sm font-medium text-white truncate">{entry.title}</p>
+                <span className="text-[10px] uppercase tracking-wider text-muted shrink-0">
+                  {entry.kind === 'run' ? 'task' : 'workflow'}
+                </span>
+              </div>
+              <p className="text-xs text-muted">{entry.subtitle}</p>
             </div>
-            <span className="text-xs text-muted shrink-0">
-              {formatDuration(run.durationMs)}
-            </span>
+            <span className="text-xs text-muted shrink-0">{entry.durationLabel}</span>
           </li>
         ))}
       </ul>

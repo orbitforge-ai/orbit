@@ -253,6 +253,19 @@ export interface WorkflowRun {
   createdAt: string;
 }
 
+export interface WorkflowRunSummary {
+  id: string;
+  workflowId: string;
+  workflowName: string;
+  workflowVersion: number;
+  triggerKind: string;
+  status: WorkflowRunStatus;
+  error: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+}
+
 export interface WorkflowRunStep {
   id: string;
   runId: string;

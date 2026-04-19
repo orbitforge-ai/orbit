@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { WorkflowRun, WorkflowRunWithSteps } from '../types';
+import { WorkflowRun, WorkflowRunSummary, WorkflowRunWithSteps } from '../types';
 
 export const workflowRunsApi = {
   start: (
@@ -14,6 +14,12 @@ export const workflowRunsApi = {
   list: (workflowId: string, limit?: number): Promise<WorkflowRun[]> =>
     invoke('list_workflow_runs', {
       workflowId,
+      limit: limit ?? null,
+    }),
+
+  listForProject: (projectId: string, limit?: number): Promise<WorkflowRunSummary[]> =>
+    invoke('list_project_workflow_runs', {
+      projectId,
       limit: limit ?? null,
     }),
 

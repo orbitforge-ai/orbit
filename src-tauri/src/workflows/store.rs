@@ -6,7 +6,7 @@ use ulid::Ulid;
 
 use crate::db::DbPool;
 use crate::models::project_workflow::{ProjectWorkflow, WorkflowGraph};
-use crate::models::workflow_run::{WorkflowRun, WorkflowRunStep};
+use crate::models::workflow_run::{WorkflowRun, WorkflowRunStep, WorkflowRunSummary};
 
 pub(crate) const STATUS_QUEUED: &str = "queued";
 pub(crate) const STATUS_RUNNING: &str = "running";
@@ -358,6 +358,30 @@ pub fn list_runs_for_workflow(
     Ok(rows)
 }
 
+pub fn list_runs_for_project(
+    pool: &DbPool,
+    project_id: &str,
+    limit: i64,
+) -> Result<Vec<WorkflowRunSummary>, String> {
+    let conn = pool.get().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT wr.id, wr.workflow_id, pw.name, wr.workflow_version, wr.trigger_kind,
+                    wr.status, wr.error, wr.started_at, wr.completed_at, wr.created_at
+             FROM workflow_runs wr
+             INNER JOIN project_workflows pw ON pw.id = wr.workflow_id
+             WHERE pw.project_id = ?1
+             ORDER BY wr.created_at DESC LIMIT ?2",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params![project_id, limit], map_run_summary_row)
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
 pub fn cancel_run(pool: &DbPool, run_id: &str) -> Result<(), String> {
     let conn = pool.get().map_err(|e| e.to_string())?;
     let now = Utc::now().to_rfc3339();
@@ -393,6 +417,21 @@ fn map_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkflowRun> {
         started_at: row.get(8)?,
         completed_at: row.get(9)?,
         created_at: row.get(10)?,
+    })
+}
+
+fn map_run_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkflowRunSummary> {
+    Ok(WorkflowRunSummary {
+        id: row.get(0)?,
+        workflow_id: row.get(1)?,
+        workflow_name: row.get(2)?,
+        workflow_version: row.get(3)?,
+        trigger_kind: row.get(4)?,
+        status: row.get(5)?,
+        error: row.get(6)?,
+        started_at: row.get(7)?,
+        completed_at: row.get(8)?,
+        created_at: row.get(9)?,
     })
 }
 

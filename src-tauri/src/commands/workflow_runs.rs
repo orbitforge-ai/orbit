@@ -1,8 +1,9 @@
 use serde_json::Value;
 
 use crate::db::DbPool;
-use crate::models::workflow_run::{WorkflowRun, WorkflowRunWithSteps};
+use crate::models::workflow_run::{WorkflowRun, WorkflowRunSummary, WorkflowRunWithSteps};
 use crate::workflows::orchestrator::{cancel_run, list_runs_for_workflow, load_run_with_steps};
+use crate::workflows::store::list_runs_for_project;
 use crate::workflows::WorkflowOrchestrator;
 
 #[tauri::command]
@@ -27,6 +28,19 @@ pub async fn list_workflow_runs(
     let pool = db.inner().clone();
     let limit = limit.unwrap_or(50).clamp(1, 200);
     tokio::task::spawn_blocking(move || list_runs_for_workflow(&pool, &workflow_id, limit))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_project_workflow_runs(
+    project_id: String,
+    limit: Option<i64>,
+    db: tauri::State<'_, DbPool>,
+) -> Result<Vec<WorkflowRunSummary>, String> {
+    let pool = db.inner().clone();
+    let limit = limit.unwrap_or(50).clamp(1, 200);
+    tokio::task::spawn_blocking(move || list_runs_for_project(&pool, &project_id, limit))
         .await
         .map_err(|e| e.to_string())?
 }

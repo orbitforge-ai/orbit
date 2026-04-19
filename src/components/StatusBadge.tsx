@@ -2,7 +2,7 @@ import { cn } from '../lib/cn';
 import { RunState } from '../types';
 
 const STATE_CONFIG: Record<
-  RunState | 'idle' | 'busy',
+  RunState | 'failed' | 'idle' | 'busy',
   { label: string; className: string; dot?: boolean }
 > = {
   pending: {
@@ -22,6 +22,7 @@ const STATE_CONFIG: Record<
   },
   success: { label: 'Success', className: 'bg-green-500/15 text-green-400 border-green-500/30' },
   failure: { label: 'Failed', className: 'bg-red-500/15 text-red-400 border-red-500/30' },
+  failed: { label: 'Failed', className: 'bg-red-500/15 text-red-400 border-red-500/30' },
   cancelled: {
     label: 'Cancelled',
     className: 'bg-slate-500/15 text-slate-400 border-slate-500/30',

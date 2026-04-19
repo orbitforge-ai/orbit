@@ -18,6 +18,21 @@ pub struct WorkflowRun {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WorkflowRunSummary {
+    pub id: String,
+    pub workflow_id: String,
+    pub workflow_name: String,
+    pub workflow_version: i64,
+    pub trigger_kind: String,
+    pub status: String,
+    pub error: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkflowRunStep {
     pub id: String,
     pub run_id: String,

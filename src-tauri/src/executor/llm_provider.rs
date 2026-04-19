@@ -133,7 +133,9 @@ pub trait LlmProvider: Send + Sync {
 /// Returns the maximum context window size (in tokens) for a given provider/model pair.
 pub fn model_context_window(provider_name: &str, model: &str) -> u32 {
     match provider_name {
-        "anthropic" => match model {
+        // Claude CLI routes through the same Anthropic models, so the window
+        // is governed by the model, not the transport.
+        "anthropic" | "claude-cli" => match model {
             "claude-opus-4-7" | "claude-opus-4-6" | "claude-sonnet-4-6" => 1_000_000,
             "claude-haiku-4-5-20251001"
             | "claude-opus-4-20250415"
@@ -143,13 +145,12 @@ pub fn model_context_window(provider_name: &str, model: &str) -> u32 {
             | "claude-3-5-haiku-20241022" => 200_000,
             other => {
                 warn!(
-                    "Unknown anthropic model '{}' — falling back to 200k context window",
+                    "Unknown anthropic/claude-cli model '{}' — falling back to 200k context window",
                     other
                 );
                 200_000
             }
         },
-        "claude-cli" => 200_000,
         "codex-cli" => 200_000,
         "minimax" => match model {
             "MiniMax-M2.7" | "MiniMax-M2.7-highspeed" => 204_800,
@@ -189,6 +190,8 @@ pub fn model_supports_images(provider_name: &str, model: &str) -> bool {
                 | "claude-3-5-sonnet-20241022"
                 | "claude-3-5-haiku-20241022"
         ),
+        // Claude CLI uses the same models but image support over the MCP
+        // bridge is not yet verified end to end — keep disabled for v1.
         "minimax" => matches!(
             model,
             "MiniMax-M2.7"
