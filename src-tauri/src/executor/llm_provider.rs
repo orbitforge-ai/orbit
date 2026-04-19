@@ -119,7 +119,8 @@ pub trait LlmProvider: Send + Sync {
 pub fn model_context_window(model: &str) -> u32 {
     match model {
         // Anthropic models
-        "claude-sonnet-4-20250514"
+        "claude-opus-4-20250415"
+        | "claude-sonnet-4-20250514"
         | "claude-opus-4-20250514"
         | "claude-haiku-4-5-20251001"
         | "claude-3-5-sonnet-20241022"
@@ -217,6 +218,7 @@ mod tests {
 
     #[test]
     fn known_models_have_expected_context_windows() {
+        assert_eq!(model_context_window("claude-opus-4-20250415"), 200_000);
         assert_eq!(model_context_window("claude-opus-4-20250514"), 200_000);
         assert_eq!(model_context_window("MiniMax-M2.7"), 1_000_000);
     }

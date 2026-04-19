@@ -57,9 +57,7 @@ pub fn should_compact(input_tokens: u32, context_window: u32, threshold: f64) ->
 
 /// Resolves the effective context window size for an agent config.
 pub fn effective_context_window(config: &AgentWorkspaceConfig) -> u32 {
-    config
-        .context_window_override
-        .unwrap_or_else(|| model_context_window(&config.model))
+    model_context_window(&config.model)
 }
 
 /// Resolves the compaction threshold (0.0–1.0) from agent config or default.

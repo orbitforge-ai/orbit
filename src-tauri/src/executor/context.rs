@@ -22,10 +22,7 @@ pub struct ContextSnapshot {
 
 impl ContextSnapshot {
     pub fn empty(request: &ContextRequest) -> Self {
-        let context_window = request
-            .ws_config
-            .context_window_override
-            .unwrap_or_else(|| model_context_window(&request.ws_config.model));
+        let context_window = model_context_window(&request.ws_config.model);
 
         Self {
             system_prompt: String::new(),

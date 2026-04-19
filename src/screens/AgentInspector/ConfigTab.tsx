@@ -331,24 +331,10 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
                   className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
                 />
               </div>
-              <div>
-                <label className="text-xs text-muted mb-1 block">Context Window Override</label>
-                <input
-                  type="number"
-                  min={1000}
-                  step={10000}
-                  placeholder="Auto"
-                  value={config.contextWindowOverride ?? ''}
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    updateConfig({
-                      contextWindowOverride: raw ? parseInt(raw) || undefined : undefined,
-                    });
-                  }}
-                  className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent placeholder:text-border-hover"
-                />
-              </div>
             </div>
+            <p className="text-[10px] text-muted">
+              Context window size is determined automatically by the selected model.
+            </p>
           </div>
 
           {/* Disabled Tools */}

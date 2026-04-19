@@ -244,8 +244,6 @@ pub struct AgentWorkspaceConfig {
     #[serde(default)]
     pub compaction_retain_count: Option<u32>,
     #[serde(default)]
-    pub context_window_override: Option<u32>,
-    #[serde(default)]
     pub disabled_skills: Vec<String>,
     #[serde(default)]
     pub disabled_tools: Vec<String>,
@@ -325,7 +323,6 @@ impl Default for AgentWorkspaceConfig {
             max_total_tokens: default_max_total_tokens(),
             compaction_threshold: None,
             compaction_retain_count: None,
-            context_window_override: None,
             disabled_skills: Vec::new(),
             disabled_tools: Vec::new(),
             default_channel_id: None,
@@ -844,8 +841,9 @@ mod tests {
     #[test]
     fn missing_identity_defaults_to_balanced_assistant() {
         // Legacy config with removed fields (allowedTools, webSearchProvider,
-        // permissionRules, permissionMode) should still parse — those fields
-        // are silently ignored by serde's default unknown-field behavior.
+        // permissionRules, permissionMode, contextWindowOverride) should still
+        // parse — those fields are silently ignored by serde's default
+        // unknown-field behavior.
         let parsed: AgentWorkspaceConfig = serde_json::from_str(
             r#"{
                 "provider": "anthropic",
@@ -853,6 +851,7 @@ mod tests {
                 "temperature": 0.7,
                 "maxIterations": 25,
                 "maxTotalTokens": 200000,
+                "contextWindowOverride": 123456,
                 "allowedTools": ["finish"],
                 "webSearchProvider": "brave",
                 "permissionMode": "normal",
@@ -874,6 +873,7 @@ mod tests {
         assert!(!json.contains("webSearchProvider"));
         assert!(!json.contains("permissionMode"));
         assert!(!json.contains("permissionRules"));
+        assert!(!json.contains("contextWindowOverride"));
         assert!(json.contains("disabledTools"));
         assert!(json.contains("defaultChannelId"));
     }

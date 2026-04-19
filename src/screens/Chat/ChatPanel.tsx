@@ -746,6 +746,7 @@ export function ChatPanel({
           sessionId ? (
             <ContextGauge
               sessionId={sessionId}
+              agentId={sessionMeta?.agentId}
               onCompacted={() => {
                 queryClient.invalidateQueries({ queryKey: ['chat-messages', sessionId] });
               }}

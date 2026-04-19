@@ -286,7 +286,10 @@ impl WorkflowOrchestrator {
             }),
             "agent.run" => self.run_agent_node(node, outputs).await,
             "logic.if" => self.run_logic_if(node, outputs).await,
-            "board.work_item.create" => self.run_work_item_node(run_id, project_id, node, outputs).await,
+            "board.work_item.create" => {
+                self.run_work_item_node(run_id, project_id, node, outputs)
+                    .await
+            }
             other if other.starts_with("integration.") => Err(format!(
                 "integration node `{}` is not yet implemented",
                 other
@@ -426,7 +429,9 @@ impl WorkflowOrchestrator {
                 }
 
                 let description = render_optional_template(
-                    node.data.get("descriptionTemplate").and_then(|v| v.as_str()),
+                    node.data
+                        .get("descriptionTemplate")
+                        .and_then(|v| v.as_str()),
                     outputs,
                 );
                 let assignee_agent_id = render_optional_template(
@@ -517,7 +522,9 @@ impl WorkflowOrchestrator {
                         "none" | "unassigned" | "null" => {
                             items.retain(|item| item.assignee_agent_id.is_none());
                         }
-                        _ => items.retain(|item| item.assignee_agent_id.as_deref() == Some(assignee.as_str())),
+                        _ => items.retain(|item| {
+                            item.assignee_agent_id.as_deref() == Some(assignee.as_str())
+                        }),
                     }
                 }
                 if items.len() > limit {
@@ -554,7 +561,8 @@ impl WorkflowOrchestrator {
             }
             "update" => {
                 let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
-                let kind = parse_optional_work_item_kind(node.data.get("kind").and_then(|v| v.as_str()))?;
+                let kind =
+                    parse_optional_work_item_kind(node.data.get("kind").and_then(|v| v.as_str()))?;
                 let priority = parse_optional_priority(node.data.get("priority"));
                 let labels = optional_labels(
                     node.data.get("labelsText").and_then(|v| v.as_str()),
@@ -569,7 +577,9 @@ impl WorkflowOrchestrator {
                             outputs,
                         ),
                         description: render_optional_template(
-                            node.data.get("descriptionTemplate").and_then(|v| v.as_str()),
+                            node.data
+                                .get("descriptionTemplate")
+                                .and_then(|v| v.as_str()),
                             outputs,
                         ),
                         kind,
@@ -609,7 +619,8 @@ impl WorkflowOrchestrator {
             "block" => {
                 let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
                 let reason = render_required_field(&node.data, "reasonTemplate", action, outputs)?;
-                let item = block_work_item_with_db(&self.db, item_id.clone(), reason.clone()).await?;
+                let item =
+                    block_work_item_with_db(&self.db, item_id.clone(), reason.clone()).await?;
                 self.sync_work_item_cloud(item.clone());
                 Ok(NodeOutcome {
                     output: json!({
@@ -638,15 +649,21 @@ impl WorkflowOrchestrator {
                 let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
                 let body = render_required_field(&node.data, "bodyTemplate", action, outputs)?;
                 let author = match render_optional_template(
-                    node.data.get("commentAuthorAgentId").and_then(|v| v.as_str()),
+                    node.data
+                        .get("commentAuthorAgentId")
+                        .and_then(|v| v.as_str()),
                     outputs,
                 ) {
                     Some(agent_id) => CommentAuthor::Agent { agent_id },
                     None => CommentAuthor::User,
                 };
-                let comment =
-                    create_work_item_comment_with_db(&self.db, item_id.clone(), body.clone(), author)
-                        .await?;
+                let comment = create_work_item_comment_with_db(
+                    &self.db,
+                    item_id.clone(),
+                    body.clone(),
+                    author,
+                )
+                .await?;
                 self.sync_work_item_comment_cloud(comment.clone());
                 Ok(NodeOutcome {
                     output: json!({
@@ -701,7 +718,10 @@ impl WorkflowOrchestrator {
                     next_handle: None,
                 })
             }
-            other => Err(format!("board.work_item has unsupported action '{}'", other)),
+            other => Err(format!(
+                "board.work_item has unsupported action '{}'",
+                other
+            )),
         }
     }
 
@@ -715,7 +735,10 @@ impl WorkflowOrchestrator {
         }
     }
 
-    fn sync_work_item_comment_cloud(&self, comment: crate::models::work_item_comment::WorkItemComment) {
+    fn sync_work_item_comment_cloud(
+        &self,
+        comment: crate::models::work_item_comment::WorkItemComment,
+    ) {
         if let Some(client) = self.app.state::<CloudClientState>().get() {
             tokio::spawn(async move {
                 if let Err(e) = client.upsert_work_item_comment(&comment).await {
@@ -932,11 +955,7 @@ fn render_optional_template(template: Option<&str>, outputs: &Value) -> Option<S
         .filter(|value| !value.is_empty())
 }
 
-fn required_template(
-    data: &Value,
-    field: &str,
-    action: &str,
-) -> Result<String, String> {
+fn required_template(data: &Value, field: &str, action: &str) -> Result<String, String> {
     data.get(field)
         .and_then(|value| value.as_str())
         .map(str::trim)
@@ -981,7 +1000,10 @@ fn optional_labels(template: Option<&str>, outputs: &Value) -> Option<Vec<String
 }
 
 fn parse_work_item_kind(value: Option<&str>) -> Result<String, String> {
-    let kind = value.map(str::trim).filter(|value| !value.is_empty()).unwrap_or("task");
+    let kind = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("task");
     if matches!(kind, "task" | "bug" | "story" | "spike" | "chore") {
         Ok(kind.to_string())
     } else {
@@ -1023,7 +1045,9 @@ fn parse_priority(value: Option<&Value>) -> i64 {
 }
 
 fn parse_optional_priority(value: Option<&Value>) -> Option<i64> {
-    value.and_then(json_number_to_i64).map(|priority| priority.clamp(0, 3))
+    value
+        .and_then(json_number_to_i64)
+        .map(|priority| priority.clamp(0, 3))
 }
 
 fn json_number_to_i64(value: &Value) -> Option<i64> {

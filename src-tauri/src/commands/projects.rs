@@ -521,11 +521,9 @@ pub async fn delete_project_workspace_file(project_id: String, path: String) -> 
 
 #[tauri::command]
 pub async fn create_project_workspace_dir(project_id: String, path: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        workspace::create_project_workspace_dir(&project_id, &path)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || workspace::create_project_workspace_dir(&project_id, &path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

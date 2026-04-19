@@ -609,7 +609,6 @@ export interface AgentWorkspaceConfig {
   maxTotalTokens: number;
   compactionThreshold?: number;
   compactionRetainCount?: number;
-  contextWindowOverride?: number;
   disabledSkills: string[];
   disabledTools: string[];
   identity: AgentIdentityConfig;

@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Check, AlertTriangle } from 'lucide-react';
 import { chatApi } from '../../api/chat';
+import { onAgentConfigChanged } from '../../events/agentEvents';
 import { onChatContextUpdate, onCompactionStatus } from '../../events/runEvents';
 
 interface ContextGaugeProps {
   sessionId: string;
+  agentId?: string;
   onCompacted?: () => void;
 }
 
@@ -21,7 +23,7 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
+export function ContextGauge({ sessionId, agentId, onCompacted }: ContextGaugeProps) {
   const [inputTokens, setInputTokens] = useState(0);
   const [contextWindow, setContextWindow] = useState(0);
   const [usagePercent, setUsagePercent] = useState(0);
@@ -29,16 +31,16 @@ export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
   const [justCompacted, setJustCompacted] = useState(false);
   const [compactionFailed, setCompactionFailed] = useState(false);
 
+  async function refreshContextUsage() {
+    const usage = await chatApi.getContextUsage(sessionId);
+    setInputTokens(usage.inputTokens);
+    setContextWindow(usage.contextWindowSize);
+    setUsagePercent(usage.usagePercent);
+  }
+
   // Load initial context usage on mount
   useEffect(() => {
-    chatApi
-      .getContextUsage(sessionId)
-      .then((usage) => {
-        setInputTokens(usage.inputTokens);
-        setContextWindow(usage.contextWindowSize);
-        setUsagePercent(usage.usagePercent);
-      })
-      .catch(() => {});
+    refreshContextUsage().catch(() => {});
   }, [sessionId]);
 
   // Subscribe to real-time context updates
@@ -54,6 +56,20 @@ export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
       unsub.then((fn) => fn()).catch(() => {});
     };
   }, [sessionId]);
+
+  // Refresh when the active agent's model config changes
+  useEffect(() => {
+    if (!agentId) return;
+
+    const unsub = onAgentConfigChanged((payload) => {
+      if (payload.agentId !== agentId) return;
+      refreshContextUsage().catch(() => {});
+    });
+
+    return () => {
+      unsub.then((fn) => fn()).catch(() => {});
+    };
+  }, [agentId, sessionId]);
 
   // Subscribe to background compaction status events
   useEffect(() => {
@@ -86,11 +102,7 @@ export function ContextGauge({ sessionId, onCompacted }: ContextGaugeProps) {
     setCompactionFailed(false);
     try {
       await chatApi.compactSession(sessionId);
-      // Refetch updated usage
-      const usage = await chatApi.getContextUsage(sessionId);
-      setInputTokens(usage.inputTokens);
-      setContextWindow(usage.contextWindowSize);
-      setUsagePercent(usage.usagePercent);
+      await refreshContextUsage();
       // Show success state
       setJustCompacted(true);
       onCompacted?.();
