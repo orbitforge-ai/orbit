@@ -75,7 +75,7 @@ pub(crate) async fn load_workflow(
 
 pub(crate) async fn insert_run(
     db: &DbPool,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<impl tauri::Runtime>,
     workflow: &ProjectWorkflow,
     trigger_kind: &str,
     trigger_data: &Value,
@@ -142,7 +142,7 @@ pub(crate) async fn insert_run(
 
 pub(crate) async fn update_run_status(
     db: &DbPool,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<impl tauri::Runtime>,
     workflow_id: &str,
     run_id: &str,
     status: &str,
@@ -184,7 +184,7 @@ pub(crate) async fn update_run_status(
 
 pub(crate) async fn fail_run(
     db: &DbPool,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<impl tauri::Runtime>,
     workflow_id: &str,
     run_id: &str,
     err: &str,
@@ -206,7 +206,7 @@ pub(crate) async fn fail_run(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn insert_step(
     db: &DbPool,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<impl tauri::Runtime>,
     workflow_id: &str,
     step_id: &str,
     run_id: &str,
@@ -258,7 +258,7 @@ pub(crate) async fn insert_step(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn finish_step(
     db: &DbPool,
-    app: &tauri::AppHandle,
+    app: &tauri::AppHandle<impl tauri::Runtime>,
     workflow_id: &str,
     run_id: &str,
     step_id: &str,

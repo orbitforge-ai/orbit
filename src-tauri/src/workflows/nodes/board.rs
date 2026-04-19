@@ -71,8 +71,8 @@ impl WorkItemAction {
     }
 }
 
-pub(super) async fn execute_proposal_enqueue(
-    ctx: &NodeExecutionContext<'_>,
+pub(super) async fn execute_proposal_enqueue<R: tauri::Runtime>(
+    ctx: &NodeExecutionContext<'_, R>,
 ) -> Result<NodeOutcome, String> {
     let candidates_path =
         required_template(&ctx.node.data, "candidatesPath", "board.proposal.enqueue")?;
@@ -173,8 +173,8 @@ pub(super) async fn execute_proposal_enqueue(
     })
 }
 
-pub(super) async fn execute_work_item(
-    ctx: &NodeExecutionContext<'_>,
+pub(super) async fn execute_work_item<R: tauri::Runtime>(
+    ctx: &NodeExecutionContext<'_, R>,
 ) -> Result<NodeOutcome, String> {
     let action = WorkItemAction::parse(ctx.node.data.get("action").and_then(|v| v.as_str()))?;
 
@@ -567,7 +567,10 @@ pub(super) async fn execute_work_item(
     }
 }
 
-fn sync_work_item_cloud(app: &tauri::AppHandle, item: crate::models::work_item::WorkItem) {
+fn sync_work_item_cloud<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    item: crate::models::work_item::WorkItem,
+) {
     if let Some(client) = app.state::<CloudClientState>().get() {
         tokio::spawn(async move {
             if let Err(e) = client.upsert_work_item(&item).await {
@@ -577,7 +580,10 @@ fn sync_work_item_cloud(app: &tauri::AppHandle, item: crate::models::work_item::
     }
 }
 
-fn sync_work_item_comment_cloud(app: &tauri::AppHandle, comment: WorkItemComment) {
+fn sync_work_item_comment_cloud<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    comment: WorkItemComment,
+) {
     if let Some(client) = app.state::<CloudClientState>().get() {
         tokio::spawn(async move {
             if let Err(e) = client.upsert_work_item_comment(&comment).await {
@@ -587,7 +593,7 @@ fn sync_work_item_comment_cloud(app: &tauri::AppHandle, comment: WorkItemComment
     }
 }
 
-fn delete_work_item_cloud(app: &tauri::AppHandle, id: String) {
+fn delete_work_item_cloud<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: String) {
     if let Some(client) = app.state::<CloudClientState>().get() {
         tokio::spawn(async move {
             if let Err(e) = client.delete_by_id("work_items", &id).await {

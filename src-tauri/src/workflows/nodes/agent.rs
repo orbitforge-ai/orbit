@@ -6,7 +6,9 @@ use crate::workflows::template::{
     parse_agent_output, render_agent_prompt, render_optional_template,
 };
 
-pub(super) async fn execute(ctx: &NodeExecutionContext<'_>) -> Result<NodeOutcome, String> {
+pub(super) async fn execute<R: tauri::Runtime>(
+    ctx: &NodeExecutionContext<'_, R>,
+) -> Result<NodeOutcome, String> {
     let agent_id = ctx
         .node
         .data

@@ -103,10 +103,36 @@ mod tests {
         dir
     }
 
+    fn seed_workflow_fixture(db: &crate::db::DbPool, workflow_id: &str) {
+        let conn = db.get().unwrap();
+        let now = "2024-01-01T00:00:00Z";
+        conn.execute(
+            "INSERT INTO projects (id, name, description, created_at, updated_at)
+             VALUES (?1, ?2, NULL, ?3, ?3)",
+            rusqlite::params!["project-1", "Test Project", now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO project_workflows
+                (id, project_id, name, description, enabled, graph, trigger_kind, trigger_config, version, created_at, updated_at)
+             VALUES
+                (?1, ?2, ?3, NULL, 1, ?4, 'manual', '{}', 1, ?5, ?5)",
+            rusqlite::params![
+                workflow_id,
+                "project-1",
+                "Workflow",
+                r#"{"nodes":[],"edges":[],"schemaVersion":1}"#,
+                now
+            ],
+        )
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn filter_unseen_items_only_returns_new_rows() {
         let dir = temp_db_dir("seen-items");
         let db = init_db(dir.clone()).unwrap();
+        seed_workflow_fixture(&db, "wf1");
 
         let items = vec![
             json!({"url": "https://example.com/a", "title": "A"}),

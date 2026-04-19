@@ -5,13 +5,14 @@ mod http;
 mod logic;
 
 use serde_json::Value;
+use tauri::Runtime;
 
 use crate::db::DbPool;
 use crate::models::project_workflow::WorkflowNode;
 
-pub(crate) struct NodeExecutionContext<'a> {
+pub(crate) struct NodeExecutionContext<'a, R: Runtime> {
     pub db: &'a DbPool,
-    pub app: &'a tauri::AppHandle,
+    pub app: &'a tauri::AppHandle<R>,
     pub run_id: &'a str,
     pub workflow_id: &'a str,
     pub project_id: &'a str,
@@ -48,7 +49,9 @@ fn route_node_type(node_type: &str) -> Option<NodeExecutorKind> {
     }
 }
 
-pub(crate) async fn execute(ctx: NodeExecutionContext<'_>) -> Result<NodeOutcome, String> {
+pub(crate) async fn execute<R: Runtime>(
+    ctx: NodeExecutionContext<'_, R>,
+) -> Result<NodeOutcome, String> {
     match route_node_type(ctx.node.node_type.as_str()) {
         Some(NodeExecutorKind::Trigger) => Ok(NodeOutcome {
             output: ctx.outputs.get("trigger").cloned().unwrap_or(Value::Null),

@@ -9,7 +9,9 @@ use crate::workflows::template::{
     json_number_to_i64, parse_multiline_templates, required_template,
 };
 
-pub(super) async fn execute(ctx: &NodeExecutionContext<'_>) -> Result<NodeOutcome, String> {
+pub(super) async fn execute<R: tauri::Runtime>(
+    ctx: &NodeExecutionContext<'_, R>,
+) -> Result<NodeOutcome, String> {
     let feed_urls_text =
         required_template(&ctx.node.data, "feedUrlsText", "integration.feed.fetch")?;
     let feed_urls = parse_multiline_templates(&feed_urls_text, ctx.outputs);

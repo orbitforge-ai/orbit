@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use serde_json::{json, Value};
+use tauri::Runtime;
 use tracing::{info, warn};
 use ulid::Ulid;
 
@@ -27,13 +28,13 @@ use crate::workflows::template::{build_reference_aliases, OUTPUT_ALIASES_KEY};
 const MAX_STEPS: usize = 100;
 
 #[derive(Clone)]
-pub struct WorkflowOrchestrator {
+pub struct WorkflowOrchestrator<R: Runtime> {
     db: DbPool,
-    app: tauri::AppHandle,
+    app: tauri::AppHandle<R>,
 }
 
-impl WorkflowOrchestrator {
-    pub fn new(db: DbPool, app: tauri::AppHandle) -> Self {
+impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
+    pub fn new(db: DbPool, app: tauri::AppHandle<R>) -> Self {
         Self { db, app }
     }
 
@@ -49,7 +50,10 @@ impl WorkflowOrchestrator {
         let run =
             store::insert_run(&self.db, &self.app, &workflow, trigger_kind, &trigger_data).await?;
 
-        let this = self.clone();
+        let this = WorkflowOrchestrator {
+            db: self.db.clone(),
+            app: self.app.clone(),
+        };
         let run_clone = run.clone();
         let project_id = workflow.project_id.clone();
         let workflow_id = workflow.id.clone();
@@ -354,6 +358,38 @@ mod tests {
         }
     }
 
+    fn seed_workflow_fixture(db: &crate::db::DbPool, workflow: &ProjectWorkflow) {
+        let conn = db.get().unwrap();
+        let graph = serde_json::to_string(&workflow.graph).unwrap();
+        let trigger_config = workflow.trigger_config.to_string();
+        conn.execute(
+            "INSERT INTO projects (id, name, description, created_at, updated_at)
+             VALUES (?1, ?2, NULL, ?3, ?3)",
+            rusqlite::params![workflow.project_id, "Test Project", workflow.created_at],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO project_workflows
+                (id, project_id, name, description, enabled, graph, trigger_kind, trigger_config, version, created_at, updated_at)
+             VALUES
+                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            rusqlite::params![
+                workflow.id,
+                workflow.project_id,
+                workflow.name,
+                workflow.description,
+                workflow.enabled,
+                graph,
+                workflow.trigger_kind,
+                trigger_config,
+                workflow.version,
+                workflow.created_at,
+                workflow.updated_at,
+            ],
+        )
+        .unwrap();
+    }
+
     #[test]
     fn pick_next_uses_handle_for_logic_if() {
         let edges = vec![
@@ -400,6 +436,7 @@ mod tests {
                 schema_version: 1,
             },
         );
+        seed_workflow_fixture(&db, &wf);
         let run = store::insert_run(
             &db,
             &app.handle().clone(),
@@ -455,6 +492,7 @@ mod tests {
                 schema_version: 1,
             },
         );
+        seed_workflow_fixture(&db, &wf);
         let run = store::insert_run(&db, &app.handle().clone(), &wf, "manual", &Value::Null)
             .await
             .unwrap();
