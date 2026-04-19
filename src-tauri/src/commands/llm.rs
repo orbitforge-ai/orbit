@@ -1,9 +1,12 @@
+use serde::Serialize;
 use ulid::Ulid;
 
 use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
+use crate::executor::cli_common;
 use crate::executor::engine::{ExecutorTx, RunRequest};
 use crate::executor::keychain;
+use crate::executor::llm_provider::is_cli_provider;
 use crate::models::task::Task;
 
 #[tauri::command]
@@ -44,6 +47,56 @@ pub async fn delete_api_key(provider: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || keychain::delete_api_key(&provider))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// Readiness report for a provider. `kind` tells the Settings UI how to
+/// render the row — API-key providers show an input, CLI providers show a
+/// binary path / install hint.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderStatus {
+    pub kind: &'static str,
+    pub ready: bool,
+    pub binary_path: Option<String>,
+    pub message: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_provider_status(provider: String) -> Result<ProviderStatus, String> {
+    tokio::task::spawn_blocking(move || {
+        if is_cli_provider(&provider) {
+            let binary = match provider.as_str() {
+                "claude-cli" => "claude",
+                "codex-cli" => "codex",
+                _ => return Err(format!("unknown CLI provider: {}", provider)),
+            };
+            match cli_common::resolve_cli(binary) {
+                Some(path) => Ok(ProviderStatus {
+                    kind: "cli",
+                    ready: true,
+                    binary_path: Some(path.display().to_string()),
+                    message: None,
+                }),
+                None => Ok(ProviderStatus {
+                    kind: "cli",
+                    ready: false,
+                    binary_path: None,
+                    message: Some(format!(
+                        "`{}` binary not found on PATH. Install and authenticate it before selecting this provider.",
+                        binary
+                    )),
+                }),
+            }
+        } else {
+            Ok(ProviderStatus {
+                kind: "api_key",
+                ready: keychain::has_api_key(&provider),
+                binary_path: None,
+                message: None,
+            })
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Trigger an autonomous agent loop run.

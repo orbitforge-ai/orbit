@@ -1,19 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import * as Switch from '@radix-ui/react-switch';
 import * as Select from '@radix-ui/react-select';
 import {
+  AlertTriangle,
   Check,
   ChevronDown,
   Key,
   Plus,
+  Terminal,
   Trash2,
   X,
 } from 'lucide-react';
 import { confirm } from '@tauri-apps/plugin-dialog';
-import { llmApi } from '../../api/llm';
+import { llmApi, ProviderStatus } from '../../api/llm';
 import { useApiKeyStatus, useInvalidateApiKeys } from '../../hooks/useApiKeyStatus';
 import {
   IMAGE_GENERATION_PROVIDERS,
+  isCliProvider,
   LLM_PROVIDERS,
   SEARCH_PROVIDERS,
 } from '../../constants/providers';
@@ -26,7 +30,59 @@ import {
   PermissionRule,
 } from '../../types';
 
+function CliProviderRow({ provider, label }: { provider: string; label: string }) {
+  const { data: status } = useQuery<ProviderStatus>({
+    queryKey: ['providerStatus', provider],
+    queryFn: () => llmApi.getProviderStatus(provider),
+    staleTime: 10_000,
+  });
+
+  const ready = status?.ready ?? false;
+
+  return (
+    <div className="rounded-lg border border-edge bg-background px-4 py-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Terminal size={13} className="text-secondary" />
+          <span className="text-sm font-medium text-white">{label}</span>
+          <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+            local CLI
+          </span>
+        </div>
+        {ready ? (
+          <div className="flex items-center gap-1.5">
+            <Check size={13} className="text-emerald-400" />
+            <span className="text-xs text-emerald-400">Installed</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <AlertTriangle size={13} className="text-amber-400" />
+            <span className="text-xs text-amber-400">Not found</span>
+          </div>
+        )}
+      </div>
+      {status?.binary_path && (
+        <p className="mt-2 truncate font-mono text-[11px] text-muted">{status.binary_path}</p>
+      )}
+      {status?.message && (
+        <p className="mt-2 text-xs text-amber-300/80">{status.message}</p>
+      )}
+      <p className="mt-2 text-[11px] text-muted">
+        Runs through the local CLI. Orbit still owns tool execution and permissions through an
+        embedded MCP bridge.
+      </p>
+    </div>
+  );
+}
+
 function ProviderKeyRow({ provider, label }: { provider: string; label: string }) {
+  if (isCliProvider(provider)) {
+    return <CliProviderRow provider={provider} label={label} />;
+  }
+  return <ApiKeyProviderRow provider={provider} label={label} />;
+}
+
+function ApiKeyProviderRow({ provider, label }: { provider: string; label: string }) {
   const { data: hasKey = false } = useApiKeyStatus(provider);
   const invalidate = useInvalidateApiKeys();
   const [keyInput, setKeyInput] = useState('');

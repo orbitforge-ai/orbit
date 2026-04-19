@@ -22,6 +22,7 @@ use executor::bg_processes::BgProcessRegistry;
 use executor::engine::{
     AgentSemaphores, ExecutorEngine, ExecutorTx, SessionExecutionRegistry, UserQuestionRegistry,
 };
+use executor::mcp_server as mcp_bridge;
 use executor::permissions::PermissionRegistry;
 use scheduler::SchedulerEngine;
 use std::sync::Arc;
@@ -137,6 +138,16 @@ pub fn run() {
 
             let memory_client = memory_state.as_ref().map(|s| s.client.clone());
 
+            // Start the embedded MCP bridge on a random loopback port. The
+            // handle is used by CLI-backed providers (claude-cli, codex-cli)
+            // to expose Orbit's tool catalog to the CLI's inner agent loop
+            // while keeping Orbit as the authority for tool dispatch and
+            // permissions.
+            let mcp_handle = tauri::async_runtime::block_on(async { mcp_bridge::start().await })
+                .map_err(|e| {
+                    Box::<dyn std::error::Error>::from(format!("failed to start MCP bridge: {}", e))
+                })?;
+
             // Register managed state
             app.manage(auth_state);
             app.manage(cloud_state);
@@ -149,6 +160,7 @@ pub fn run() {
             app.manage(bg_process_registry);
             app.manage(memory_state);
             app.manage(ActiveUser::new("default_user".to_string()));
+            app.manage(mcp_handle);
 
             // Start execution engine (now takes tx clone for retry scheduling)
             let engine = ExecutorEngine::new(
@@ -275,6 +287,7 @@ pub fn run() {
             commands::llm::set_api_key,
             commands::llm::has_api_key,
             commands::llm::delete_api_key,
+            commands::llm::get_provider_status,
             commands::llm::trigger_agent_loop,
             // Bus
             commands::bus::list_bus_messages,

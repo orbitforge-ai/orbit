@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use tauri::Manager;
 use tracing::warn;
 use ulid::Ulid;
 
@@ -13,8 +16,9 @@ use crate::executor::engine::{
 };
 use crate::executor::keychain;
 use crate::executor::llm_provider::{
-    self, ChatMessage, ContentBlock, LlmConfig, LlmProvider, ToolDefinition,
+    self, AgentMcpWiring, ChatMessage, ContentBlock, LlmConfig, LlmProvider, ToolDefinition,
 };
+use crate::executor::mcp_server::McpServerHandle;
 use crate::executor::memory::MemoryClient;
 use crate::executor::permissions::{self, PermissionRegistry};
 use crate::executor::session_worktree;
@@ -71,7 +75,6 @@ pub async fn run_agent_session(
             provider_name
         )
     })?;
-    let provider = llm_provider::create_provider(provider_name, api_key)?;
 
     let history = load_session_messages(db, session_id).await?;
     let worktree_state = session_worktree::load_session_worktree_state(db, session_id).await?;
@@ -153,13 +156,30 @@ pub async fn run_agent_session(
     } else {
         tool_ctx
     };
+    let tool_ctx = Arc::new(tool_ctx);
+
+    // ── Create provider (wiring MCP bridge for CLI providers) ────────────
+    let mcp_handle: Option<McpServerHandle> = app
+        .try_state::<McpServerHandle>()
+        .map(|s| s.inner().clone());
+    let wiring = mcp_handle.map(|handle| AgentMcpWiring {
+        handle,
+        agent_id: agent_id.to_string(),
+        run_id: stream_id.clone(),
+        tool_ctx: tool_ctx.clone(),
+        tools: tools.clone(),
+        permission_registry: permission_registry.clone(),
+        app: app.clone(),
+        db: db.clone(),
+    });
+    let provider = llm_provider::create_provider_with_mcp(provider_name, api_key, wiring)?;
 
     let result = run_session_loop(
         &provider,
         &llm_config,
         snapshot.messages,
         &tools,
-        &tool_ctx,
+        tool_ctx.as_ref(),
         &stream_id,
         session_id,
         max_iterations,

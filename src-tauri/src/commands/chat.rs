@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
+use tauri::Manager;
 use tracing::{debug, info, warn};
 use ulid::Ulid;
 
@@ -973,8 +974,6 @@ async fn do_llm_chat(
     let api_key = keychain::retrieve_api_key(provider_name)
         .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
 
-    let provider = llm_provider::create_provider(provider_name, api_key)?;
-
     // Build context via pipeline (messages already loaded, pass them to avoid re-query)
     let pipeline = context::default_pipeline(memory_client.cloned());
     let allowed_tools = ContextRequest::effective_allowed_tools(&ws_config);
@@ -1031,6 +1030,24 @@ async fn do_llm_chat(
     .with_memory_client(memory_client.cloned())
     .with_memory_user_id(memory_user_id.to_string())
     .with_cloud_client(cloud_client.clone());
+    let tool_ctx = std::sync::Arc::new(tool_ctx);
+
+    // ── Create provider (wiring MCP bridge for CLI providers) ────────────
+    let mcp_handle: Option<crate::executor::mcp_server::McpServerHandle> = app
+        .try_state::<crate::executor::mcp_server::McpServerHandle>()
+        .map(|s| s.inner().clone());
+    let wiring = mcp_handle.map(|handle| crate::executor::llm_provider::AgentMcpWiring {
+        handle,
+        agent_id: agent_id.to_string(),
+        run_id: stream_id.to_string(),
+        tool_ctx: tool_ctx.clone(),
+        tools: tools.clone(),
+        permission_registry: permission_registry.clone(),
+        app: app.clone(),
+        db: db.clone(),
+    });
+    let provider = llm_provider::create_provider_with_mcp(provider_name, api_key, wiring)?;
+
     let pool = db.0.clone();
 
     let mut cumulative_input_tokens: u32 = 0;
@@ -1169,7 +1186,7 @@ async fn do_llm_chat(
                         );
 
                         match permissions::execute_tool_with_permissions(
-                            &tool_ctx,
+                            tool_ctx.as_ref(),
                             name,
                             input,
                             app,

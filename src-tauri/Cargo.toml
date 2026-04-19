@@ -46,6 +46,11 @@ thiserror = "2.0.18"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 url = "2"
 
+# HTTP server for embedded MCP bridge
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio"] }
+tower = { version = "0.5", default-features = false }
+which = "6"
+
 # Cron scheduling
 cron = "0.12"
 

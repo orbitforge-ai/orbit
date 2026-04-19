@@ -1,8 +1,23 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
+use crate::db::DbPool;
+use crate::executor::agent_tools::ToolExecutionContext;
 use crate::executor::anthropic::AnthropicProvider;
+use crate::executor::claude_cli::{ClaudeCliProvider, SessionFn};
+use crate::executor::mcp_server::{McpServerHandle, McpSession};
 use crate::executor::minimax::MiniMaxProvider;
+use crate::executor::permissions::PermissionRegistry;
+
+/// A provider name routes through a local CLI binary rather than an HTTP API.
+/// Central list so call sites don't duplicate the literal names.
+pub const CLI_PROVIDERS: &[&str] = &["claude-cli", "codex-cli"];
+
+pub fn is_cli_provider(name: &str) -> bool {
+    CLI_PROVIDERS.contains(&name)
+}
 
 // ─── Provider-agnostic types ─────────────────────────────────────────────────
 
@@ -134,6 +149,8 @@ pub fn model_context_window(provider_name: &str, model: &str) -> u32 {
                 200_000
             }
         },
+        "claude-cli" => 200_000,
+        "codex-cli" => 200_000,
         "minimax" => match model {
             "MiniMax-M2.7" | "MiniMax-M2.7-highspeed" => 204_800,
             "MiniMax-M2.5" | "MiniMax-M2.5-highspeed" => 204_800,
@@ -182,6 +199,9 @@ pub fn model_supports_images(provider_name: &str, model: &str) -> bool {
                 | "MiniMax-M2.1-highspeed"
                 | "MiniMax-M2"
         ),
+        // CLI providers: image support is disabled in v1 until end-to-end
+        // verification through the MCP bridge is completed.
+        "claude-cli" | "codex-cli" => false,
         _ => false,
     }
 }
@@ -225,6 +245,76 @@ pub fn create_provider(
     match provider_name {
         "anthropic" => Ok(Box::new(AnthropicProvider::new(api_key))),
         "minimax" => Ok(Box::new(MiniMaxProvider::new(api_key))),
+        // CLI providers: the bare factory returns a tool-less provider. Agent
+        // call sites that need the Orbit tool catalog exposed to the CLI should
+        // use `create_provider_with_mcp` (or construct the CLI provider
+        // directly) so they can attach an MCP handle + session factory.
+        "claude-cli" => Ok(Box::new(ClaudeCliProvider::new(None))),
+        "codex-cli" => Err(
+            "codex-cli provider is not yet implemented. Select another provider for now.".to_string(),
+        ),
+        other => Err(format!("unsupported LLM provider: {}", other)),
+    }
+}
+
+/// Per-call wiring data used to construct an `McpSession` lazily each time a
+/// CLI provider makes a streaming call. Owned by the agent-loop caller.
+#[derive(Clone)]
+pub struct AgentMcpWiring {
+    pub handle: McpServerHandle,
+    pub agent_id: String,
+    pub run_id: String,
+    pub tool_ctx: Arc<ToolExecutionContext>,
+    pub tools: Vec<ToolDefinition>,
+    pub permission_registry: PermissionRegistry,
+    pub app: tauri::AppHandle,
+    pub db: DbPool,
+}
+
+impl AgentMcpWiring {
+    fn into_session_fn(self) -> (McpServerHandle, SessionFn) {
+        let handle = self.handle.clone();
+        let wiring = self;
+        let f: SessionFn = Arc::new(move || {
+            Some(McpSession {
+                run_id: wiring.run_id.clone(),
+                agent_id: wiring.agent_id.clone(),
+                tool_ctx: wiring.tool_ctx.clone(),
+                tools: wiring.tools.clone(),
+                permission_registry: wiring.permission_registry.clone(),
+                app: wiring.app.clone(),
+                db: wiring.db.clone(),
+            })
+        });
+        (handle, f)
+    }
+}
+
+/// Factory variant that wires an MCP bridge handle and a per-run session
+/// factory into CLI providers so the CLI's inner agent loop can call Orbit
+/// tools. Non-CLI providers ignore the wiring and behave identically to
+/// `create_provider`.
+pub fn create_provider_with_mcp(
+    provider_name: &str,
+    api_key: String,
+    wiring: Option<AgentMcpWiring>,
+) -> Result<Box<dyn LlmProvider>, String> {
+    match provider_name {
+        "anthropic" => Ok(Box::new(AnthropicProvider::new(api_key))),
+        "minimax" => Ok(Box::new(MiniMaxProvider::new(api_key))),
+        "claude-cli" => {
+            let provider = match wiring {
+                Some(w) => {
+                    let (handle, session_fn) = w.into_session_fn();
+                    ClaudeCliProvider::new(Some(handle)).with_session_fn(session_fn)
+                }
+                None => ClaudeCliProvider::new(None),
+            };
+            Ok(Box::new(provider))
+        }
+        "codex-cli" => Err(
+            "codex-cli provider is not yet implemented. Select another provider for now.".to_string(),
+        ),
         other => Err(format!("unsupported LLM provider: {}", other)),
     }
 }

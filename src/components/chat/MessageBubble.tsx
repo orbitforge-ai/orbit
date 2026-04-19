@@ -11,6 +11,12 @@ import { ReactionChip } from './ReactionChip';
 import { useUiStore } from '../../store/uiStore';
 import { useSettingsStore } from '../../store/settingsStore';
 
+function ancestorPre(node: Node | null): HTMLPreElement | null {
+  if (!node) return null;
+  const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+  return el?.closest('pre') ?? null;
+}
+
 function formatTimestamp(iso: string): string {
   const d = new Date(iso);
   const now = new Date();
@@ -51,9 +57,32 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
       const selection = window.getSelection();
       if (!selection || selection.isCollapsed) return;
 
-      const fragment = selection.getRangeAt(0).cloneContents();
+      const range = selection.getRangeAt(0);
+      const fragment = range.cloneContents();
       const wrapper = document.createElement('div');
       wrapper.appendChild(fragment);
+
+      // If the selection lies entirely within a single <pre>, the cloned
+      // fragment often omits the <pre> wrapper. Turndown then treats the
+      // content as inline code and collapses newlines. Re-wrap it so
+      // Turndown emits a fenced code block.
+      const startPre = ancestorPre(range.startContainer);
+      const endPre = ancestorPre(range.endContainer);
+      if (startPre && startPre === endPre && !wrapper.querySelector('pre')) {
+        const pre = document.createElement('pre');
+        const code = document.createElement('code');
+        const origCode = startPre.querySelector('code');
+        if (origCode?.className) code.className = origCode.className;
+        const existingCode = wrapper.querySelector('code');
+        if (existingCode) {
+          code.innerHTML = existingCode.innerHTML;
+        } else {
+          code.textContent = wrapper.textContent ?? '';
+        }
+        pre.appendChild(code);
+        wrapper.innerHTML = '';
+        wrapper.appendChild(pre);
+      }
 
       const markdown = turndown.turndown(wrapper.innerHTML).trim();
       if (!markdown) return;

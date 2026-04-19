@@ -1,5 +1,6 @@
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use tauri::Manager;
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};
 
@@ -10,8 +11,9 @@ use crate::executor::context::{self, ContextMode, ContextRequest};
 use crate::executor::engine::{AgentSemaphores, SessionExecutionRegistry};
 use crate::executor::keychain;
 use crate::executor::llm_provider::{
-    self, ChatMessage, ContentBlock, LlmConfig, LlmProvider, ToolDefinition,
+    self, AgentMcpWiring, ChatMessage, ContentBlock, LlmConfig, LlmProvider, ToolDefinition,
 };
+use crate::executor::mcp_server::McpServerHandle;
 use crate::executor::memory::MemoryClient;
 use crate::executor::permissions::{self, PermissionRegistry};
 use crate::executor::process::ProcessResult;
@@ -118,12 +120,6 @@ pub async fn run_agent_loop(
         msg
     })?;
 
-    let provider = llm_provider::create_provider(provider_name, api_key).map_err(|e| {
-        log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
-        log.flush_to_file(log_path);
-        e
-    })?;
-
     // ── Apply template variable substitution to goal ─────────────────────
     let mut goal = cfg.goal.clone();
     if let Some(ref vars) = cfg.template_vars {
@@ -201,6 +197,28 @@ pub async fn run_agent_loop(
         .with_memory_user_id(memory_user_id.to_string())
         .with_cloud_client(cloud_client.clone())
     };
+    let tool_ctx = Arc::new(tool_ctx);
+
+    // ── Create provider (wiring MCP bridge for CLI providers) ────────────
+    let mcp_handle: Option<McpServerHandle> = app
+        .try_state::<McpServerHandle>()
+        .map(|s| s.inner().clone());
+    let wiring = mcp_handle.map(|handle| AgentMcpWiring {
+        handle,
+        agent_id: agent_id.to_string(),
+        run_id: run_id.to_string(),
+        tool_ctx: tool_ctx.clone(),
+        tools: tools.clone(),
+        permission_registry: permission_registry.clone(),
+        app: app.clone(),
+        db: db.clone(),
+    });
+    let provider = llm_provider::create_provider_with_mcp(provider_name, api_key, wiring)
+        .map_err(|e| {
+            log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
+            log.flush_to_file(log_path);
+            e
+        })?;
 
     // ── Init conversation ────────────────────────────────────────────────
     let mut messages: Vec<ChatMessage> = vec![ChatMessage {
@@ -431,7 +449,12 @@ pub async fn run_agent_loop(
                             .as_ref()
                             .unwrap_or(permission_registry);
                         match permissions::execute_tool_with_permissions(
-                            &tool_ctx, name, input, app, run_id, perm_reg,
+                            tool_ctx.as_ref(),
+                            name,
+                            input,
+                            app,
+                            run_id,
+                            perm_reg,
                         )
                         .await
                         {
@@ -855,12 +878,6 @@ pub async fn run_pulse(
         msg
     })?;
 
-    let provider = llm_provider::create_provider(provider_name, api_key).map_err(|e| {
-        log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
-        log.flush_to_file(log_path);
-        e
-    })?;
-
     // ── Find or create Pulse chat session + save user message ───────────
     let pool = db.0.clone();
     let aid = agent_id.to_string();
@@ -991,6 +1008,28 @@ pub async fn run_pulse(
     .with_memory_client(memory_client.cloned())
     .with_memory_user_id(memory_user_id.to_string())
     .with_cloud_client(cloud_client.clone());
+    let tool_ctx = Arc::new(tool_ctx);
+
+    // ── Create provider (wiring MCP bridge for CLI providers) ────────────
+    let mcp_handle: Option<McpServerHandle> = app
+        .try_state::<McpServerHandle>()
+        .map(|s| s.inner().clone());
+    let wiring = mcp_handle.map(|handle| AgentMcpWiring {
+        handle,
+        agent_id: agent_id.to_string(),
+        run_id: run_id.to_string(),
+        tool_ctx: tool_ctx.clone(),
+        tools: tools.clone(),
+        permission_registry: permission_registry.clone(),
+        app: app.clone(),
+        db: db.clone(),
+    });
+    let provider = llm_provider::create_provider_with_mcp(provider_name, api_key, wiring)
+        .map_err(|e| {
+            log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
+            log.flush_to_file(log_path);
+            e
+        })?;
 
     // ── Run session loop (LLM + tool execution) ─────────────────────────
     let result = session_agent::run_session_loop(
@@ -998,7 +1037,7 @@ pub async fn run_pulse(
         &llm_config,
         history,
         &tools,
-        &tool_ctx,
+        tool_ctx.as_ref(),
         &stream_id,
         &session_id,
         max_iterations,

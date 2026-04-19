@@ -1,6 +1,8 @@
 use std::process::Command;
 use tracing::{info, warn};
 
+use crate::executor::llm_provider::is_cli_provider;
+
 const SERVICE_NAME: &str = "com.orbit.api-keys";
 
 /// Store an API key in the macOS Keychain.
@@ -30,7 +32,14 @@ pub fn store_api_key(provider: &str, key: &str) -> Result<(), String> {
 }
 
 /// Retrieve an API key from the macOS Keychain.
+///
+/// CLI-backed providers (claude-cli, codex-cli) do not use API keys — the
+/// local CLI handles its own authentication. Return an empty sentinel for
+/// those so runtime code can still call `retrieve_api_key` uniformly.
 pub fn retrieve_api_key(provider: &str) -> Result<String, String> {
+    if is_cli_provider(provider) {
+        return Ok(String::new());
+    }
     let output = Command::new("security")
         .args([
             "find-generic-password",
@@ -75,6 +84,15 @@ pub fn delete_api_key(provider: &str) -> Result<(), String> {
 }
 
 /// Check whether an API key exists in the Keychain for a given provider.
+///
+/// CLI providers do not require a stored key — their readiness is driven by
+/// whether the binary is installed. Surface code should use
+/// `get_provider_status` for a complete view; this fn is kept for
+/// backwards-compat with existing call sites and returns `true` for CLI
+/// providers to avoid false "missing key" errors.
 pub fn has_api_key(provider: &str) -> bool {
+    if is_cli_provider(provider) {
+        return true;
+    }
     retrieve_api_key(provider).is_ok()
 }

@@ -188,7 +188,18 @@ function getEdgeStyle(handle: string | null | undefined) {
   return undefined;
 }
 
-function getEventClientPosition(event: MouseEvent | TouchEvent): XYPosition | null {
+function getConnectionDropClientPosition(
+  event: MouseEvent | TouchEvent,
+  connectionState: FinalConnectionState,
+  hostRect: DOMRect | null,
+): XYPosition | null {
+  if (hostRect && connectionState.pointer) {
+    return {
+      x: hostRect.left + connectionState.pointer.x,
+      y: hostRect.top + connectionState.pointer.y,
+    };
+  }
+
   if (event instanceof MouseEvent) {
     return { x: event.clientX, y: event.clientY };
   }
@@ -471,8 +482,8 @@ function Editor({ workflowId }: { workflowId: string }) {
         return;
       }
 
-      const pointer = getEventClientPosition(event);
       const hostRect = canvasHostRef.current?.getBoundingClientRect() ?? null;
+      const pointer = getConnectionDropClientPosition(event, connectionState, hostRect);
       if (!pointer || !hostRect) {
         return;
       }
@@ -778,10 +789,7 @@ function Editor({ workflowId }: { workflowId: string }) {
             onConnectEnd={handleConnectEnd}
             onReconnect={onReconnect}
             onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-            onPaneClick={() => {
-              setSelectedNodeId(null);
-              setPendingCreateConnection(null);
-            }}
+            onPaneClick={() => setSelectedNodeId(null)}
             fitView
             proOptions={{ hideAttribution: true }}
           >
