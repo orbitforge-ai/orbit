@@ -525,7 +525,7 @@ pub async fn run_session_loop(
                 Ok(api_key) => match llm_provider::create_provider(&ws_config.provider, api_key) {
                     Ok(provider) => {
                         tauri::async_runtime::spawn(async move {
-                            if let Err(e) = compaction::perform_compaction(
+                            match compaction::perform_compaction(
                                 &agent_id,
                                 &session_id,
                                 provider.as_ref(),
@@ -538,8 +538,11 @@ pub async fn run_session_loop(
                             )
                             .await
                             {
-                                warn!(session_id = %session_id, "Session compaction failed: {}", e);
-                                let _ = compaction::record_compaction_failure(&db, &session_id);
+                                Ok(_) => {}
+                                Err(e) => {
+                                    warn!(session_id = %session_id, "Session compaction failed: {}", e);
+                                    let _ = compaction::record_compaction_failure(&db, &session_id);
+                                }
                             }
                         });
                     }

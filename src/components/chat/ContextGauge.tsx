@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, AlertTriangle } from 'lucide-react';
+import { Check, AlertTriangle, Minus } from 'lucide-react';
 import { chatApi } from '../../api/chat';
 import { onAgentConfigChanged } from '../../events/agentEvents';
 import { onChatContextUpdate, onCompactionStatus } from '../../events/runEvents';
@@ -37,6 +37,8 @@ export function ContextGauge({
   const [compacting, setCompacting] = useState(false);
   const [justCompacted, setJustCompacted] = useState(false);
   const [compactionFailed, setCompactionFailed] = useState(false);
+  const [compactionSkipped, setCompactionSkipped] = useState<string | null>(null);
+  const [failureReason, setFailureReason] = useState<string | null>(null);
 
   async function refreshContextUsage() {
     const usage = await chatApi.getContextUsage(sessionId, modelOverride);
@@ -85,15 +87,25 @@ export function ContextGauge({
       if (payload.status === 'started') {
         setCompacting(true);
         setCompactionFailed(false);
+        setCompactionSkipped(null);
+        setFailureReason(null);
       } else if (payload.status === 'completed') {
         setCompacting(false);
         setJustCompacted(true);
         onCompacted?.();
         setTimeout(() => setJustCompacted(false), 2000);
+      } else if (payload.status === 'skipped') {
+        setCompacting(false);
+        setCompactionSkipped(payload.reason ?? 'Nothing to compact yet');
+        setTimeout(() => setCompactionSkipped(null), 4000);
       } else if (payload.status === 'failed') {
         setCompacting(false);
         setCompactionFailed(true);
-        setTimeout(() => setCompactionFailed(false), 4000);
+        setFailureReason(payload.reason ?? null);
+        setTimeout(() => {
+          setCompactionFailed(false);
+          setFailureReason(null);
+        }, 4000);
       }
     });
 
@@ -107,19 +119,21 @@ export function ContextGauge({
     setCompacting(true);
     setJustCompacted(false);
     setCompactionFailed(false);
+    setCompactionSkipped(null);
+    setFailureReason(null);
     try {
       await chatApi.compactSession(sessionId);
       await refreshContextUsage();
-      // Show success state
-      setJustCompacted(true);
-      onCompacted?.();
-      setTimeout(() => setJustCompacted(false), 2000);
     } catch (err) {
       console.error('Compaction failed:', err);
+      setCompacting(false);
       setCompactionFailed(true);
-      setTimeout(() => setCompactionFailed(false), 4000);
+      setFailureReason(err instanceof Error ? err.message : String(err));
+      setTimeout(() => {
+        setCompactionFailed(false);
+        setFailureReason(null);
+      }, 4000);
     }
-    setCompacting(false);
   }
 
   // Don't render until we have data
@@ -135,64 +149,95 @@ export function ContextGauge({
     ? 'var(--color-success)'
     : compactionFailed
       ? 'var(--color-failure)'
-      : getColor(usagePercent);
+      : compactionSkipped
+        ? 'var(--color-yellow)'
+        : getColor(usagePercent);
 
   const tooltip = compacting
-    ? 'Compacting...'
+    ? 'Compacting context...'
     : justCompacted
       ? 'Compaction complete'
-      : compactionFailed
-        ? 'Compaction failed — click to retry'
-        : usagePercent >= 65
-          ? `${formatTokens(inputTokens)} / ${formatTokens(contextWindow)} tokens (${usagePercent.toFixed(1)}%) — auto-compaction may be in progress, or click to compact manually`
-          : `${formatTokens(inputTokens)} / ${formatTokens(contextWindow)} tokens (${usagePercent.toFixed(1)}%) — click to compact`;
+      : compactionSkipped
+        ? compactionSkipped
+        : compactionFailed
+          ? `Compaction failed${failureReason ? `: ${failureReason}` : ''} — click to retry`
+          : usagePercent >= 65
+            ? `${formatTokens(inputTokens)} / ${formatTokens(contextWindow)} tokens (${usagePercent.toFixed(1)}%) — auto-compaction may be in progress, or click to compact manually`
+            : `${formatTokens(inputTokens)} / ${formatTokens(contextWindow)} tokens (${usagePercent.toFixed(1)}%) — click to compact`;
+
+  const label = compacting
+    ? 'Compacting context…'
+    : justCompacted
+      ? 'Compacted'
+      : compactionSkipped
+        ? compactionSkipped
+        : compactionFailed
+          ? 'Compaction failed'
+          : null;
 
   return (
-    <button
-      onClick={handleCompact}
-      disabled={compacting}
-      className="relative inline-flex items-center justify-center cursor-pointer hover:opacity-80 disabled:opacity-40 transition-opacity"
-      title={tooltip}
-    >
-      <svg
-        width={size}
-        height={size}
-        className={`transform -rotate-90 ${compacting ? 'animate-spin' : ''}`}
+    <div className="inline-flex items-center gap-1.5">
+      <button
+        onClick={handleCompact}
+        disabled={compacting}
+        className="relative inline-flex items-center justify-center cursor-pointer hover:opacity-80 disabled:opacity-40 transition-opacity"
+        title={tooltip}
       >
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke="var(--color-surface)"
-          strokeWidth={strokeWidth}
-        />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke={color}
-          strokeWidth={strokeWidth}
-          strokeDasharray={circumference}
-          strokeDashoffset={dashOffset}
-          strokeLinecap="round"
-          className="transition-all duration-700 ease-out"
-          style={{ opacity: 0.8 }}
-        />
-      </svg>
-      {compacting ? null : justCompacted ? (
-        <Check size={10} className="absolute text-emerald-400" strokeWidth={3} />
-      ) : compactionFailed ? (
-        <AlertTriangle size={9} className="absolute" style={{ color: 'var(--color-failure)' }} />
-      ) : (
-        <span
-          className="absolute text-[7px] font-mono tabular-nums leading-none"
-          style={{ color, opacity: 0.9 }}
+        <svg
+          width={size}
+          height={size}
+          className={`transform -rotate-90 ${compacting ? 'animate-spin' : ''}`}
         >
-          {Math.round(usagePercent)}
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="var(--color-surface)"
+            strokeWidth={strokeWidth}
+          />
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke={color}
+            strokeWidth={strokeWidth}
+            strokeDasharray={circumference}
+            strokeDashoffset={dashOffset}
+            strokeLinecap="round"
+            className="transition-all duration-700 ease-out"
+            style={{ opacity: 0.8 }}
+          />
+        </svg>
+        {compacting ? null : justCompacted ? (
+          <Check size={10} className="absolute text-emerald-400" strokeWidth={3} />
+        ) : compactionFailed ? (
+          <AlertTriangle
+            size={9}
+            className="absolute"
+            style={{ color: 'var(--color-failure)' }}
+          />
+        ) : compactionSkipped ? (
+          <Minus size={9} className="absolute" style={{ color: 'var(--color-yellow)' }} />
+        ) : (
+          <span
+            className="absolute text-[7px] font-mono tabular-nums leading-none"
+            style={{ color, opacity: 0.9 }}
+          >
+            {Math.round(usagePercent)}
+          </span>
+        )}
+      </button>
+      {label ? (
+        <span
+          className="text-[11px] leading-none"
+          style={{ color, opacity: 0.9 }}
+          title={tooltip}
+        >
+          {label}
         </span>
-      )}
-    </button>
+      ) : null}
+    </div>
   );
 }

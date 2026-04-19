@@ -1342,8 +1342,11 @@ async fn do_llm_chat(
                                 )
                                 .await
                                 {
-                                    Ok(()) => {
+                                    Ok(compaction::CompactionOutcome::Performed) => {
                                         info!(session_id = %session_id, "Background compaction completed")
+                                    }
+                                    Ok(compaction::CompactionOutcome::Skipped(reason)) => {
+                                        info!(session_id = %session_id, "Background compaction skipped: {}", reason)
                                     }
                                     Err(e) => {
                                         warn!(session_id = %session_id, "Background compaction failed: {}", e);
@@ -1600,7 +1603,7 @@ pub async fn compact_chat_session(
     let mem_client = memory_state.as_ref().map(|s| s.client.clone());
     let cloud_client = cloud.get();
     let db_pool = DbPool(pool);
-    compaction::perform_compaction(
+    let outcome = compaction::perform_compaction(
         &agent_id,
         &session_id,
         provider.as_ref(),
@@ -1613,11 +1616,14 @@ pub async fn compact_chat_session(
     )
     .await?;
 
-    // Refetch and emit updated context usage
-    let context_window = compaction::effective_context_window(&ws_config);
-    emit_chat_context_update(&app, &session_id, 0, 0, context_window);
-
-    info!(session_id = %session_id, "Manual compaction completed");
+    match outcome {
+        compaction::CompactionOutcome::Performed => {
+            info!(session_id = %session_id, "Manual compaction completed");
+        }
+        compaction::CompactionOutcome::Skipped(reason) => {
+            info!(session_id = %session_id, "Manual compaction skipped: {}", reason);
+        }
+    }
     Ok(())
 }
 

@@ -2,7 +2,9 @@ use tracing::{debug, info, warn};
 use ulid::Ulid;
 
 use crate::db::connection::DbPool;
-use crate::events::emitter::{emit_chat_context_update, emit_compaction_status};
+use crate::events::emitter::{
+    emit_chat_context_update, emit_compaction_status, emit_compaction_status_with_reason,
+};
 use crate::executor::llm_provider::{
     model_context_window, ChatMessage, ContentBlock, LlmConfig, LlmProvider,
 };
@@ -13,6 +15,12 @@ const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.65;
 const DEFAULT_COMPACTION_RETAIN_COUNT: u32 = 12;
 const COMPACTION_MAX_TOKENS: u32 = 4096;
 const MIN_MESSAGES_TO_COMPACT: usize = 5;
+
+#[derive(Debug, Clone)]
+pub enum CompactionOutcome {
+    Performed,
+    Skipped(String),
+}
 
 /// Max consecutive auto-compaction failures before the circuit breaker opens.
 const CIRCUIT_BREAKER_MAX_FAILURES: i64 = 3;
@@ -272,7 +280,7 @@ pub async fn perform_compaction(
     memory_client: Option<MemoryClient>,
     memory_user_id: &str,
     cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
-) -> Result<(), String> {
+) -> Result<CompactionOutcome, String> {
     // Emit compaction started
     emit_compaction_status(app, session_id, "started");
 
@@ -290,7 +298,10 @@ pub async fn perform_compaction(
     .await;
 
     match &result {
-        Ok(()) => emit_compaction_status(app, session_id, "completed"),
+        Ok(CompactionOutcome::Performed) => emit_compaction_status(app, session_id, "completed"),
+        Ok(CompactionOutcome::Skipped(reason)) => {
+            emit_compaction_status_with_reason(app, session_id, "skipped", Some(reason))
+        }
         Err(_) => emit_compaction_status(app, session_id, "failed"),
     }
 
@@ -307,7 +318,7 @@ async fn perform_compaction_inner(
     memory_client: Option<MemoryClient>,
     memory_user_id: &str,
     cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
-) -> Result<(), String> {
+) -> Result<CompactionOutcome, String> {
     let pool = db.0.clone();
     let sid = session_id.to_string();
 
@@ -365,7 +376,9 @@ async fn perform_compaction_inner(
         Some(split) => split,
         None => {
             debug!("Not enough messages to compact for session {}", session_id);
-            return Ok(());
+            return Ok(CompactionOutcome::Skipped(
+                "Not enough conversation history to compact yet".to_string(),
+            ));
         }
     };
 
@@ -638,7 +651,7 @@ async fn perform_compaction_inner(
         }
     }
 
-    Ok(())
+    Ok(CompactionOutcome::Performed)
 }
 
 #[cfg(test)]

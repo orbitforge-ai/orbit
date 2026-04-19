@@ -806,7 +806,8 @@ export interface ContextUsage {
 
 export interface CompactionStatusPayload {
   sessionId: string;
-  status: 'started' | 'completed' | 'failed';
+  status: 'started' | 'completed' | 'failed' | 'skipped';
+  reason?: string;
   timestamp: string;
 }
 

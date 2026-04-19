@@ -457,14 +457,26 @@ pub fn emit_agent_deleted(app: &tauri::AppHandle, agent_id: &str) {
 #[serde(rename_all = "camelCase")]
 pub struct CompactionStatusPayload {
     pub session_id: String,
-    pub status: String, // "started" | "completed" | "failed"
+    pub status: String, // "started" | "completed" | "failed" | "skipped"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     pub timestamp: String,
 }
 
 pub fn emit_compaction_status(app: &tauri::AppHandle, session_id: &str, status: &str) {
+    emit_compaction_status_with_reason(app, session_id, status, None);
+}
+
+pub fn emit_compaction_status_with_reason(
+    app: &tauri::AppHandle,
+    session_id: &str,
+    status: &str,
+    reason: Option<&str>,
+) {
     let payload = CompactionStatusPayload {
         session_id: session_id.to_string(),
         status: status.to_string(),
+        reason: reason.map(|s| s.to_string()),
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
     if let Err(e) = app.emit("compaction:status", &payload) {
