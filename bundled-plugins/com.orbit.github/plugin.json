@@ -3,8 +3,8 @@
   "hostApiVersion": "^1.0.0",
   "id": "com.orbit.github",
   "name": "GitHub",
-  "version": "0.1.1",
-  "description": "Bundled flagship plugin: clone repos, open PRs. Uses the Orbit-registered GitHub OAuth App via PKCE — no per-user setup required.",
+  "version": "0.1.2",
+  "description": "Bundled flagship plugin: clone repos, open PRs. Bring your own classic GitHub OAuth App (paste client_id + client_secret in the OAuth tab).",
   "author": "Orbit",
   "license": "MIT",
   "runtime": {
@@ -53,8 +53,7 @@
       "authorizationUrl": "https://github.com/login/oauth/authorize",
       "tokenUrl": "https://github.com/login/oauth/access_token",
       "scopes": ["repo", "read:org"],
-      "clientType": "public",
-      "clientId": "Iv23liLu8CEAeNPqvl9v",
+      "clientType": "confidential",
       "redirectUri": "http://127.0.0.1:47821/oauth/callback"
     }
   ]
