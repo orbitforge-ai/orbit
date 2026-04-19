@@ -13,6 +13,7 @@ pub struct WorkItem {
     pub description: Option<String>,
     /// `task` | `bug` | `story` | `spike` | `chore`
     pub kind: String,
+    pub column_id: Option<String>,
     /// `backlog` | `todo` | `in_progress` | `blocked` | `review` | `done` | `cancelled`
     pub status: String,
     /// 0..3 (low..urgent)
@@ -38,6 +39,7 @@ pub struct CreateWorkItem {
     pub title: String,
     pub description: Option<String>,
     pub kind: Option<String>,
+    pub column_id: Option<String>,
     pub status: Option<String>,
     pub priority: Option<i64>,
     pub assignee_agent_id: Option<String>,
@@ -58,6 +60,7 @@ pub struct UpdateWorkItem {
     pub title: Option<String>,
     pub description: Option<String>,
     pub kind: Option<String>,
+    pub column_id: Option<String>,
     pub priority: Option<i64>,
     pub labels: Option<Vec<String>>,
     pub metadata: Option<serde_json::Value>,

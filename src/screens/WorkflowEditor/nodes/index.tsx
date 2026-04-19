@@ -134,6 +134,32 @@ export function WorkItemNode({ data, type, selected }: NodeProps) {
   );
 }
 
+export function ProposalQueueNode({ data, type, selected }: NodeProps) {
+  const meta = nodeMeta(type);
+  const Icon = meta?.icon;
+  const d = data as { candidatesPath?: string; reviewColumnId?: string };
+  return (
+    <div className={`${NODE_BASE} ${selected ? 'border-accent' : 'border-edge'}`}>
+      <Handle type="target" position={Position.Left} className="!bg-muted" />
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-edge bg-fuchsia-500/5">
+        {Icon && <Icon size={12} className="text-fuchsia-300" />}
+        <span className="font-semibold uppercase text-[10px] tracking-wider text-fuchsia-300">
+          {meta?.label ?? type}
+        </span>
+      </div>
+      <div className="px-3 py-2 space-y-1">
+        <p className="text-muted text-[10px] line-clamp-2">
+          {d.candidatesPath || '(candidates path required)'}
+        </p>
+        <p className="text-muted text-[10px]">
+          Review column: <span className="text-white font-mono">{d.reviewColumnId || '(unset)'}</span>
+        </p>
+      </div>
+      <Handle type="source" position={Position.Right} className="!bg-accent" />
+    </div>
+  );
+}
+
 export function LogicIfNode({ data, type, selected }: NodeProps) {
   const meta = nodeMeta(type);
   const Icon = meta?.icon;
@@ -189,7 +215,7 @@ export function IntegrationNode({ type, selected }: NodeProps) {
       </div>
       <div className="px-3 py-2">
         <span className="inline-block px-1.5 py-0.5 rounded bg-muted/15 text-[9px] uppercase tracking-wider text-muted font-mono">
-          Coming soon
+          Integration
         </span>
       </div>
       <Handle type="source" position={Position.Right} className="!bg-muted" />
@@ -202,7 +228,9 @@ export const nodeTypes = {
   'trigger.schedule': TriggerNode,
   'agent.run': AgentNode,
   'board.work_item.create': WorkItemNode,
+  'board.proposal.enqueue': ProposalQueueNode,
   'logic.if': LogicIfNode,
+  'integration.feed.fetch': IntegrationNode,
   'integration.gmail.read': IntegrationNode,
   'integration.gmail.send': IntegrationNode,
   'integration.slack.send': IntegrationNode,

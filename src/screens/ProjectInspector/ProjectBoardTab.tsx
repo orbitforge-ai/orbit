@@ -18,19 +18,11 @@ import {
 import { KanbanSquare, Plus } from 'lucide-react';
 import { workItemsApi } from '../../api/workItems';
 import { agentsApi } from '../../api/agents';
-import { Agent, WorkItem, WorkItemStatus } from '../../types';
+import { projectsApi } from '../../api/projects';
+import { Agent, ProjectBoardColumn, WorkItem } from '../../types';
 import { cn } from '../../lib/cn';
 import { ProjectBoardCard } from './ProjectBoardCard';
 import { ProjectBoardDetailDrawer } from './ProjectBoardDetailDrawer';
-
-const COLUMNS: { id: WorkItemStatus; label: string; tone: string }[] = [
-  { id: 'backlog', label: 'Backlog', tone: 'text-muted' },
-  { id: 'todo', label: 'Todo', tone: 'text-secondary' },
-  { id: 'in_progress', label: 'In Progress', tone: 'text-blue-300' },
-  { id: 'blocked', label: 'Blocked', tone: 'text-red-300' },
-  { id: 'review', label: 'Review', tone: 'text-amber-300' },
-  { id: 'done', label: 'Done', tone: 'text-emerald-300' },
-];
 
 const CARD_DRAG_PREFIX = 'work-item:';
 const COLUMN_DROP_PREFIX = 'column:';
@@ -42,14 +34,14 @@ function parseCardDragId(id: string | number | null | undefined): string | null 
   if (typeof id !== 'string' || !id.startsWith(CARD_DRAG_PREFIX)) return null;
   return id.slice(CARD_DRAG_PREFIX.length);
 }
-function columnDropId(status: WorkItemStatus): string {
-  return `${COLUMN_DROP_PREFIX}${status}`;
+function columnDropId(columnId: string): string {
+  return `${COLUMN_DROP_PREFIX}${columnId}`;
 }
 function parseColumnDropId(
   id: string | number | null | undefined,
-): WorkItemStatus | null {
+): string | null {
   if (typeof id !== 'string' || !id.startsWith(COLUMN_DROP_PREFIX)) return null;
-  return id.slice(COLUMN_DROP_PREFIX.length) as WorkItemStatus;
+  return id.slice(COLUMN_DROP_PREFIX.length);
 }
 
 export function ProjectBoardTab({ projectId }: { projectId: string }) {
@@ -71,31 +63,47 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
     queryKey: ['agents'],
     queryFn: agentsApi.list,
   });
+  const { data: columns = [] } = useQuery<ProjectBoardColumn[]>({
+    queryKey: ['project-board-columns', projectId],
+    queryFn: () => projectsApi.listBoardColumns(projectId),
+  });
 
   const agentById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
+  const columnById = useMemo(() => new Map(columns.map((column) => [column.id, column])), [columns]);
+  const firstColumnId = columns[0]?.id ?? null;
+  const backlogColumnId =
+    columns.find((column) => column.status === 'backlog')?.id ?? firstColumnId;
 
-  const itemsByStatus = useMemo(() => {
-    const groups = new Map<WorkItemStatus, WorkItem[]>();
-    for (const col of COLUMNS) groups.set(col.id, []);
+  const itemsByColumn = useMemo(() => {
+    const groups = new Map<string, WorkItem[]>();
+    for (const col of columns) groups.set(col.id, []);
     for (const item of items) {
-      if (item.status === 'cancelled') continue;
-      const list = groups.get(item.status as WorkItemStatus);
+      const resolvedColumnId =
+        item.columnId && columnById.has(item.columnId)
+          ? item.columnId
+          : columns.find((column) => column.status === item.status)?.id ?? firstColumnId;
+      if (!resolvedColumnId) continue;
+      const list = groups.get(resolvedColumnId);
       if (list) list.push(item);
     }
     for (const [, list] of groups) list.sort((a, b) => a.position - b.position);
     return groups;
-  }, [items]);
+  }, [columnById, columns, firstColumnId, items]);
 
   const moveMutation = useMutation({
-    mutationFn: ({ id, status, position }: { id: string; status: WorkItemStatus; position?: number }) =>
-      workItemsApi.move(id, status, position),
-    onMutate: async ({ id, status, position }) => {
+    mutationFn: ({ id, columnId, status, position }: {
+      id: string;
+      columnId: string;
+      status: ProjectBoardColumn['status'];
+      position?: number;
+    }) => workItemsApi.move(id, status, columnId, position),
+    onMutate: async ({ id, columnId, status, position }) => {
       await queryClient.cancelQueries({ queryKey: ['work-items', projectId] });
       const prev = queryClient.getQueryData<WorkItem[]>(['work-items', projectId]);
       queryClient.setQueryData<WorkItem[]>(['work-items', projectId], (old = []) =>
         old.map((it) =>
           it.id === id
-            ? { ...it, status, position: position ?? it.position }
+            ? { ...it, columnId, status, position: position ?? it.position }
             : it,
         ),
       );
@@ -127,24 +135,29 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
     if (!cardId || !event.over) return;
 
     const overId = event.over.id;
-    let targetStatus = parseColumnDropId(overId);
+    let targetColumnId = parseColumnDropId(overId);
     let targetCardId: string | null = null;
-    if (!targetStatus) {
+    if (!targetColumnId) {
       const overCardId = parseCardDragId(overId);
       if (overCardId) {
         const overItem = items.find((it) => it.id === overCardId);
         if (overItem) {
-          targetStatus = overItem.status as WorkItemStatus;
+          targetColumnId =
+            overItem.columnId ??
+            columns.find((column) => column.status === overItem.status)?.id ??
+            null;
           targetCardId = overCardId;
         }
       }
     }
-    if (!targetStatus) return;
+    if (!targetColumnId) return;
 
     const card = items.find((it) => it.id === cardId);
     if (!card) return;
+    const targetColumn = columnById.get(targetColumnId);
+    if (!targetColumn) return;
 
-    if (targetStatus === 'blocked') {
+    if (targetColumn.status === 'blocked') {
       const reason = window.prompt('Why is this card blocked?');
       if (!reason || !reason.trim()) return;
       blockMutation.mutate({ id: cardId, reason: reason.trim() });
@@ -152,7 +165,7 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
     }
 
     // Compute target position
-    const columnItems = (itemsByStatus.get(targetStatus) ?? []).filter(
+    const columnItems = (itemsByColumn.get(targetColumnId) ?? []).filter(
       (it) => it.id !== cardId,
     );
     let position: number | undefined;
@@ -166,12 +179,17 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
     }
     // Same column same position no-op
     if (
-      card.status === targetStatus &&
+      (card.columnId ?? columns.find((column) => column.status === card.status)?.id) === targetColumnId &&
       (position === undefined || Math.abs(position - card.position) < 0.0001)
     ) {
       return;
     }
-    moveMutation.mutate({ id: cardId, status: targetStatus, position });
+    moveMutation.mutate({
+      id: cardId,
+      columnId: targetColumnId,
+      status: targetColumn.status,
+      position,
+    });
   }
 
   const draggingItem = draggingId ? items.find((it) => it.id === draggingId) ?? null : null;
@@ -201,25 +219,25 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
             <KanbanSquare size={14} className="text-emerald-400" />
             Board
             <span className="text-xs text-muted font-normal">
-              ({items.filter((it) => it.status !== 'cancelled').length})
+              ({items.length})
             </span>
           </h3>
         </div>
 
         <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden">
           <div className="flex gap-3 p-3 h-full min-w-max">
-            {COLUMNS.map((col) => {
-              const colItems = itemsByStatus.get(col.id) ?? [];
+            {columns.map((col) => {
+              const colItems = itemsByColumn.get(col.id) ?? [];
               return (
                 <Column
                   key={col.id}
                   id={col.id}
-                  label={col.label}
-                  tone={col.tone}
+                  label={col.name}
+                  tone={columnTone(col.status)}
                   count={colItems.length}
                 >
-                  {col.id === 'backlog' && (
-                    <QuickAddRow projectId={projectId} />
+                  {backlogColumnId === col.id && (
+                    <QuickAddRow projectId={projectId} columnId={col.id} />
                   )}
                   {colItems.map((item) => (
                     <DraggableCard key={item.id} id={item.id}>
@@ -275,7 +293,7 @@ function Column({
   count,
   children,
 }: {
-  id: WorkItemStatus;
+  id: string;
   label: string;
   tone: string;
   count: number;
@@ -331,14 +349,14 @@ function DraggableCard({
 
 // ── Quick-add row at top of Backlog ───────────────────────────────────────────
 
-function QuickAddRow({ projectId }: { projectId: string }) {
+function QuickAddRow({ projectId, columnId }: { projectId: string; columnId: string }) {
   const queryClient = useQueryClient();
   const [title, setTitle] = useState('');
   const [adding, setAdding] = useState(false);
 
   const createMutation = useMutation({
     mutationFn: (titleValue: string) =>
-      workItemsApi.create({ projectId, title: titleValue, status: 'backlog' }),
+      workItemsApi.create({ projectId, title: titleValue, columnId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['work-items', projectId] });
       setTitle('');
@@ -380,4 +398,23 @@ function QuickAddRow({ projectId }: { projectId: string }) {
       />
     </div>
   );
+}
+
+function columnTone(status: ProjectBoardColumn['status']): string {
+  switch (status) {
+    case 'todo':
+      return 'text-secondary';
+    case 'in_progress':
+      return 'text-blue-300';
+    case 'blocked':
+      return 'text-red-300';
+    case 'review':
+      return 'text-amber-300';
+    case 'done':
+      return 'text-emerald-300';
+    case 'cancelled':
+      return 'text-muted';
+    default:
+      return 'text-muted';
+  }
 }

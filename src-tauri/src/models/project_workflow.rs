@@ -66,7 +66,7 @@ impl Default for WorkflowGraph {
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowNode {
     pub id: String,
-    /// e.g. `trigger.manual`, `agent.run`, `logic.if`, `integration.gmail.read`.
+    /// e.g. `trigger.manual`, `agent.run`, `logic.if`, `integration.feed.fetch`.
     #[serde(rename = "type")]
     pub node_type: String,
     pub position: NodePosition,
@@ -146,6 +146,8 @@ pub const KNOWN_NODE_TYPES: &[&str] = &[
     "agent.run",
     "logic.if",
     "board.work_item.create",
+    "board.proposal.enqueue",
+    "integration.feed.fetch",
     // Integration stubs — placeable but inert in Phase 3.
     "integration.gmail.read",
     "integration.gmail.send",

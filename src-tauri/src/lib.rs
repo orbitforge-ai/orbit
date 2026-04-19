@@ -313,6 +313,9 @@ pub fn run() {
             commands::projects::delete_project_workspace_file,
             commands::projects::create_project_workspace_dir,
             commands::projects::rename_project_workspace_entry,
+            commands::project_board_columns::list_project_board_columns,
+            commands::project_board_columns::create_project_board_column,
+            commands::project_board_columns::update_project_board_column,
             // Work items (project board)
             commands::work_items::list_work_items,
             commands::work_items::get_work_item,

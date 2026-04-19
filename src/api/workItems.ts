@@ -25,15 +25,21 @@ export const workItemsApi = {
   claim: (id: string, agentId: string): Promise<WorkItem> =>
     invoke('claim_work_item', { id, agentId }),
 
-  move: (id: string, status: WorkItemStatus, position?: number): Promise<WorkItem> =>
-    invoke('move_work_item', { id, status, position }),
+  move: (
+    id: string,
+    status?: WorkItemStatus,
+    columnId?: string,
+    position?: number,
+  ): Promise<WorkItem> =>
+    invoke('move_work_item', { id, status: status ?? null, columnId: columnId ?? null, position }),
 
   reorder: (
     projectId: string,
-    status: WorkItemStatus,
+    status: WorkItemStatus | null,
+    columnId: string | null,
     orderedIds: string[],
   ): Promise<void> =>
-    invoke('reorder_work_items', { projectId, status, orderedIds }),
+    invoke('reorder_work_items', { projectId, status, columnId, orderedIds }),
 
   block: (id: string, reason: string): Promise<WorkItem> =>
     invoke('block_work_item', { id, reason }),

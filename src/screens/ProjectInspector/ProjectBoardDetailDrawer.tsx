@@ -3,18 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { Bot, CheckCircle, Trash2, X } from 'lucide-react';
 import { workItemsApi } from '../../api/workItems';
-import { Agent, WorkItem, WorkItemKind, WorkItemStatus } from '../../types';
+import { projectsApi } from '../../api/projects';
+import { Agent, ProjectBoardColumn, WorkItem, WorkItemKind, WorkItemStatus } from '../../types';
 import { WorkItemComments } from './WorkItemComments';
-
-const STATUS_OPTIONS: { id: WorkItemStatus; label: string }[] = [
-  { id: 'backlog', label: 'Backlog' },
-  { id: 'todo', label: 'Todo' },
-  { id: 'in_progress', label: 'In Progress' },
-  { id: 'blocked', label: 'Blocked' },
-  { id: 'review', label: 'Review' },
-  { id: 'done', label: 'Done' },
-  { id: 'cancelled', label: 'Cancelled' },
-];
 
 const KIND_OPTIONS: { id: WorkItemKind; label: string }[] = [
   { id: 'task', label: 'Task' },
@@ -40,6 +31,10 @@ export function ProjectBoardDetailDrawer({
   const { data: item, isLoading } = useQuery<WorkItem>({
     queryKey: ['work-items', projectId, workItemId],
     queryFn: () => workItemsApi.get(workItemId),
+  });
+  const { data: columns = [] } = useQuery<ProjectBoardColumn[]>({
+    queryKey: ['project-board-columns', projectId],
+    queryFn: () => projectsApi.listBoardColumns(projectId),
   });
 
   const [title, setTitle] = useState('');
@@ -71,8 +66,8 @@ export function ProjectBoardDetailDrawer({
   });
 
   const moveMutation = useMutation({
-    mutationFn: ({ status }: { status: WorkItemStatus }) =>
-      workItemsApi.move(workItemId, status),
+    mutationFn: ({ columnId, status }: { columnId: string; status: WorkItemStatus }) =>
+      workItemsApi.move(workItemId, status, columnId),
     onSuccess: invalidate,
   });
 
@@ -109,18 +104,20 @@ export function ProjectBoardDetailDrawer({
     updateMutation.mutate({ title, description, labels });
   }
 
-  function handleStatusChange(next: WorkItemStatus) {
-    if (next === 'blocked') {
+  function handleColumnChange(nextColumnId: string) {
+    const nextColumn = columns.find((column) => column.id === nextColumnId);
+    if (!nextColumn) return;
+    if (nextColumn.status === 'blocked') {
       const reason = window.prompt('Why is this card blocked?');
       if (!reason || !reason.trim()) return;
       blockMutation.mutate({ reason: reason.trim() });
       return;
     }
-    if (next === 'done') {
+    if (nextColumn.status === 'done') {
       completeMutation.mutate();
       return;
     }
-    moveMutation.mutate({ status: next });
+    moveMutation.mutate({ columnId: nextColumnId, status: nextColumn.status });
   }
 
   function handleAssigneeChange(agentId: string) {
@@ -185,13 +182,17 @@ export function ProjectBoardDetailDrawer({
               {/* Status + actions */}
               <div className="flex flex-wrap items-center gap-2">
                 <select
-                  value={item.status}
-                  onChange={(e) => handleStatusChange(e.target.value as WorkItemStatus)}
+                  value={
+                    item.columnId ??
+                    columns.find((column) => column.status === item.status)?.id ??
+                    ''
+                  }
+                  onChange={(e) => handleColumnChange(e.target.value)}
                   className="bg-surface border border-edge rounded-md px-2.5 py-1 text-xs text-white outline-none focus:border-accent"
                 >
-                  {STATUS_OPTIONS.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.label}
+                  {columns.map((column) => (
+                    <option key={column.id} value={column.id}>
+                      {column.name}
                     </option>
                   ))}
                 </select>

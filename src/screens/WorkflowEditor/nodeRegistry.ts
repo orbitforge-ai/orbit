@@ -8,6 +8,7 @@ import {
   MailOpen,
   MessagesSquare,
   Play,
+  Rss,
   Timer,
 } from 'lucide-react';
 import type { WorkflowNodeType } from '../../types';
@@ -42,7 +43,12 @@ export const NODE_REGISTRY: NodeMeta[] = [
     label: 'Run agent',
     group: 'Agents',
     icon: Bot,
-    defaultData: { agentId: '', promptTemplate: '' },
+    defaultData: {
+      agentId: '',
+      promptTemplate: '',
+      contextTemplate: '',
+      outputMode: 'text',
+    },
   },
   {
     type: 'logic.if',
@@ -65,6 +71,7 @@ export const NODE_REGISTRY: NodeMeta[] = [
       itemIdTemplate: '',
       titleTemplate: '',
       descriptionTemplate: '',
+      columnId: '',
       kind: '',
       status: '',
       priority: null,
@@ -79,6 +86,29 @@ export const NODE_REGISTRY: NodeMeta[] = [
       listKind: 'all',
       listAssignee: '',
       limit: 25,
+    },
+  },
+  {
+    type: 'board.proposal.enqueue',
+    label: 'Board · Proposal queue',
+    group: 'Board',
+    icon: KanbanSquare,
+    defaultData: {
+      candidatesPath: '',
+      reviewColumnId: '',
+      kind: 'task',
+      priority: 1,
+      labelsText: 'proposal-review',
+    },
+  },
+  {
+    type: 'integration.feed.fetch',
+    label: 'Feed fetch',
+    group: 'Integrations',
+    icon: Rss,
+    defaultData: {
+      feedUrlsText: '',
+      limit: 50,
     },
   },
   {
@@ -111,7 +141,6 @@ export const NODE_REGISTRY: NodeMeta[] = [
     group: 'Integrations',
     icon: Globe,
     defaultData: { method: 'GET', url: '' },
-    comingSoon: true,
   },
 ];
 

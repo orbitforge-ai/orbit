@@ -11,9 +11,14 @@
 //!   recovery, parallel branches, and async wait states are out of scope.
 
 use std::collections::HashMap;
+use std::io::Cursor;
 
 use chrono::Utc;
+use feed_rs::parser;
+use reqwest::header::CONTENT_TYPE;
+use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager};
 use tracing::{info, warn};
 use ulid::Ulid;
@@ -70,8 +75,9 @@ impl WorkflowOrchestrator {
         let this = self.clone();
         let run_clone = run.clone();
         let project_id = workflow.project_id.clone();
+        let workflow_id = workflow.id.clone();
         tokio::spawn(async move {
-            if let Err(e) = this.execute_run(run_clone, project_id).await {
+            if let Err(e) = this.execute_run(run_clone, workflow_id, project_id).await {
                 warn!("workflow run failed: {}", e);
             }
         });
@@ -175,7 +181,12 @@ impl WorkflowOrchestrator {
         Ok(run)
     }
 
-    async fn execute_run(&self, run: WorkflowRun, project_id: String) -> Result<(), String> {
+    async fn execute_run(
+        &self,
+        run: WorkflowRun,
+        workflow_id: String,
+        project_id: String,
+    ) -> Result<(), String> {
         let started_at = Utc::now().to_rfc3339();
         self.update_run_status(&run.id, STATUS_RUNNING, None, Some(&started_at), None)
             .await
@@ -228,7 +239,7 @@ impl WorkflowOrchestrator {
 
             let outputs_val = Value::Object(outputs.clone());
             let exec = self
-                .execute_node(&run.id, &project_id, node, &outputs_val, sequence)
+                .execute_node(&run.id, &workflow_id, &project_id, node, &outputs_val, sequence)
                 .await;
 
             match exec {
@@ -258,6 +269,7 @@ impl WorkflowOrchestrator {
     async fn execute_node(
         &self,
         run_id: &str,
+        workflow_id: &str,
         project_id: &str,
         node: &WorkflowNode,
         outputs: &Value,
@@ -286,14 +298,20 @@ impl WorkflowOrchestrator {
             }),
             "agent.run" => self.run_agent_node(node, outputs).await,
             "logic.if" => self.run_logic_if(node, outputs).await,
+            "integration.feed.fetch" => {
+                self.run_feed_fetch_node(workflow_id, node, outputs).await
+            }
+            "integration.http.request" => {
+                self.run_http_request_node(workflow_id, node, outputs).await
+            }
+            "board.proposal.enqueue" => {
+                self.run_proposal_enqueue_node(run_id, project_id, node, outputs)
+                    .await
+            }
             "board.work_item.create" => {
                 self.run_work_item_node(run_id, project_id, node, outputs)
                     .await
             }
-            other if other.starts_with("integration.") => Err(format!(
-                "integration node `{}` is not yet implemented",
-                other
-            )),
             other => Err(format!("unknown node type `{}`", other)),
         };
 
@@ -336,7 +354,16 @@ impl WorkflowOrchestrator {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let prompt = render_template(&template, outputs);
+        let context = render_optional_template(
+            node.data.get("contextTemplate").and_then(|v| v.as_str()),
+            outputs,
+        );
+        let output_mode = node
+            .data
+            .get("outputMode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("text");
+        let prompt = render_agent_prompt(&template, context.as_deref(), output_mode, outputs);
 
         let ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
         if ws_config.provider.is_empty() {
@@ -373,15 +400,273 @@ impl WorkflowOrchestrator {
             .map_err(|e| format!("agent.run LLM call failed: {}", e))?;
 
         let text = llm_provider::extract_text_response(&response).unwrap_or_default();
-        let parsed: Value =
-            serde_json::from_str(&text).unwrap_or_else(|_| Value::String(text.clone()));
+        let parsed = parse_agent_output(output_mode, &text)?;
 
         Ok(NodeOutcome {
             output: json!({
                 "agentId": agent_id,
                 "prompt": prompt,
+                "context": context,
+                "outputMode": output_mode,
                 "text": text,
                 "parsed": parsed,
+            }),
+            next_handle: None,
+        })
+    }
+
+    async fn run_feed_fetch_node(
+        &self,
+        workflow_id: &str,
+        node: &WorkflowNode,
+        outputs: &Value,
+    ) -> Result<NodeOutcome, String> {
+        let feed_urls_text = required_template(&node.data, "feedUrlsText", "integration.feed.fetch")?;
+        let feed_urls = parse_multiline_templates(&feed_urls_text, outputs);
+        if feed_urls.is_empty() {
+            return Err("integration.feed.fetch requires at least one feed URL".to_string());
+        }
+
+        let limit = node
+            .data
+            .get("limit")
+            .and_then(json_number_to_i64)
+            .filter(|value| *value > 0)
+            .unwrap_or(50) as usize;
+        let client = reqwest::Client::builder()
+            .user_agent("Orbit/0.1 workflow feed fetch")
+            .build()
+            .map_err(|e| format!("integration.feed.fetch client error: {}", e))?;
+
+        let mut unseen_items = Vec::new();
+        let mut fetched = Vec::new();
+        let mut total_items = 0usize;
+
+        for url in feed_urls {
+            let response = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| format!("integration.feed.fetch request failed for {}: {}", url, e))?;
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| format!("integration.feed.fetch body failed for {}: {}", url, e))?;
+            let feed = parser::parse(Cursor::new(bytes))
+                .map_err(|e| format!("integration.feed.fetch parse failed for {}: {}", url, e))?;
+            fetched.push(url.clone());
+
+            let mut normalized = Vec::new();
+            let feed_title = feed.title.as_ref().map(|title| title.content.clone());
+            for entry in feed.entries {
+                let item = json!({
+                    "source": url,
+                    "feedTitle": feed_title.clone(),
+                    "id": entry.id,
+                    "title": entry.title.as_ref().map(|title| title.content.clone()).unwrap_or_default(),
+                    "url": entry.links.first().map(|link| link.href.clone()),
+                    "summary": entry.summary.as_ref().map(|summary| summary.content.clone()),
+                    "content": entry.content.and_then(|content| content.body),
+                    "publishedAt": entry.published.map(|value| value.to_rfc3339()),
+                    "updatedAt": entry.updated.map(|value| value.to_rfc3339()),
+                    "authors": entry.authors.iter().map(|author| author.name.clone()).collect::<Vec<_>>(),
+                });
+                normalized.push(item);
+            }
+
+            total_items += normalized.len();
+            if normalized.len() > limit {
+                normalized.truncate(limit);
+            }
+            let mut new_items = self
+                .filter_unseen_items(workflow_id, &node.id, &url, normalized)
+                .await?;
+            unseen_items.append(&mut new_items);
+        }
+
+        Ok(NodeOutcome {
+            output: json!({
+                "sourceUrls": fetched,
+                "count": unseen_items.len(),
+                "totalFetched": total_items,
+                "items": unseen_items,
+            }),
+            next_handle: None,
+        })
+    }
+
+    async fn run_http_request_node(
+        &self,
+        workflow_id: &str,
+        node: &WorkflowNode,
+        outputs: &Value,
+    ) -> Result<NodeOutcome, String> {
+        let url_template = required_template(&node.data, "url", "integration.http.request")?;
+        let url = render_template(&url_template, outputs).trim().to_string();
+        if url.is_empty() {
+            return Err("integration.http.request rendered an empty URL".to_string());
+        }
+        let client = reqwest::Client::builder()
+            .user_agent("Orbit/0.1 workflow http request")
+            .build()
+            .map_err(|e| format!("integration.http.request client error: {}", e))?;
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("integration.http.request failed: {}", e))?;
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let raw_body = response
+            .text()
+            .await
+            .map_err(|e| format!("integration.http.request body read failed: {}", e))?;
+        let body_text = normalize_http_body(&content_type, &raw_body);
+        let parsed_json = serde_json::from_str::<Value>(&raw_body).ok();
+        let fingerprint_item = json!({
+            "url": url,
+            "title": "",
+            "publishedAt": Value::Null,
+            "source": "http",
+            "bodyHash": hash_text(&body_text),
+        });
+        let is_new = self
+            .filter_unseen_items(
+                workflow_id,
+                &node.id,
+                &url,
+                vec![fingerprint_item],
+            )
+            .await?
+            .len()
+            == 1;
+
+        Ok(NodeOutcome {
+            output: json!({
+                "url": url,
+                "status": status,
+                "contentType": content_type,
+                "bodyText": body_text,
+                "json": parsed_json,
+                "fetchedAt": Utc::now().to_rfc3339(),
+                "isNew": is_new,
+            }),
+            next_handle: None,
+        })
+    }
+
+    async fn run_proposal_enqueue_node(
+        &self,
+        run_id: &str,
+        project_id: &str,
+        node: &WorkflowNode,
+        outputs: &Value,
+    ) -> Result<NodeOutcome, String> {
+        let candidates_path = required_template(
+            &node.data,
+            "candidatesPath",
+            "board.proposal.enqueue",
+        )?;
+        let review_column_id = required_template(
+            &node.data,
+            "reviewColumnId",
+            "board.proposal.enqueue",
+        )?;
+        let kind = parse_work_item_kind(node.data.get("kind").and_then(|v| v.as_str()))?;
+        let priority = parse_priority(node.data.get("priority")).clamp(0, 3);
+        let labels = parse_work_item_labels(
+            node.data.get("labelsText").and_then(|v| v.as_str()),
+            outputs,
+        );
+        let candidates = lookup_json_path(&candidates_path, outputs)
+            .and_then(|value| value.as_array().cloned())
+            .ok_or_else(|| {
+                format!(
+                    "board.proposal.enqueue requires candidatesPath '{}' to resolve to an array",
+                    candidates_path
+                )
+            })?;
+
+        let mut work_items = Vec::new();
+        for candidate in candidates {
+            if !candidate
+                .get("shouldReview")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+            {
+                continue;
+            }
+
+            let listing = candidate.get("listing").cloned().unwrap_or(Value::Null);
+            let title = listing
+                .get("title")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| "Freelance job proposal review".to_string());
+            let proposal_draft = candidate
+                .get("proposalDraft")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if proposal_draft.trim().is_empty() {
+                return Err("board.proposal.enqueue candidate is missing proposalDraft".to_string());
+            }
+            let fit_score = candidate.get("fitScore").cloned().unwrap_or(Value::Null);
+            let fit_reason = candidate
+                .get("fitReason")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+
+            let description = Some(format!(
+                "Proposal draft:\n\n{}\n\nFit reason:\n{}\n",
+                proposal_draft,
+                if fit_reason.is_empty() {
+                    "(not provided)"
+                } else {
+                    fit_reason.as_str()
+                }
+            ));
+
+            let payload = CreateWorkItem {
+                project_id: project_id.to_string(),
+                title,
+                description,
+                kind: Some(kind.clone()),
+                column_id: Some(review_column_id.clone()),
+                status: None,
+                priority: Some(priority),
+                assignee_agent_id: None,
+                created_by_agent_id: None,
+                parent_work_item_id: None,
+                position: None,
+                labels: Some(labels.clone()),
+                metadata: Some(json!({
+                    "source": "workflow.proposal",
+                    "workflowRunId": run_id,
+                    "workflowNodeId": node.id,
+                    "proposalCandidate": candidate,
+                    "listing": listing,
+                    "fitScore": fit_score,
+                })),
+            };
+            let item = create_work_item_with_db(&self.db, payload).await?;
+            self.sync_work_item_cloud(item.clone());
+            work_items.push(item);
+        }
+
+        Ok(NodeOutcome {
+            output: json!({
+                "action": "enqueue",
+                "reviewColumnId": review_column_id,
+                "count": work_items.len(),
+                "workItems": work_items,
             }),
             next_handle: None,
         })
@@ -449,6 +734,10 @@ impl WorkflowOrchestrator {
                 let kind = parse_work_item_kind(node.data.get("kind").and_then(|v| v.as_str()))?;
                 let status =
                     parse_work_item_status(node.data.get("status").and_then(|v| v.as_str()))?;
+                let column_id = render_optional_template(
+                    node.data.get("columnId").and_then(|v| v.as_str()),
+                    outputs,
+                );
                 let priority = parse_priority(node.data.get("priority")).clamp(0, 3);
 
                 let payload = CreateWorkItem {
@@ -456,6 +745,7 @@ impl WorkflowOrchestrator {
                     title: title.clone(),
                     description: description.clone(),
                     kind: Some(kind.clone()),
+                    column_id: column_id.clone(),
                     status: Some(status.clone()),
                     priority: Some(priority),
                     assignee_agent_id: assignee_agent_id.clone(),
@@ -479,6 +769,7 @@ impl WorkflowOrchestrator {
                         "title": title,
                         "description": description,
                         "kind": kind,
+                        "columnId": column_id,
                         "status": status,
                         "priority": priority,
                         "labels": labels,
@@ -583,6 +874,10 @@ impl WorkflowOrchestrator {
                             outputs,
                         ),
                         kind,
+                        column_id: render_optional_template(
+                            node.data.get("columnId").and_then(|v| v.as_str()),
+                            outputs,
+                        ),
                         priority,
                         labels,
                         metadata: None,
@@ -603,13 +898,25 @@ impl WorkflowOrchestrator {
                 let item_id = render_required_field(&node.data, "itemIdTemplate", action, outputs)?;
                 let status =
                     parse_work_item_status(node.data.get("status").and_then(|v| v.as_str()))?;
+                let column_id = render_optional_template(
+                    node.data.get("columnId").and_then(|v| v.as_str()),
+                    outputs,
+                );
                 let item =
-                    move_work_item_with_db(&self.db, item_id.clone(), status.clone(), None).await?;
+                    move_work_item_with_db(
+                        &self.db,
+                        item_id.clone(),
+                        Some(status.clone()),
+                        column_id.clone(),
+                        None,
+                    )
+                    .await?;
                 self.sync_work_item_cloud(item.clone());
                 Ok(NodeOutcome {
                     output: json!({
                         "action": action,
                         "itemId": item_id,
+                        "columnId": column_id,
                         "status": status,
                         "workItem": item,
                     }),
@@ -723,6 +1030,62 @@ impl WorkflowOrchestrator {
                 other
             )),
         }
+    }
+
+    async fn filter_unseen_items(
+        &self,
+        workflow_id: &str,
+        node_id: &str,
+        source_key: &str,
+        items: Vec<Value>,
+    ) -> Result<Vec<Value>, String> {
+        let pool = self.db.0.clone();
+        let workflow_id = workflow_id.to_string();
+        let node_id = node_id.to_string();
+        let source_key = source_key.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Vec<Value>, String> {
+            let mut conn = pool.get().map_err(|e| e.to_string())?;
+            let tx = conn.transaction().map_err(|e| e.to_string())?;
+            let now = Utc::now().to_rfc3339();
+            let mut unseen = Vec::new();
+
+            for item in items {
+                let fingerprint = fingerprint_listing(&item, &source_key);
+                let exists: Option<String> = tx
+                    .query_row(
+                        "SELECT id FROM workflow_seen_items
+                         WHERE workflow_id = ?1 AND node_id = ?2 AND source_key = ?3 AND fingerprint = ?4",
+                        rusqlite::params![workflow_id, node_id, source_key, fingerprint],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|e| e.to_string())?;
+                if exists.is_some() {
+                    continue;
+                }
+
+                tx.execute(
+                    "INSERT INTO workflow_seen_items (
+                        id, workflow_id, node_id, source_key, fingerprint, created_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![
+                        Ulid::new().to_string(),
+                        workflow_id,
+                        node_id,
+                        source_key,
+                        fingerprint,
+                        now,
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
+                unseen.push(item);
+            }
+
+            tx.commit().map_err(|e| e.to_string())?;
+            Ok(unseen)
+        })
+        .await
+        .map_err(|e| e.to_string())?
     }
 
     fn sync_work_item_cloud(&self, item: crate::models::work_item::WorkItem) {
@@ -946,6 +1309,116 @@ fn lookup_path(path: &str, outputs: &Value) -> String {
         Value::String(s) => s.clone(),
         other => other.to_string(),
     }
+}
+
+fn lookup_json_path(path: &str, outputs: &Value) -> Option<Value> {
+    let mut cur = outputs;
+    for segment in path.split('.') {
+        cur = cur.get(segment)?;
+    }
+    Some(cur.clone())
+}
+
+fn render_agent_prompt(
+    template: &str,
+    context: Option<&str>,
+    output_mode: &str,
+    outputs: &Value,
+) -> String {
+    let prompt = render_template(template, outputs);
+    match output_mode {
+        "proposal_candidates" => {
+            let context_block = context
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| format!("\n\nFit context:\n{}", value))
+                .unwrap_or_default();
+            format!(
+                "{}{}\n\nReturn only valid JSON as an array. Each array item must include: listing, fitScore, fitReason, proposalDraft, shouldReview.",
+                prompt, context_block
+            )
+        }
+        "json" => {
+            let context_block = context
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| format!("\n\nContext:\n{}", value))
+                .unwrap_or_default();
+            format!("{}{}\n\nReturn only valid JSON.", prompt, context_block)
+        }
+        _ => match context {
+            Some(value) if !value.trim().is_empty() => format!("{}\n\nContext:\n{}", prompt, value),
+            _ => prompt,
+        },
+    }
+}
+
+fn parse_agent_output(output_mode: &str, text: &str) -> Result<Value, String> {
+    match output_mode {
+        "proposal_candidates" => {
+            let parsed: Value = serde_json::from_str(text)
+                .map_err(|e| format!("agent.run expected JSON array output: {}", e))?;
+            let items = parsed
+                .as_array()
+                .ok_or_else(|| "agent.run proposal_candidates output must be an array".to_string())?;
+            for (idx, item) in items.iter().enumerate() {
+                let obj = item.as_object().ok_or_else(|| {
+                    format!("agent.run proposal_candidates item {} must be an object", idx)
+                })?;
+                for field in ["listing", "fitScore", "fitReason", "proposalDraft", "shouldReview"] {
+                    if !obj.contains_key(field) {
+                        return Err(format!(
+                            "agent.run proposal_candidates item {} is missing '{}'",
+                            idx, field
+                        ));
+                    }
+                }
+            }
+            Ok(parsed)
+        }
+        "json" => serde_json::from_str(text)
+            .map_err(|e| format!("agent.run expected JSON output: {}", e)),
+        _ => Ok(serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string()))),
+    }
+}
+
+fn parse_multiline_templates(template: &str, outputs: &Value) -> Vec<String> {
+    render_template(template, outputs)
+        .split('\n')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn normalize_http_body(content_type: &str, raw_body: &str) -> String {
+    if content_type.contains("html") {
+        html2md::parse_html(raw_body)
+    } else {
+        raw_body.to_string()
+    }
+}
+
+fn hash_text(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn fingerprint_listing(item: &Value, source_key: &str) -> String {
+    if let Some(url) = item
+        .get("url")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        return hash_text(url);
+    }
+
+    let title = item.get("title").and_then(Value::as_str).unwrap_or("");
+    let published = item
+        .get("publishedAt")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let body_hash = item.get("bodyHash").and_then(Value::as_str).unwrap_or("");
+    hash_text(&format!("{}|{}|{}|{}", source_key, title, published, body_hash))
 }
 
 fn render_optional_template(template: Option<&str>, outputs: &Value) -> Option<String> {

@@ -2,7 +2,14 @@ import { useQuery } from '@tanstack/react-query';
 import { Node } from '@xyflow/react';
 import { agentsApi } from '../../api/agents';
 import { projectsApi } from '../../api/projects';
-import { Agent, RuleGroup, RuleNode, WorkItemKind, WorkItemStatus } from '../../types';
+import {
+  Agent,
+  ProjectBoardColumn,
+  RuleGroup,
+  RuleNode,
+  WorkItemKind,
+  WorkItemStatus,
+} from '../../types';
 import { RecurringPicker } from '../ScheduleBuilder/RecurringPicker';
 import { nodeMeta } from './nodeRegistry';
 import { RuleBuilder } from './RuleBuilder';
@@ -107,7 +114,21 @@ export function NodeInspector({ node, projectId, onChangeData, onDelete }: Props
           />
         )}
 
-        {node.type?.startsWith('integration.') && (
+        {node.type === 'board.proposal.enqueue' && (
+          <ProposalQueueInspector data={data} projectId={projectId} onUpdate={update} />
+        )}
+
+        {node.type === 'integration.feed.fetch' && (
+          <FeedFetchInspector data={data} onUpdate={update} />
+        )}
+
+        {node.type === 'integration.http.request' && (
+          <HttpRequestInspector data={data} onUpdate={update} />
+        )}
+
+        {(node.type === 'integration.gmail.read' ||
+          node.type === 'integration.gmail.send' ||
+          node.type === 'integration.slack.send') && (
           <p className="text-xs text-muted italic">Integration nodes are coming in a later phase.</p>
         )}
       </div>
@@ -147,6 +168,8 @@ function AgentRunInspector({
   });
   const agentId = (data.agentId as string) ?? '';
   const promptTemplate = (data.promptTemplate as string) ?? '';
+  const contextTemplate = (data.contextTemplate as string) ?? '';
+  const outputMode = (data.outputMode as string) ?? 'text';
 
   return (
     <div className="space-y-3">
@@ -179,6 +202,28 @@ function AgentRunInspector({
           <span className="font-mono">{`{{<nodeId>.output.<field>}}`}</span> to reference upstream
           data.
         </p>
+      </div>
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Fit context</label>
+        <textarea
+          value={contextTemplate}
+          onChange={(e) => onUpdate({ contextTemplate: e.target.value })}
+          rows={5}
+          placeholder="Candidate profile, writing preferences, exclusions, portfolio notes…"
+          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+        />
+      </div>
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Output mode</label>
+        <select
+          value={outputMode}
+          onChange={(e) => onUpdate({ outputMode: e.target.value })}
+          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+        >
+          <option value="text">Text</option>
+          <option value="json">JSON</option>
+          <option value="proposal_candidates">Proposal candidates</option>
+        </select>
       </div>
     </div>
   );
@@ -244,11 +289,16 @@ function WorkItemInspector({
     queryKey: ['project-agents', projectId],
     queryFn: () => projectsApi.listAgents(projectId),
   });
+  const { data: boardColumns = [] } = useQuery<ProjectBoardColumn[]>({
+    queryKey: ['project-board-columns', projectId],
+    queryFn: () => projectsApi.listBoardColumns(projectId),
+  });
 
   const action = ((data.action as WorkItemNodeAction | undefined) ?? 'create') as WorkItemNodeAction;
   const itemIdTemplate = (data.itemIdTemplate as string) ?? '';
   const titleTemplate = (data.titleTemplate as string) ?? '';
   const descriptionTemplate = (data.descriptionTemplate as string) ?? '';
+  const columnId = (data.columnId as string) ?? '';
   const kind = ((data.kind as WorkItemKind | undefined) ?? 'task') as WorkItemKind;
   const status = ((data.status as WorkItemStatus | undefined) ?? 'backlog') as WorkItemStatus;
   const priorityValue = data.priority;
@@ -270,6 +320,7 @@ function WorkItemInspector({
   const showItemId = action !== 'create' && action !== 'list';
   const showTitle = action === 'create' || action === 'update';
   const showDescription = action === 'create' || action === 'update';
+  const showColumn = action === 'create' || action === 'update' || action === 'move';
   const showKind = action === 'create' || action === 'update' || action === 'list';
   const showStatus = action === 'create' || action === 'move' || action === 'list';
   const showPriority = action === 'create' || action === 'update';
@@ -344,6 +395,24 @@ function WorkItemInspector({
             placeholder={`Customer summary:\n{{agentNode.output.text}}`}
             className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
           />
+        </div>
+      )}
+
+      {showColumn && (
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">Board column</label>
+          <select
+            value={columnId}
+            onChange={(e) => onUpdate({ columnId: e.target.value })}
+            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+          >
+            <option value="">Resolve from status</option>
+            {boardColumns.map((column) => (
+              <option key={column.id} value={column.id}>
+                {column.name}
+              </option>
+            ))}
+          </select>
         </div>
       )}
 
@@ -552,6 +621,161 @@ function WorkItemInspector({
           />
         </div>
       )}
+    </div>
+  );
+}
+
+function ProposalQueueInspector({
+  data,
+  projectId,
+  onUpdate,
+}: {
+  data: Record<string, unknown>;
+  projectId: string;
+  onUpdate: (patch: Record<string, unknown>) => void;
+}) {
+  const { data: boardColumns = [] } = useQuery<ProjectBoardColumn[]>({
+    queryKey: ['project-board-columns', projectId],
+    queryFn: () => projectsApi.listBoardColumns(projectId),
+  });
+  const candidatesPath = (data.candidatesPath as string) ?? '';
+  const reviewColumnId = (data.reviewColumnId as string) ?? '';
+  const kind = ((data.kind as WorkItemKind | undefined) ?? 'task') as WorkItemKind;
+  const priority = typeof data.priority === 'number' ? data.priority : 1;
+  const labelsText = (data.labelsText as string) ?? '';
+
+  return (
+    <div className="space-y-3">
+      <p className="text-[10px] text-muted">
+        Expects an upstream array of proposal candidates. Point this at something like{' '}
+        <span className="font-mono">agentNode.output.parsed</span>.
+      </p>
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Candidates path</label>
+        <input
+          value={candidatesPath}
+          onChange={(e) => onUpdate({ candidatesPath: e.target.value })}
+          placeholder="agentNode.output.parsed"
+          className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono"
+        />
+      </div>
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Review column</label>
+        <select
+          value={reviewColumnId}
+          onChange={(e) => onUpdate({ reviewColumnId: e.target.value })}
+          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+        >
+          <option value="">Select column…</option>
+          {boardColumns.map((column) => (
+            <option key={column.id} value={column.id}>
+              {column.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">Kind</label>
+          <select
+            value={kind}
+            onChange={(e) => onUpdate({ kind: e.target.value })}
+            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+          >
+            {WORK_ITEM_KIND_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-[11px] uppercase tracking-wider text-muted">Priority</label>
+          <select
+            value={String(priority)}
+            onChange={(e) => onUpdate({ priority: Number(e.target.value) })}
+            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+          >
+            <option value="0">Low</option>
+            <option value="1">Normal</option>
+            <option value="2">High</option>
+            <option value="3">Urgent</option>
+          </select>
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Labels</label>
+        <textarea
+          value={labelsText}
+          onChange={(e) => onUpdate({ labelsText: e.target.value })}
+          rows={2}
+          placeholder="proposal-review, freelance"
+          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+        />
+      </div>
+    </div>
+  );
+}
+
+function FeedFetchInspector({
+  data,
+  onUpdate,
+}: {
+  data: Record<string, unknown>;
+  onUpdate: (patch: Record<string, unknown>) => void;
+}) {
+  const feedUrlsText = (data.feedUrlsText as string) ?? '';
+  const limit = typeof data.limit === 'number' ? data.limit : 50;
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Feed URLs</label>
+        <textarea
+          value={feedUrlsText}
+          onChange={(e) => onUpdate({ feedUrlsText: e.target.value })}
+          rows={6}
+          placeholder={'https://example.com/jobs.xml\nhttps://example.com/feed'}
+          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono resize-none"
+        />
+      </div>
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Per-feed limit</label>
+        <input
+          type="number"
+          min={1}
+          max={200}
+          value={limit}
+          onChange={(e) => onUpdate({ limit: Number(e.target.value) || 50 })}
+          className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent"
+        />
+      </div>
+    </div>
+  );
+}
+
+function HttpRequestInspector({
+  data,
+  onUpdate,
+}: {
+  data: Record<string, unknown>;
+  onUpdate: (patch: Record<string, unknown>) => void;
+}) {
+  const url = (data.url as string) ?? '';
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">URL template</label>
+        <input
+          value={url}
+          onChange={(e) => onUpdate({ url: e.target.value, method: 'GET' })}
+          placeholder="https://example.com/jobs/{{trigger.data.slug}}"
+          className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono"
+        />
+      </div>
+      <p className="text-[10px] text-muted">
+        V1 supports plain HTTP GET only. HTML responses are normalized into text, and JSON
+        responses are exposed under <span className="font-mono">output.json</span>.
+      </p>
     </div>
   );
 }

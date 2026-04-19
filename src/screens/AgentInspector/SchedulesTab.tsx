@@ -233,7 +233,7 @@ function AgentSchedulesList({ agentId }: { agentId: string }) {
     tasks.filter((t) => t.agentId === agentId && !t.tags.includes('pulse')).map((t) => t.id)
   );
 
-  const agentSchedules = allSchedules.filter((s) => agentTaskIds.has(s.taskId));
+  const agentSchedules = allSchedules.filter((s) => s.taskId && agentTaskIds.has(s.taskId));
 
   async function handleToggle(schedule: Schedule) {
     await schedulesApi.toggle(schedule.id, !schedule.enabled);
@@ -269,7 +269,9 @@ function AgentSchedulesList({ agentId }: { agentId: string }) {
                 className="flex items-center gap-3 px-4 py-3 rounded-lg border border-edge bg-surface"
               >
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm text-white truncate">{getTaskName(schedule.taskId)}</p>
+                  <p className="text-sm text-white truncate">
+                    {schedule.taskId ? getTaskName(schedule.taskId) : 'Workflow schedule'}
+                  </p>
                   <p className="text-xs text-muted">{description}</p>
                   {schedule.nextRunAt && (
                     <p className="text-[10px] text-border-hover mt-0.5">

@@ -453,6 +453,7 @@ impl SupabaseClient {
                 "title": w.title,
                 "description": w.description,
                 "kind": w.kind,
+                "column_id": w.column_id,
                 "status": w.status,
                 "priority": w.priority,
                 "assignee_agent_id": w.assignee_agent_id,
@@ -1367,7 +1368,7 @@ fn read_project_agents(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec
 fn read_work_items(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, project_id, title, description, kind, status, priority,
+            "SELECT id, project_id, title, description, kind, column_id, status, priority,
                     assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
                     labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at
              FROM work_items",
@@ -1382,19 +1383,20 @@ fn read_work_items(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Val
                 "title": row.get::<_, String>(2)?,
                 "description": row.get::<_, Option<String>>(3)?,
                 "kind": row.get::<_, String>(4)?,
-                "status": row.get::<_, String>(5)?,
-                "priority": row.get::<_, i64>(6)?,
-                "assignee_agent_id": row.get::<_, Option<String>>(7)?,
-                "created_by_agent_id": row.get::<_, Option<String>>(8)?,
-                "parent_work_item_id": row.get::<_, Option<String>>(9)?,
-                "position": row.get::<_, f64>(10)?,
-                "labels": row.get::<_, String>(11)?,
-                "metadata": row.get::<_, String>(12)?,
-                "blocked_reason": row.get::<_, Option<String>>(13)?,
-                "started_at": row.get::<_, Option<String>>(14)?,
-                "completed_at": row.get::<_, Option<String>>(15)?,
-                "created_at": row.get::<_, String>(16)?,
-                "updated_at": row.get::<_, String>(17)?,
+                "column_id": row.get::<_, Option<String>>(5)?,
+                "status": row.get::<_, String>(6)?,
+                "priority": row.get::<_, i64>(7)?,
+                "assignee_agent_id": row.get::<_, Option<String>>(8)?,
+                "created_by_agent_id": row.get::<_, Option<String>>(9)?,
+                "parent_work_item_id": row.get::<_, Option<String>>(10)?,
+                "position": row.get::<_, f64>(11)?,
+                "labels": row.get::<_, String>(12)?,
+                "metadata": row.get::<_, String>(13)?,
+                "blocked_reason": row.get::<_, Option<String>>(14)?,
+                "started_at": row.get::<_, Option<String>>(15)?,
+                "completed_at": row.get::<_, Option<String>>(16)?,
+                "created_at": row.get::<_, String>(17)?,
+                "updated_at": row.get::<_, String>(18)?,
             }))
         })
         .map_err(|e| e.to_string())?
@@ -1904,16 +1906,17 @@ fn write_work_items(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(),
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO work_items (
-                id, project_id, title, description, kind, status, priority,
+                id, project_id, title, description, kind, column_id, status, priority,
                 assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
                 labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "project_id"),
                 str_val(&r, "title"),
                 opt_str(&r, "description"),
                 str_val(&r, "kind"),
+                opt_str(&r, "column_id"),
                 str_val(&r, "status"),
                 int_val(&r, "priority", 0),
                 opt_str(&r, "assignee_agent_id"),

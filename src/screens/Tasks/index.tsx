@@ -42,7 +42,7 @@ export function TasksScreen() {
   const scheduleByTask = useMemo(() => {
     const map = new Map<string, Schedule>();
     for (const s of schedules) {
-      if (!map.has(s.taskId)) map.set(s.taskId, s);
+      if (s.taskId && !map.has(s.taskId)) map.set(s.taskId, s);
     }
     return map;
   }, [schedules]);
@@ -51,7 +51,7 @@ export function TasksScreen() {
   const lastRunByTask = useMemo(() => {
     const map = new Map<string, RunSummary>();
     for (const r of recentRuns) {
-      if (!map.has(r.taskId)) map.set(r.taskId, r);
+      if (r.taskId && !map.has(r.taskId)) map.set(r.taskId, r);
     }
     return map;
   }, [recentRuns]);

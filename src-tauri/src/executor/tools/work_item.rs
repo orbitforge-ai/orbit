@@ -6,11 +6,13 @@ use serde_json::{json, Value};
 use ulid::Ulid;
 
 use crate::commands::work_items::{
-    assert_agent_in_project, fetch_work_item_project, WorkItemError,
+    assert_agent_in_project, block_work_item_with_db, claim_work_item_with_db,
+    complete_work_item_with_db, create_work_item_with_db, fetch_work_item_project,
+    move_work_item_with_db, unblock_work_item_with_db, update_work_item_with_db, WorkItemError,
 };
 use crate::db::DbPool;
 use crate::executor::llm_provider::ToolDefinition;
-use crate::models::work_item::WorkItem;
+use crate::models::work_item::{CreateWorkItem, UpdateWorkItem, WorkItem};
 use crate::models::work_item_comment::WorkItemComment;
 
 use super::{context::ToolExecutionContext, ToolHandler};
@@ -408,7 +410,7 @@ fn spawn_cloud_upsert_comment(ctx: &ToolExecutionContext, comment: &WorkItemComm
 
 // ── DB operations (async wrappers that reuse the command helpers) ────────────
 
-const WORK_ITEM_COLUMNS: &str = "id, project_id, title, description, kind, status, priority,
+const WORK_ITEM_COLUMNS: &str = "id, project_id, title, description, kind, column_id, status, priority,
         assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
         labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at";
 
@@ -450,7 +452,7 @@ async fn list_work_items(
             }
             None => {}
         }
-        sql.push_str(" ORDER BY status, position ASC");
+        sql.push_str(" ORDER BY COALESCE(column_id, status), position ASC");
         if let Some(l) = limit {
             sql.push_str(" LIMIT ?");
             params.push(Box::new(l));
@@ -500,55 +502,27 @@ async fn create_work_item(
     labels: Vec<String>,
     created_by_agent_id: Option<String>,
 ) -> Result<WorkItem, String> {
-    let pool = db.0.clone();
     let project_id = project_id.to_string();
     let title = title.to_string();
-    tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let id = Ulid::new().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
-        let labels_json = serde_json::to_string(&labels).map_err(|e| e.to_string())?;
-
-        let max: Option<f64> = conn
-            .query_row(
-                "SELECT MAX(position) FROM work_items WHERE project_id = ?1 AND status = 'backlog'",
-                rusqlite::params![project_id],
-                |row| row.get::<_, Option<f64>>(0),
-            )
-            .unwrap_or(None);
-        let position = max.unwrap_or(0.0) + 1024.0;
-
-        conn.execute(
-            "INSERT INTO work_items (
-                id, project_id, title, description, kind, status, priority,
-                assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
-                labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at
-             ) VALUES (?1,?2,?3,?4,?5,'backlog',?6,NULL,?7,?8,?9,?10,'{}',NULL,NULL,NULL,?11,?11)",
-            rusqlite::params![
-                id,
-                project_id,
-                title,
-                description,
-                kind,
-                priority,
-                created_by_agent_id,
-                parent_id,
-                position,
-                labels_json,
-                now,
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
-        conn.query_row(
-            &sql,
-            rusqlite::params![id],
-            crate::commands::work_items::map_work_item,
-        )
-        .map_err(|e| e.to_string())
-    })
+    create_work_item_with_db(
+        db,
+        CreateWorkItem {
+            project_id,
+            title,
+            description,
+            kind: Some(kind),
+            column_id: None,
+            status: Some("backlog".to_string()),
+            priority: Some(priority),
+            assignee_agent_id: None,
+            created_by_agent_id,
+            parent_work_item_id: parent_id,
+            position: None,
+            labels: Some(labels),
+            metadata: None,
+        },
+    )
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn update_work_item(
@@ -560,221 +534,41 @@ async fn update_work_item(
     priority: Option<i64>,
     labels: Option<Vec<String>>,
 ) -> Result<WorkItem, String> {
-    let pool = db.0.clone();
     let id = id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-        if let Some(t) = title {
-            conn.execute(
-                "UPDATE work_items SET title = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![t, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if let Some(d) = description {
-            conn.execute(
-                "UPDATE work_items SET description = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![d, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if let Some(k) = kind {
-            conn.execute(
-                "UPDATE work_items SET kind = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![k, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if let Some(p) = priority {
-            conn.execute(
-                "UPDATE work_items SET priority = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![p, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if let Some(l) = labels {
-            let json = serde_json::to_string(&l).map_err(|e| e.to_string())?;
-            conn.execute(
-                "UPDATE work_items SET labels = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![json, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
-        conn.query_row(
-            &sql,
-            rusqlite::params![id],
-            crate::commands::work_items::map_work_item,
-        )
-        .map_err(|e| e.to_string())
-    })
+    update_work_item_with_db(
+        db,
+        id,
+        UpdateWorkItem {
+          title,
+          description,
+          kind,
+          column_id: None,
+          priority,
+          labels,
+          metadata: None,
+        },
+    )
     .await
-    .map_err(|e| e.to_string())?
 }
 
 async fn claim_work_item(db: &DbPool, id: &str, agent_id: &str) -> Result<WorkItem, String> {
-    let pool = db.0.clone();
-    let id = id.to_string();
-    let agent_id = agent_id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE work_items
-                SET assignee_agent_id = ?1,
-                    status = 'in_progress',
-                    started_at = COALESCE(started_at, ?2),
-                    updated_at = ?2
-              WHERE id = ?3",
-            rusqlite::params![agent_id, now, id],
-        )
-        .map_err(|e| e.to_string())?;
-        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
-        conn.query_row(
-            &sql,
-            rusqlite::params![id],
-            crate::commands::work_items::map_work_item,
-        )
-        .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    claim_work_item_with_db(db, id.to_string(), agent_id.to_string()).await
 }
 
 async fn move_work_item(db: &DbPool, id: &str, status: String) -> Result<WorkItem, String> {
-    let pool = db.0.clone();
-    let id = id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-
-        let project_id: String = conn
-            .query_row(
-                "SELECT project_id FROM work_items WHERE id = ?1",
-                rusqlite::params![id],
-                |row| row.get(0),
-            )
-            .map_err(|e| format!("work_item: not found ({})", e))?;
-        let max: Option<f64> = conn
-            .query_row(
-                "SELECT MAX(position) FROM work_items WHERE project_id = ?1 AND status = ?2",
-                rusqlite::params![project_id, status],
-                |row| row.get::<_, Option<f64>>(0),
-            )
-            .unwrap_or(None);
-        let position = max.unwrap_or(0.0) + 1024.0;
-
-        let completed_bump = matches!(status.as_str(), "done" | "cancelled");
-        let started_bump = status == "in_progress";
-
-        conn.execute(
-            "UPDATE work_items
-                SET status = ?1,
-                    position = ?2,
-                    started_at = CASE WHEN ?5 = 1 THEN COALESCE(started_at, ?4) ELSE started_at END,
-                    completed_at = CASE WHEN ?6 = 1 THEN ?4 ELSE completed_at END,
-                    updated_at = ?4
-              WHERE id = ?3",
-            rusqlite::params![
-                status,
-                position,
-                id,
-                now,
-                started_bump as i64,
-                completed_bump as i64,
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-
-        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
-        conn.query_row(
-            &sql,
-            rusqlite::params![id],
-            crate::commands::work_items::map_work_item,
-        )
-        .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    move_work_item_with_db(db, id.to_string(), Some(status), None, None).await
 }
 
 async fn block_work_item(db: &DbPool, id: &str, reason: String) -> Result<WorkItem, String> {
-    let pool = db.0.clone();
-    let id = id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE work_items
-                SET status = 'blocked', blocked_reason = ?1, updated_at = ?2
-              WHERE id = ?3",
-            rusqlite::params![reason, now, id],
-        )
-        .map_err(|e| e.to_string())?;
-        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
-        conn.query_row(
-            &sql,
-            rusqlite::params![id],
-            crate::commands::work_items::map_work_item,
-        )
-        .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    block_work_item_with_db(db, id.to_string(), reason).await
 }
 
 async fn unblock_work_item(db: &DbPool, id: &str, new_status: String) -> Result<WorkItem, String> {
-    let pool = db.0.clone();
-    let id = id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE work_items
-                SET status = ?1, blocked_reason = NULL, updated_at = ?2
-              WHERE id = ?3",
-            rusqlite::params![new_status, now, id],
-        )
-        .map_err(|e| e.to_string())?;
-        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
-        conn.query_row(
-            &sql,
-            rusqlite::params![id],
-            crate::commands::work_items::map_work_item,
-        )
-        .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    unblock_work_item_with_db(db, id.to_string(), new_status).await
 }
 
 async fn complete_work_item(db: &DbPool, id: &str) -> Result<WorkItem, String> {
-    let pool = db.0.clone();
-    let id = id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE work_items
-                SET status = 'done',
-                    completed_at = ?1,
-                    blocked_reason = NULL,
-                    updated_at = ?1
-              WHERE id = ?2",
-            rusqlite::params![now, id],
-        )
-        .map_err(|e| e.to_string())?;
-        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
-        conn.query_row(
-            &sql,
-            rusqlite::params![id],
-            crate::commands::work_items::map_work_item,
-        )
-        .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    complete_work_item_with_db(db, id.to_string()).await
 }
 
 async fn create_comment(

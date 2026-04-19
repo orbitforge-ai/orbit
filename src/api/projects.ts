@@ -1,5 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
-import { Agent, FileEntry, Project, ProjectAgent, ProjectSummary } from '../types';
+import {
+  Agent,
+  FileEntry,
+  Project,
+  ProjectAgent,
+  ProjectBoardColumn,
+  ProjectSummary,
+} from '../types';
 
 export interface ProjectAgentWithMeta {
   agent: Agent;
@@ -34,6 +41,21 @@ export const projectsApi = {
 
   removeAgent: (projectId: string, agentId: string): Promise<void> =>
     invoke('remove_agent_from_project', { projectId, agentId }),
+
+  listBoardColumns: (projectId: string): Promise<ProjectBoardColumn[]> =>
+    invoke('list_project_board_columns', { projectId }),
+
+  createBoardColumn: (payload: {
+    projectId: string;
+    name: string;
+    status: ProjectBoardColumn['status'];
+    position?: number;
+  }): Promise<ProjectBoardColumn> => invoke('create_project_board_column', { payload }),
+
+  updateBoardColumn: (
+    id: string,
+    payload: Partial<Pick<ProjectBoardColumn, 'name' | 'status' | 'position'>>,
+  ): Promise<ProjectBoardColumn> => invoke('update_project_board_column', { id, payload }),
 
   // Workspace file operations
   getWorkspacePath: (projectId: string): Promise<string> =>

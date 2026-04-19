@@ -4,6 +4,8 @@ use crate::models::project_workflow::{
     CreateProjectWorkflow, ProjectWorkflow, RuleNode, UpdateProjectWorkflow, WorkflowGraph,
     KNOWN_NODE_TYPES, RULE_OPERATORS,
 };
+use crate::models::schedule::RecurringConfig;
+use crate::scheduler::converter::next_n_runs;
 use rusqlite::params;
 use std::collections::{HashMap, HashSet};
 use ulid::Ulid;
@@ -192,6 +194,63 @@ fn validate_rule(rule: &RuleNode) -> Result<(), String> {
     }
 }
 
+fn derive_trigger_from_graph(
+    graph: &WorkflowGraph,
+    fallback_kind: Option<&str>,
+    fallback_config: Option<&serde_json::Value>,
+) -> (String, serde_json::Value) {
+    if let Some(node) = graph.nodes.iter().find(|node| node.node_type == "trigger.schedule") {
+        return ("schedule".to_string(), node.data.clone());
+    }
+    if graph
+        .nodes
+        .iter()
+        .any(|node| node.node_type == "trigger.manual")
+    {
+        return ("manual".to_string(), serde_json::json!({}));
+    }
+    (
+        fallback_kind.unwrap_or("manual").to_string(),
+        fallback_config.cloned().unwrap_or_else(|| serde_json::json!({})),
+    )
+}
+
+fn sync_workflow_schedule(
+    conn: &rusqlite::Connection,
+    workflow_id: &str,
+    enabled: bool,
+    trigger_kind: &str,
+    trigger_config: &serde_json::Value,
+    now: &str,
+) -> Result<(), String> {
+    let schedule_id = format!("workflow-schedule-{}", workflow_id);
+    if !enabled || trigger_kind != "schedule" {
+        conn.execute(
+            "DELETE FROM schedules WHERE workflow_id = ?1",
+            params![workflow_id],
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    let config: RecurringConfig = serde_json::from_value(trigger_config.clone())
+        .map_err(|e| format!("workflow schedule config is invalid: {}", e))?;
+    let next_run_at = next_n_runs(&config, 1).into_iter().next();
+    let config_json = serde_json::to_string(trigger_config).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO schedules (
+            id, task_id, workflow_id, target_kind, kind, config, enabled,
+            next_run_at, last_run_at, created_at, updated_at
+         ) VALUES (?1, NULL, ?2, 'workflow', 'recurring', ?3, 1, ?4, NULL,
+                   COALESCE((SELECT created_at FROM schedules WHERE id = ?1), ?5), ?5)",
+        params![schedule_id, workflow_id, config_json, next_run_at, now],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -246,15 +305,16 @@ pub async fn create_project_workflow(
     // Validate before write.
     let graph = payload.graph.clone().unwrap_or_default();
     validate_graph(&graph)?;
+    let (trigger_kind, trigger_config) = derive_trigger_from_graph(
+        &graph,
+        payload.trigger_kind.as_deref(),
+        payload.trigger_config.as_ref(),
+    );
 
     let item = tokio::task::spawn_blocking(move || -> Result<ProjectWorkflow, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let id = Ulid::new().to_string();
         let now = chrono::Utc::now().to_rfc3339();
-        let trigger_kind = payload.trigger_kind.unwrap_or_else(|| "manual".to_string());
-        let trigger_config = payload
-            .trigger_config
-            .unwrap_or_else(|| serde_json::json!({}));
         let graph_json = serde_json::to_string(&graph).map_err(|e| e.to_string())?;
         let trigger_config_json =
             serde_json::to_string(&trigger_config).map_err(|e| e.to_string())?;
@@ -276,6 +336,8 @@ pub async fn create_project_workflow(
             ],
         )
         .map_err(|e| e.to_string())?;
+
+        sync_workflow_schedule(&conn, &id, false, &trigger_kind, &trigger_config, &now)?;
 
         let sql = format!("SELECT {} FROM project_workflows WHERE id = ?1", COLUMNS);
         conn.query_row(&sql, params![id], map_workflow)
@@ -321,21 +383,6 @@ pub async fn update_project_workflow(
             )
             .map_err(|e| e.to_string())?;
         }
-        if let Some(trigger_kind) = &payload.trigger_kind {
-            conn.execute(
-                "UPDATE project_workflows SET trigger_kind = ?1, updated_at = ?2 WHERE id = ?3",
-                params![trigger_kind, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if let Some(trigger_config) = &payload.trigger_config {
-            let json = serde_json::to_string(trigger_config).map_err(|e| e.to_string())?;
-            conn.execute(
-                "UPDATE project_workflows SET trigger_config = ?1, updated_at = ?2 WHERE id = ?3",
-                params![json, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
         if let Some(graph) = &payload.graph {
             let json = serde_json::to_string(graph).map_err(|e| e.to_string())?;
             conn.execute(
@@ -347,9 +394,32 @@ pub async fn update_project_workflow(
             .map_err(|e| e.to_string())?;
         }
 
-        let sql = format!("SELECT {} FROM project_workflows WHERE id = ?1", COLUMNS);
-        conn.query_row(&sql, params![id], map_workflow)
-            .map_err(|e| e.to_string())
+        let mut item = conn
+            .query_row(
+                &format!("SELECT {} FROM project_workflows WHERE id = ?1", COLUMNS),
+                params![id],
+                map_workflow,
+            )
+            .map_err(|e| e.to_string())?;
+
+        let (trigger_kind, trigger_config) = derive_trigger_from_graph(
+            payload.graph.as_ref().unwrap_or(&item.graph),
+            payload.trigger_kind.as_deref().or(Some(item.trigger_kind.as_str())),
+            payload.trigger_config.as_ref().or(Some(&item.trigger_config)),
+        );
+        let trigger_config_json =
+            serde_json::to_string(&trigger_config).map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE project_workflows SET trigger_kind = ?1, trigger_config = ?2, updated_at = ?3 WHERE id = ?4",
+            params![trigger_kind, trigger_config_json, now, id],
+        )
+        .map_err(|e| e.to_string())?;
+        sync_workflow_schedule(&conn, &item.id, item.enabled, &trigger_kind, &trigger_config, &now)?;
+
+        item.trigger_kind = trigger_kind;
+        item.trigger_config = trigger_config;
+        item.updated_at = now;
+        Ok(item)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -369,6 +439,8 @@ pub async fn delete_project_workflow(
     let id_clone = id.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM schedules WHERE workflow_id = ?1", params![id_clone.clone()])
+            .map_err(|e| e.to_string())?;
         conn.execute(
             "DELETE FROM project_workflows WHERE id = ?1",
             params![id_clone],
@@ -401,9 +473,22 @@ pub async fn set_project_workflow_enabled(
             params![flag, now, id],
         )
         .map_err(|e| e.to_string())?;
-        let sql = format!("SELECT {} FROM project_workflows WHERE id = ?1", COLUMNS);
-        conn.query_row(&sql, params![id], map_workflow)
-            .map_err(|e| e.to_string())
+        let item = conn
+            .query_row(
+                &format!("SELECT {} FROM project_workflows WHERE id = ?1", COLUMNS),
+                params![id],
+                map_workflow,
+            )
+            .map_err(|e| e.to_string())?;
+        sync_workflow_schedule(
+            &conn,
+            &item.id,
+            item.enabled,
+            &item.trigger_kind,
+            &item.trigger_config,
+            &now,
+        )?;
+        Ok(item)
     })
     .await
     .map_err(|e| e.to_string())??;

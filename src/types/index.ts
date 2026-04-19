@@ -26,6 +26,16 @@ export interface ProjectAgent {
   addedAt: string;
 }
 
+export interface ProjectBoardColumn {
+  id: string;
+  projectId: string;
+  name: string;
+  status: WorkItemStatus;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ─── Work items (project board) ──────────────────────────────────────────────
 
 export type WorkItemStatus =
@@ -45,6 +55,7 @@ export interface WorkItem {
   title: string;
   description: string | null;
   kind: string;
+  columnId: string | null;
   status: WorkItemStatus;
   priority: number;
   assigneeAgentId: string | null;
@@ -65,6 +76,7 @@ export interface CreateWorkItem {
   title: string;
   description?: string;
   kind?: string;
+  columnId?: string;
   status?: WorkItemStatus;
   priority?: number;
   assigneeAgentId?: string;
@@ -79,6 +91,7 @@ export interface UpdateWorkItem {
   title?: string;
   description?: string;
   kind?: string;
+  columnId?: string;
   priority?: number;
   labels?: string[];
   metadata?: Record<string, unknown>;
@@ -210,6 +223,8 @@ export const KNOWN_NODE_TYPES = [
   'agent.run',
   'logic.if',
   'board.work_item.create',
+  'board.proposal.enqueue',
+  'integration.feed.fetch',
   'integration.gmail.read',
   'integration.gmail.send',
   'integration.slack.send',
@@ -418,7 +433,9 @@ export interface RunSummary {
 
 export interface Schedule {
   id: string;
-  taskId: string;
+  taskId: string | null;
+  workflowId: string | null;
+  targetKind: 'task' | 'workflow';
   kind: 'recurring' | 'one_shot' | 'triggered';
   config: RecurringConfig | OneShotConfig | Record<string, unknown>;
   enabled: boolean;
@@ -530,7 +547,9 @@ export interface CreateTask {
 }
 
 export interface CreateSchedule {
-  taskId: string;
+  taskId?: string;
+  workflowId?: string;
+  targetKind?: 'task' | 'workflow';
   kind: Schedule['kind'];
   config: RecurringConfig | OneShotConfig | Record<string, unknown>;
 }

@@ -36,7 +36,7 @@ export function ScheduleBuilderScreen() {
   const { data: schedules = [], refetch } = useQuery({
     queryKey: ['schedules'],
     queryFn: schedulesApi.list,
-    select: (all: Schedule[]) => all.filter((s) => !pulseTaskIds.has(s.taskId)),
+    select: (all: Schedule[]) => all.filter((s) => !s.taskId || !pulseTaskIds.has(s.taskId)),
   });
 
   async function handleCreate() {
@@ -74,7 +74,7 @@ export function ScheduleBuilderScreen() {
             <ScheduleCard
               key={s.id}
               schedule={s}
-              taskName={tasks.find((t) => t.id === s.taskId)?.name ?? 'Unknown task'}
+              taskName={s.taskId ? tasks.find((t) => t.id === s.taskId)?.name ?? 'Unknown task' : 'Workflow'}
               onToggle={() => schedulesApi.toggle(s.id, !s.enabled).then(() => refetch())}
               onDelete={() => schedulesApi.delete(s.id).then(() => refetch())}
             />

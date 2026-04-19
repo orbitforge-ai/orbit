@@ -3,6 +3,7 @@ pub mod agent_task;
 pub mod bus;
 pub mod chat;
 pub mod project;
+pub mod project_board_column;
 pub mod project_workflow;
 pub mod run;
 pub mod schedule;
