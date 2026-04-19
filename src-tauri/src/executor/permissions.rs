@@ -694,10 +694,7 @@ pub fn classify_tool_call(
                         format!("Send external message to channel '{}'", channel),
                     )
                 }
-                other => (
-                    RiskLevel::Prompt,
-                    format!("Message action: {}", other),
-                ),
+                other => (RiskLevel::Prompt, format!("Message action: {}", other)),
             }
         }
 
@@ -910,15 +907,16 @@ pub async fn execute_tool_with_permissions(
     if tool_name == "message" && input["action"].as_str().unwrap_or("send") == "send" {
         let raw_channel = input["channel"].as_str();
         let resolved_id = match raw_channel {
-            Some(raw) if !raw.is_empty() => global_settings::find_channel_in_global(raw)
-                .map(|c| c.id),
+            Some(raw) if !raw.is_empty() => {
+                global_settings::find_channel_in_global(raw).map(|c| c.id)
+            }
             _ => {
                 // Fall back to the agent's default outbound channel.
                 let ws_config = crate::executor::workspace::load_agent_config(&ctx.agent_id)
                     .unwrap_or_default();
-                ws_config.default_channel_id.and_then(|id| {
-                    global_settings::find_channel_by_id(&id).map(|c| c.id)
-                })
+                ws_config
+                    .default_channel_id
+                    .and_then(|id| global_settings::find_channel_by_id(&id).map(|c| c.id))
             }
         };
         if let Some(id) = resolved_id {

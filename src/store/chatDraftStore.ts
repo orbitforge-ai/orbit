@@ -6,11 +6,32 @@ const DRAFT_SESSION_PREFIX = '__draft__:';
 
 type DraftMap = Record<string, ChatDraft>;
 
+export interface DraftScope {
+  agentId: string;
+  projectId?: string | null;
+}
+
 interface ChatDraftStore {
   drafts: DraftMap;
-  ensureDraft: (agentId: string) => ChatDraft;
-  updateDraftText: (agentId: string, text: string) => void;
-  deleteDraft: (agentId: string) => void;
+  ensureDraft: (scope: DraftScope) => ChatDraft;
+  updateDraftText: (scope: DraftScope, text: string) => void;
+  deleteDraft: (scope: DraftScope) => void;
+}
+
+function scopeKey({ agentId, projectId }: DraftScope): string {
+  return `${projectId ?? 'global'}:${agentId}`;
+}
+
+export function getDraftScopeKey(scope: DraftScope): string {
+  return scopeKey(scope);
+}
+
+export function getDraftSessionId(scope: DraftScope) {
+  return `${DRAFT_SESSION_PREFIX}${scopeKey(scope)}`;
+}
+
+export function isDraftSessionId(sessionId: string | null) {
+  return Boolean(sessionId && sessionId.startsWith(DRAFT_SESSION_PREFIX));
 }
 
 function loadDrafts(): DraftMap {
@@ -37,28 +58,21 @@ function persistDrafts(drafts: DraftMap) {
   }
 }
 
-function createDraft(agentId: string, text = ''): ChatDraft {
+function createDraft(scope: DraftScope, text = ''): ChatDraft {
   const now = new Date().toISOString();
   return {
-    id: `draft-${agentId}-${Date.now()}`,
-    agentId,
+    id: `draft-${scopeKey(scope)}-${Date.now()}`,
+    agentId: scope.agentId,
+    projectId: scope.projectId ?? null,
     text,
     createdAt: now,
     updatedAt: now,
   };
 }
 
-export function getDraftSessionId(agentId: string) {
-  return `${DRAFT_SESSION_PREFIX}${agentId}`;
-}
-
-export function isDraftSessionId(sessionId: string | null) {
-  return Boolean(sessionId && sessionId.startsWith(DRAFT_SESSION_PREFIX));
-}
-
 export function draftToChatSession(draft: ChatDraft): ChatSession {
   return {
-    id: getDraftSessionId(draft.agentId),
+    id: getDraftSessionId({ agentId: draft.agentId, projectId: draft.projectId }),
     agentId: draft.agentId,
     title: 'New Chat',
     archived: false,
@@ -75,39 +89,43 @@ export function draftToChatSession(draft: ChatDraft): ChatSession {
     sourceSessionTitle: null,
     createdAt: draft.createdAt,
     updatedAt: draft.updatedAt,
+    projectId: draft.projectId,
   };
 }
 
 export const useChatDraftStore = create<ChatDraftStore>((set, get) => ({
   drafts: loadDrafts(),
 
-  ensureDraft: (agentId) => {
-    const existing = get().drafts[agentId];
+  ensureDraft: (scope) => {
+    const key = scopeKey(scope);
+    const existing = get().drafts[key];
     if (existing) return existing;
 
-    const draft = createDraft(agentId);
-    const drafts = { ...get().drafts, [agentId]: draft };
+    const draft = createDraft(scope);
+    const drafts = { ...get().drafts, [key]: draft };
     persistDrafts(drafts);
     set({ drafts });
     return draft;
   },
 
-  updateDraftText: (agentId, text) => {
-    const existing = get().drafts[agentId] ?? createDraft(agentId);
+  updateDraftText: (scope, text) => {
+    const key = scopeKey(scope);
+    const existing = get().drafts[key] ?? createDraft(scope);
     const nextDraft: ChatDraft = {
       ...existing,
       text,
       updatedAt: new Date().toISOString(),
     };
-    const drafts = { ...get().drafts, [agentId]: nextDraft };
+    const drafts = { ...get().drafts, [key]: nextDraft };
     persistDrafts(drafts);
     set({ drafts });
   },
 
-  deleteDraft: (agentId) => {
-    if (!get().drafts[agentId]) return;
+  deleteDraft: (scope) => {
+    const key = scopeKey(scope);
+    if (!get().drafts[key]) return;
     const drafts = { ...get().drafts };
-    delete drafts[agentId];
+    delete drafts[key];
     persistDrafts(drafts);
     set({ drafts });
   },

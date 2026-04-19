@@ -47,7 +47,9 @@ export function ChatScreen() {
     staleTime: 60_000,
   });
 
-  const selectedDraft = selectedAgentId ? drafts[selectedAgentId] ?? null : null;
+  const draftScope = selectedAgentId ? { agentId: selectedAgentId } : null;
+  const draftScopeKey = draftScope ? `global:${draftScope.agentId}` : null;
+  const selectedDraft = draftScopeKey ? drafts[draftScopeKey] ?? null : null;
   const visibleDraft =
     selectedAgentId && pendingInitialSend?.agentId === selectedAgentId ? null : selectedDraft;
   const draftSession = visibleDraft ? draftToChatSession(visibleDraft) : null;
@@ -79,7 +81,7 @@ export function ChatScreen() {
   }, [agents, selectedAgentId]);
 
   useEffect(() => {
-    if (!selectedAgentId) return;
+    if (!selectedAgentId || !draftScope) return;
 
     if (isDraftSessionId(activeSessionId) && !selectedDraft) {
       setActiveSessionId(null);
@@ -87,33 +89,35 @@ export function ChatScreen() {
     }
 
     if (!activeSessionId && selectedDraft) {
-      setActiveSessionId(getDraftSessionId(selectedAgentId));
+      setActiveSessionId(getDraftSessionId(draftScope));
     }
-  }, [activeSessionId, selectedAgentId, selectedDraft]);
+  }, [activeSessionId, draftScope, selectedAgentId, selectedDraft]);
 
   function handleSelectAgent(agentId: string) {
     setSelectedAgentId(agentId);
-    setActiveSessionId(drafts[agentId] ? getDraftSessionId(agentId) : null);
+    const scope = { agentId };
+    const key = `global:${agentId}`;
+    setActiveSessionId(drafts[key] ? getDraftSessionId(scope) : null);
   }
 
   function handleNewSession() {
-    if (!selectedAgentId) return;
-    ensureDraft(selectedAgentId);
-    setActiveSessionId(getDraftSessionId(selectedAgentId));
+    if (!draftScope) return;
+    ensureDraft(draftScope);
+    setActiveSessionId(getDraftSessionId(draftScope));
   }
 
   function handleDeleteDraft() {
-    if (!selectedAgentId) return;
-    deleteDraft(selectedAgentId);
-    if (activeSessionId === getDraftSessionId(selectedAgentId)) {
+    if (!draftScope) return;
+    deleteDraft(draftScope);
+    if (activeSessionId === getDraftSessionId(draftScope)) {
       setActiveSessionId(null);
     }
   }
 
   async function handleDraftSend(content: ContentBlock[]) {
-    if (!selectedAgentId) return;
+    if (!selectedAgentId || !draftScope || !draftScopeKey) return;
 
-    const draft = useChatDraftStore.getState().drafts[selectedAgentId] ?? ensureDraft(selectedAgentId);
+    const draft = useChatDraftStore.getState().drafts[draftScopeKey] ?? ensureDraft(draftScope);
     const session = await chatApi.createSession(selectedAgentId);
     queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
     setPendingInitialSend({
@@ -129,9 +133,10 @@ export function ChatScreen() {
   function handleInitialMessageHandled(key: string) {
     setPendingInitialSend((current) => {
       if (!current || current.key !== key) return current;
-      const draft = useChatDraftStore.getState().drafts[current.agentId];
+      const scope = { agentId: current.agentId };
+      const draft = useChatDraftStore.getState().drafts[`global:${current.agentId}`];
       if (draft?.id === current.draftId) {
-        useChatDraftStore.getState().deleteDraft(current.agentId);
+        useChatDraftStore.getState().deleteDraft(scope);
       }
       return null;
     });
@@ -141,7 +146,7 @@ export function ChatScreen() {
     setPendingInitialSend((current) => {
       if (!current || current.key !== key) return current;
       if (selectedAgentId === current.agentId) {
-        setActiveSessionId(getDraftSessionId(current.agentId));
+        setActiveSessionId(getDraftSessionId({ agentId: current.agentId }));
       }
       return null;
     });
@@ -203,11 +208,11 @@ export function ChatScreen() {
 
       <div className="flex-1 min-h-0">
         {selectedDraft &&
-        selectedAgentId &&
-        activeSessionId === getDraftSessionId(selectedAgentId) ? (
+        draftScope &&
+        activeSessionId === getDraftSessionId(draftScope) ? (
           <ChatPanel
             draft={selectedDraft}
-            onDraftTextChange={(text) => updateDraftText(selectedAgentId, text)}
+            onDraftTextChange={(text) => updateDraftText(draftScope, text)}
             onDraftSend={handleDraftSend}
             agentIdentity={agentConfig?.identity}
           />

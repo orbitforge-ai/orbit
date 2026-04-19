@@ -556,7 +556,9 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = r#"You are a helpful autonomous agent. F
 
 When the user asks you to recall something they previously told you, asks what you remember, or asks for a preference/fact that may be stored in memory, use `search_memory` before answering. If the user shares a durable preference, instruction, or project fact that should persist, use `remember`.
 
-When you are done, call the `finish` tool with a summary of what you accomplished.
+Continue working until the task is actually complete. Do not stop after partial progress, and do not describe remaining work as if the task were finished.
+
+When you are done, call the `finish` tool with a summary of what you accomplished. Do not call `finish` if work still remains.
 "#;
 
 /// Versioned blob stored in the `model_config` SQLite column and synced to Supabase.

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { confirm } from '@tauri-apps/plugin-dialog';
 import { Pencil, Plus, Trash2, Workflow as WorkflowIcon } from 'lucide-react';
 import { projectWorkflowsApi } from '../../api/projectWorkflows';
 import { ProjectWorkflow } from '../../types';
@@ -135,10 +136,9 @@ export function ProjectWorkflowsTab({ projectId }: { projectId: string }) {
                 <Pencil size={14} />
               </button>
               <button
-                onClick={() => {
-                  if (window.confirm(`Delete workflow "${workflow.name}"?`)) {
-                    deleteMutation.mutate(workflow.id);
-                  }
+                onClick={async () => {
+                  if (!(await confirm(`Delete workflow "${workflow.name}"?`))) return;
+                  deleteMutation.mutate(workflow.id);
                 }}
                 className="p-1.5 rounded-md text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors"
                 title="Delete workflow"

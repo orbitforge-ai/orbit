@@ -28,7 +28,7 @@ impl ToolHandler for TaskTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Track work items for the current session. Create tasks to break down work, update progress, and manage dependencies. Actions: create, list, get, update, delete.".to_string(),
+            description: "Track scratch-pad tasks for the current session only. Use this for the agent's own internal plan when breaking work into smaller steps. These tasks are not project board cards and do not show up on the kanban board; use `work_item` for user-requested tasks or any persistent project work. Actions: create, list, get, update, delete.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

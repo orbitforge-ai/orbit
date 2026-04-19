@@ -15,7 +15,7 @@ impl ToolHandler for FinishTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Signal that the goal has been completed. Provide a summary of what was accomplished.".to_string(),
+            description: "Signal that the goal has been fully completed. Provide a summary of what was accomplished. Do not use this for partial progress or when work still remains.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

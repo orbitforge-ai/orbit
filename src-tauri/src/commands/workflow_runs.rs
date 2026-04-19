@@ -14,11 +14,7 @@ pub async fn start_workflow_run(
 ) -> Result<WorkflowRun, String> {
     let orchestrator = WorkflowOrchestrator::new(db.inner().clone(), app);
     orchestrator
-        .start_run(
-            workflow_id,
-            "manual",
-            trigger_data.unwrap_or(Value::Null),
-        )
+        .start_run(workflow_id, "manual", trigger_data.unwrap_or(Value::Null))
         .await
 }
 

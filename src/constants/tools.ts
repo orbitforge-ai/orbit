@@ -1,7 +1,7 @@
 // Shared tool catalog used by the global settings screen (for the shared
 // allowed-tools editor) and the per-agent config tab (for the disabled-tools
-// multi-select). Must stay in sync with `DEFAULT_ALLOWED_TOOLS` in
-// `src-tauri/src/executor/global_settings.rs`.
+// multi-select). Keep this aligned with user-configurable runtime tools.
+// Internal tools like `finish` and `react_to_message` are intentionally omitted.
 
 export interface ToolDescriptor {
   id: string;
@@ -34,6 +34,7 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
   {
     label: 'Communication',
     tools: [
+      { id: 'send_message', label: 'Agent Messages' },
       { id: 'message', label: 'External Messages' },
       { id: 'ask_user', label: 'Ask User' },
       { id: 'web_search', label: 'Web Search' },
@@ -61,6 +62,7 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     label: 'Agent Control',
     tools: [
       { id: 'config', label: 'Self-Config' },
+      { id: 'spawn_sub_agents', label: 'Spawn Sub-Agents' },
       { id: 'subagents', label: 'Manage Sub-Agents' },
       { id: 'yield_turn', label: 'Yield Turn' },
       { id: 'activate_skill', label: 'Activate Skill' },
@@ -68,7 +70,10 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
   },
   {
     label: 'Task Management',
-    tools: [{ id: 'task', label: 'Agent Task Tracking' }],
+    tools: [
+      { id: 'task', label: 'Session Task Planning' },
+      { id: 'work_item', label: 'Project Board Work Items' },
+    ],
   },
   {
     label: 'Scheduling',
@@ -79,6 +84,8 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     tools: [
       { id: 'remember', label: 'Remember' },
       { id: 'search_memory', label: 'Search Memory' },
+      { id: 'list_memories', label: 'List Memories' },
+      { id: 'forget', label: 'Forget Memory' },
     ],
   },
 ];

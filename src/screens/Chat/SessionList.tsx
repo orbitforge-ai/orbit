@@ -30,6 +30,7 @@ interface SessionListProps {
   onNewSession: () => void;
   draftSession?: ChatSession | null;
   onDeleteDraft?: () => void;
+  projectId?: string;
 }
 
 interface SourceSessionGroup {
@@ -64,6 +65,7 @@ export function SessionList({
   onNewSession,
   draftSession = null,
   onDeleteDraft,
+  projectId,
 }: SessionListProps) {
   const queryClient = useQueryClient();
   const { openAgentChat } = useUiStore();
@@ -86,8 +88,8 @@ export function SessionList({
   }, [menuSessionId]);
 
   const { data: sessions = [] } = useQuery({
-    queryKey: ['chat-sessions', agentId, showArchived],
-    queryFn: () => chatApi.listSessions(agentId, showArchived),
+    queryKey: ['chat-sessions', agentId, showArchived, projectId ?? null],
+    queryFn: () => chatApi.listSessions(agentId, showArchived, undefined, projectId),
     refetchInterval: 5_000,
   });
 

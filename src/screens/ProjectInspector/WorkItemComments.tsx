@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { confirm } from '@tauri-apps/plugin-dialog';
 import { Bot, Pencil, Trash2, User } from 'lucide-react';
 import { workItemsApi } from '../../api/workItems';
 import { Agent, WorkItemComment } from '../../types';
@@ -113,10 +114,9 @@ export function WorkItemComments({
                         <Pencil size={10} />
                       </button>
                       <button
-                        onClick={() => {
-                          if (window.confirm('Delete this comment?')) {
-                            deleteMutation.mutate(c.id);
-                          }
+                        onClick={async () => {
+                          if (!(await confirm('Delete this comment?'))) return;
+                          deleteMutation.mutate(c.id);
                         }}
                         className="p-1 rounded text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors"
                         title="Delete"

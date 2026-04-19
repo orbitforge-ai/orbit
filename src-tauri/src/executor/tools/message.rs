@@ -59,7 +59,8 @@ impl ToolHandler for MessageTool {
             "list" => {
                 if channels.is_empty() {
                     return Ok((
-                        "No external channels are configured. Add one in Settings → Channels.".to_string(),
+                        "No external channels are configured. Add one in Settings → Channels."
+                            .to_string(),
                         false,
                     ));
                 }

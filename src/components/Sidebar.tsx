@@ -59,6 +59,7 @@ const GLOBAL_NAV = [
 const PROJECT_TABS = [
   { id: 'workspace' as const, label: 'Workspace', icon: HardDrive },
   { id: 'agents' as const, label: 'Agents', icon: Users },
+  { id: 'chat' as const, label: 'Chat', icon: MessageSquare },
   { id: 'board' as const, label: 'Board', icon: KanbanSquare },
   { id: 'scheduled' as const, label: 'Scheduled', icon: ListChecks },
   { id: 'workflows' as const, label: 'Workflows', icon: Workflow },
@@ -289,10 +290,15 @@ export function Sidebar() {
                         {PROJECT_TABS.map(({ id, label, icon: Icon }) => (
                           <button
                             key={id}
-                            onClick={() => { setProjectTab(id); navigate('projects'); }}
+                            onClick={() => {
+                              selectProject(project.id);
+                              setProjectTab(id);
+                            }}
                             className={cn(
                               'w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors',
-                              screen === 'projects' && projectTab === id
+                              screen === 'projects' &&
+                                selectedProjectId === project.id &&
+                                projectTab === id
                                 ? 'bg-accent/10 text-accent-hover'
                                 : 'text-secondary hover:bg-surface hover:text-white'
                             )}

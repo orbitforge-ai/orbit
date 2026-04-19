@@ -180,6 +180,7 @@ pub async fn run_agent_loop(
             agent_semaphores.clone(),
             session_registry.clone(),
             None,
+            None,
         )
         .with_permission_registry(permission_registry.clone())
         .with_allow_sub_agents(false)
@@ -197,6 +198,7 @@ pub async fn run_agent_loop(
             app.clone(),
             agent_semaphores.clone(),
             session_registry.clone(),
+            None,
             None,
         )
         .with_permission_registry(permission_registry.clone())
@@ -375,11 +377,24 @@ pub async fn run_agent_loop(
                         }
                     }
                 }
+                let should_auto_continue =
+                    session_agent::should_auto_continue_after_end_turn(&response.content);
                 messages.push(ChatMessage {
                     role: "assistant".to_string(),
                     content: response.content.clone(),
                     created_at: None,
                 });
+                if should_auto_continue {
+                    messages.push(ChatMessage {
+                        role: "user".to_string(),
+                        content: vec![ContentBlock::Text {
+                            text: "You are not done yet. Continue working until the current task is complete. Do not stop after partial progress. If you are blocked, state the blocker explicitly and ask only for the missing input or permission.".to_string(),
+                        }],
+                        created_at: None,
+                    });
+                    finish_summary = None;
+                    continue;
+                }
                 log.log(
                     app,
                     run_id,
@@ -958,6 +973,14 @@ pub async fn run_pulse(
     );
 
     // ── Build tool execution context ────────────────────────────────────
+    let pulse_worktree = session_worktree::load_session_worktree_state(db, &session_id).await?;
+    let pulse_project_id = session_worktree::load_session_project_id(db, &session_id).await?;
+    if let Some(pid) = pulse_project_id.as_deref() {
+        crate::commands::projects::assert_agent_in_project(db, pid, agent_id).await?;
+        if let Err(e) = crate::executor::workspace::init_project_workspace(pid) {
+            tracing::warn!(project_id = pid, "failed to init project workspace: {}", e);
+        }
+    }
     let tool_ctx = ToolExecutionContext::new_with_bus(
         agent_id,
         &stream_id,
@@ -968,7 +991,8 @@ pub async fn run_pulse(
         app.clone(),
         agent_semaphores.clone(),
         session_registry.clone(),
-        session_worktree::load_session_worktree_state(db, &session_id).await?,
+        pulse_worktree,
+        pulse_project_id.as_deref(),
     )
     .with_permission_registry(permission_registry.clone())
     .with_memory_client(memory_client.cloned())

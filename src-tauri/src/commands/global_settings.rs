@@ -8,9 +8,7 @@ pub async fn get_global_settings() -> Result<GlobalSettings, String> {
 }
 
 #[tauri::command]
-pub async fn update_global_settings(
-    settings: GlobalSettings,
-) -> Result<GlobalSettings, String> {
+pub async fn update_global_settings(settings: GlobalSettings) -> Result<GlobalSettings, String> {
     tokio::task::spawn_blocking(move || global_settings::save_global_settings(settings))
         .await
         .map_err(|e| e.to_string())?

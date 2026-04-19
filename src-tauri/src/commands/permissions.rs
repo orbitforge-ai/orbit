@@ -54,10 +54,8 @@ pub async fn delete_permission_rule(
             "delete_permission_rule: agent_id argument is ignored; rules are now global"
         );
     }
-    tokio::task::spawn_blocking(move || {
-        global_settings::delete_global_permission_rule(&rule_id)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    tokio::task::spawn_blocking(move || global_settings::delete_global_permission_rule(&rule_id))
+        .await
+        .map_err(|e| e.to_string())??;
     Ok(())
 }

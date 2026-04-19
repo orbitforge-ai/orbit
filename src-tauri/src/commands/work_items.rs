@@ -64,8 +64,7 @@ pub(crate) fn map_work_item(row: &rusqlite::Row) -> rusqlite::Result<WorkItem> {
         parent_work_item_id: row.get(9)?,
         position: row.get(10)?,
         labels: serde_json::from_str(&labels_json).unwrap_or_default(),
-        metadata: serde_json::from_str(&metadata_json)
-            .unwrap_or_else(|_| serde_json::json!({})),
+        metadata: serde_json::from_str(&metadata_json).unwrap_or_else(|_| serde_json::json!({})),
         blocked_reason: row.get(13)?,
         started_at: row.get(14)?,
         completed_at: row.get(15)?,
@@ -133,19 +132,11 @@ pub fn assert_agent_in_project(
     agent_id: &str,
     project_id: &str,
 ) -> Result<(), WorkItemError> {
-    let exists: bool = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM project_agents WHERE project_id = ?1 AND agent_id = ?2)",
-            params![project_id, agent_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| WorkItemError::Other(e.to_string()))?;
-    if !exists {
-        return Err(WorkItemError::AgentNotInProject {
+    crate::commands::projects::assert_agent_in_project_sync(conn, project_id, agent_id).map_err(
+        |_| WorkItemError::AgentNotInProject {
             project_id: project_id.to_string(),
-        });
-    }
-    Ok(())
+        },
+    )
 }
 
 /// Fetch a work item row and return its project_id — used by the tool path
@@ -192,10 +183,7 @@ pub async fn list_work_items(
 }
 
 #[tauri::command]
-pub async fn get_work_item(
-    id: String,
-    db: tauri::State<'_, DbPool>,
-) -> Result<WorkItem, String> {
+pub async fn get_work_item(id: String, db: tauri::State<'_, DbPool>) -> Result<WorkItem, String> {
     let pool = db.0.clone();
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;

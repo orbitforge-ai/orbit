@@ -480,6 +480,7 @@ export interface ChatSession {
 export interface ChatDraft {
   id: string;
   agentId: string;
+  projectId: string | null;
   text: string;
   createdAt: string;
   updatedAt: string;

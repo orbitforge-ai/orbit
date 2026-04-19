@@ -152,8 +152,7 @@ impl SchedulerEngine {
                         "fired_at": now,
                     });
 
-                    let orchestrator =
-                        WorkflowOrchestrator::new(self.db.clone(), self.app.clone());
+                    let orchestrator = WorkflowOrchestrator::new(self.db.clone(), self.app.clone());
                     let workflow_id_log = workflow_id.clone();
                     let schedule_id_log = schedule_id.clone();
                     tokio::spawn(async move {

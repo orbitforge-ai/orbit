@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { confirm } from '@tauri-apps/plugin-dialog';
 import { Bot, CheckCircle, Trash2, X } from 'lucide-react';
 import { workItemsApi } from '../../api/workItems';
 import { Agent, WorkItem, WorkItemKind, WorkItemStatus } from '../../types';
@@ -334,10 +335,9 @@ export function ProjectBoardDetailDrawer({
               {/* Delete */}
               <div className="pt-3 border-t border-edge">
                 <button
-                  onClick={() => {
-                    if (window.confirm(`Delete "${item.title}"?`)) {
-                      deleteMutation.mutate();
-                    }
+                  onClick={async () => {
+                    if (!(await confirm(`Delete "${item.title}"?`))) return;
+                    deleteMutation.mutate();
                   }}
                   className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs text-red-400 hover:bg-red-400/10 transition-colors"
                 >

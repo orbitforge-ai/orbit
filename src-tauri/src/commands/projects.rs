@@ -224,6 +224,47 @@ pub async fn delete_project(
 
 // ─── Project Agent Membership ────────────────────────────────────────────────
 
+/// Synchronous membership check — for use inside `spawn_blocking` contexts
+/// that already hold a connection.
+pub fn assert_agent_in_project_sync(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    agent_id: &str,
+) -> Result<(), String> {
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM project_agents WHERE project_id = ?1 AND agent_id = ?2)",
+            rusqlite::params![project_id, agent_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !exists {
+        return Err(format!(
+            "agent '{}' is not a member of project '{}'",
+            agent_id, project_id
+        ));
+    }
+    Ok(())
+}
+
+/// Async membership check — for use from async call sites that don't already
+/// hold a DB connection (e.g. before spawning the agent session loop).
+pub async fn assert_agent_in_project(
+    db: &DbPool,
+    project_id: &str,
+    agent_id: &str,
+) -> Result<(), String> {
+    let pool = db.0.clone();
+    let project_id = project_id.to_string();
+    let agent_id = agent_id.to_string();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        assert_agent_in_project_sync(&conn, &project_id, &agent_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn list_project_agents(
     project_id: String,
@@ -259,6 +300,56 @@ pub async fn list_project_agents(
             .filter_map(|r| r.ok())
             .collect();
         Ok(agents)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectAgentWithMeta {
+    pub agent: Agent,
+    pub is_default: bool,
+}
+
+#[tauri::command]
+pub async fn list_project_agents_with_meta(
+    project_id: String,
+    db: tauri::State<'_, DbPool>,
+) -> Result<Vec<ProjectAgentWithMeta>, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT a.id, a.name, a.description, a.state, a.max_concurrent_runs,
+                        a.heartbeat_at, a.created_at, a.updated_at, pa.is_default
+                 FROM agents a
+                 JOIN project_agents pa ON pa.agent_id = a.id
+                 WHERE pa.project_id = ?1
+                 ORDER BY pa.is_default DESC, a.created_at ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params![project_id], |row| {
+                Ok(ProjectAgentWithMeta {
+                    agent: Agent {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        description: row.get(2)?,
+                        state: row.get(3)?,
+                        max_concurrent_runs: row.get(4)?,
+                        heartbeat_at: row.get(5)?,
+                        created_at: row.get(6)?,
+                        updated_at: row.get(7)?,
+                    },
+                    is_default: row.get::<_, bool>(8)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
     })
     .await
     .map_err(|e| e.to_string())?

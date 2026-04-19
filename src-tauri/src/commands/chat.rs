@@ -33,6 +33,7 @@ pub async fn list_chat_sessions(
     agent_id: String,
     include_archived: Option<bool>,
     session_types: Option<Vec<String>>,
+    project_id: Option<String>,
     db: tauri::State<'_, DbPool>,
 ) -> Result<Vec<ChatSession>, String> {
     let pool = db.0.clone();
@@ -58,6 +59,11 @@ pub async fn list_chat_sessions(
       let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(agent_id)];
       if !show_archived {
         sql.push_str(" AND cs.archived = 0");
+      }
+      if let Some(pid) = project_id {
+        let idx = params.len() + 1;
+        sql.push_str(&format!(" AND cs.project_id = ?{}", idx));
+        params.push(Box::new(pid));
       }
       if !session_types.is_empty() {
         let start_idx = params.len() + 1;
@@ -124,6 +130,9 @@ pub async fn create_chat_session(
     let session: ChatSession = tokio::task
     ::spawn_blocking(move || -> Result<ChatSession, String> {
       let conn = pool.get().map_err(|e| e.to_string())?;
+      if let Some(pid) = project_id.as_deref() {
+        crate::commands::projects::assert_agent_in_project_sync(&conn, pid, &agent_id)?;
+      }
       let id = Ulid::new().to_string();
       let now = chrono::Utc::now().to_rfc3339();
       let title = title.unwrap_or_else(|| "New Chat".to_string());
@@ -987,6 +996,14 @@ async fn do_llm_chat(
         system_prompt: snapshot.system_prompt,
     };
 
+    let chat_worktree = session_worktree::load_session_worktree_state(db, session_id).await?;
+    let chat_project_id = session_worktree::load_session_project_id(db, session_id).await?;
+    if let Some(pid) = chat_project_id.as_deref() {
+        crate::commands::projects::assert_agent_in_project(db, pid, agent_id).await?;
+        if let Err(e) = workspace::init_project_workspace(pid) {
+            warn!(project_id = pid, "failed to init project workspace: {}", e);
+        }
+    }
     let tool_ctx = ToolExecutionContext::new_with_bus(
         agent_id,
         stream_id,
@@ -997,7 +1014,8 @@ async fn do_llm_chat(
         app.clone(),
         agent_semaphores,
         session_registry,
-        session_worktree::load_session_worktree_state(db, session_id).await?,
+        chat_worktree,
+        chat_project_id.as_deref(),
     )
     .with_permission_registry(permission_registry.clone())
     .with_user_question_registry(user_question_registry)
@@ -1331,6 +1349,45 @@ pub struct SessionExecutionStatus {
     pub execution_state: Option<String>,
     pub finish_summary: Option<String>,
     pub terminal_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatSessionMeta {
+    pub session_id: String,
+    pub agent_id: String,
+    pub project_id: Option<String>,
+    pub project_name: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_chat_session_meta(
+    session_id: String,
+    db: tauri::State<'_, DbPool>,
+) -> Result<ChatSessionMeta, String> {
+    let pool = db.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let sid = session_id.clone();
+        conn.query_row(
+            "SELECT cs.agent_id, cs.project_id, p.name
+             FROM chat_sessions cs
+             LEFT JOIN projects p ON p.id = cs.project_id
+             WHERE cs.id = ?1",
+            rusqlite::params![session_id],
+            |row| {
+                Ok(ChatSessionMeta {
+                    session_id: sid.clone(),
+                    agent_id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    project_name: row.get(2)?,
+                })
+            },
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

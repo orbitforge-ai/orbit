@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { FolderOpen, HardDrive, History, KanbanSquare, ListChecks, Pencil, Plus, Trash2, Users, Workflow } from 'lucide-react';
+import { confirm } from '@tauri-apps/plugin-dialog';
+import { FolderOpen, HardDrive, History, KanbanSquare, ListChecks, MessageSquare, Pencil, Plus, Trash2, Users, Workflow } from 'lucide-react';
 import { projectsApi } from '../../api/projects';
 import { Project, ProjectSummary } from '../../types';
 import { useUiStore } from '../../store/uiStore';
@@ -8,6 +9,7 @@ import { cn } from '../../lib/cn';
 import { ProjectWorkspaceTab } from './ProjectWorkspaceTab';
 import { ProjectAgentsTab } from './ProjectAgentsTab';
 import { ProjectBoardTab } from './ProjectBoardTab';
+import { ProjectChatTab } from './ProjectChatTab';
 import { ProjectScheduledTab } from './ProjectScheduledTab';
 import { ProjectWorkflowsTab } from './ProjectWorkflowsTab';
 import { ProjectHistoryTab } from './ProjectHistoryTab';
@@ -15,6 +17,7 @@ import { ProjectHistoryTab } from './ProjectHistoryTab';
 const TABS = [
   { id: 'workspace' as const, label: 'Workspace', icon: HardDrive },
   { id: 'agents' as const, label: 'Agents', icon: Users },
+  { id: 'chat' as const, label: 'Chat', icon: MessageSquare },
   { id: 'board' as const, label: 'Board', icon: KanbanSquare },
   { id: 'scheduled' as const, label: 'Scheduled', icon: ListChecks },
   { id: 'workflows' as const, label: 'Workflows', icon: Workflow },
@@ -176,7 +179,7 @@ function ProjectDetail({
   }
 
   async function handleDelete() {
-    if (!window.confirm(`Delete project "${project.name}"? This cannot be undone.`)) return;
+    if (!(await confirm(`Delete project "${project.name}"? This cannot be undone.`))) return;
     await projectsApi.delete(project.id);
     onDeleted();
   }
@@ -259,6 +262,7 @@ function ProjectDetail({
       <div className="flex-1 min-h-0 overflow-hidden">
         {projectTab === 'workspace' && <ProjectWorkspaceTab projectId={project.id} />}
         {projectTab === 'agents' && <ProjectAgentsTab projectId={project.id} />}
+        {projectTab === 'chat' && <ProjectChatTab projectId={project.id} />}
         {projectTab === 'board' && <ProjectBoardTab projectId={project.id} />}
         {projectTab === 'scheduled' && <ProjectScheduledTab projectId={project.id} />}
         {projectTab === 'workflows' && <ProjectWorkflowsTab projectId={project.id} />}

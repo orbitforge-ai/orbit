@@ -42,6 +42,28 @@ pub async fn load_session_worktree_state(
     .map_err(|e| e.to_string())?
 }
 
+pub async fn load_session_project_id(
+    db: &DbPool,
+    session_id: &str,
+) -> Result<Option<String>, String> {
+    let pool = db.0.clone();
+    let session_id = session_id.to_string();
+
+    tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let project_id: Option<String> = conn
+            .query_row(
+                "SELECT project_id FROM chat_sessions WHERE id = ?1",
+                rusqlite::params![session_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(project_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 pub async fn set_session_worktree_state(
     db: &DbPool,
     session_id: &str,

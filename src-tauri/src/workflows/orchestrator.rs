@@ -82,8 +82,7 @@ impl WorkflowOrchestrator {
                 |row| {
                     let graph_str: String = row.get(5)?;
                     let trigger_cfg_str: String = row.get(7)?;
-                    let graph: WorkflowGraph =
-                        serde_json::from_str(&graph_str).unwrap_or_default();
+                    let graph: WorkflowGraph = serde_json::from_str(&graph_str).unwrap_or_default();
                     let trigger_config: Value =
                         serde_json::from_str(&trigger_cfg_str).unwrap_or(Value::Null);
                     Ok(ProjectWorkflow {
@@ -179,7 +178,11 @@ impl WorkflowOrchestrator {
             graph.nodes.iter().map(|n| (n.id.clone(), n)).collect();
         let outgoing: HashMap<String, Vec<&WorkflowEdge>> = group_edges(&graph.edges);
 
-        let trigger = match graph.nodes.iter().find(|n| n.node_type.starts_with("trigger.")) {
+        let trigger = match graph
+            .nodes
+            .iter()
+            .find(|n| n.node_type.starts_with("trigger."))
+        {
             Some(t) => t,
             None => {
                 let err = "no trigger node in workflow graph";
@@ -219,7 +222,10 @@ impl WorkflowOrchestrator {
                 .await;
 
             match exec {
-                Ok(NodeOutcome { output, next_handle }) => {
+                Ok(NodeOutcome {
+                    output,
+                    next_handle,
+                }) => {
                     outputs.insert(node.id.clone(), json!({ "output": output }));
                     sequence += 1;
                     current = pick_next(&outgoing, &node.id, next_handle.as_deref());
@@ -232,15 +238,9 @@ impl WorkflowOrchestrator {
         }
 
         let completed_at = Utc::now().to_rfc3339();
-        self.update_run_status(
-            &run.id,
-            STATUS_SUCCESS,
-            None,
-            None,
-            Some(&completed_at),
-        )
-        .await
-        .ok();
+        self.update_run_status(&run.id, STATUS_SUCCESS, None, None, Some(&completed_at))
+            .await
+            .ok();
         info!(run_id = run.id, steps = sequence, "workflow run completed");
         Ok(())
     }
@@ -270,10 +270,7 @@ impl WorkflowOrchestrator {
 
         let result = match node.node_type.as_str() {
             "trigger.manual" | "trigger.schedule" => Ok(NodeOutcome {
-                output: outputs
-                    .get("trigger")
-                    .cloned()
-                    .unwrap_or(Value::Null),
+                output: outputs.get("trigger").cloned().unwrap_or(Value::Null),
                 next_handle: None,
             }),
             "agent.run" => self.run_agent_node(node, outputs).await,
@@ -463,14 +460,7 @@ impl WorkflowOrchestrator {
                                                   started_at, sequence)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 rusqlite::params![
-                    step_id,
-                    run_id,
-                    node_id,
-                    node_type,
-                    status,
-                    input_str,
-                    started_at,
-                    sequence,
+                    step_id, run_id, node_id, node_type, status, input_str, started_at, sequence,
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -704,7 +694,7 @@ fn map_step_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkflowRunStep> {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_template, pick_next, group_edges};
+    use super::{group_edges, pick_next, render_template};
     use crate::models::project_workflow::WorkflowEdge;
     use serde_json::json;
 

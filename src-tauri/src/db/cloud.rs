@@ -1934,10 +1934,7 @@ fn write_work_items(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(),
     Ok(())
 }
 
-fn write_project_workflows(
-    conn: &rusqlite::Connection,
-    rows: Vec<Value>,
-) -> Result<(), String> {
+fn write_project_workflows(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO project_workflows (
@@ -1950,7 +1947,11 @@ fn write_project_workflows(
                 str_val(&r, "name"),
                 opt_str(&r, "description"),
                 bool_val(&r, "enabled"),
-                json_str(&r, "graph", "{\"nodes\":[],\"edges\":[],\"schemaVersion\":1}"),
+                json_str(
+                    &r,
+                    "graph",
+                    "{\"nodes\":[],\"edges\":[],\"schemaVersion\":1}"
+                ),
                 str_val(&r, "trigger_kind"),
                 json_str(&r, "trigger_config", "{}"),
                 int_val(&r, "version", 1),
@@ -1989,10 +1990,7 @@ fn write_workflow_runs(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<
     Ok(())
 }
 
-fn write_work_item_comments(
-    conn: &rusqlite::Connection,
-    rows: Vec<Value>,
-) -> Result<(), String> {
+fn write_work_item_comments(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO work_item_comments (

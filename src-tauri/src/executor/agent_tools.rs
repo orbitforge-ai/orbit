@@ -50,7 +50,9 @@ pub fn build_tool_definitions(allowed: &[String]) -> Vec<ToolDefinition> {
         tools
             .iter()
             .filter(|tool| {
-                tool.name() == "react_to_message" || allowed.contains(&tool.name().to_string())
+                tool.name() == "react_to_message"
+                    || tool.name() == "finish"
+                    || allowed.contains(&tool.name().to_string())
             })
             .map(|tool| tool.definition())
             .collect()
@@ -61,6 +63,9 @@ pub fn build_tool_definitions(allowed: &[String]) -> Vec<ToolDefinition> {
         .any(|tool| tool.name == "react_to_message")
     {
         definitions.push(tools::react_to_message::ReactToMessageTool.definition());
+    }
+    if !definitions.iter().any(|tool| tool.name == "finish") {
+        definitions.push(tools::finish::FinishTool.definition());
     }
 
     definitions
@@ -81,4 +86,22 @@ pub async fn execute_tool(
     }
 
     Err(format!("unknown tool: {}", tool_name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_tool_definitions;
+
+    #[test]
+    fn finish_is_always_exposed_even_if_not_in_allowed_list() {
+        let defs = build_tool_definitions(&["read_file".to_string()]);
+        assert!(defs.iter().any(|tool| tool.name == "read_file"));
+        assert!(defs.iter().any(|tool| tool.name == "finish"));
+    }
+
+    #[test]
+    fn react_to_message_is_always_exposed_even_if_not_in_allowed_list() {
+        let defs = build_tool_definitions(&["read_file".to_string()]);
+        assert!(defs.iter().any(|tool| tool.name == "react_to_message"));
+    }
 }

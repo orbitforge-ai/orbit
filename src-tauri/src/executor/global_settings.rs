@@ -24,6 +24,7 @@ const DEFAULT_ALLOWED_TOOLS: &[&str] = &[
     "image_generation",
     "config",
     "task",
+    "work_item",
     "schedule",
     "worktree",
     "session_history",
@@ -38,7 +39,6 @@ const DEFAULT_ALLOWED_TOOLS: &[&str] = &[
     "activate_skill",
     "remember",
     "search_memory",
-    "finish",
 ];
 
 /// Chat display toggles shared across all agents.
@@ -85,7 +85,10 @@ fn default_search_provider() -> String {
 impl Default for AgentDefaults {
     fn default() -> Self {
         Self {
-            allowed_tools: DEFAULT_ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect(),
+            allowed_tools: DEFAULT_ALLOWED_TOOLS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             permission_mode: default_permission_mode(),
             permission_rules: Vec::new(),
             web_search_provider: default_search_provider(),
@@ -153,15 +156,17 @@ fn read_from_disk() -> Result<GlobalSettings, String> {
     if !path.exists() {
         return Ok(GlobalSettings::default());
     }
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("failed to read global settings: {}", e))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("failed to parse global settings: {}", e))
+    let content =
+        fs::read_to_string(&path).map_err(|e| format!("failed to read global settings: {}", e))?;
+    serde_json::from_str(&content).map_err(|e| format!("failed to parse global settings: {}", e))
 }
 
 /// Return a clone of the currently cached global settings.
 pub fn load_global_settings() -> GlobalSettings {
-    cache().read().expect("global settings lock poisoned").clone()
+    cache()
+        .read()
+        .expect("global settings lock poisoned")
+        .clone()
 }
 
 /// Persist a new settings value to disk atomically (temp + rename) and update
@@ -315,7 +320,7 @@ impl MergedAgentConfig {
     /// Same as `build`, but uses the supplied global settings (useful for
     /// tests and migration-time code paths).
     pub fn build_with_global(agent: AgentWorkspaceConfig, global: GlobalSettings) -> Self {
-        let effective_allowed: Vec<String> = if global.agent_defaults.allowed_tools.is_empty() {
+        let mut effective_allowed: Vec<String> = if global.agent_defaults.allowed_tools.is_empty() {
             // Empty allow list means "all default tools".
             DEFAULT_ALLOWED_TOOLS
                 .iter()
@@ -331,6 +336,17 @@ impl MergedAgentConfig {
                 .cloned()
                 .collect()
         };
+
+        // Backfill `work_item` for older saved global settings that predate the
+        // persistent board tool. If `task` is allowed, the agent should also be
+        // able to create project board cards unless the per-agent disabled list
+        // explicitly opts out.
+        if effective_allowed.iter().any(|tool| tool == "task")
+            && !effective_allowed.iter().any(|tool| tool == "work_item")
+            && !agent.disabled_tools.iter().any(|tool| tool == "work_item")
+        {
+            effective_allowed.push("work_item".to_string());
+        }
 
         Self {
             agent,
@@ -348,7 +364,10 @@ impl MergedAgentConfig {
 /// disabled-tools multi-select when the global list is empty).
 #[allow(dead_code)]
 pub fn default_allowed_tools() -> Vec<String> {
-    DEFAULT_ALLOWED_TOOLS.iter().map(|s| s.to_string()).collect()
+    DEFAULT_ALLOWED_TOOLS
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 #[cfg(test)]
@@ -369,6 +388,8 @@ mod tests {
         let defaults = AgentDefaults::default();
         assert!(defaults.allowed_tools.contains(&"read_file".to_string()));
         assert!(defaults.allowed_tools.contains(&"message".to_string()));
+        assert!(defaults.allowed_tools.contains(&"work_item".to_string()));
+        assert!(!defaults.allowed_tools.contains(&"finish".to_string()));
     }
 
     #[test]
@@ -389,5 +410,26 @@ mod tests {
         let merged = MergedAgentConfig::build_with_global(agent, global);
         assert!(!merged.allowed_tools.iter().any(|t| t == "grep"));
         assert!(merged.allowed_tools.iter().any(|t| t == "read_file"));
+    }
+
+    #[test]
+    fn merged_config_backfills_work_item_for_legacy_task_tool_access() {
+        let mut global = GlobalSettings::default();
+        global.agent_defaults.allowed_tools = vec!["task".to_string(), "read_file".to_string()];
+        let agent = AgentWorkspaceConfig::default();
+        let merged = MergedAgentConfig::build_with_global(agent, global);
+        assert!(merged.allowed_tools.iter().any(|t| t == "task"));
+        assert!(merged.allowed_tools.iter().any(|t| t == "work_item"));
+    }
+
+    #[test]
+    fn merged_config_respects_disabled_work_item_even_when_backfilling() {
+        let mut global = GlobalSettings::default();
+        global.agent_defaults.allowed_tools = vec!["task".to_string(), "read_file".to_string()];
+        let mut agent = AgentWorkspaceConfig::default();
+        agent.disabled_tools = vec!["work_item".to_string()];
+        let merged = MergedAgentConfig::build_with_global(agent, global);
+        assert!(merged.allowed_tools.iter().any(|t| t == "task"));
+        assert!(!merged.allowed_tools.iter().any(|t| t == "work_item"));
     }
 }

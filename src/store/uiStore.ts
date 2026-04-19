@@ -36,6 +36,7 @@ type ProjectTab =
   | 'workspace'
   | 'agents'
   | 'board'
+  | 'chat'
   | 'scheduled'
   | 'workflows'
   | 'history';

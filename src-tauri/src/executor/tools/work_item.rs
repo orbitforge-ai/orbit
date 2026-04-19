@@ -5,7 +5,9 @@
 use serde_json::{json, Value};
 use ulid::Ulid;
 
-use crate::commands::work_items::{assert_agent_in_project, fetch_work_item_project, WorkItemError};
+use crate::commands::work_items::{
+    assert_agent_in_project, fetch_work_item_project, WorkItemError,
+};
 use crate::db::DbPool;
 use crate::executor::llm_provider::ToolDefinition;
 use crate::models::work_item::WorkItem;
@@ -24,7 +26,7 @@ impl ToolHandler for WorkItemTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Manipulate the project kanban board. Work items are persistent, project-scoped cards visible to every agent assigned to the project — distinct from session-local `task` planning. Actions: list, get, create, update, claim, move, block, unblock, complete, comment, list_comments. `project_id` is inferred from the current session when omitted. `review` means 'another agent should verify'; `in_progress` means 'I am actively on it'.".to_string(),
+            description: "Manipulate the project kanban board. Work items are persistent, project-scoped cards visible to every agent assigned to the project. When a user asks to create, update, or track a task for the project, prefer this tool over the session-local `task` tool. Actions: list, get, create, update, claim, move, block, unblock, complete, comment, list_comments. `project_id` is inferred from the current session when omitted. `review` means 'another agent should verify'; `in_progress` means 'I am actively on it'.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -90,8 +92,7 @@ impl ToolHandler for WorkItemTool {
             }
             "get" => {
                 let id = required_str(input, "id", "get")?;
-                let project_id =
-                    resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
+                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
                 enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
                 let item = get_work_item(db, id).await?;
                 let result = serde_json::to_string_pretty(&item)
@@ -103,10 +104,7 @@ impl ToolHandler for WorkItemTool {
                 enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
                 let title = required_str(input, "title", "create")?;
                 let description = optional_trimmed(input.get("description"));
-                let kind = input["kind"]
-                    .as_str()
-                    .unwrap_or("task")
-                    .to_string();
+                let kind = input["kind"].as_str().unwrap_or("task").to_string();
                 let priority = input["priority"].as_i64().unwrap_or(0);
                 let parent_id = optional_trimmed(input.get("parent_id"));
                 let labels = parse_labels(input.get("labels"))?;
@@ -128,8 +126,7 @@ impl ToolHandler for WorkItemTool {
             }
             "update" => {
                 let id = required_str(input, "id", "update")?;
-                let project_id =
-                    resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
+                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
                 enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
                 let title = optional_trimmed(input.get("title"));
                 let description = optional_trimmed(input.get("description"));
@@ -139,16 +136,15 @@ impl ToolHandler for WorkItemTool {
                     Some(v) if !v.is_null() => Some(parse_labels(Some(v))?),
                     _ => None,
                 };
-                let item = update_work_item(db, id, title, description, kind, priority, labels)
-                    .await?;
+                let item =
+                    update_work_item(db, id, title, description, kind, priority, labels).await?;
                 spawn_cloud_upsert(ctx, &item);
                 let result = mutation_result("updated", &item)?;
                 Ok((result, false))
             }
             "claim" => {
                 let id = required_str(input, "id", "claim")?;
-                let project_id =
-                    resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
+                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
                 enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
                 let item = claim_work_item(db, id, &ctx.agent_id).await?;
                 spawn_cloud_upsert(ctx, &item);
@@ -157,12 +153,13 @@ impl ToolHandler for WorkItemTool {
             }
             "move" => {
                 let id = required_str(input, "id", "move")?;
-                let project_id =
-                    resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
+                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
                 enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
                 let status = required_str(input, "status", "move")?.to_string();
                 if status == "blocked" {
-                    return Err("work_item: use action='block' with a reason to move to 'blocked'".into());
+                    return Err(
+                        "work_item: use action='block' with a reason to move to 'blocked'".into(),
+                    );
                 }
                 let item = move_work_item(db, id, status).await?;
                 spawn_cloud_upsert(ctx, &item);
@@ -175,8 +172,7 @@ impl ToolHandler for WorkItemTool {
                 if reason.trim().is_empty() {
                     return Err("work_item: block requires a non-empty 'reason'".into());
                 }
-                let project_id =
-                    resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
+                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
                 enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
                 let item = block_work_item(db, id, reason).await?;
                 spawn_cloud_upsert(ctx, &item);
@@ -185,8 +181,7 @@ impl ToolHandler for WorkItemTool {
             }
             "unblock" => {
                 let id = required_str(input, "id", "unblock")?;
-                let project_id =
-                    resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
+                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
                 enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
                 let new_status = input["new_status"].as_str().unwrap_or("todo").to_string();
                 if !matches!(
@@ -202,8 +197,7 @@ impl ToolHandler for WorkItemTool {
             }
             "complete" => {
                 let id = required_str(input, "id", "complete")?;
-                let project_id =
-                    resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
+                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
                 enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
                 let item = complete_work_item(db, id).await?;
                 spawn_cloud_upsert(ctx, &item);
@@ -216,8 +210,7 @@ impl ToolHandler for WorkItemTool {
                 if body.trim().is_empty() {
                     return Err("work_item: comment requires a non-empty 'body'".into());
                 }
-                let project_id =
-                    resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
+                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
                 enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
                 let comment = create_comment(db, id, &ctx.agent_id, body).await?;
                 spawn_cloud_upsert_comment(ctx, &comment);
@@ -230,8 +223,7 @@ impl ToolHandler for WorkItemTool {
             }
             "list_comments" => {
                 let id = required_str(input, "id", "list_comments")?;
-                let project_id =
-                    resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
+                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
                 enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
                 let comments = list_comments(db, id).await?;
                 let result = serde_json::to_string_pretty(&comments)
@@ -334,17 +326,18 @@ async fn resolve_project_id(
     let db = ctx.db.as_ref().ok_or("work_item: no database available")?;
     let pool = db.0.clone();
     let session_id = session_id.to_string();
-    let project_id: Option<String> = tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT project_id FROM chat_sessions WHERE id = ?1",
-            rusqlite::params![session_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let project_id: Option<String> =
+        tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
+            let conn = pool.get().map_err(|e| e.to_string())?;
+            conn.query_row(
+                "SELECT project_id FROM chat_sessions WHERE id = ?1",
+                rusqlite::params![session_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
     project_id.ok_or_else(|| {
         "work_item: no project_id provided and current session is not scoped to a project"
             .to_string()
@@ -438,8 +431,7 @@ async fn list_work_items(
             "SELECT {} FROM work_items WHERE project_id = ?",
             WORK_ITEM_COLUMNS
         );
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> =
-            vec![Box::new(project_id.clone())];
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(project_id.clone())];
         if let Some(s) = status {
             sql.push_str(" AND status = ?");
             params.push(Box::new(s));
@@ -463,8 +455,7 @@ async fn list_work_items(
             sql.push_str(" LIMIT ?");
             params.push(Box::new(l));
         }
-        let params_ref: Vec<&dyn rusqlite::ToSql> =
-            params.iter().map(|b| b.as_ref()).collect();
+        let params_ref: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let items = stmt
             .query_map(
@@ -733,11 +724,7 @@ async fn block_work_item(db: &DbPool, id: &str, reason: String) -> Result<WorkIt
     .map_err(|e| e.to_string())?
 }
 
-async fn unblock_work_item(
-    db: &DbPool,
-    id: &str,
-    new_status: String,
-) -> Result<WorkItem, String> {
+async fn unblock_work_item(db: &DbPool, id: &str, new_status: String) -> Result<WorkItem, String> {
     let pool = db.0.clone();
     let id = id.to_string();
     tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {

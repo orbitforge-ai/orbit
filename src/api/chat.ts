@@ -14,12 +14,18 @@ export const chatApi = {
   listSessions: (
     agentId: string,
     includeArchived?: boolean,
-    sessionTypes?: string[]
+    sessionTypes?: string[],
+    projectId?: string
   ): Promise<ChatSession[]> =>
-    invoke('list_chat_sessions', { agentId, includeArchived, sessionTypes }),
+    invoke('list_chat_sessions', { agentId, includeArchived, sessionTypes, projectId }),
 
-  createSession: (agentId: string, title?: string, sessionType?: string): Promise<ChatSession> =>
-    invoke('create_chat_session', { agentId, title, sessionType }),
+  createSession: (
+    agentId: string,
+    title?: string,
+    sessionType?: string,
+    projectId?: string
+  ): Promise<ChatSession> =>
+    invoke('create_chat_session', { agentId, title, sessionType, projectId }),
 
   renameSession: (sessionId: string, title: string): Promise<void> =>
     invoke('rename_chat_session', { sessionId, title }),
@@ -49,6 +55,15 @@ export const chatApi = {
 
   getSessionExecution: (sessionId: string): Promise<SessionExecutionStatus> =>
     invoke('get_session_execution', { sessionId }),
+
+  getSessionMeta: (
+    sessionId: string
+  ): Promise<{
+    sessionId: string;
+    agentId: string;
+    projectId: string | null;
+    projectName: string | null;
+  }> => invoke('get_chat_session_meta', { sessionId }),
 
   cancelAgentSession: (sessionId: string): Promise<void> =>
     invoke('cancel_agent_session', { sessionId }),

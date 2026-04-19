@@ -1,6 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
 import { Agent, FileEntry, Project, ProjectAgent, ProjectSummary } from '../types';
 
+export interface ProjectAgentWithMeta {
+  agent: Agent;
+  isDefault: boolean;
+}
+
 export const projectsApi = {
   list: (): Promise<ProjectSummary[]> => invoke('list_projects'),
 
@@ -17,6 +22,9 @@ export const projectsApi = {
   // Agent membership
   listAgents: (projectId: string): Promise<Agent[]> =>
     invoke('list_project_agents', { projectId }),
+
+  listAgentsWithMeta: (projectId: string): Promise<ProjectAgentWithMeta[]> =>
+    invoke('list_project_agents_with_meta', { projectId }),
 
   listAgentProjects: (agentId: string): Promise<Project[]> =>
     invoke('list_agent_projects', { agentId }),

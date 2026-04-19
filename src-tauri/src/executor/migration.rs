@@ -75,11 +75,7 @@ fn seed_from_legacy() -> Result<GlobalSettings, String> {
         let content = match fs::read_to_string(&config_path) {
             Ok(c) => c,
             Err(e) => {
-                warn!(
-                    "migration: failed to read {}: {}",
-                    config_path.display(),
-                    e
-                );
+                warn!("migration: failed to read {}: {}", config_path.display(), e);
                 continue;
             }
         };
@@ -255,11 +251,7 @@ fn rewrite_per_agent_configs_to_slim_shape() -> Result<(), String> {
         let legacy_content = match fs::read_to_string(&config_path) {
             Ok(c) => c,
             Err(e) => {
-                warn!(
-                    "migration: failed to read {}: {}",
-                    config_path.display(),
-                    e
-                );
+                warn!("migration: failed to read {}: {}", config_path.display(), e);
                 continue;
             }
         };
@@ -312,10 +304,7 @@ fn read_first_enabled_channel_id(agent_dir: &PathBuf) -> Option<String> {
     }
     let content = fs::read_to_string(&path).ok()?;
     let file: LegacyChannelsFile = serde_json::from_str(&content).ok()?;
-    file.channels
-        .into_iter()
-        .find(|c| c.enabled)
-        .map(|c| c.id)
+    file.channels.into_iter().find(|c| c.enabled).map(|c| c.id)
 }
 
 #[derive(serde::Deserialize)]

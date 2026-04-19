@@ -25,6 +25,8 @@ const DEFAULT_MAX_TOTAL_TOKENS: u32 = 200_000;
 const DEFAULT_MAX_TOKENS_PER_CALL: u32 = 16384;
 const LLM_RETRY_ATTEMPTS: u32 = 3;
 const LLM_RETRY_BASE_DELAY_MS: u64 = 2000;
+const MAX_AUTO_CONTINUATIONS: u32 = 2;
+const AUTO_CONTINUE_REMINDER: &str = "You are not done yet. Continue working until the current task is complete. Do not stop after partial progress. If you are blocked, state the blocker explicitly and ask only for the missing input or permission.";
 
 pub async fn run_agent_session(
     agent_id: &str,
@@ -78,6 +80,13 @@ pub async fn run_agent_session(
 
     let history = load_session_messages(db, session_id).await?;
     let worktree_state = session_worktree::load_session_worktree_state(db, session_id).await?;
+    let project_id = session_worktree::load_session_project_id(db, session_id).await?;
+    if let Some(pid) = project_id.as_deref() {
+        crate::commands::projects::assert_agent_in_project(db, pid, agent_id).await?;
+        if let Err(e) = workspace::init_project_workspace(pid) {
+            warn!(project_id = pid, "failed to init project workspace: {}", e);
+        }
+    }
     let session_type = load_session_type(db, session_id).await.ok();
     let pipeline = context::default_pipeline(memory_client.cloned());
     let allowed_tools = ContextRequest::effective_allowed_tools(&ws_config);
@@ -118,6 +127,7 @@ pub async fn run_agent_session(
             agent_semaphores.clone(),
             session_registry.clone(),
             worktree_state.clone(),
+            project_id.as_deref(),
         )
         .with_permission_registry(permission_registry.clone())
         .with_allow_sub_agents(allow_sub_agents)
@@ -136,6 +146,7 @@ pub async fn run_agent_session(
             agent_semaphores.clone(),
             session_registry.clone(),
             worktree_state,
+            project_id.as_deref(),
         )
         .with_permission_registry(permission_registry.clone())
         .with_memory_client(memory_client.cloned())
@@ -200,6 +211,7 @@ pub async fn run_session_loop(
     let mut cumulative_output_tokens: u32 = 0;
     let mut iteration: u32 = 0;
     let mut finish_summary: Option<String> = None;
+    let mut auto_continue_count: u32 = 0;
 
     loop {
         if is_session_cancelled(session_id, db, session_registry).await {
@@ -289,11 +301,25 @@ pub async fn run_session_loop(
                 if finish_summary.is_none() {
                     finish_summary = extract_text_summary(&response.content);
                 }
+                let should_auto_continue = auto_continue_count < MAX_AUTO_CONTINUATIONS
+                    && should_auto_continue_after_end_turn(&response.content);
                 messages.push(ChatMessage {
                     role: "assistant".to_string(),
                     content: response.content,
                     created_at: None,
                 });
+                if should_auto_continue {
+                    auto_continue_count += 1;
+                    messages.push(ChatMessage {
+                        role: "user".to_string(),
+                        content: vec![ContentBlock::Text {
+                            text: AUTO_CONTINUE_REMINDER.to_string(),
+                        }],
+                        created_at: None,
+                    });
+                    finish_summary = None;
+                    continue;
+                }
                 break;
             }
 
@@ -826,6 +852,30 @@ fn extract_text_summary(content: &[ContentBlock]) -> Option<String> {
     None
 }
 
+pub(crate) fn should_auto_continue_after_end_turn(content: &[ContentBlock]) -> bool {
+    let Some(summary) = extract_text_summary(content) else {
+        return false;
+    };
+
+    let lower = summary.to_lowercase();
+    [
+        "almost done",
+        "still need",
+        "still have to",
+        "let me finish",
+        "let me continue",
+        "i'll continue",
+        "i will continue",
+        "remaining work",
+        "remaining step",
+        "one more thing to do",
+        "not finished yet",
+        "not done yet",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
 async fn call_llm_with_retry(
     provider: &dyn LlmProvider,
     config: &LlmConfig,
@@ -880,4 +930,29 @@ async fn load_session_type(db: &DbPool, session_id: &str) -> Result<String, Stri
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_auto_continue_after_end_turn;
+    use crate::executor::llm_provider::ContentBlock;
+
+    #[test]
+    fn detects_incomplete_end_turn_language() {
+        let content = vec![ContentBlock::Text {
+            text: "Almost done! I updated two files but still need to create the main component. Let me finish.".to_string(),
+        }];
+
+        assert!(should_auto_continue_after_end_turn(&content));
+    }
+
+    #[test]
+    fn ignores_normal_completed_response() {
+        let content = vec![ContentBlock::Text {
+            text: "Implemented the landing page, wired the styles, and verified the build passes."
+                .to_string(),
+        }];
+
+        assert!(!should_auto_continue_after_end_turn(&content));
+    }
 }

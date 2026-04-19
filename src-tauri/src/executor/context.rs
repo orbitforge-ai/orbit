@@ -166,6 +166,11 @@ const GUARDRAIL_PROMPT: &str = "\
 - Stay focused on the user's goal. Do not explore files, run commands, or take actions unrelated to the current task.
 - If uncertain whether an action is in scope, explain what you want to do and why before proceeding.
 - Do not autonomously install software, modify system configuration, or access files outside your workspace unless explicitly requested.
+- Continue working until the current request is actually complete. Partial progress is not completion.
+- Do not end your turn after making only some edits, creating only some files, or describing the next step you plan to take.
+- If you explicitly mention remaining work, immediately continue with that work in the same turn when tools are available.
+- Only end without using `finish` when you are blocked on missing user input, permission, or an external async condition that requires `yield_turn`.
+- Before ending your turn, quickly check whether any acceptance criteria or obvious next implementation steps remain. If they do, keep going.
 
 ### Memory
 - When the user asks about something they previously told you, asks what you remember, or asks for a preference/fact that may be stored in memory, call `search_memory` before answering.
@@ -540,16 +545,19 @@ impl ContextStage for BasePromptStage {
             .join(", ");
 
         // Tool names from actual resolved definitions (matches what the LLM receives)
-        let tool_names = {
+        let (tool_names, has_task, has_work_item) = {
             let mut tools = agent_tools::build_tool_definitions(&request.allowed_tools);
             if !request.allow_sub_agents {
                 tools.retain(|t| t.name != "spawn_sub_agents");
             }
-            tools
+            let has_task = tools.iter().any(|t| t.name == "task");
+            let has_work_item = tools.iter().any(|t| t.name == "work_item");
+            let tool_names = tools
                 .iter()
                 .map(|t| t.name.clone())
                 .collect::<Vec<_>>()
-                .join(", ")
+                .join(", ");
+            (tool_names, has_task, has_work_item)
         };
 
         let identity_summary =
@@ -589,8 +597,14 @@ impl ContextStage for BasePromptStage {
             let has_spawn = request.allow_sub_agents && tool_names.contains("spawn_sub_agents");
             let has_send_message = tool_names.contains("send_message");
 
-            if has_spawn || has_send_message {
+            if has_spawn || has_send_message || (has_task && has_work_item) {
                 context_section.push_str("\n### Tool guidance\n");
+            }
+
+            if has_task && has_work_item {
+                context_section.push_str(
+                    "- **work_item vs task**: Use `work_item` for user-requested project tasks, board cards, backlog items, bugs, stories, or any persistent work that should show up on the project's kanban board. Use `task` only for your own temporary session-local checklist when breaking your current work into steps.\n"
+                );
             }
 
             if has_spawn {
@@ -917,8 +931,7 @@ impl ContextStage for ToolResolutionStage {
     ) -> Result<ContextSnapshot, String> {
         match request.mode {
             ContextMode::AgentLoop | ContextMode::Chat | ContextMode::Pulse => {
-                let mut tools =
-                    agent_tools::build_tool_definitions(&request.allowed_tools);
+                let mut tools = agent_tools::build_tool_definitions(&request.allowed_tools);
                 if !request.allow_sub_agents {
                     tools.retain(|t| t.name != "spawn_sub_agents");
                 }

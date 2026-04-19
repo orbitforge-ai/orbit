@@ -68,9 +68,13 @@ impl ToolExecutionContext {
         agent_semaphores: AgentSemaphores,
         session_registry: SessionExecutionRegistry,
         worktree: Option<SessionWorktreeState>,
+        project_id: Option<&str>,
     ) -> Self {
         let agent_root = crate::executor::workspace::agent_dir(agent_id);
-        let main_workspace_root = crate::executor::workspace::agent_workspace_dir(agent_id);
+        let main_workspace_root = match project_id {
+            Some(pid) => crate::executor::workspace::project_workspace_dir(pid),
+            None => crate::executor::workspace::agent_workspace_dir(agent_id),
+        };
         let active_workspace_root = worktree
             .as_ref()
             .map(|state| state.path.clone())
@@ -156,6 +160,7 @@ impl ToolExecutionContext {
         agent_semaphores: AgentSemaphores,
         session_registry: SessionExecutionRegistry,
         worktree: Option<SessionWorktreeState>,
+        project_id: Option<&str>,
     ) -> Self {
         let mut ctx = Self::new_with_bus(
             agent_id,
@@ -168,6 +173,7 @@ impl ToolExecutionContext {
             agent_semaphores,
             session_registry,
             worktree,
+            project_id,
         );
         ctx.is_sub_agent = true;
         ctx.allow_sub_agents = false;

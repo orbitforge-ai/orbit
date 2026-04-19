@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ArrowDown, Loader2, Shield } from 'lucide-react';
+import { ArrowDown, FolderOpen, Loader2, Shield } from 'lucide-react';
 import { chatApi } from '../../api/chat';
+import { useUiStore } from '../../store/uiStore';
 import { AgentIdentityConfig, ChatDraft, ContentBlock } from '../../types';
 import { DisplayMessage, DisplayBlock } from '../../components/chat/types';
 import { chatMessagesToDisplay } from '../../components/chat/utils';
@@ -112,6 +113,22 @@ export function ChatPanel({
     setAutoScroll(true);
     consumedInitialMessageRef.current = null;
   }, [draft?.id, sessionId]);
+
+  const { data: sessionMeta } = useQuery({
+    queryKey: ['chat-session-meta', sessionId],
+    queryFn: () => chatApi.getSessionMeta(sessionId!),
+    enabled: Boolean(sessionId),
+    staleTime: 60_000,
+  });
+
+  const selectProject = useUiStore((state) => state.selectProject);
+  const setProjectTab = useUiStore((state) => state.setProjectTab);
+
+  function handleProjectBadgeClick() {
+    if (!sessionMeta?.projectId) return;
+    selectProject(sessionMeta.projectId);
+    setProjectTab('chat');
+  }
 
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
     queryKey: sessionId ? ['chat-messages', sessionId] : ['chat-messages', 'draft'],
@@ -603,6 +620,17 @@ export function ChatPanel({
 
   return (
     <div className="flex flex-col h-full">
+      {sessionMeta?.projectId && sessionMeta?.projectName && (
+        <button
+          type="button"
+          onClick={handleProjectBadgeClick}
+          className="flex items-center gap-1.5 self-start ml-3 mt-2 rounded-full border border-accent/40 bg-accent/10 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-accent-hover hover:bg-accent/20 transition-colors"
+          title="Open project"
+        >
+          <FolderOpen size={11} />
+          in {sessionMeta.projectName}
+        </button>
+      )}
       <div className="relative flex-1 min-h-0">
         <div
           ref={parentRef}
