@@ -21,7 +21,6 @@ use crate::executor::session_worktree;
 use crate::executor::workspace;
 
 const DEFAULT_MAX_ITERATIONS: u32 = 25;
-const DEFAULT_MAX_TOTAL_TOKENS: u32 = 200_000;
 const DEFAULT_MAX_TOKENS_PER_CALL: u32 = 16384;
 const LLM_RETRY_ATTEMPTS: u32 = 3;
 const LLM_RETRY_BASE_DELAY_MS: u64 = 2000;
@@ -52,11 +51,7 @@ pub async fn run_agent_session(
     } else {
         DEFAULT_MAX_ITERATIONS
     };
-    let max_total_tokens = if ws_config.max_total_tokens > 0 {
-        ws_config.max_total_tokens
-    } else {
-        DEFAULT_MAX_TOTAL_TOKENS
-    };
+    let max_total_tokens = u32::MAX;
 
     let semaphore = agent_semaphores.get_or_create(agent_id, db).await;
     let _permit = semaphore.acquire_owned().await.map_err(|e| e.to_string())?;

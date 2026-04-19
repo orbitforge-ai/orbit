@@ -237,8 +237,6 @@ pub struct AgentWorkspaceConfig {
     pub temperature: f64,
     #[serde(default = "default_max_iterations")]
     pub max_iterations: u32,
-    #[serde(default = "default_max_total_tokens")]
-    pub max_total_tokens: u32,
     #[serde(default)]
     pub compaction_threshold: Option<f64>,
     #[serde(default)]
@@ -271,10 +269,6 @@ fn default_staleness_days() -> u32 {
 
 fn default_max_iterations() -> u32 {
     25
-}
-
-fn default_max_total_tokens() -> u32 {
-    200_000
 }
 
 fn default_identity_preset_id() -> String {
@@ -320,7 +314,6 @@ impl Default for AgentWorkspaceConfig {
             model: "claude-sonnet-4-6".to_string(),
             temperature: 0.7,
             max_iterations: default_max_iterations(),
-            max_total_tokens: default_max_total_tokens(),
             compaction_threshold: None,
             compaction_retain_count: None,
             disabled_skills: Vec::new(),
@@ -850,7 +843,6 @@ mod tests {
                 "model": "claude-sonnet-4-6",
                 "temperature": 0.7,
                 "maxIterations": 25,
-                "maxTotalTokens": 200000,
                 "contextWindowOverride": 123456,
                 "allowedTools": ["finish"],
                 "webSearchProvider": "brave",

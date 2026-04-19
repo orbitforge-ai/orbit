@@ -21,7 +21,6 @@ use crate::executor::workspace;
 use crate::models::task::{AgentLoopConfig, AgentStepConfig};
 
 const DEFAULT_MAX_ITERATIONS: u32 = 25;
-const DEFAULT_MAX_TOTAL_TOKENS: u32 = 200_000;
 const DEFAULT_MAX_TOKENS_PER_CALL: u32 = 16384;
 const LLM_RETRY_ATTEMPTS: u32 = 3;
 const LLM_RETRY_BASE_DELAY_MS: u64 = 2000;
@@ -105,13 +104,7 @@ pub async fn run_agent_loop(
         } else {
             DEFAULT_MAX_ITERATIONS
         });
-    let max_total_tokens = cfg
-        .max_total_tokens
-        .unwrap_or(if ws_config.max_total_tokens > 0 {
-            ws_config.max_total_tokens
-        } else {
-            DEFAULT_MAX_TOTAL_TOKENS
-        });
+    let max_total_tokens = cfg.max_total_tokens.unwrap_or(u32::MAX);
 
     // ── Resolve provider + API key ───────────────────────────────────────
     let provider_name = &ws_config.provider;
@@ -852,11 +845,7 @@ pub async fn run_pulse(
     } else {
         PULSE_MAX_ITERATIONS
     };
-    let max_total_tokens = if ws_config.max_total_tokens > 0 {
-        ws_config.max_total_tokens
-    } else {
-        DEFAULT_MAX_TOTAL_TOKENS
-    };
+    let max_total_tokens = u32::MAX;
 
     let provider_name = &ws_config.provider;
     let api_key = keychain::retrieve_api_key(provider_name).map_err(|_| {

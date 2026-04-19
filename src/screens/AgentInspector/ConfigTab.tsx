@@ -283,20 +283,6 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
                 />
                 <span className="text-[10px] text-muted mt-0.5 block">Default 25</span>
               </div>
-              <div>
-                <label className="text-xs text-muted mb-1 block">Max Total Tokens</label>
-                <input
-                  type="number"
-                  min={1000}
-                  step={10000}
-                  value={config.maxTotalTokens}
-                  onChange={(e) =>
-                    updateConfig({ maxTotalTokens: parseInt(e.target.value) || 200000 })
-                  }
-                  className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
-                />
-                <span className="text-[10px] text-muted mt-0.5 block">Default 200k</span>
-              </div>
             </div>
             <div className="grid grid-cols-3 gap-3">
               <div>

@@ -6,13 +6,7 @@ use crate::executor::{llm_provider::ToolDefinition, workspace};
 
 use super::{context::ToolExecutionContext, ToolHandler};
 
-const MODIFIABLE_SETTINGS: &[&str] = &[
-    "model",
-    "temperature",
-    "maxIterations",
-    "maxTotalTokens",
-    "memoryEnabled",
-];
+const MODIFIABLE_SETTINGS: &[&str] = &["model", "temperature", "maxIterations", "memoryEnabled"];
 const BLOCKED_SETTINGS: &[&str] = &[
     // These now live in global settings and cannot be mutated via the
     // per-agent config tool at all.
@@ -202,13 +196,6 @@ fn apply_setting_value(
                 .and_then(|value| u32::try_from(value).ok())
                 .filter(|value| *value > 0)
                 .ok_or("config: maxIterations must be a positive integer")?;
-        }
-        "maxTotalTokens" => {
-            config.max_total_tokens = value
-                .as_u64()
-                .and_then(|value| u32::try_from(value).ok())
-                .filter(|value| *value > 0)
-                .ok_or("config: maxTotalTokens must be a positive integer")?;
         }
         "memoryEnabled" => {
             config.memory_enabled = value

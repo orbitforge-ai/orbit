@@ -606,7 +606,6 @@ export interface AgentWorkspaceConfig {
   model: string;
   temperature: number;
   maxIterations: number;
-  maxTotalTokens: number;
   compactionThreshold?: number;
   compactionRetainCount?: number;
   disabledSkills: string[];
