@@ -472,6 +472,27 @@ impl SupabaseClient {
         .await
     }
 
+    pub async fn upsert_project_board_column(
+        &self,
+        c: &crate::models::project_board_column::ProjectBoardColumn,
+    ) -> Result<(), String> {
+        self.upsert_single(
+            "project_board_columns",
+            serde_json::json!({
+                "user_id": self.user_id,
+                "id": c.id,
+                "project_id": c.project_id,
+                "name": c.name,
+                "role": c.role,
+                "is_default": c.is_default,
+                "position": c.position,
+                "created_at": c.created_at,
+                "updated_at": c.updated_at,
+            }),
+        )
+        .await
+    }
+
     pub async fn upsert_work_item_comment(
         &self,
         c: &crate::models::work_item_comment::WorkItemComment,
@@ -714,6 +735,7 @@ impl SupabaseClient {
         let (
             projects,
             project_agents,
+            project_board_columns,
             reactions,
             work_items,
             work_item_comments,
@@ -724,6 +746,7 @@ impl SupabaseClient {
             Ok::<_, String>((
                 read_projects(&conn, &user_id2)?,
                 read_project_agents(&conn, &user_id2)?,
+                read_project_board_columns(&conn, &user_id2)?,
                 read_message_reactions(&conn, &user_id2)?,
                 read_work_items(&conn, &user_id2)?,
                 read_work_item_comments(&conn, &user_id2)?,
@@ -756,6 +779,7 @@ impl SupabaseClient {
         push!("memory_extraction_log", mem_log);
         push!("projects", projects);
         push!("project_agents", project_agents);
+        push!("project_board_columns", project_board_columns);
         push!("message_reactions", reactions);
         push!("work_items", work_items);
         push!("work_item_comments", work_item_comments);
@@ -810,6 +834,7 @@ impl SupabaseClient {
         let mem_log = fetch!("memory_extraction_log");
         let projects = fetch!("projects");
         let project_agents = fetch!("project_agents");
+        let project_board_columns = fetch!("project_board_columns");
         let reactions = fetch!("message_reactions");
         let work_items = fetch!("work_items");
         let work_item_comments = fetch!("work_item_comments");
@@ -831,6 +856,7 @@ impl SupabaseClient {
             ("memory_extraction_log".to_string(), mem_log.len()),
             ("projects".to_string(), projects.len()),
             ("project_agents".to_string(), project_agents.len()),
+            ("project_board_columns".to_string(), project_board_columns.len()),
             ("message_reactions".to_string(), reactions.len()),
             ("work_items".to_string(), work_items.len()),
             ("work_item_comments".to_string(), work_item_comments.len()),
@@ -865,6 +891,7 @@ impl SupabaseClient {
             write_memory_extraction_log(&conn, mem_log)?;
             write_projects(&conn, projects)?;
             write_project_agents(&conn, project_agents)?;
+            write_project_board_columns(&conn, project_board_columns)?;
             write_message_reactions(&conn, reactions)?;
             write_work_items(&conn, work_items)?;
             write_work_item_comments(&conn, work_item_comments)?;
@@ -1357,6 +1384,36 @@ fn read_project_agents(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec
                 "agent_id": row.get::<_, String>(1)?,
                 "is_default": is_default,
                 "added_at": row.get::<_, String>(3)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
+fn read_project_board_columns(
+    conn: &rusqlite::Connection,
+    user_id: &str,
+) -> Result<Vec<Value>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, project_id, name, role, is_default, position, created_at, updated_at
+             FROM project_board_columns",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(serde_json::json!({
+                "user_id": user_id,
+                "id": row.get::<_, String>(0)?,
+                "project_id": row.get::<_, String>(1)?,
+                "name": row.get::<_, String>(2)?,
+                "role": row.get::<_, Option<String>>(3)?,
+                "is_default": row.get::<_, bool>(4)?,
+                "position": row.get::<_, f64>(5)?,
+                "created_at": row.get::<_, String>(6)?,
+                "updated_at": row.get::<_, String>(7)?,
             }))
         })
         .map_err(|e| e.to_string())?
@@ -1895,6 +1952,28 @@ fn write_project_agents(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result
                 str_val(&r, "agent_id"),
                 bool_val(&r, "is_default"),
                 str_val(&r, "added_at"),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn write_project_board_columns(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+    for r in rows {
+        conn.execute(
+            "INSERT OR REPLACE INTO project_board_columns (
+                id, project_id, name, status, role, is_default, position, created_at, updated_at
+             ) VALUES (?1,?2,?3,COALESCE(?4, 'backlog'),?4,?5,?6,?7,?8)",
+            rusqlite::params![
+                str_val(&r, "id"),
+                str_val(&r, "project_id"),
+                str_val(&r, "name"),
+                opt_str(&r, "role"),
+                bool_val(&r, "is_default"),
+                r["position"].as_f64().unwrap_or(0.0),
+                str_val(&r, "created_at"),
+                str_val(&r, "updated_at"),
             ],
         )
         .map_err(|e| e.to_string())?;

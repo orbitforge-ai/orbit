@@ -333,6 +333,8 @@ pub fn run() {
             commands::project_board_columns::list_project_board_columns,
             commands::project_board_columns::create_project_board_column,
             commands::project_board_columns::update_project_board_column,
+            commands::project_board_columns::delete_project_board_column,
+            commands::project_board_columns::reorder_project_board_columns,
             // Work items (project board)
             commands::work_items::list_work_items,
             commands::work_items::get_work_item,

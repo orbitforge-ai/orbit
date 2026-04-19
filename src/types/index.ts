@@ -30,7 +30,8 @@ export interface ProjectBoardColumn {
   id: string;
   projectId: string;
   name: string;
-  status: WorkItemStatus;
+  role: WorkItemStatus | null;
+  isDefault: boolean;
   position: number;
   createdAt: string;
   updatedAt: string;

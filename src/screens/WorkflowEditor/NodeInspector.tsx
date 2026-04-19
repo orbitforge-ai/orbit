@@ -408,7 +408,7 @@ function WorkItemInspector({
   const descriptionTemplate = asString(data.descriptionTemplate);
   const columnId = asString(data.columnId);
   const kind = (asString(data.kind) || 'task') as WorkItemKind;
-  const status = (asString(data.status) || 'backlog') as WorkItemStatus;
+  const status = asString(data.status) as WorkItemStatus;
   const priorityValue = data.priority;
   const priority =
     typeof priorityValue === 'number' && Number.isFinite(priorityValue) ? priorityValue : 0;
@@ -418,7 +418,8 @@ function WorkItemInspector({
   const reasonTemplate = asString(data.reasonTemplate);
   const bodyTemplate = asString(data.bodyTemplate);
   const commentAuthorAgentId = asString(data.commentAuthorAgentId);
-  const listColumn = (asString(data.listColumn) || asString(data.listStatus) || 'all') as string;
+  const listColumnId = asString(data.listColumnId);
+  const listStatus = asString(data.listStatus);
   const listKind = (asString(data.listKind) || 'all') as string;
   const listAssignee = asString(data.listAssignee);
   const limitValue = data.limit;
@@ -427,7 +428,7 @@ function WorkItemInspector({
   const showItemId = action !== 'create' && action !== 'list';
   const showTitle = action === 'create' || action === 'update';
   const showDescription = action === 'create' || action === 'update';
-  const showColumn = action === 'create' || action === 'update' || action === 'move';
+  const showColumn = action === 'create' || action === 'update' || action === 'move' || action === 'list';
   const showKind = action === 'create' || action === 'update' || action === 'list';
   const showStatus = action === 'create' || action === 'move' || action === 'list';
   const showPriority = action === 'create' || action === 'update';
@@ -507,11 +508,13 @@ function WorkItemInspector({
         <div className="space-y-1.5">
           <label className="text-[11px] uppercase tracking-wider text-muted">Board column</label>
           <select
-            value={columnId}
-            onChange={(e) => onUpdate({ columnId: e.target.value })}
+            value={action === 'list' ? listColumnId : columnId}
+            onChange={(e) =>
+              onUpdate(action === 'list' ? { listColumnId: e.target.value } : { columnId: e.target.value })
+            }
             className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
           >
-            <option value="">Resolve from status</option>
+            <option value="">{action === 'list' ? 'Any column' : 'Resolve from status/default'}</option>
             {boardColumns.map((column) => (
               <option key={column.id} value={column.id}>
                 {column.name}
@@ -548,15 +551,13 @@ function WorkItemInspector({
           {showStatus && (
             <div className="space-y-1.5">
               <label className="text-[11px] uppercase tracking-wider text-muted">
-                {action === 'list' ? 'Board column' : 'Status'}
+                {action === 'list' ? 'Status filter' : 'Status'}
               </label>
               <select
-                value={action === 'list' ? listColumn || 'all' : status || 'backlog'}
+                value={action === 'list' ? listStatus || 'all' : status || 'backlog'}
                 onChange={(e) =>
                   onUpdate(
-                    action === 'list'
-                      ? { listColumn: e.target.value, listStatus: e.target.value }
-                      : { status: e.target.value },
+                    action === 'list' ? { listStatus: e.target.value } : { status: e.target.value },
                   )
                 }
                 className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"

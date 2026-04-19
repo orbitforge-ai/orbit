@@ -147,7 +147,12 @@ pub async fn create_project(
             )
             .map_err(|e| e.to_string())?;
 
-        ensure_project_board_columns(&conn, &project.id, &project.created_at)?;
+        ensure_project_board_columns(
+            &conn,
+            &project.id,
+            &project.created_at,
+            payload.board_preset_id.as_deref(),
+        )?;
 
         workspace::init_project_workspace(&project.id)?;
 

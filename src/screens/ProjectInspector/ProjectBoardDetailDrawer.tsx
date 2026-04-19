@@ -66,7 +66,7 @@ export function ProjectBoardDetailDrawer({
   });
 
   const moveMutation = useMutation({
-    mutationFn: ({ columnId, status }: { columnId: string; status: WorkItemStatus }) =>
+    mutationFn: ({ columnId, status }: { columnId: string; status?: WorkItemStatus }) =>
       workItemsApi.move(workItemId, status, columnId),
     onSuccess: invalidate,
   });
@@ -107,17 +107,17 @@ export function ProjectBoardDetailDrawer({
   function handleColumnChange(nextColumnId: string) {
     const nextColumn = columns.find((column) => column.id === nextColumnId);
     if (!nextColumn) return;
-    if (nextColumn.status === 'blocked') {
+    if (nextColumn.role === 'blocked') {
       const reason = window.prompt('Why is this card blocked?');
       if (!reason || !reason.trim()) return;
       blockMutation.mutate({ reason: reason.trim() });
       return;
     }
-    if (nextColumn.status === 'done') {
+    if (nextColumn.role === 'done') {
       completeMutation.mutate();
       return;
     }
-    moveMutation.mutate({ columnId: nextColumnId, status: nextColumn.status });
+    moveMutation.mutate({ columnId: nextColumnId, status: nextColumn.role ?? undefined });
   }
 
   function handleAssigneeChange(agentId: string) {
@@ -184,7 +184,7 @@ export function ProjectBoardDetailDrawer({
                 <select
                   value={
                     item.columnId ??
-                    columns.find((column) => column.status === item.status)?.id ??
+                    columns.find((column) => column.role === item.status)?.id ??
                     ''
                   }
                   onChange={(e) => handleColumnChange(e.target.value)}

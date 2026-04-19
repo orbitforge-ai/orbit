@@ -14,7 +14,7 @@ use crate::workflows::nodes::{NodeExecutionContext, NodeOutcome};
 use crate::workflows::template::{
     json_number_to_i64, lookup_json_path, optional_labels, parse_optional_priority,
     parse_optional_work_item_kind, parse_optional_work_item_status, parse_priority,
-    parse_work_item_kind, parse_work_item_labels, parse_work_item_status, render_optional_template,
+    parse_work_item_kind, parse_work_item_labels, render_optional_template,
     render_required_field, render_template, required_template,
 };
 
@@ -215,8 +215,9 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                 ctx.outputs,
             );
             let kind = parse_work_item_kind(ctx.node.data.get("kind").and_then(|v| v.as_str()))?;
-            let status =
-                parse_work_item_status(ctx.node.data.get("status").and_then(|v| v.as_str()))?;
+            let status = parse_optional_work_item_status(
+                ctx.node.data.get("status").and_then(|v| v.as_str()),
+            )?;
             let column_id = render_optional_template(
                 ctx.node.data.get("columnId").and_then(|v| v.as_str()),
                 ctx.outputs,
@@ -229,7 +230,7 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                 description: description.clone(),
                 kind: Some(kind.clone()),
                 column_id: column_id.clone(),
-                status: Some(status.clone()),
+                status: status.clone(),
                 priority: Some(priority),
                 assignee_agent_id: assignee_agent_id.clone(),
                 created_by_agent_id: None,
@@ -253,7 +254,7 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                     "description": description,
                     "kind": kind,
                     "columnId": column_id,
-                    "status": status,
+                    "status": item.status,
                     "priority": priority,
                     "labels": labels,
                     "assigneeAgentId": assignee_agent_id,
@@ -265,13 +266,12 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
         }
         WorkItemAction::List => {
             let mut items = list_work_items_with_db(ctx.db, ctx.project_id.to_string()).await?;
-            let status_filter = parse_optional_work_item_status(
-                ctx.node
-                    .data
-                    .get("listColumn")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| ctx.node.data.get("listStatus").and_then(|v| v.as_str())),
-            )?;
+            let column_id_filter = render_optional_template(
+                ctx.node.data.get("listColumnId").and_then(|v| v.as_str()),
+                ctx.outputs,
+            );
+            let status_filter =
+                parse_optional_work_item_status(ctx.node.data.get("listStatus").and_then(|v| v.as_str()))?;
             let kind_filter = parse_optional_work_item_kind(
                 ctx.node.data.get("listKind").and_then(|v| v.as_str()),
             )?;
@@ -287,6 +287,9 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                 .filter(|v| *v > 0)
                 .unwrap_or(100) as usize;
 
+            if let Some(column_id) = column_id_filter.as_ref() {
+                items.retain(|item| item.column_id.as_deref() == Some(column_id.as_str()));
+            }
             if let Some(status) = status_filter.as_ref() {
                 items.retain(|item| item.status == status.as_str());
             }
@@ -314,6 +317,7 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                     "items": items,
                     "filters": {
                         "column": status_filter.clone(),
+                        "columnId": column_id_filter,
                         "status": status_filter,
                         "kind": kind_filter,
                         "assignee": assignee_filter,
@@ -397,16 +401,20 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                 action.as_str(),
                 ctx.outputs,
             )?;
-            let status =
-                parse_work_item_status(ctx.node.data.get("status").and_then(|v| v.as_str()))?;
+            let status = parse_optional_work_item_status(
+                ctx.node.data.get("status").and_then(|v| v.as_str()),
+            )?;
             let column_id = render_optional_template(
                 ctx.node.data.get("columnId").and_then(|v| v.as_str()),
                 ctx.outputs,
             );
+            if status.is_none() && column_id.is_none() {
+                return Err("board.work_item move requires data.status or data.columnId".to_string());
+            }
             let item = move_work_item_with_db(
                 ctx.db,
                 item_id.clone(),
-                Some(status.clone()),
+                status.clone(),
                 column_id.clone(),
                 None,
             )
@@ -417,7 +425,7 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                     "action": action.as_str(),
                     "itemId": item_id,
                     "columnId": column_id,
-                    "status": status,
+                    "status": item.status,
                     "workItem": item,
                 }),
                 next_handle: None,

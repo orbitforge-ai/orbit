@@ -28,6 +28,7 @@ pub struct ProjectSummary {
 pub struct CreateProject {
     pub name: String,
     pub description: Option<String>,
+    pub board_preset_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -18,7 +18,11 @@ export const projectsApi = {
 
   get: (id: string): Promise<Project> => invoke('get_project', { id }),
 
-  create: (payload: { name: string; description?: string }): Promise<Project> =>
+  create: (payload: {
+    name: string;
+    description?: string;
+    boardPresetId?: 'starter' | 'lean';
+  }): Promise<Project> =>
     invoke('create_project', { payload }),
 
   update: (id: string, payload: { name?: string; description?: string }): Promise<Project> =>
@@ -48,14 +52,40 @@ export const projectsApi = {
   createBoardColumn: (payload: {
     projectId: string;
     name: string;
-    status: ProjectBoardColumn['status'];
+    role?: ProjectBoardColumn['role'];
+    isDefault?: boolean;
     position?: number;
   }): Promise<ProjectBoardColumn> => invoke('create_project_board_column', { payload }),
 
   updateBoardColumn: (
     id: string,
-    payload: Partial<Pick<ProjectBoardColumn, 'name' | 'status' | 'position'>>,
+    payload: {
+      name?: string;
+      role?: ProjectBoardColumn['role'];
+      isDefault?: boolean;
+      position?: number;
+      expectedRevision?: string;
+    },
   ): Promise<ProjectBoardColumn> => invoke('update_project_board_column', { id, payload }),
+
+  deleteBoardColumn: (
+    id: string,
+    payload: {
+      destinationColumnId?: string;
+      force?: boolean;
+      expectedRevision?: string;
+    } = {},
+  ): Promise<void> => invoke('delete_project_board_column', { id, payload }),
+
+  reorderBoardColumns: (
+    projectId: string,
+    orderedIds: string[],
+    expectedRevision?: string,
+  ): Promise<ProjectBoardColumn[]> =>
+    invoke('reorder_project_board_columns', {
+      projectId,
+      payload: { orderedIds, expectedRevision },
+    }),
 
   // Workspace file operations
   getWorkspacePath: (projectId: string): Promise<string> =>

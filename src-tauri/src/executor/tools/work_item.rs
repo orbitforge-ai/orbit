@@ -48,7 +48,8 @@ impl ToolHandler for WorkItemTool {
                     "description": { "type": "string", "description": "Markdown body (create/update)." },
                     "kind": { "type": "string", "enum": ["task", "bug", "story", "spike", "chore"], "description": "Card kind." },
                     "priority": { "type": "integer", "minimum": 0, "maximum": 3, "description": "0 (low) .. 3 (urgent)." },
-                    "status": { "type": "string", "enum": ["backlog", "todo", "in_progress", "blocked", "review", "done", "cancelled"], "description": "Status filter (list) or target status (move)." },
+                    "status": { "type": "string", "enum": ["backlog", "todo", "in_progress", "blocked", "review", "done", "cancelled"], "description": "Status filter (list) or target status (move/create compatibility)." },
+                    "column_id": { "type": "string", "description": "Explicit board column id for create, move, or list filtering." },
                     "assignee": { "type": "string", "description": "Filter by assignee agent id when listing. Use 'me' for self, or 'none' for unassigned." },
                     "parent_id": { "type": "string", "description": "Parent work item id (for subtasks)." },
                     "labels": { "type": "array", "items": { "type": "string" }, "description": "Labels (create/update)." },
@@ -79,6 +80,7 @@ impl ToolHandler for WorkItemTool {
                 let project_id = resolve_project_id(ctx, input, None).await?;
                 enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
                 let status = input["status"].as_str().map(String::from);
+                let column_id = input["column_id"].as_str().map(String::from);
                 let kind = input["kind"].as_str().map(String::from);
                 let assignee_raw = input["assignee"].as_str();
                 let assignee_filter = assignee_raw.map(|s| match s {
@@ -88,7 +90,8 @@ impl ToolHandler for WorkItemTool {
                 });
                 let limit = input["limit"].as_i64();
                 let items =
-                    list_work_items(db, &project_id, status, kind, assignee_filter, limit).await?;
+                    list_work_items(db, &project_id, status, column_id, kind, assignee_filter, limit)
+                        .await?;
                 let result = serde_json::to_string_pretty(&items)
                     .map_err(|e| format!("work_item: serialize: {}", e))?;
                 Ok((result, false))
@@ -111,12 +114,16 @@ impl ToolHandler for WorkItemTool {
                 let priority = input["priority"].as_i64().unwrap_or(0);
                 let parent_id = optional_trimmed(input.get("parent_id"));
                 let labels = parse_labels(input.get("labels"))?;
+                let status = input["status"].as_str().map(String::from);
+                let column_id = input["column_id"].as_str().map(String::from);
                 let item = create_work_item(
                     db,
                     &project_id,
                     title,
                     description,
                     kind,
+                    column_id,
+                    status,
                     priority,
                     parent_id,
                     labels,
@@ -172,13 +179,17 @@ impl ToolHandler for WorkItemTool {
                 let id = required_str(input, "id", "move")?;
                 let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
                 enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
-                let status = required_str(input, "status", "move")?.to_string();
-                if status == "blocked" {
+                let status = input["status"].as_str().map(str::to_string);
+                let column_id = input["column_id"].as_str().map(str::to_string);
+                if status.is_none() && column_id.is_none() {
+                    return Err("work_item: move requires 'status' or 'column_id'".into());
+                }
+                if status.as_deref() == Some("blocked") {
                     return Err(
                         "work_item: use action='block' with a reason to move to 'blocked'".into(),
                     );
                 }
-                let item = move_work_item(db, id, status).await?;
+                let item = move_work_item(db, id, status, column_id).await?;
                 spawn_cloud_upsert(ctx, &item);
                 let result = mutation_result("moved", &item)?;
                 Ok((result, false))
@@ -448,6 +459,7 @@ async fn list_work_items(
     db: &DbPool,
     project_id: &str,
     status: Option<String>,
+    column_id: Option<String>,
     kind: Option<String>,
     assignee: Option<AssigneeFilter>,
     limit: Option<i64>,
@@ -461,6 +473,10 @@ async fn list_work_items(
             WORK_ITEM_COLUMNS
         );
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(project_id.clone())];
+        if let Some(column_id) = column_id {
+            sql.push_str(" AND column_id = ?");
+            params.push(Box::new(column_id));
+        }
         if let Some(s) = status {
             sql.push_str(" AND status = ?");
             params.push(Box::new(s));
@@ -528,6 +544,8 @@ async fn create_work_item(
     title: &str,
     description: Option<String>,
     kind: String,
+    column_id: Option<String>,
+    status: Option<String>,
     priority: i64,
     parent_id: Option<String>,
     labels: Vec<String>,
@@ -542,8 +560,8 @@ async fn create_work_item(
             title,
             description,
             kind: Some(kind),
-            column_id: None,
-            status: Some("backlog".to_string()),
+            column_id,
+            status,
             priority: Some(priority),
             assignee_agent_id: None,
             created_by_agent_id,
@@ -586,8 +604,13 @@ async fn claim_work_item(db: &DbPool, id: &str, agent_id: &str) -> Result<WorkIt
     claim_work_item_with_db(db, id.to_string(), agent_id.to_string()).await
 }
 
-async fn move_work_item(db: &DbPool, id: &str, status: String) -> Result<WorkItem, String> {
-    move_work_item_with_db(db, id.to_string(), Some(status), None, None).await
+async fn move_work_item(
+    db: &DbPool,
+    id: &str,
+    status: Option<String>,
+    column_id: Option<String>,
+) -> Result<WorkItem, String> {
+    move_work_item_with_db(db, id.to_string(), status, column_id, None).await
 }
 
 async fn block_work_item(db: &DbPool, id: &str, reason: String) -> Result<WorkItem, String> {

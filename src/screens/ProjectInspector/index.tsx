@@ -284,6 +284,7 @@ function CreateProjectForm({
 }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [boardPresetId, setBoardPresetId] = useState<'starter' | 'lean'>('starter');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -295,6 +296,7 @@ function CreateProjectForm({
       const project = await projectsApi.create({
         name: name.trim(),
         description: description.trim() || undefined,
+        boardPresetId,
       });
       onCreated(project);
     } catch (e) {
@@ -321,6 +323,14 @@ function CreateProjectForm({
           placeholder="Description (optional)"
           className="w-full bg-background border border-edge rounded-lg px-3 py-2 text-sm text-white placeholder-muted outline-none focus:border-accent"
         />
+        <select
+          value={boardPresetId}
+          onChange={(e) => setBoardPresetId(e.target.value as 'starter' | 'lean')}
+          className="w-full bg-background border border-edge rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-accent"
+        >
+          <option value="starter">Starter board</option>
+          <option value="lean">Lean board</option>
+        </select>
       </div>
       {error && <p className="text-xs text-red-400">{error}</p>}
       <div className="flex gap-2">
