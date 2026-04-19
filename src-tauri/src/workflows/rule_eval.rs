@@ -71,10 +71,7 @@ fn resolve_output_root_segment<'a>(segment: &'a str, outputs: &'a Value) -> Opti
     if outputs.get(segment).is_some() {
         return Some(segment);
     }
-    outputs
-        .get(OUTPUT_ALIASES_KEY)?
-        .get(segment)?
-        .as_str()
+    outputs.get(OUTPUT_ALIASES_KEY)?.get(segment)?.as_str()
 }
 
 /// If `value` is a `{ "field": "..." }` reference, resolve it; otherwise return as-is.

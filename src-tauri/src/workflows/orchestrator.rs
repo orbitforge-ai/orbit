@@ -17,6 +17,7 @@ use chrono::Utc;
 use feed_rs::parser;
 use reqwest::header::CONTENT_TYPE;
 use rusqlite::OptionalExtension;
+use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager};
@@ -48,6 +49,25 @@ const STATUS_SKIPPED: &str = "skipped";
 
 const MAX_STEPS: usize = 100;
 const OUTPUT_ALIASES_KEY: &str = "__aliases";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkflowRunEventPayload {
+    workflow_id: String,
+    run_id: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkflowRunStepEventPayload {
+    workflow_id: String,
+    run_id: String,
+    step_id: String,
+    node_id: String,
+    node_type: String,
+    status: String,
+}
 
 #[derive(Clone)]
 pub struct WorkflowOrchestrator {
@@ -178,7 +198,14 @@ impl WorkflowOrchestrator {
             completed_at: None,
             created_at: now,
         };
-        let _ = self.app.emit("workflow_run:created", &run);
+        let _ = self.app.emit(
+            "workflow_run:created",
+            WorkflowRunEventPayload {
+                workflow_id: run.workflow_id.clone(),
+                run_id: run.id.clone(),
+                status: run.status.clone(),
+            },
+        );
         Ok(run)
     }
 
@@ -189,9 +216,16 @@ impl WorkflowOrchestrator {
         project_id: String,
     ) -> Result<(), String> {
         let started_at = Utc::now().to_rfc3339();
-        self.update_run_status(&run.id, STATUS_RUNNING, None, Some(&started_at), None)
-            .await
-            .ok();
+        self.update_run_status(
+            &workflow_id,
+            &run.id,
+            STATUS_RUNNING,
+            None,
+            Some(&started_at),
+            None,
+        )
+        .await
+        .ok();
 
         let graph: WorkflowGraph = serde_json::from_value(run.graph_snapshot.clone())
             .map_err(|e| format!("invalid graph snapshot: {}", e))?;
@@ -208,7 +242,7 @@ impl WorkflowOrchestrator {
             Some(t) => t,
             None => {
                 let err = "no trigger node in workflow graph";
-                self.fail_run(&run.id, err).await.ok();
+                self.fail_run(&workflow_id, &run.id, err).await.ok();
                 return Err(err.into());
             }
         };
@@ -229,7 +263,7 @@ impl WorkflowOrchestrator {
         while let Some(node_id) = current {
             if sequence as usize >= MAX_STEPS {
                 let err = format!("workflow exceeded {} steps; aborting", MAX_STEPS);
-                self.fail_run(&run.id, &err).await.ok();
+                self.fail_run(&workflow_id, &run.id, &err).await.ok();
                 return Err(err);
             }
 
@@ -237,14 +271,21 @@ impl WorkflowOrchestrator {
                 Some(n) => *n,
                 None => {
                     let err = format!("node {} referenced by edge not found", node_id);
-                    self.fail_run(&run.id, &err).await.ok();
+                    self.fail_run(&workflow_id, &run.id, &err).await.ok();
                     return Err(err);
                 }
             };
 
             let outputs_val = Value::Object(outputs.clone());
             let exec = self
-                .execute_node(&run.id, &workflow_id, &project_id, node, &outputs_val, sequence)
+                .execute_node(
+                    &run.id,
+                    &workflow_id,
+                    &project_id,
+                    node,
+                    &outputs_val,
+                    sequence,
+                )
                 .await;
 
             match exec {
@@ -257,16 +298,23 @@ impl WorkflowOrchestrator {
                     current = pick_next(&outgoing, &node.id, next_handle.as_deref());
                 }
                 Err(err_msg) => {
-                    self.fail_run(&run.id, &err_msg).await.ok();
+                    self.fail_run(&workflow_id, &run.id, &err_msg).await.ok();
                     return Err(err_msg);
                 }
             }
         }
 
         let completed_at = Utc::now().to_rfc3339();
-        self.update_run_status(&run.id, STATUS_SUCCESS, None, None, Some(&completed_at))
-            .await
-            .ok();
+        self.update_run_status(
+            &workflow_id,
+            &run.id,
+            STATUS_SUCCESS,
+            None,
+            None,
+            Some(&completed_at),
+        )
+        .await
+        .ok();
         info!(run_id = run.id, steps = sequence, "workflow run completed");
         Ok(())
     }
@@ -285,6 +333,7 @@ impl WorkflowOrchestrator {
         let input = json!({ "node_data": node.data, "upstream": outputs });
 
         self.insert_step(
+            workflow_id,
             &step_id,
             run_id,
             &node.id,
@@ -303,9 +352,7 @@ impl WorkflowOrchestrator {
             }),
             "agent.run" => self.run_agent_node(node, outputs).await,
             "logic.if" => self.run_logic_if(node, outputs).await,
-            "integration.feed.fetch" => {
-                self.run_feed_fetch_node(workflow_id, node, outputs).await
-            }
+            "integration.feed.fetch" => self.run_feed_fetch_node(workflow_id, node, outputs).await,
             "integration.http.request" => {
                 self.run_http_request_node(workflow_id, node, outputs).await
             }
@@ -324,7 +371,11 @@ impl WorkflowOrchestrator {
         match &result {
             Ok(outcome) => {
                 self.finish_step(
+                    workflow_id,
+                    run_id,
                     &step_id,
+                    &node.id,
+                    &node.node_type,
                     STATUS_SUCCESS,
                     Some(&outcome.output),
                     None,
@@ -333,8 +384,18 @@ impl WorkflowOrchestrator {
                 .await?;
             }
             Err(err) => {
-                self.finish_step(&step_id, STATUS_FAILED, None, Some(err), &completed_at)
-                    .await?;
+                self.finish_step(
+                    workflow_id,
+                    run_id,
+                    &step_id,
+                    &node.id,
+                    &node.node_type,
+                    STATUS_FAILED,
+                    None,
+                    Some(err),
+                    &completed_at,
+                )
+                .await?;
             }
         }
         result
@@ -426,7 +487,8 @@ impl WorkflowOrchestrator {
         node: &WorkflowNode,
         outputs: &Value,
     ) -> Result<NodeOutcome, String> {
-        let feed_urls_text = required_template(&node.data, "feedUrlsText", "integration.feed.fetch")?;
+        let feed_urls_text =
+            required_template(&node.data, "feedUrlsText", "integration.feed.fetch")?;
         let feed_urls = parse_multiline_templates(&feed_urls_text, outputs);
         if feed_urls.is_empty() {
             return Err("integration.feed.fetch requires at least one feed URL".to_string());
@@ -448,11 +510,10 @@ impl WorkflowOrchestrator {
         let mut total_items = 0usize;
 
         for url in feed_urls {
-            let response = client
-                .get(&url)
-                .send()
-                .await
-                .map_err(|e| format!("integration.feed.fetch request failed for {}: {}", url, e))?;
+            let response =
+                client.get(&url).send().await.map_err(|e| {
+                    format!("integration.feed.fetch request failed for {}: {}", url, e)
+                })?;
             let bytes = response
                 .bytes()
                 .await
@@ -541,12 +602,7 @@ impl WorkflowOrchestrator {
             "bodyHash": hash_text(&body_text),
         });
         let is_new = self
-            .filter_unseen_items(
-                workflow_id,
-                &node.id,
-                &url,
-                vec![fingerprint_item],
-            )
+            .filter_unseen_items(workflow_id, &node.id, &url, vec![fingerprint_item])
             .await?
             .len()
             == 1;
@@ -572,16 +628,10 @@ impl WorkflowOrchestrator {
         node: &WorkflowNode,
         outputs: &Value,
     ) -> Result<NodeOutcome, String> {
-        let candidates_path = required_template(
-            &node.data,
-            "candidatesPath",
-            "board.proposal.enqueue",
-        )?;
-        let review_column_id = required_template(
-            &node.data,
-            "reviewColumnId",
-            "board.proposal.enqueue",
-        )?;
+        let candidates_path =
+            required_template(&node.data, "candidatesPath", "board.proposal.enqueue")?;
+        let review_column_id =
+            required_template(&node.data, "reviewColumnId", "board.proposal.enqueue")?;
         let kind = parse_work_item_kind(node.data.get("kind").and_then(|v| v.as_str()))?;
         let priority = parse_priority(node.data.get("priority")).clamp(0, 3);
         let labels = parse_work_item_labels(
@@ -907,15 +957,14 @@ impl WorkflowOrchestrator {
                     node.data.get("columnId").and_then(|v| v.as_str()),
                     outputs,
                 );
-                let item =
-                    move_work_item_with_db(
-                        &self.db,
-                        item_id.clone(),
-                        Some(status.clone()),
-                        column_id.clone(),
-                        None,
-                    )
-                    .await?;
+                let item = move_work_item_with_db(
+                    &self.db,
+                    item_id.clone(),
+                    Some(status.clone()),
+                    column_id.clone(),
+                    None,
+                )
+                .await?;
                 self.sync_work_item_cloud(item.clone());
                 Ok(NodeOutcome {
                     output: json!({
@@ -1130,6 +1179,7 @@ impl WorkflowOrchestrator {
 
     async fn update_run_status(
         &self,
+        workflow_id: &str,
         run_id: &str,
         status: &str,
         error: Option<&str>,
@@ -1137,6 +1187,7 @@ impl WorkflowOrchestrator {
         completed_at: Option<&str>,
     ) -> Result<(), String> {
         let pool = self.db.0.clone();
+        let workflow_id = workflow_id.to_string();
         let run_id = run_id.to_string();
         let status = status.to_string();
         let error = error.map(String::from);
@@ -1153,22 +1204,37 @@ impl WorkflowOrchestrator {
                 rusqlite::params![status, error, started_at, completed_at, run_id],
             )
             .map_err(|e| e.to_string())?;
-            let _ = app.emit("workflow_run:updated", &run_id);
+            let _ = app.emit(
+                "workflow_run:updated",
+                WorkflowRunEventPayload {
+                    workflow_id,
+                    run_id,
+                    status,
+                },
+            );
             Ok(())
         })
         .await
         .map_err(|e| e.to_string())?
     }
 
-    async fn fail_run(&self, run_id: &str, err: &str) -> Result<(), String> {
+    async fn fail_run(&self, workflow_id: &str, run_id: &str, err: &str) -> Result<(), String> {
         let now = Utc::now().to_rfc3339();
-        self.update_run_status(run_id, STATUS_FAILED, Some(err), None, Some(&now))
-            .await
+        self.update_run_status(
+            workflow_id,
+            run_id,
+            STATUS_FAILED,
+            Some(err),
+            None,
+            Some(&now),
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
     async fn insert_step(
         &self,
+        workflow_id: &str,
         step_id: &str,
         run_id: &str,
         node_id: &str,
@@ -1179,6 +1245,7 @@ impl WorkflowOrchestrator {
         sequence: i64,
     ) -> Result<(), String> {
         let pool = self.db.0.clone();
+        let workflow_id = workflow_id.to_string();
         let step_id = step_id.to_string();
         let run_id = run_id.to_string();
         let node_id = node_id.to_string();
@@ -1198,7 +1265,17 @@ impl WorkflowOrchestrator {
                 ],
             )
             .map_err(|e| e.to_string())?;
-            let _ = app.emit("workflow_run:step", &run_id);
+            let _ = app.emit(
+                "workflow_run:step",
+                WorkflowRunStepEventPayload {
+                    workflow_id,
+                    run_id,
+                    step_id,
+                    node_id,
+                    node_type,
+                    status,
+                },
+            );
             Ok(())
         })
         .await
@@ -1207,14 +1284,22 @@ impl WorkflowOrchestrator {
 
     async fn finish_step(
         &self,
+        workflow_id: &str,
+        run_id: &str,
         step_id: &str,
+        node_id: &str,
+        node_type: &str,
         status: &str,
         output: Option<&Value>,
         error: Option<&str>,
         completed_at: &str,
     ) -> Result<(), String> {
         let pool = self.db.0.clone();
+        let workflow_id = workflow_id.to_string();
+        let run_id = run_id.to_string();
         let step_id = step_id.to_string();
+        let node_id = node_id.to_string();
+        let node_type = node_type.to_string();
         let status = status.to_string();
         let output_str = output.map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".into()));
         let error = error.map(String::from);
@@ -1229,7 +1314,17 @@ impl WorkflowOrchestrator {
                 rusqlite::params![status, output_str, error, completed_at, step_id],
             )
             .map_err(|e| e.to_string())?;
-            let _ = app.emit("workflow_run:step", &step_id);
+            let _ = app.emit(
+                "workflow_run:step",
+                WorkflowRunStepEventPayload {
+                    workflow_id,
+                    run_id,
+                    step_id,
+                    node_id,
+                    node_type,
+                    status,
+                },
+            );
             Ok(())
         })
         .await
@@ -1360,10 +1455,7 @@ fn resolve_output_root_segment<'a>(segment: &'a str, outputs: &'a Value) -> Opti
     if outputs.get(segment).is_some() {
         return Some(segment);
     }
-    outputs
-        .get(OUTPUT_ALIASES_KEY)?
-        .get(segment)?
-        .as_str()
+    outputs.get(OUTPUT_ALIASES_KEY)?.get(segment)?.as_str()
 }
 
 fn render_agent_prompt(
@@ -1403,14 +1495,23 @@ fn parse_agent_output(output_mode: &str, text: &str) -> Result<Value, String> {
         "proposal_candidates" => {
             let parsed: Value = serde_json::from_str(text)
                 .map_err(|e| format!("agent.run expected JSON array output: {}", e))?;
-            let items = parsed
-                .as_array()
-                .ok_or_else(|| "agent.run proposal_candidates output must be an array".to_string())?;
+            let items = parsed.as_array().ok_or_else(|| {
+                "agent.run proposal_candidates output must be an array".to_string()
+            })?;
             for (idx, item) in items.iter().enumerate() {
                 let obj = item.as_object().ok_or_else(|| {
-                    format!("agent.run proposal_candidates item {} must be an object", idx)
+                    format!(
+                        "agent.run proposal_candidates item {} must be an object",
+                        idx
+                    )
                 })?;
-                for field in ["listing", "fitScore", "fitReason", "proposalDraft", "shouldReview"] {
+                for field in [
+                    "listing",
+                    "fitScore",
+                    "fitReason",
+                    "proposalDraft",
+                    "shouldReview",
+                ] {
                     if !obj.contains_key(field) {
                         return Err(format!(
                             "agent.run proposal_candidates item {} is missing '{}'",
@@ -1421,8 +1522,9 @@ fn parse_agent_output(output_mode: &str, text: &str) -> Result<Value, String> {
             }
             Ok(parsed)
         }
-        "json" => serde_json::from_str(text)
-            .map_err(|e| format!("agent.run expected JSON output: {}", e)),
+        "json" => {
+            serde_json::from_str(text).map_err(|e| format!("agent.run expected JSON output: {}", e))
+        }
         _ => Ok(serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string()))),
     }
 }
@@ -1465,7 +1567,10 @@ fn fingerprint_listing(item: &Value, source_key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or("");
     let body_hash = item.get("bodyHash").and_then(Value::as_str).unwrap_or("");
-    hash_text(&format!("{}|{}|{}|{}", source_key, title, published, body_hash))
+    hash_text(&format!(
+        "{}|{}|{}|{}",
+        source_key, title, published, body_hash
+    ))
 }
 
 fn render_optional_template(template: Option<&str>, outputs: &Value) -> Option<String> {

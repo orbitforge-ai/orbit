@@ -6,7 +6,7 @@ import { ruleToSentence } from '../ruleSentence';
 import { describeWorkflowSchedule } from '../scheduleConfig';
 
 const NODE_BASE =
-  'rounded-lg border bg-surface text-white text-xs shadow-sm min-w-[160px] ' +
+  'max-w-[320px] rounded-lg border bg-surface text-white text-xs shadow-sm min-w-[160px] ' +
   'transition-colors';
 
 export function TriggerNode({ data, type, selected }: NodeProps) {
@@ -56,7 +56,9 @@ export function AgentNode({ id, data, type, selected }: NodeProps) {
           Agent: <span className="text-white font-mono">{d.agentId || '(unset)'}</span>
         </p>
         {d.promptTemplate && (
-          <p className="text-muted text-[10px] line-clamp-2 italic">{d.promptTemplate}</p>
+          <p className="text-muted text-[10px] italic whitespace-pre-wrap break-words">
+            {d.promptTemplate}
+          </p>
         )}
       </div>
       <Handle type="source" position={Position.Right} className="!bg-accent" />
@@ -106,7 +108,7 @@ export function WorkItemNode({ id, data, type, selected }: NodeProps) {
         <p className="text-muted text-[10px]">
           Ref: <span className="text-white font-mono">{referenceKey}</span>
         </p>
-        <p className="text-white text-[11px] line-clamp-2">
+        <p className="text-white text-[11px] whitespace-pre-wrap break-words">
           {summary}
         </p>
         <div className="flex items-center gap-2 text-[10px] text-muted font-mono">
@@ -163,7 +165,7 @@ export function ProposalQueueNode({ id, data, type, selected }: NodeProps) {
         <p className="text-muted text-[10px]">
           Ref: <span className="text-white font-mono">{referenceKey}</span>
         </p>
-        <p className="text-muted text-[10px] line-clamp-2">
+        <p className="text-muted text-[10px] whitespace-pre-wrap break-words">
           {d.candidatesPath || '(candidates path required)'}
         </p>
         <p className="text-muted text-[10px]">
@@ -194,7 +196,7 @@ export function LogicIfNode({ id, data, type, selected }: NodeProps) {
         <div className="text-[10px] text-muted">
           Ref: <span className="text-white font-mono">{referenceKey}</span>
         </div>
-        <p className="text-[11px] text-white/90 line-clamp-3 leading-relaxed">
+        <p className="text-[11px] text-white/90 leading-relaxed whitespace-pre-wrap break-words">
           {conditionSummary}
         </p>
         <div className="flex items-center justify-between text-[10px]">

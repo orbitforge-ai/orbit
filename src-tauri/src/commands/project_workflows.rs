@@ -241,7 +241,11 @@ fn derive_trigger_from_graph(
     fallback_kind: Option<&str>,
     fallback_config: Option<&serde_json::Value>,
 ) -> (String, serde_json::Value) {
-    if let Some(node) = graph.nodes.iter().find(|node| node.node_type == "trigger.schedule") {
+    if let Some(node) = graph
+        .nodes
+        .iter()
+        .find(|node| node.node_type == "trigger.schedule")
+    {
         return ("schedule".to_string(), node.data.clone());
     }
     if graph
@@ -253,7 +257,9 @@ fn derive_trigger_from_graph(
     }
     (
         fallback_kind.unwrap_or("manual").to_string(),
-        fallback_config.cloned().unwrap_or_else(|| serde_json::json!({})),
+        fallback_config
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
     )
 }
 
@@ -481,8 +487,11 @@ pub async fn delete_project_workflow(
     let id_clone = id.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM schedules WHERE workflow_id = ?1", params![id_clone.clone()])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM schedules WHERE workflow_id = ?1",
+            params![id_clone.clone()],
+        )
+        .map_err(|e| e.to_string())?;
         conn.execute(
             "DELETE FROM project_workflows WHERE id = ?1",
             params![id_clone],

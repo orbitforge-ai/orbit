@@ -15,8 +15,7 @@ pub const LEGACY_BOARD_STATUSES: &[&str] = &[
     "cancelled",
 ];
 
-const COLUMN_SELECT: &str =
-    "id, project_id, name, status, position, created_at, updated_at";
+const COLUMN_SELECT: &str = "id, project_id, name, status, position, created_at, updated_at";
 
 pub fn default_board_columns() -> [(&'static str, &'static str); 7] {
     [
@@ -127,7 +126,10 @@ pub fn get_column_by_id_sync(
     id: &str,
 ) -> Result<Option<ProjectBoardColumn>, String> {
     conn.query_row(
-        &format!("SELECT {} FROM project_board_columns WHERE id = ?1", COLUMN_SELECT),
+        &format!(
+            "SELECT {} FROM project_board_columns WHERE id = ?1",
+            COLUMN_SELECT
+        ),
         params![id],
         map_project_board_column,
     )
@@ -211,12 +213,22 @@ pub async fn create_project_board_column(
             "INSERT INTO project_board_columns (
                 id, project_id, name, status, position, created_at, updated_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-            params![id, payload.project_id, payload.name, payload.status, position, now],
+            params![
+                id,
+                payload.project_id,
+                payload.name,
+                payload.status,
+                position,
+                now
+            ],
         )
         .map_err(|e| e.to_string())?;
 
         conn.query_row(
-            &format!("SELECT {} FROM project_board_columns WHERE id = ?1", COLUMN_SELECT),
+            &format!(
+                "SELECT {} FROM project_board_columns WHERE id = ?1",
+                COLUMN_SELECT
+            ),
             params![id],
             map_project_board_column,
         )
@@ -268,7 +280,10 @@ pub async fn update_project_board_column(
             .map_err(|e| e.to_string())?;
         }
         conn.query_row(
-            &format!("SELECT {} FROM project_board_columns WHERE id = ?1", COLUMN_SELECT),
+            &format!(
+                "SELECT {} FROM project_board_columns WHERE id = ?1",
+                COLUMN_SELECT
+            ),
             params![id],
             map_project_board_column,
         )

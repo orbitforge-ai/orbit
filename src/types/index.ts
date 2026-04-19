@@ -235,19 +235,9 @@ export type WorkflowNodeType = (typeof KNOWN_NODE_TYPES)[number];
 
 // ─── Workflow runs (Phase 4 runtime) ─────────────────────────────────────────
 
-export type WorkflowRunStatus =
-  | 'queued'
-  | 'running'
-  | 'success'
-  | 'failed'
-  | 'cancelled';
+export type WorkflowRunStatus = 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
 
-export type WorkflowRunStepStatus =
-  | 'queued'
-  | 'running'
-  | 'success'
-  | 'failed'
-  | 'skipped';
+export type WorkflowRunStepStatus = 'queued' | 'running' | 'success' | 'failed' | 'skipped';
 
 export interface WorkflowRun {
   id: string;
@@ -522,6 +512,27 @@ export interface RunStateChangedPayload {
   previousState: RunState;
   newState: RunState;
   timestamp: string;
+}
+
+export interface WorkflowRunCreatedPayload {
+  workflowId: string;
+  runId: string;
+  status: WorkflowRunStatus;
+}
+
+export interface WorkflowRunUpdatedPayload {
+  workflowId: string;
+  runId: string;
+  status: WorkflowRunStatus;
+}
+
+export interface WorkflowRunStepPayload {
+  workflowId: string;
+  runId: string;
+  stepId: string;
+  nodeId: string;
+  nodeType: string;
+  status: WorkflowRunStepStatus;
 }
 
 // ─── Command payloads ─────────────────────────────────────────────────────────

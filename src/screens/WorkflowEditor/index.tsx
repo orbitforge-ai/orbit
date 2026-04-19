@@ -31,6 +31,11 @@ import { ArrowLeft, History, Play, Save } from 'lucide-react';
 import { useUiStore } from '../../store/uiStore';
 import { projectWorkflowsApi } from '../../api/projectWorkflows';
 import { workflowRunsApi } from '../../api/workflowRuns';
+import {
+  onWorkflowRunCreated,
+  onWorkflowRunStep,
+  onWorkflowRunUpdated,
+} from '../../events/workflowRunEvents';
 import { ProjectWorkflow, WorkflowEdge, WorkflowGraph, WorkflowNode } from '../../types';
 import { edgeTypes } from './edges';
 import { nodeMeta, NODE_REGISTRY } from './nodeRegistry';
@@ -142,6 +147,16 @@ function getUpstreamNodes(nodes: Node[], edges: Edge[], selectedNodeId: string |
   return ordered;
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target.isContentEditable) {
+    return true;
+  }
+  return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+}
+
 export function WorkflowEditor() {
   const { selectedWorkflowId } = useUiStore();
   if (!selectedWorkflowId) {
@@ -173,6 +188,32 @@ function Editor({ workflowId }: { workflowId: string }) {
     queryKey: ['project-workflow', workflowId],
     queryFn: () => projectWorkflowsApi.get(workflowId),
   });
+
+  useEffect(() => {
+    const refreshRun = (runId: string) => {
+      queryClient.invalidateQueries({ queryKey: ['workflow-runs', workflowId] });
+      queryClient.invalidateQueries({ queryKey: ['workflow-run', runId] });
+    };
+
+    const unlistenCreated = onWorkflowRunCreated((payload) => {
+      if (payload.workflowId !== workflowId) return;
+      refreshRun(payload.runId);
+    });
+    const unlistenUpdated = onWorkflowRunUpdated((payload) => {
+      if (payload.workflowId !== workflowId) return;
+      refreshRun(payload.runId);
+    });
+    const unlistenStep = onWorkflowRunStep((payload) => {
+      if (payload.workflowId !== workflowId) return;
+      refreshRun(payload.runId);
+    });
+
+    return () => {
+      unlistenCreated.then((fn) => fn()).catch(() => {});
+      unlistenUpdated.then((fn) => fn()).catch(() => {});
+      unlistenStep.then((fn) => fn()).catch(() => {});
+    };
+  }, [queryClient, workflowId]);
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -409,6 +450,13 @@ function Editor({ workflowId }: { workflowId: string }) {
     },
   });
 
+  const handleSave = useCallback(() => {
+    if (!workflow || !dirty || saveMutation.isPending) {
+      return;
+    }
+    saveMutation.mutate();
+  }, [dirty, saveMutation, workflow]);
+
   const runMutation = useMutation({
     mutationFn: () => workflowRunsApi.start(workflowId, {}),
     onSuccess: () => {
@@ -429,6 +477,35 @@ function Editor({ workflowId }: { workflowId: string }) {
       queryClient.invalidateQueries({ queryKey: ['project-workflows', updated.projectId] });
     },
   });
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const isSaveShortcut =
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === 's' &&
+        !event.altKey;
+
+      if (isSaveShortcut) {
+        event.preventDefault();
+        handleSave();
+        return;
+      }
+
+      if (event.key !== 'Delete' || isEditableTarget(event.target)) {
+        return;
+      }
+
+      if (!selectedNodeId) {
+        return;
+      }
+
+      event.preventDefault();
+      deleteNode(selectedNodeId);
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [deleteNode, handleSave, selectedNodeId]);
 
   if (isLoading || !workflow) {
     return (
@@ -507,7 +584,7 @@ function Editor({ workflowId }: { workflowId: string }) {
           {runMutation.isPending ? 'Starting…' : 'Run'}
         </button>
         <button
-          onClick={() => saveMutation.mutate()}
+          onClick={handleSave}
           disabled={!dirty || saveMutation.isPending}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >

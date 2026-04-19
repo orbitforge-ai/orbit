@@ -1,6 +1,6 @@
+use crate::commands::project_board_columns::resolve_board_column_sync;
 use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
-use crate::commands::project_board_columns::resolve_board_column_sync;
 use crate::models::work_item::{CreateWorkItem, UpdateWorkItem, WorkItem};
 use crate::models::work_item_comment::{CommentAuthor, WorkItemComment};
 use rusqlite::{params, OptionalExtension};
@@ -75,7 +75,8 @@ pub(crate) fn map_work_item(row: &rusqlite::Row) -> rusqlite::Result<WorkItem> {
     })
 }
 
-const WORK_ITEM_COLUMNS: &str = "id, project_id, title, description, kind, column_id, status, priority,
+const WORK_ITEM_COLUMNS: &str =
+    "id, project_id, title, description, kind, column_id, status, priority,
         assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
         labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at";
 
@@ -779,13 +780,8 @@ pub async fn reorder_work_items(
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let mut conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
-        let resolved_column_id = resolve_target_column(
-            &conn,
-            &project_id,
-            column_id.as_deref(),
-            status.as_deref(),
-        )?
-        .0;
+        let resolved_column_id =
+            resolve_target_column(&conn, &project_id, column_id.as_deref(), status.as_deref())?.0;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         for (idx, item_id) in ordered_ids.iter().enumerate() {
             let pos = ((idx + 1) as f64) * 1024.0;

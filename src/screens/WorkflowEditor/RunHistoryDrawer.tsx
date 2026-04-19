@@ -18,9 +18,13 @@ import {
   WorkflowRunWithSteps,
 } from '../../types';
 
-function formatDuration(startedAt: string | null, completedAt: string | null): string {
+function formatDuration(
+  startedAt: string | null,
+  completedAt: string | null,
+  nowMs: number,
+): string {
   if (!startedAt) return '—';
-  const end = completedAt ? new Date(completedAt).getTime() : Date.now();
+  const end = completedAt ? new Date(completedAt).getTime() : nowMs;
   const start = new Date(startedAt).getTime();
   const ms = Math.max(0, end - start);
   if (ms < 1000) return `${ms}ms`;
@@ -31,8 +35,8 @@ function formatDuration(startedAt: string | null, completedAt: string | null): s
   return `${m}m ${rem}s`;
 }
 
-function formatRelative(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
+function formatRelative(iso: string, nowMs: number): string {
+  const diff = nowMs - new Date(iso).getTime();
   const s = Math.floor(diff / 1000);
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);
@@ -74,17 +78,18 @@ export function RunHistoryDrawer({
 }) {
   const queryClient = useQueryClient();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const { data: runs = [], isLoading } = useQuery<WorkflowRun[]>({
     queryKey: ['workflow-runs', workflowId],
     queryFn: () => workflowRunsApi.list(workflowId),
-    refetchInterval: (q) => {
-      const list = (q.state.data ?? []) as WorkflowRun[];
-      const hasActive = list.some(
-        (r) => r.status === 'queued' || r.status === 'running',
-      );
-      return hasActive ? 2000 : false;
-    },
   });
 
   useEffect(() => {
@@ -93,18 +98,10 @@ export function RunHistoryDrawer({
     }
   }, [runs, selectedRunId]);
 
-  const activeRunInList = useMemo(
-    () => runs.find((r) => r.id === selectedRunId) ?? null,
-    [runs, selectedRunId],
-  );
-  const isSelectedActive =
-    activeRunInList?.status === 'queued' || activeRunInList?.status === 'running';
-
   const { data: detail } = useQuery<WorkflowRunWithSteps>({
     queryKey: ['workflow-run', selectedRunId],
     queryFn: () => workflowRunsApi.get(selectedRunId!),
     enabled: !!selectedRunId,
-    refetchInterval: isSelectedActive ? 2000 : false,
   });
 
   const cancelMutation = useMutation({
@@ -127,9 +124,7 @@ export function RunHistoryDrawer({
       <div className="w-[880px] h-full bg-panel border-l border-edge shadow-2xl flex flex-col">
         <div className="flex items-center justify-between px-5 py-3 border-b border-edge shrink-0">
           <div className="flex items-center gap-2">
-            <span className="text-[10px] uppercase tracking-wide text-muted">
-              Run history
-            </span>
+            <span className="text-[10px] uppercase tracking-wide text-muted">Run history</span>
             <span className="text-[10px] text-muted font-mono">
               {runs.length} run{runs.length === 1 ? '' : 's'}
             </span>
@@ -175,17 +170,15 @@ export function RunHistoryDrawer({
                             <span className="text-white font-mono text-[11px]">
                               {r.id.slice(-8)}
                             </span>
-                            <span className="text-muted text-[10px]">
-                              v{r.workflowVersion}
-                            </span>
+                            <span className="text-muted text-[10px]">v{r.workflowVersion}</span>
                           </div>
                           <div className="flex items-center gap-2 mt-0.5 text-muted text-[10px]">
                             <span>{r.triggerKind}</span>
                             <span>·</span>
-                            <span>{formatRelative(r.createdAt)}</span>
+                            <span>{formatRelative(r.createdAt, nowMs)}</span>
                           </div>
                           <div className="text-muted text-[10px] mt-0.5">
-                            {formatDuration(r.startedAt, r.completedAt)}
+                            {formatDuration(r.startedAt, r.completedAt, nowMs)}
                           </div>
                         </div>
                         <ChevronRight size={12} className="text-muted shrink-0 mt-1" />
@@ -205,6 +198,7 @@ export function RunHistoryDrawer({
             ) : (
               <RunDetail
                 detail={detail}
+                nowMs={nowMs}
                 onCancel={() => cancelMutation.mutate(detail.id)}
                 cancelling={cancelMutation.isPending}
               />
@@ -218,10 +212,12 @@ export function RunHistoryDrawer({
 
 function RunDetail({
   detail,
+  nowMs,
   onCancel,
   cancelling,
 }: {
   detail: WorkflowRunWithSteps;
+  nowMs: number;
   onCancel: () => void;
   cancelling: boolean;
 }) {
@@ -231,9 +227,7 @@ function RunDetail({
     <div className="px-5 py-4 space-y-4">
       <div className="flex items-center gap-2">
         <StatusIcon status={detail.status} size={18} />
-        <span className="text-base font-semibold text-white capitalize">
-          {detail.status}
-        </span>
+        <span className="text-base font-semibold text-white capitalize">{detail.status}</span>
         <span className="text-[10px] text-muted font-mono">{detail.id.slice(-12)}</span>
         <div className="flex-1" />
         {isActive && (
@@ -257,7 +251,7 @@ function RunDetail({
         />
         <MetaRow
           label="Duration"
-          value={formatDuration(detail.startedAt, detail.completedAt)}
+          value={formatDuration(detail.startedAt, detail.completedAt, nowMs)}
         />
       </div>
 
@@ -288,7 +282,7 @@ function RunDetail({
                   <span className="text-[10px] text-muted">{step.nodeType}</span>
                   <div className="flex-1" />
                   <span className="text-[10px] text-muted">
-                    {formatDuration(step.startedAt, step.completedAt)}
+                    {formatDuration(step.startedAt, step.completedAt, nowMs)}
                   </span>
                 </div>
                 {step.error && (
@@ -333,10 +327,7 @@ function StepPayload({ label, value }: { label: string; value: unknown }) {
         onClick={() => setOpen((p) => !p)}
         className="w-full flex items-center gap-1 px-3 py-1.5 text-[10px] uppercase tracking-wide text-muted hover:bg-edge/20"
       >
-        <ChevronRight
-          size={10}
-          className={`transition-transform ${open ? 'rotate-90' : ''}`}
-        />
+        <ChevronRight size={10} className={`transition-transform ${open ? 'rotate-90' : ''}`} />
         {label}
       </button>
       {open && (

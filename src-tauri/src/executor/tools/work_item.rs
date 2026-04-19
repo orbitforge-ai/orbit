@@ -410,7 +410,8 @@ fn spawn_cloud_upsert_comment(ctx: &ToolExecutionContext, comment: &WorkItemComm
 
 // ── DB operations (async wrappers that reuse the command helpers) ────────────
 
-const WORK_ITEM_COLUMNS: &str = "id, project_id, title, description, kind, column_id, status, priority,
+const WORK_ITEM_COLUMNS: &str =
+    "id, project_id, title, description, kind, column_id, status, priority,
         assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
         labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at";
 
@@ -539,13 +540,13 @@ async fn update_work_item(
         db,
         id,
         UpdateWorkItem {
-          title,
-          description,
-          kind,
-          column_id: None,
-          priority,
-          labels,
-          metadata: None,
+            title,
+            description,
+            kind,
+            column_id: None,
+            priority,
+            labels,
+            metadata: None,
         },
     )
     .await
