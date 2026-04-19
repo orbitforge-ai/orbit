@@ -14,16 +14,8 @@ import { MessageBubble } from '../../components/chat/MessageBubble';
 import { PermissionPrompt } from '../../components/chat/PermissionPrompt';
 import { ChatInput } from './ChatInput';
 import { ContextGauge } from '../../components/chat/ContextGauge';
-import {
-  onAgentLlmChunk,
-  onAgentContentBlock,
-  onAgentToolResult,
-  onAgentIteration,
-  onMessageReaction,
-  onUserQuestion,
-} from '../../events/runEvents';
 import { onAgentConfigChanged } from '../../events/agentEvents';
-import { onPermissionRequest, onPermissionCancelled } from '../../events/permissionEvents';
+import { useLiveChatStore } from '../../store/liveChatStore';
 import { usePermissionStore } from '../../store/permissionStore';
 import { selectAvatarArchetype } from '../../lib/agentIdentity';
 import { AvatarOverlay, useAvatarState, useAvatarSpeech } from '../../components/avatar';
@@ -47,27 +39,6 @@ interface ChatPanelProps {
   agentIdentity?: AgentIdentityConfig;
 }
 
-let msgId = 0;
-
-function finalizeStreamingMessage(message: DisplayMessage): DisplayMessage {
-  const blocks = [...message.blocks];
-  const lastBlock = blocks[blocks.length - 1];
-  if (lastBlock && lastBlock.kind === 'text' && lastBlock.isStreaming) {
-    blocks[blocks.length - 1] = { ...lastBlock, isStreaming: false };
-  }
-  return { ...message, blocks, isStreaming: false };
-}
-
-function contentBlocksToDisplay(content: ContentBlock[]): DisplayBlock[] {
-  return content.map((block): DisplayBlock => {
-    if (block.type === 'text') return { kind: 'text', text: block.text, isStreaming: false };
-    if (block.type === 'image') {
-      return { kind: 'image', mediaType: block.media_type, data: block.data };
-    }
-    return { kind: 'text', text: '[attachment]', isStreaming: false };
-  });
-}
-
 export function ChatPanel({
   sessionId,
   draft,
@@ -82,8 +53,6 @@ export function ChatPanel({
   const parentRef = useRef<HTMLDivElement>(null);
   const consumedInitialMessageRef = useRef<string | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
-  const [streaming, setStreaming] = useState(false);
-  const [streamMessages, setStreamMessages] = useState<DisplayMessage[]>([]);
   const [selectedModelOverride, setSelectedModelOverride] = useState<ChatModelOverride | null>(
     null
   );
@@ -94,6 +63,14 @@ export function ChatPanel({
   const isLoadingOlderRef = useRef(false);
   const isDraft = Boolean(draft && !sessionId);
   const streamId = sessionId ? `chat:${sessionId}` : null;
+  const streamEntry = useLiveChatStore(
+    useCallback(
+      (state) => (streamId ? state.chatStreams[streamId] ?? null : null),
+      [streamId]
+    )
+  );
+  const streaming = streamEntry?.isStreaming ?? false;
+  const streamMessages = streamEntry?.displayMessages ?? [];
   const pendingPermissionRequestMap = usePermissionStore((s) => s.pending);
 
   // ── Avatar ────────────────────────────────────────────────────────────────
@@ -116,8 +93,6 @@ export function ChatPanel({
   }, [sessionId, agentIdentity?.avatarSpeakAloud]);
 
   useEffect(() => {
-    setStreaming(false);
-    setStreamMessages([]);
     setAutoScroll(true);
     consumedInitialMessageRef.current = null;
     setSelectedModelOverride(null);
@@ -215,23 +190,6 @@ export function ChatPanel({
     staleTime: 30_000,
   });
 
-  const finalizeStreamingState = useCallback(() => {
-    setStreaming(false);
-    setStreamMessages((prev) => {
-      const msgs = [...prev];
-      const last = msgs[msgs.length - 1];
-      if (last && last.isStreaming) {
-        msgs[msgs.length - 1] = finalizeStreamingMessage(last);
-      }
-      return msgs;
-    });
-    if (sessionId) {
-      queryClient.invalidateQueries({ queryKey: ['chat-messages', sessionId] });
-      queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
-      queryClient.invalidateQueries({ queryKey: ['chat-session-execution', sessionId] });
-    }
-  }, [queryClient, sessionId]);
-
   const { data: sessionExecution } = useQuery({
     queryKey: ['chat-session-execution', sessionId],
     queryFn: () => chatApi.getSessionExecution(sessionId!),
@@ -267,7 +225,13 @@ export function ChatPanel({
       {
         id: `queued-user-${initialQueuedMessage.key}`,
         role: 'user',
-        blocks: contentBlocksToDisplay(initialQueuedMessage.content),
+        blocks: initialQueuedMessage.content.map((block): DisplayBlock => {
+          if (block.type === 'text') return { kind: 'text', text: block.text, isStreaming: false };
+          if (block.type === 'image') {
+            return { kind: 'image', mediaType: block.media_type, data: block.data };
+          }
+          return { kind: 'text', text: '[attachment]', isStreaming: false };
+        }),
         isStreaming: false,
         timestamp: new Date().toISOString(),
       },
@@ -280,7 +244,8 @@ export function ChatPanel({
     ];
   }, [initialQueuedMessage, isDraft]);
 
-  const shouldPreferStreamMessages = streaming || streamMessages.length > historyMessages.length;
+  const shouldPreferStreamMessages =
+    streamMessages.length > 0 && (streaming || streamMessages.length > historyMessages.length);
   const displayMessages = isDraft
     ? []
     : shouldPreferStreamMessages
@@ -288,215 +253,6 @@ export function ChatPanel({
       : historyMessages.length > 0
         ? historyMessages
         : optimisticInitialMessages;
-
-  useEffect(() => {
-    if (!streamId || !sessionId) return;
-
-    const unsubs: Promise<() => void>[] = [];
-
-    unsubs.push(
-      onAgentLlmChunk((payload) => {
-        if (payload.runId !== streamId) return;
-        setStreamMessages((prev) => {
-          const msgs = [...prev];
-          let last = msgs[msgs.length - 1];
-          if (!last || last.role !== 'assistant' || !last.isStreaming) {
-            last = { id: `stream-${++msgId}`, role: 'assistant', blocks: [], isStreaming: true };
-            msgs.push(last);
-          } else {
-            last = { ...last };
-            msgs[msgs.length - 1] = last;
-          }
-
-          const blocks = [...last.blocks];
-          const lastBlock = blocks[blocks.length - 1];
-          if (lastBlock && lastBlock.kind === 'text' && lastBlock.isStreaming) {
-            blocks[blocks.length - 1] = { ...lastBlock, text: lastBlock.text + payload.delta };
-          } else {
-            blocks.push({ kind: 'text', text: payload.delta, isStreaming: true });
-          }
-          last.blocks = blocks;
-
-          return msgs;
-        });
-      })
-    );
-
-    unsubs.push(
-      onAgentContentBlock((payload) => {
-        if (payload.runId !== streamId) return;
-        // Hide react_to_message tool calls — no bubble
-        if (payload.block.type === 'tool_use' && payload.block.name === 'react_to_message') return;
-        setStreamMessages((prev) => {
-          const msgs = [...prev];
-          let last = msgs[msgs.length - 1];
-          if (!last || last.role !== 'assistant') return prev;
-          last = { ...last };
-          msgs[msgs.length - 1] = last;
-
-          const blocks = [...last.blocks];
-          const lastBlock = blocks[blocks.length - 1];
-          if (lastBlock && lastBlock.kind === 'text' && lastBlock.isStreaming) {
-            blocks[blocks.length - 1] = { ...lastBlock, isStreaming: false };
-          }
-
-          if (payload.block.type === 'thinking') {
-            blocks.push({ kind: 'thinking', thinking: payload.block.thinking });
-          } else if (payload.block.type === 'tool_use') {
-            blocks.push({
-              kind: 'tool_call',
-              id: payload.block.id,
-              name: payload.block.name,
-              input: payload.block.input,
-            });
-          }
-          last.blocks = blocks;
-
-          return msgs;
-        });
-      })
-    );
-
-    unsubs.push(
-      onAgentToolResult((payload) => {
-        if (payload.runId !== streamId) return;
-        setStreamMessages((prev) => {
-          const msgs = [...prev];
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            const msg = msgs[i];
-            if (msg.role !== 'assistant') continue;
-            for (let j = msg.blocks.length - 1; j >= 0; j--) {
-              const block = msg.blocks[j];
-              if (block.kind === 'tool_call' && block.id === payload.toolUseId) {
-                const updatedMsg = { ...msg, blocks: [...msg.blocks] };
-                updatedMsg.blocks[j] = {
-                  ...block,
-                  result: { content: payload.content, isError: payload.isError },
-                };
-                msgs[i] = updatedMsg;
-                return msgs;
-              }
-            }
-          }
-          return prev;
-        });
-      })
-    );
-
-    unsubs.push(
-      onAgentIteration((payload) => {
-        if (payload.runId !== streamId) return;
-        if (payload.action === 'llm_call' && payload.iteration > 1) {
-          setStreamMessages((prev) => {
-            const msgs = [...prev];
-            const last = msgs[msgs.length - 1];
-            if (last && last.role === 'assistant' && last.isStreaming) {
-              msgs[msgs.length - 1] = finalizeStreamingMessage(last);
-            }
-            return msgs;
-          });
-        }
-        if (payload.action === 'finished') {
-          finalizeStreamingState();
-        }
-      })
-    );
-
-    unsubs.push(
-      onPermissionRequest((payload) => {
-        if (payload.runId !== streamId && payload.sessionId !== sessionId) return;
-        usePermissionStore.getState().addRequest(payload);
-        setStreamMessages((prev) => {
-          const msgs = [...prev];
-          let last = msgs[msgs.length - 1];
-          if (!last || last.role !== 'assistant') {
-            last = { id: `stream-${++msgId}`, role: 'assistant', blocks: [], isStreaming: true };
-            msgs.push(last);
-          } else {
-            last = { ...last };
-            msgs[msgs.length - 1] = last;
-          }
-          last.blocks = [
-            ...last.blocks,
-            {
-              kind: 'permission_prompt' as const,
-              requestId: payload.requestId,
-              toolName: payload.toolName,
-              toolInput: payload.toolInput,
-              riskLevel: payload.riskLevel,
-              riskDescription: payload.riskDescription,
-              suggestedPattern: payload.suggestedPattern,
-            },
-          ];
-          return msgs;
-        });
-      })
-    );
-
-    unsubs.push(
-      onPermissionCancelled((payload) => {
-        usePermissionStore.getState().removeRequest(payload.requestId);
-      })
-    );
-
-    unsubs.push(
-      onUserQuestion((payload) => {
-        if (payload.runId !== streamId && payload.sessionId !== sessionId) return;
-        setStreamMessages((prev) => {
-          const msgs = [...prev];
-          let last = msgs[msgs.length - 1];
-          if (!last || last.role !== 'assistant') {
-            last = { id: `stream-${++msgId}`, role: 'assistant', blocks: [], isStreaming: true };
-            msgs.push(last);
-          } else {
-            last = { ...last };
-            msgs[msgs.length - 1] = last;
-          }
-          last.blocks = [
-            ...last.blocks,
-            {
-              kind: 'user_question_prompt' as const,
-              requestId: payload.requestId,
-              question: payload.question,
-              choices: payload.choices ?? undefined,
-              allowCustom: payload.allowCustom,
-              multiSelect: payload.multiSelect,
-              context: payload.context ?? undefined,
-            },
-          ];
-          return msgs;
-        });
-      })
-    );
-
-    unsubs.push(
-      onMessageReaction((payload) => {
-        if (payload.sessionId !== sessionId) return;
-        // Apply reaction to stream messages with animation
-        setStreamMessages((prev) => {
-          const msgs = [...prev];
-          for (let i = 0; i < msgs.length; i++) {
-            if (msgs[i].dbId === payload.messageId) {
-              const updated = { ...msgs[i] };
-              updated.reactions = [
-                ...(updated.reactions ?? []),
-                { id: payload.reactionId, emoji: payload.emoji, isNew: true },
-              ];
-              msgs[i] = updated;
-              return msgs;
-            }
-          }
-          return prev;
-        });
-        // Invalidate the reactions query so history view stays in sync
-        queryClient.invalidateQueries({ queryKey: ['message-reactions', sessionId] });
-      })
-    );
-
-    return () => {
-      unsubs.forEach((p) => p.then((unsub) => unsub()).catch(() => {}));
-    };
-  }, [finalizeStreamingState, queryClient, sessionId, streamId]);
 
   useEffect(() => {
     if (!streaming || !sessionExecution?.executionState) return;
@@ -510,8 +266,20 @@ export function ChatPanel({
     ) {
       return;
     }
-    finalizeStreamingState();
-  }, [finalizeStreamingState, sessionExecution?.executionState, streaming]);
+    if (streamId) {
+      useLiveChatStore.getState().completeChatStream(streamId);
+      queryClient.invalidateQueries({ queryKey: ['chat-messages', sessionId] });
+      queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
+      queryClient.invalidateQueries({ queryKey: ['chat-session-execution', sessionId] });
+    }
+  }, [queryClient, sessionExecution?.executionState, sessionId, streamId, streaming]);
+
+  useEffect(() => {
+    if (!streamId || !streamEntry || streaming) return;
+    if (historyMessages.length >= streamMessages.length && streamMessages.length > 0) {
+      useLiveChatStore.getState().clearChatStream(streamId);
+    }
+  }, [historyMessages.length, streamEntry, streamId, streamMessages.length, streaming]);
 
   useEffect(() => {
     if (!isLoadingOlderRef.current || !parentRef.current) return;
@@ -562,24 +330,10 @@ export function ChatPanel({
   const handlePersistedSend = useCallback(
     async (content: ContentBlock[]) => {
       if (!sessionId) return;
-
-      const userMsg: DisplayMessage = {
-        id: `user-${++msgId}`,
-        role: 'user',
-        blocks: contentBlocksToDisplay(content),
-        isStreaming: false,
-        timestamp: new Date().toISOString(),
-      };
-
-      const assistantPlaceholder: DisplayMessage = {
-        id: `assistant-${++msgId}`,
-        role: 'assistant',
-        blocks: [],
-        isStreaming: true,
-      };
-
-      setStreamMessages([...historyMessages, userMsg, assistantPlaceholder]);
-      setStreaming(true);
+      const currentStreamId = `chat:${sessionId}`;
+      const localUserMessageId = useLiveChatStore
+        .getState()
+        .startChatStream(currentStreamId, sessionId, historyMessages, content);
       forceThinking();
 
       try {
@@ -588,15 +342,12 @@ export function ChatPanel({
           content,
           selectedModelOverride ?? undefined
         );
-        // Set the dbId so reactions can target this message
-        setStreamMessages((prev) =>
-          prev.map((m) =>
-            m.id === userMsg.id ? { ...m, dbId: resp.userMessageId } : m
-          )
-        );
+        useLiveChatStore
+          .getState()
+          .setUserMessageDbId(currentStreamId, localUserMessageId, resp.userMessageId);
       } catch (err) {
         console.error('Failed to send message:', err);
-        setStreaming(false);
+        useLiveChatStore.getState().clearChatStream(currentStreamId);
         throw err;
       }
     },

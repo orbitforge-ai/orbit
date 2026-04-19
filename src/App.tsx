@@ -4,6 +4,16 @@ import { listen } from '@tauri-apps/api/event';
 import { Sidebar } from './components/Sidebar';
 import { useUiStore } from './store/uiStore';
 import { useAuthStore } from './store/authStore';
+import { useLiveChatStore } from './store/liveChatStore';
+import { onPermissionCancelled, onPermissionRequest } from './events/permissionEvents';
+import {
+  onAgentContentBlock,
+  onAgentIteration,
+  onAgentLlmChunk,
+  onAgentToolResult,
+  onMessageReaction,
+  onUserQuestion,
+} from './events/runEvents';
 import { Dashboard } from './screens/Dashboard';
 import { RunHistory } from './screens/RunHistory';
 import { TaskBuilder } from './screens/TaskBuilder';
@@ -27,6 +37,96 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+function toChatStreamId(runId: string | null | undefined, sessionId?: string | null) {
+  if (runId?.startsWith('chat:')) return runId;
+  if (sessionId) return `chat:${sessionId}`;
+  return null;
+}
+
+function ChatStreamBridge() {
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const unsubs: Promise<() => void>[] = [];
+
+    unsubs.push(
+      onAgentLlmChunk((payload) => {
+        if (!payload.runId.startsWith('chat:')) return;
+        useLiveChatStore.getState().appendTextDelta(payload.runId, payload.delta);
+      })
+    );
+
+    unsubs.push(
+      onAgentContentBlock((payload) => {
+        if (!payload.runId.startsWith('chat:')) return;
+        if (payload.block.type === 'tool_use' && payload.block.name === 'react_to_message') return;
+        useLiveChatStore.getState().addContentBlock(payload.runId, payload);
+      })
+    );
+
+    unsubs.push(
+      onAgentToolResult((payload) => {
+        if (!payload.runId.startsWith('chat:')) return;
+        useLiveChatStore
+          .getState()
+          .addToolResult(payload.runId, payload.toolUseId, payload.content, payload.isError);
+      })
+    );
+
+    unsubs.push(
+      onAgentIteration((payload) => {
+        if (!payload.runId.startsWith('chat:')) return;
+        useLiveChatStore.getState().handleIteration(payload.runId, payload);
+        if (payload.action === 'finished') {
+          const sessionId = payload.runId.slice(5);
+          useLiveChatStore.getState().completeChatStream(payload.runId);
+          queryClient.invalidateQueries({ queryKey: ['chat-messages', sessionId] });
+          queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
+          queryClient.invalidateQueries({ queryKey: ['chat-session-execution', sessionId] });
+          queryClient.invalidateQueries({ queryKey: ['message-reactions', sessionId] });
+        }
+      })
+    );
+
+    unsubs.push(
+      onPermissionRequest((payload) => {
+        const streamId = toChatStreamId(payload.runId, payload.sessionId);
+        if (!streamId) return;
+        useLiveChatStore.getState().addPermissionPrompt(streamId, payload);
+      })
+    );
+
+    unsubs.push(
+      onPermissionCancelled((_payload) => {
+        // Pending request visibility is handled by PermissionStore in Sidebar.
+      })
+    );
+
+    unsubs.push(
+      onUserQuestion((payload) => {
+        const streamId = toChatStreamId(payload.runId, payload.sessionId);
+        if (!streamId) return;
+        useLiveChatStore.getState().addUserQuestionPrompt(streamId, payload);
+      })
+    );
+
+    unsubs.push(
+      onMessageReaction((payload) => {
+        const streamId = `chat:${payload.sessionId}`;
+        useLiveChatStore.getState().addReaction(streamId, payload);
+      })
+    );
+
+    return () => {
+      unsubs.forEach((unsub) => {
+        unsub.then((cleanup) => cleanup()).catch(() => {});
+      });
+    };
+  }, [queryClient]);
+
+  return null;
+}
 
 function AppContent() {
   const { screen, settingsOpen, closeSettings } = useUiStore();
@@ -70,6 +170,7 @@ function AppContent() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
+      <ChatStreamBridge />
       <Sidebar />
       <main className="relative flex-1 overflow-hidden">
         {content}
