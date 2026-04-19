@@ -69,9 +69,9 @@ pub(crate) fn map_workflow(row: &rusqlite::Row) -> rusqlite::Result<ProjectWorkf
 // Save-time validation rules (per the plan, §3 / §8):
 // - All node `type` values must be in KNOWN_NODE_TYPES.
 // - Edges must reference existing node ids.
-// - `logic.if` nodes must have exactly two outgoing edges (sourceHandle
-//   "true" and "false"), and any rule tree they carry must use only known
-//   operators and combinators.
+// - `logic.if` nodes may have zero or one outgoing edge per branch handle
+//   (`sourceHandle` "true" / "false"), and any rule tree they carry must
+//   use only known operators and combinators.
 // - No fan-in: every non-trigger node may have at most one incoming edge.
 
 pub fn validate_graph(graph: &WorkflowGraph) -> Result<(), String> {
@@ -151,10 +151,16 @@ pub fn validate_graph(graph: &WorkflowGraph) -> Result<(), String> {
                     edge.source, edge.id, handle
                 ));
             }
-            logic_if_handles
+            let inserted = logic_if_handles
                 .entry(edge.source.as_str())
                 .or_default()
-                .insert(handle);
+                .insert(handle.clone());
+            if !inserted {
+                return Err(format!(
+                    "workflow: logic.if node '{}' has multiple outgoing '{}' edges; each branch may only connect once",
+                    edge.source, handle
+                ));
+            }
         }
     }
 
@@ -165,20 +171,6 @@ pub fn validate_graph(graph: &WorkflowGraph) -> Result<(), String> {
                 "workflow: node '{}' has {} incoming edges; fan-in / join nodes are not supported",
                 target, count
             ));
-        }
-    }
-
-    // Each logic.if must have exactly two distinct outgoing handles when it
-    // has any outgoing edges. (Saving with zero outgoing is OK during early
-    // editing; the runtime will treat that as a terminal branch.)
-    for id in &logic_if_ids {
-        if let Some(handles) = logic_if_handles.get(id) {
-            if handles.len() != 2 {
-                return Err(format!(
-                    "workflow: logic.if node '{}' must have exactly two outgoing edges (true and false); found handles: {:?}",
-                    id, handles
-                ));
-            }
         }
     }
 
@@ -546,4 +538,58 @@ pub async fn set_project_workflow_enabled(
 
     cloud_upsert_workflow!(cloud, item);
     Ok(item)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_graph;
+    use crate::models::project_workflow::{NodePosition, WorkflowEdge, WorkflowGraph, WorkflowNode};
+    use serde_json::json;
+
+    fn node(id: &str, node_type: &str, data: serde_json::Value) -> WorkflowNode {
+        WorkflowNode {
+            id: id.to_string(),
+            node_type: node_type.to_string(),
+            position: NodePosition { x: 0.0, y: 0.0 },
+            data,
+        }
+    }
+
+    #[test]
+    fn validate_graph_allows_logic_if_with_single_branch_edge() {
+        let graph = WorkflowGraph {
+            schema_version: 1,
+            nodes: vec![
+                node("trigger-1", "trigger.manual", json!({})),
+                node(
+                    "if-1",
+                    "logic.if",
+                    json!({
+                        "rule": {
+                            "field": "trigger.data.count",
+                            "operator": "greaterThan",
+                            "value": 0
+                        }
+                    }),
+                ),
+                node("agent-1", "agent.run", json!({})),
+            ],
+            edges: vec![
+                WorkflowEdge {
+                    id: "edge-trigger-if".to_string(),
+                    source: "trigger-1".to_string(),
+                    target: "if-1".to_string(),
+                    source_handle: None,
+                },
+                WorkflowEdge {
+                    id: "edge-if-true".to_string(),
+                    source: "if-1".to_string(),
+                    target: "agent-1".to_string(),
+                    source_handle: Some("true".to_string()),
+                },
+            ],
+        };
+
+        assert!(validate_graph(&graph).is_ok());
+    }
 }
