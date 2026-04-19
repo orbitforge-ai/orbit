@@ -686,11 +686,16 @@ export interface AgentDefaults {
   webSearchProvider: string;
 }
 
+export interface DeveloperSettings {
+  pluginDevMode: boolean;
+}
+
 export interface GlobalSettings {
   version: number;
   chatDisplay: ChatDisplaySettings;
   agentDefaults: AgentDefaults;
   channels: ChannelConfig[];
+  developer: DeveloperSettings;
 }
 
 // ─── Agent Skills types ────────────────────────────────────────────────────

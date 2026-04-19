@@ -133,6 +133,11 @@ pub struct OAuthProviderSpec {
     pub client_type: String,
     #[serde(default = "default_redirect_uri")]
     pub redirect_uri: String,
+    /// Embedded `client_id` for public PKCE plugins that ship with an
+    /// author-registered OAuth app. Not a secret. Confidential clients leave
+    /// this empty and take the user's own `client_id` via Keychain.
+    #[serde(default)]
+    pub client_id: Option<String>,
 }
 
 fn default_client_type() -> String {

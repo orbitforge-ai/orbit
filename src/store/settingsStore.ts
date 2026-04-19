@@ -4,6 +4,7 @@ import {
   AgentDefaults,
   ChannelConfig,
   ChatDisplaySettings,
+  DeveloperSettings,
   GlobalSettings,
   PermissionRule,
 } from '../types';
@@ -27,6 +28,9 @@ function defaultSettings(): GlobalSettings {
       webSearchProvider: 'brave',
     },
     channels: [],
+    developer: {
+      pluginDevMode: false,
+    },
   };
 }
 
@@ -73,6 +77,7 @@ interface SettingsStore {
 
   updateChatDisplay: (patch: Partial<ChatDisplaySettings>) => Promise<void>;
   updateAgentDefaults: (patch: Partial<AgentDefaults>) => Promise<void>;
+  updateDeveloper: (patch: Partial<DeveloperSettings>) => Promise<void>;
 
   upsertChannel: (channel: ChannelConfig) => Promise<void>;
   removeChannel: (channelId: string) => Promise<void>;
@@ -177,6 +182,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     await get().saveSettings({
       ...current,
       agentDefaults: { ...current.agentDefaults, ...patch },
+    });
+  },
+
+  updateDeveloper: async (patch) => {
+    const current = get().settings;
+    await get().saveSettings({
+      ...current,
+      developer: { ...current.developer, ...patch },
     });
   },
 

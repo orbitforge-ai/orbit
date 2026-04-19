@@ -68,6 +68,20 @@ export interface StagedInstall {
   manifest: PluginManifest;
 }
 
+export interface PluginOAuthProviderStatus {
+  id: string;
+  name: string;
+  clientType: string;
+  connected: boolean;
+  hasClientId: boolean;
+}
+
+export interface PluginOAuthStatus {
+  pluginId: string;
+  anyNeedsConnect: boolean;
+  providers: PluginOAuthProviderStatus[];
+}
+
 export interface PluginEntity {
   id: string;
   pluginId: string;
@@ -140,4 +154,7 @@ export const pluginsApi = {
 
   getEntity: (id: string): Promise<PluginEntity | null> =>
     invoke('get_plugin_entity', { id }),
+
+  listOAuthStatus: (): Promise<PluginOAuthStatus[]> =>
+    invoke('list_plugin_oauth_status'),
 };

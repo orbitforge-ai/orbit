@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listen } from '@tauri-apps/api/event';
-import { X, Link, ScrollText, Database, Info } from 'lucide-react';
-import { pluginsApi, PluginManifest } from '../../api/plugins';
+import { X, Link, ScrollText, Database, Info, CheckCircle2 } from 'lucide-react';
+import { pluginsApi, PluginManifest, PluginOAuthStatus } from '../../api/plugins';
 
 type Tab = 'overview' | 'oauth' | 'entities' | 'logs';
 
 interface Props {
   pluginId: string;
+  initialTab?: Tab;
   onClose: () => void;
 }
 
-export function PluginDetailDrawer({ pluginId, onClose }: Props) {
-  const [tab, setTab] = useState<Tab>('overview');
+export function PluginDetailDrawer({ pluginId, initialTab, onClose }: Props) {
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'overview');
   const manifestQuery = useQuery<PluginManifest | null>({
     queryKey: ['plugin-manifest', pluginId],
     queryFn: () => pluginsApi.getManifest(pluginId),
@@ -118,8 +119,26 @@ function OAuthTab({
   pluginId: string;
   manifest: PluginManifest | null;
 }) {
+  const queryClient = useQueryClient();
   const [clientId, setClientId] = useState<Record<string, string>>({});
   const [clientSecret, setClientSecret] = useState<Record<string, string>>({});
+
+  const statusQuery = useQuery<PluginOAuthStatus[]>({
+    queryKey: ['plugin-oauth-status'],
+    queryFn: () => pluginsApi.listOAuthStatus(),
+  });
+  const providersStatus = statusQuery.data
+    ?.find((s) => s.pluginId === pluginId)
+    ?.providers ?? [];
+
+  useEffect(() => {
+    const unlisten = listen('plugin:oauth:connected', () => {
+      queryClient.invalidateQueries({ queryKey: ['plugin-oauth-status'] });
+    });
+    return () => {
+      unlisten.then((u) => u());
+    };
+  }, [queryClient]);
 
   const connect = useCallback(
     async (providerId: string, clientType: string) => {
@@ -140,6 +159,14 @@ function OAuthTab({
     [pluginId, clientId, clientSecret]
   );
 
+  const disconnect = useCallback(
+    async (providerId: string) => {
+      await pluginsApi.disconnectOAuth(pluginId, providerId);
+      queryClient.invalidateQueries({ queryKey: ['plugin-oauth-status'] });
+    },
+    [pluginId, queryClient]
+  );
+
   if (!manifest) return <div className="text-muted">Loading…</div>;
   if (manifest.oauthProviders.length === 0) {
     return <div className="text-muted">No OAuth providers declared.</div>;
@@ -147,49 +174,63 @@ function OAuthTab({
 
   return (
     <div className="space-y-4">
-      {manifest.oauthProviders.map((p) => (
-        <div key={p.id} className="rounded-lg border border-edge px-3 py-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm font-medium">{p.name}</div>
-              <div className="text-xs text-muted">
-                {p.clientType} client · scopes: {p.scopes.join(', ') || '—'}
+      {manifest.oauthProviders.map((p) => {
+        const connected = providersStatus.find((s) => s.id === p.id)?.connected ?? false;
+        return (
+          <div key={p.id} className="rounded-lg border border-edge px-3 py-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">{p.name}</span>
+                  {connected ? (
+                    <span className="inline-flex items-center gap-1 rounded bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success">
+                      <CheckCircle2 size={10} />
+                      Connected
+                    </span>
+                  ) : null}
+                </div>
+                <div className="text-xs text-muted">
+                  {p.clientType} client · scopes: {p.scopes.join(', ') || '—'}
+                </div>
               </div>
             </div>
-          </div>
-          {p.clientType === 'confidential' ? (
-            <div className="mt-3 space-y-2">
-              <input
-                className="w-full rounded border border-edge bg-background px-2 py-1 text-xs"
-                placeholder="client_id"
-                value={clientId[p.id] ?? ''}
-                onChange={(e) => setClientId({ ...clientId, [p.id]: e.target.value })}
-              />
-              <input
-                className="w-full rounded border border-edge bg-background px-2 py-1 text-xs"
-                placeholder="client_secret (optional)"
-                type="password"
-                value={clientSecret[p.id] ?? ''}
-                onChange={(e) => setClientSecret({ ...clientSecret, [p.id]: e.target.value })}
-              />
+            {!connected && p.clientType === 'confidential' ? (
+              <div className="mt-3 space-y-2">
+                <input
+                  className="w-full rounded border border-edge bg-background px-2 py-1 text-xs"
+                  placeholder="client_id"
+                  value={clientId[p.id] ?? ''}
+                  onChange={(e) => setClientId({ ...clientId, [p.id]: e.target.value })}
+                />
+                <input
+                  className="w-full rounded border border-edge bg-background px-2 py-1 text-xs"
+                  placeholder="client_secret (optional)"
+                  type="password"
+                  value={clientSecret[p.id] ?? ''}
+                  onChange={(e) => setClientSecret({ ...clientSecret, [p.id]: e.target.value })}
+                />
+              </div>
+            ) : null}
+            <div className="mt-3 flex items-center justify-end gap-2">
+              {connected ? (
+                <button
+                  className="rounded border border-edge px-2.5 py-1 text-xs text-secondary hover:bg-surface"
+                  onClick={() => disconnect(p.id)}
+                >
+                  Disconnect
+                </button>
+              ) : (
+                <button
+                  className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-white hover:bg-accent-hover"
+                  onClick={() => connect(p.id, p.clientType)}
+                >
+                  Connect
+                </button>
+              )}
             </div>
-          ) : null}
-          <div className="mt-3 flex items-center justify-end gap-2">
-            <button
-              className="rounded border border-edge px-2 py-1 text-xs text-secondary hover:bg-surface"
-              onClick={() => pluginsApi.disconnectOAuth(pluginId, p.id)}
-            >
-              Disconnect
-            </button>
-            <button
-              className="rounded bg-primary px-2 py-1 text-xs text-white hover:bg-primary-hover"
-              onClick={() => connect(p.id, p.clientType)}
-            >
-              Connect
-            </button>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

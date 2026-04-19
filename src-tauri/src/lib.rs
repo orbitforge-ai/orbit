@@ -407,6 +407,7 @@ pub fn run() {
             commands::plugins::get_plugin_runtime_log,
             commands::plugins::list_plugin_entities,
             commands::plugins::get_plugin_entity,
+            commands::plugins::list_plugin_oauth_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

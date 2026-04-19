@@ -104,6 +104,28 @@ pub async fn start_flow<R: Runtime>(
         .find(|p| p.id == provider_id)
         .ok_or_else(|| format!("provider {:?} not declared by plugin", provider_id))?;
 
+    // Resolve client_id: Keychain (user-supplied) overrides manifest, so a
+    // confidential-client plugin where the user pasted their own App still
+    // wins over an embedded default. Public PKCE plugins that ship with a
+    // provider-registered client_id use the manifest value.
+    let client_id = get_secret(plugin_id, &format!("oauth.{}.client_id", provider_id))
+        .ok()
+        .or_else(|| provider.client_id.clone());
+    let client_id = client_id.ok_or_else(|| {
+        if provider.client_type == "confidential" {
+            format!(
+                "Paste a {} OAuth App client_id (and client_secret) in the Plugin detail drawer's OAuth tab before connecting.",
+                provider.name
+            )
+        } else {
+            format!(
+                "Provider {:?} has no embedded clientId and no user-supplied credentials. \
+                 Either add `oauthProviders[].clientId` to the manifest or supply one via the OAuth tab.",
+                provider.id
+            )
+        }
+    })?;
+
     let state_token = ulid::Ulid::new().to_string();
     let (verifier, challenge) = generate_pkce();
 
@@ -111,6 +133,7 @@ pub async fn start_flow<R: Runtime>(
         .map_err(|e| format!("invalid authorizationUrl: {}", e))?;
     {
         let mut q = auth_url.query_pairs_mut();
+        q.append_pair("client_id", &client_id);
         q.append_pair("response_type", "code");
         q.append_pair("state", &state_token);
         q.append_pair("redirect_uri", &provider.redirect_uri);
@@ -119,12 +142,6 @@ pub async fn start_flow<R: Runtime>(
         }
         q.append_pair("code_challenge", &challenge);
         q.append_pair("code_challenge_method", "S256");
-        // Confidential clients still send their client_id; the secret is
-        // only used at token exchange time.
-        if let Ok(client_id) = get_secret(plugin_id, &format!("oauth.{}.client_id", provider_id))
-        {
-            q.append_pair("client_id", &client_id);
-        }
     }
 
     manager.oauth_state.park(
@@ -220,10 +237,13 @@ pub async fn handle_callback<R: Runtime>(
         ("redirect_uri", pending.redirect_uri.clone()),
         ("code_verifier", pending.pkce_verifier),
     ];
-    if let Ok(client_id) = get_secret(
+    let client_id = get_secret(
         &pending.plugin_id,
         &format!("oauth.{}.client_id", pending.provider_id),
-    ) {
+    )
+    .ok()
+    .or_else(|| provider.client_id.clone());
+    if let Some(client_id) = client_id {
         form.push(("client_id", client_id));
     }
     if provider.client_type == "confidential" {

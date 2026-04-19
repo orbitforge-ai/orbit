@@ -634,6 +634,40 @@ function PermissionRulesSection() {
   );
 }
 
+// ─── Developer ───────────────────────────────────────────────────────────────
+
+function DeveloperSection() {
+  const pluginDevMode = useSettingsStore((s) => s.settings.developer.pluginDevMode);
+  const updateDeveloper = useSettingsStore((s) => s.updateDeveloper);
+
+  return (
+    <section className="space-y-3">
+      <h3 className="text-sm font-semibold text-white">Developer</h3>
+      <div className="rounded-lg border border-edge bg-background px-4 py-3">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <label className="text-sm font-medium text-white">Plugin dev mode</label>
+            <p className="text-xs text-muted mt-1">
+              Unlocks &ldquo;Install from directory&rdquo; on the Plugins screen, shows MCP
+              wire logs, and skips manifest hash checks. Plugins run unsandboxed from disk.
+            </p>
+          </div>
+          <Switch.Root
+            checked={pluginDevMode}
+            onCheckedChange={(v) => {
+              void updateDeveloper({ pluginDevMode: v });
+            }}
+            className="w-9 h-5 rounded-full bg-edge data-[state=checked]:bg-accent transition-colors outline-none shrink-0"
+            aria-label="Plugin dev mode"
+          >
+            <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
+          </Switch.Root>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 // ─── Settings screen shell ───────────────────────────────────────────────────
 
 interface SettingsProps {
@@ -749,6 +783,7 @@ export function Settings({ onClose }: SettingsProps = {}) {
           {loaded && <ChannelsSection />}
           {loaded && <AgentDefaultsSection />}
           {loaded && <PermissionRulesSection />}
+          {loaded && <DeveloperSection />}
 
           <section className="space-y-3">
             <h3 className="text-sm font-semibold text-white">Model Providers</h3>

@@ -16,41 +16,52 @@ import {
 import {
   pluginsApi,
   PluginManifest,
+  PluginOAuthStatus,
   PluginSummary,
   StagedInstall,
 } from '../../api/plugins';
+import { useSettingsStore } from '../../store/settingsStore';
 import { PluginInstallModal } from './PluginInstallModal';
 import { PluginDetailDrawer } from './PluginDetailDrawer';
+
+type DrawerTab = 'overview' | 'oauth' | 'entities' | 'logs';
 
 export function Plugins() {
   const queryClient = useQueryClient();
   const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
+  const [selectedTab, setSelectedTab] = useState<DrawerTab>('overview');
   const [staged, setStaged] = useState<StagedInstall | null>(null);
-  const [devMode, setDevMode] = useState(false);
+  const devMode = useSettingsStore((s) => s.settings.developer.pluginDevMode);
 
   const plugins = useQuery<PluginSummary[]>({
     queryKey: ['plugins'],
     queryFn: () => pluginsApi.list(),
   });
 
-  useEffect(() => {
-    const unlisten = listen('plugins:changed', () => {
-      queryClient.invalidateQueries({ queryKey: ['plugins'] });
-    });
-    return () => {
-      unlisten.then((u) => u());
-    };
-  }, [queryClient]);
+  const oauthStatus = useQuery<PluginOAuthStatus[]>({
+    queryKey: ['plugin-oauth-status'],
+    queryFn: () => pluginsApi.listOAuthStatus(),
+  });
+
+  const oauthByPlugin = useMemo(() => {
+    const map = new Map<string, PluginOAuthStatus>();
+    for (const entry of oauthStatus.data ?? []) map.set(entry.pluginId, entry);
+    return map;
+  }, [oauthStatus.data]);
 
   useEffect(() => {
-    // Read dev mode flag. Best-effort: the global settings API would be
-    // cleaner, but for now we call a lightweight invoke if available.
-    import('@tauri-apps/api/core').then(({ invoke }) => {
-      invoke<{ developer?: { pluginDevMode?: boolean } }>('get_global_settings')
-        .then((s) => setDevMode(Boolean(s.developer?.pluginDevMode)))
-        .catch(() => {});
+    const unlistenChanged = listen('plugins:changed', () => {
+      queryClient.invalidateQueries({ queryKey: ['plugins'] });
+      queryClient.invalidateQueries({ queryKey: ['plugin-oauth-status'] });
     });
-  }, []);
+    const unlistenOAuth = listen('plugin:oauth:connected', () => {
+      queryClient.invalidateQueries({ queryKey: ['plugin-oauth-status'] });
+    });
+    return () => {
+      unlistenChanged.then((u) => u());
+      unlistenOAuth.then((u) => u());
+    };
+  }, [queryClient]);
 
   const installFromFile = useCallback(async () => {
     const path = await openDialog({
@@ -138,7 +149,7 @@ export function Plugins() {
             </button>
           ) : null}
           <button
-            className="flex items-center gap-1 rounded bg-primary px-3 py-1.5 text-sm text-white hover:bg-primary-hover"
+            className="flex items-center gap-1 rounded bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-hover"
             onClick={installFromFile}
           >
             <Plus size={13} />
@@ -167,12 +178,33 @@ export function Plugins() {
               <PluginCard
                 key={plugin.id}
                 plugin={plugin}
-                onOpen={() => setSelectedPluginId(plugin.id)}
+                oauth={oauthByPlugin.get(plugin.id) ?? null}
+                onOpen={() => {
+                  setSelectedTab('overview');
+                  setSelectedPluginId(plugin.id);
+                }}
                 onToggle={(enabled) =>
                   setEnabledMut.mutate({ id: plugin.id, enabled })
                 }
                 onReload={() => reloadMut.mutate(plugin.id)}
                 onUninstall={() => uninstallMut.mutate(plugin.id)}
+                onConnectOAuth={async () => {
+                  const status = oauthByPlugin.get(plugin.id);
+                  const target = status?.providers.find(
+                    (p) => !p.connected && (p.clientType !== 'confidential' || p.hasClientId),
+                  );
+                  if (target) {
+                    try {
+                      await pluginsApi.startOAuth(plugin.id, target.id);
+                      return;
+                    } catch (e) {
+                      alert(`Connect failed: ${e}`);
+                      return;
+                    }
+                  }
+                  setSelectedTab('oauth');
+                  setSelectedPluginId(plugin.id);
+                }}
               />
             ))}
           </div>
@@ -204,6 +236,7 @@ export function Plugins() {
       {selectedPluginId ? (
         <PluginDetailDrawer
           pluginId={selectedPluginId}
+          initialTab={selectedTab}
           onClose={() => setSelectedPluginId(null)}
         />
       ) : null}
@@ -213,13 +246,24 @@ export function Plugins() {
 
 interface PluginCardProps {
   plugin: PluginSummary;
+  oauth: PluginOAuthStatus | null;
   onOpen: () => void;
   onToggle: (enabled: boolean) => void;
   onReload: () => void;
   onUninstall: () => void;
+  onConnectOAuth: () => void;
 }
 
-function PluginCard({ plugin, onOpen, onToggle, onReload, onUninstall }: PluginCardProps) {
+function PluginCard({
+  plugin,
+  oauth,
+  onOpen,
+  onToggle,
+  onReload,
+  onUninstall,
+  onConnectOAuth,
+}: PluginCardProps) {
+  const needsOAuth = oauth?.anyNeedsConnect ?? false;
   return (
     <div className="rounded-lg border border-edge bg-background px-4 py-3">
       <div className="flex items-start justify-between gap-3">
@@ -251,6 +295,27 @@ function PluginCard({ plugin, onOpen, onToggle, onReload, onUninstall }: PluginC
         </button>
         <StatusDot running={plugin.running} enabled={plugin.enabled} />
       </div>
+      {needsOAuth && plugin.enabled ? (
+        <div className="mt-3 flex items-center justify-between rounded border border-warning/40 bg-warning/10 px-2 py-2 text-xs">
+          <div className="flex items-center gap-1 text-warning">
+            <AlertCircle size={12} />
+            <span>
+              {oauth?.providers.length === 1
+                ? `${oauth.providers[0]?.name} not connected`
+                : `${oauth?.providers.filter((p) => !p.connected).length ?? 0} providers not connected`}
+            </span>
+          </div>
+          <button
+            className="rounded bg-accent px-2.5 py-1 text-[11px] font-medium text-white hover:bg-accent-hover"
+            onClick={(e) => {
+              e.stopPropagation();
+              onConnectOAuth();
+            }}
+          >
+            Connect
+          </button>
+        </div>
+      ) : null}
       <div className="mt-3 flex items-center justify-between border-t border-edge pt-3">
         <label className="flex items-center gap-2 text-xs text-secondary">
           <input

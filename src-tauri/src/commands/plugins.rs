@@ -169,6 +169,67 @@ pub fn get_plugin_entity(
     plugins::entities::get(&db, &id)
 }
 
+#[tauri::command]
+pub fn list_plugin_oauth_status(
+    manager: State<'_, Arc<PluginManager>>,
+) -> Vec<PluginOAuthStatus> {
+    let mut out = Vec::new();
+    for manifest in manager.manifests() {
+        if manifest.oauth_providers.is_empty() {
+            continue;
+        }
+        let providers: Vec<_> = manifest
+            .oauth_providers
+            .iter()
+            .map(|p| {
+                let connected = plugins::oauth::get_secret(
+                    &manifest.id,
+                    &format!("oauth.{}.access", p.id),
+                )
+                .is_ok();
+                let has_client_id = p.client_id.is_some()
+                    || plugins::oauth::get_secret(
+                        &manifest.id,
+                        &format!("oauth.{}.client_id", p.id),
+                    )
+                    .is_ok();
+                PluginOAuthProviderStatus {
+                    id: p.id.clone(),
+                    name: p.name.clone(),
+                    client_type: p.client_type.clone(),
+                    connected,
+                    has_client_id,
+                }
+            })
+            .collect();
+        let any_needs_connect = providers.iter().any(|p| !p.connected);
+        out.push(PluginOAuthStatus {
+            plugin_id: manifest.id.clone(),
+            any_needs_connect,
+            providers,
+        });
+    }
+    out
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginOAuthStatus {
+    pub plugin_id: String,
+    pub any_needs_connect: bool,
+    pub providers: Vec<PluginOAuthProviderStatus>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginOAuthProviderStatus {
+    pub id: String,
+    pub name: String,
+    pub client_type: String,
+    pub connected: bool,
+    pub has_client_id: bool,
+}
+
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StagedInstall {
