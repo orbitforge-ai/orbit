@@ -61,21 +61,24 @@ pub fn bootstrap_bundled_plugins(registry: &mut super::registry::PluginRegistry)
                 let _ = installed;
                 // V1: always overwrite if version differs, preserving the
                 // registry entry so enable state carries across upgrades.
-                if let Ok(installed_manifest) =
-                    super::manifest::load_from_path(&super::plugins_dir().join(&manifest.id).join("plugin.json"))
-                {
+                if let Ok(installed_manifest) = super::manifest::load_from_path(
+                    &super::plugins_dir().join(&manifest.id).join("plugin.json"),
+                ) {
                     if installed_manifest.version != manifest.version {
                         let target = super::plugins_dir().join(&manifest.id);
                         let _ = std::fs::remove_dir_all(&target);
                         if let Err(e) = copy_dir_recursive(&src, &target) {
                             tracing::warn!(
                                 "bundled plugin upgrade copy failed for {}: {}",
-                                manifest.id, e
+                                manifest.id,
+                                e
                             );
                         } else {
                             tracing::info!(
                                 "bundled plugin upgraded: {} {} -> {}",
-                                manifest.id, installed_manifest.version, manifest.version
+                                manifest.id,
+                                installed_manifest.version,
+                                manifest.version
                             );
                         }
                     }
@@ -95,7 +98,11 @@ pub fn bootstrap_bundled_plugins(registry: &mut super::registry::PluginRegistry)
         let mut entry = super::registry::RegistryEntry::new(manifest.id.clone());
         entry.bundled = true;
         let _ = registry.upsert(entry);
-        tracing::info!("bundled plugin installed: {} v{}", manifest.id, manifest.version);
+        tracing::info!(
+            "bundled plugin installed: {} v{}",
+            manifest.id,
+            manifest.version
+        );
     }
 }
 
@@ -129,13 +136,11 @@ pub fn stage_from_zip(zip_path: &Path) -> Result<(String, PluginManifest), Strin
 
     let staging_id = ulid::Ulid::new().to_string();
     let target = staging_dir().join(&staging_id);
-    std::fs::create_dir_all(&target)
-        .map_err(|e| format!("failed to create staging dir: {}", e))?;
+    std::fs::create_dir_all(&target).map_err(|e| format!("failed to create staging dir: {}", e))?;
 
-    let file = std::fs::File::open(zip_path)
-        .map_err(|e| format!("failed to open zip: {}", e))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| format!("failed to open zip archive: {}", e))?;
+    let file = std::fs::File::open(zip_path).map_err(|e| format!("failed to open zip: {}", e))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("failed to open zip archive: {}", e))?;
 
     extract_archive(&mut archive, &target).inspect_err(|_| {
         let _ = std::fs::remove_dir_all(&target);
@@ -166,8 +171,7 @@ pub fn commit_from_staging(staging_id: &str) -> Result<PluginManifest, String> {
     }
     std::fs::create_dir_all(target.parent().unwrap_or_else(|| Path::new("/")))
         .map_err(|e| format!("failed to create plugins parent dir: {}", e))?;
-    std::fs::rename(&source, &target)
-        .map_err(|e| format!("failed to commit plugin: {}", e))?;
+    std::fs::rename(&source, &target).map_err(|e| format!("failed to commit plugin: {}", e))?;
 
     Ok(manifest)
 }
@@ -197,8 +201,7 @@ pub fn install_from_directory(source: &Path) -> Result<PluginManifest, String> {
         std::fs::remove_dir_all(&target)
             .map_err(|e| format!("failed to remove existing plugin dir: {}", e))?;
     }
-    std::fs::create_dir_all(&target)
-        .map_err(|e| format!("failed to create plugin dir: {}", e))?;
+    std::fs::create_dir_all(&target).map_err(|e| format!("failed to create plugin dir: {}", e))?;
 
     // The pointer file tells the runtime where the real source lives. Copy
     // the manifest out so loading logic can read it without resolving the
@@ -282,12 +285,9 @@ mod tests {
             w.write_all(b"boom").unwrap();
             w.finish().unwrap();
         }
-        let mut archive =
-            zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-        let temp = std::env::temp_dir().join(format!(
-            "orbit-zip-test-{}",
-            ulid::Ulid::new().to_string()
-        ));
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("orbit-zip-test-{}", ulid::Ulid::new().to_string()));
         std::fs::create_dir_all(&temp).unwrap();
         let res = extract_archive(&mut archive, &temp);
         let _ = std::fs::remove_dir_all(&temp);

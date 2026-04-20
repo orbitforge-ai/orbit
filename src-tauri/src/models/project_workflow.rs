@@ -31,7 +31,7 @@ pub struct CreateProjectWorkflow {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateProjectWorkflow {
     pub name: Option<String>,
-    pub description: Option<String>,
+    pub description: Option<Option<String>>,
     pub trigger_kind: Option<String>,
     pub trigger_config: Option<serde_json::Value>,
     pub graph: Option<WorkflowGraph>,
@@ -90,6 +90,8 @@ pub struct WorkflowEdge {
     /// For `logic.if`: `"true"` or `"false"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_handle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_handle: Option<String>,
 }
 
 // ── Rule tree (for logic.if) ──────────────────────────────────────────────────

@@ -230,8 +230,8 @@ async fn execute_agent_loop_internal(
         app: app.clone(),
         db: db.clone(),
     });
-    let provider = llm_provider::create_provider_with_mcp(provider_name, api_key, wiring)
-        .map_err(|e| {
+    let provider =
+        llm_provider::create_provider_with_mcp(provider_name, api_key, wiring).map_err(|e| {
             log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
             log.flush_to_file(log_path);
             e
@@ -1122,8 +1122,8 @@ pub async fn run_pulse(
         app: app.clone(),
         db: db.clone(),
     });
-    let provider = llm_provider::create_provider_with_mcp(provider_name, api_key, wiring)
-        .map_err(|e| {
+    let provider =
+        llm_provider::create_provider_with_mcp(provider_name, api_key, wiring).map_err(|e| {
             log.log(app, run_id, vec![("stderr".to_string(), e.clone())]);
             log.flush_to_file(log_path);
             e

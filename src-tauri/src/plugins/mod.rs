@@ -49,7 +49,10 @@ pub fn staging_dir() -> PathBuf {
 /// Path where a plugin's core-API unix socket lives. The subprocess reads
 /// this path from `ORBIT_CORE_API_SOCKET` and dials in via JSON-RPC.
 pub fn core_api_socket_path(plugin_id: &str) -> PathBuf {
-    plugins_dir().join(plugin_id).join(".orbit").join("core.sock")
+    plugins_dir()
+        .join(plugin_id)
+        .join(".orbit")
+        .join("core.sock")
 }
 
 /// Top-level plugin subsystem. Lives in Tauri managed state and is the only
@@ -84,7 +87,10 @@ impl PluginManager {
         // into the user's plugins dir. Bundled plugins are trusted so we skip
         // the staging/review step.
         let mut registry = PluginRegistry::load(&plugins_dir).unwrap_or_else(|e| {
-            tracing::warn!("failed to load plugin registry.json ({}); starting empty", e);
+            tracing::warn!(
+                "failed to load plugin registry.json ({}); starting empty",
+                e
+            );
             PluginRegistry::default()
         });
         install::bootstrap_bundled_plugins(&mut registry);
@@ -107,7 +113,10 @@ impl PluginManager {
         tracing::info!("plugin manager initialised: {} installed", manifests.len());
 
         Self {
-            inner: Arc::new(RwLock::new(PluginManagerInner { registry, manifests })),
+            inner: Arc::new(RwLock::new(PluginManagerInner {
+                registry,
+                manifests,
+            })),
             runtime: Arc::new(RuntimeRegistry::new()),
             oauth_state: Arc::new(oauth::OAuthState::new()),
             core_api: Arc::new(CoreApiServer::new()),
@@ -169,7 +178,9 @@ impl PluginManager {
                 let manifest = inner.manifests.iter().find(|m| m.id == entry.id);
                 PluginSummary {
                     id: entry.id.clone(),
-                    name: manifest.map(|m| m.name.clone()).unwrap_or_else(|| entry.id.clone()),
+                    name: manifest
+                        .map(|m| m.name.clone())
+                        .unwrap_or_else(|| entry.id.clone()),
                     version: manifest.map(|m| m.version.clone()).unwrap_or_default(),
                     description: manifest.and_then(|m| m.description.clone()),
                     enabled: entry.enabled,
@@ -315,11 +326,7 @@ impl PluginManager {
 
     /// Uninstall — kill subprocess, delete files and registry entry, wipe
     /// Keychain secrets. **Retains** `plugin_entities` rows per V1 policy.
-    pub fn uninstall<R: Runtime>(
-        &self,
-        app: &AppHandle<R>,
-        plugin_id: &str,
-    ) -> Result<(), String> {
+    pub fn uninstall<R: Runtime>(&self, app: &AppHandle<R>, plugin_id: &str) -> Result<(), String> {
         let plugins_dir = plugins_dir();
 
         self.runtime.shutdown(plugin_id);

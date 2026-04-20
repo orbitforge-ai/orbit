@@ -819,13 +819,8 @@ pub async fn reorder_work_items(
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let mut conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
-        let resolved_column_id = resolve_target_column(
-            &conn,
-            &project_id,
-            column_id.as_deref(),
-            status.as_deref(),
-        )?
-        .id;
+        let resolved_column_id =
+            resolve_target_column(&conn, &project_id, column_id.as_deref(), status.as_deref())?.id;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         for (idx, item_id) in ordered_ids.iter().enumerate() {
             let pos = ((idx + 1) as f64) * 1024.0;

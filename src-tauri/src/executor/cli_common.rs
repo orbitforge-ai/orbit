@@ -17,11 +17,7 @@ pub fn resolve_cli(binary: &str) -> Option<PathBuf> {
     if let Ok(path) = which::which(binary) {
         return Some(path);
     }
-    for candidate in [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/bin",
-    ] {
+    for candidate in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
         let p = PathBuf::from(candidate).join(binary);
         if p.exists() {
             return Some(p);
@@ -62,10 +58,7 @@ pub fn transcript_for_cli(messages: &[ChatMessage]) -> (String, String) {
 
     let history_text = messages[..history_end_idx]
         .iter()
-        .filter_map(|m| {
-            extract_text(&m.content)
-                .map(|t| format!("[{}]\n{}", m.role, t))
-        })
+        .filter_map(|m| extract_text(&m.content).map(|t| format!("[{}]\n{}", m.role, t)))
         .collect::<Vec<_>>()
         .join("\n\n");
 

@@ -21,8 +21,8 @@ use tokio::process::Command;
 use tracing::{debug, warn};
 
 use crate::events::emitter::{emit_agent_content_block, emit_agent_llm_chunk, emit_log_chunk};
-use crate::executor::cli_common;
 use crate::executor::claude_cli::SessionFn;
+use crate::executor::cli_common;
 use crate::executor::llm_provider::{
     ChatMessage, ContentBlock, LlmConfig, LlmProvider, LlmResponse, StopReason, ToolDefinition,
     Usage,
@@ -59,8 +59,9 @@ struct StreamContext<'a> {
 }
 
 fn binary_path() -> Result<PathBuf, String> {
-    cli_common::resolve_cli("codex")
-        .ok_or_else(|| "codex CLI not found on PATH. Install it from https://github.com/openai/codex.".to_string())
+    cli_common::resolve_cli("codex").ok_or_else(|| {
+        "codex CLI not found on PATH. Install it from https://github.com/openai/codex.".to_string()
+    })
 }
 
 fn user_codex_home() -> PathBuf {
@@ -205,9 +206,9 @@ impl LlmProvider for CodexCliProvider {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        let mut child = cmd.spawn().map_err(|e| {
-            format!("failed to spawn `{}`: {}", binary.display(), e)
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("failed to spawn `{}`: {}", binary.display(), e))?;
 
         if let Some(mut stdin) = child.stdin.take() {
             if let Err(e) = stdin.write_all(prompt.as_bytes()).await {
@@ -407,10 +408,7 @@ fn handle_item(ctx: &mut StreamContext<'_>, item: &Value) {
             // Sandboxed command attempt — only shows up if the model tried
             // to use Codex's native shell. Surface it so users see what was
             // attempted; the sandbox should have refused write operations.
-            let cmd = item
-                .get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let cmd = item.get("command").and_then(|v| v.as_str()).unwrap_or("");
             emit_log_chunk(
                 ctx.app,
                 ctx.run_id,
@@ -429,7 +427,11 @@ fn handle_item(ctx: &mut StreamContext<'_>, item: &Value) {
 fn parse_codex_error(raw: &str) -> String {
     let trimmed = raw.trim();
     if let Ok(outer) = serde_json::from_str::<Value>(trimmed) {
-        if let Some(inner) = outer.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+        if let Some(inner) = outer
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+        {
             return format!("Codex CLI error: {}", inner);
         }
         if let Some(message) = outer.get("message").and_then(|m| m.as_str()) {
@@ -490,10 +492,7 @@ mod tests {
         // indirectly via apply_usage here; full event path is covered by
         // integration probes in the PR.
         let mut usage = Usage::default();
-        apply_usage(
-            &mut usage,
-            &json!({"input_tokens": 10, "output_tokens": 3}),
-        );
+        apply_usage(&mut usage, &json!({"input_tokens": 10, "output_tokens": 3}));
         assert_eq!(usage.input_tokens, 10);
         assert_eq!(usage.output_tokens, 3);
     }

@@ -45,7 +45,10 @@ impl HookEvent {
     }
 
     pub fn is_blocking(self) -> bool {
-        matches!(self, HookEvent::AgentToolBeforeCall | HookEvent::EntityWorkItemBeforeDelete)
+        matches!(
+            self,
+            HookEvent::AgentToolBeforeCall | HookEvent::EntityWorkItemBeforeDelete
+        )
     }
 }
 

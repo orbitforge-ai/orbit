@@ -237,8 +237,8 @@ pub fn load_from_path(path: &Path) -> Result<PluginManifest, String> {
             MAX_MANIFEST_BYTES
         ));
     }
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("failed to read plugin.json: {}", e))?;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("failed to read plugin.json: {}", e))?;
     parse_and_validate(&content)
 }
 
@@ -268,12 +268,21 @@ pub fn validate(manifest: &PluginManifest) -> Result<(), String> {
         return Err("manifest.name must not be empty".into());
     }
 
-    Version::parse(&manifest.version)
-        .map_err(|_| format!("manifest.version {:?} is not valid semver", manifest.version))?;
+    Version::parse(&manifest.version).map_err(|_| {
+        format!(
+            "manifest.version {:?} is not valid semver",
+            manifest.version
+        )
+    })?;
 
     match manifest.runtime.kind.as_str() {
         "mcp-stdio" => {}
-        other => return Err(format!("unsupported runtime.type {:?} (V1 supports mcp-stdio)", other)),
+        other => {
+            return Err(format!(
+                "unsupported runtime.type {:?} (V1 supports mcp-stdio)",
+                other
+            ))
+        }
     }
     if manifest.runtime.command.trim().is_empty() {
         return Err("runtime.command must not be empty".into());
@@ -353,8 +362,12 @@ pub fn validate(manifest: &PluginManifest) -> Result<(), String> {
 }
 
 fn check_host_api_compat(declared: &str) -> Result<(), String> {
-    let req = VersionReq::parse(declared)
-        .map_err(|e| format!("hostApiVersion {:?} is not a valid semver range: {}", declared, e))?;
+    let req = VersionReq::parse(declared).map_err(|e| {
+        format!(
+            "hostApiVersion {:?} is not a valid semver range: {}",
+            declared, e
+        )
+    })?;
     let current = Version::parse(PLUGIN_HOST_API_VERSION)
         .expect("PLUGIN_HOST_API_VERSION must be valid semver");
     if !req.matches(&current) {
@@ -371,7 +384,10 @@ fn check_reverse_dns_id(id: &str) -> Result<(), String> {
         return Err("manifest.id must not be empty".into());
     }
     if id.contains("..") || id.contains('/') || id.contains('\\') {
-        return Err(format!("manifest.id {:?} contains forbidden characters", id));
+        return Err(format!(
+            "manifest.id {:?} contains forbidden characters",
+            id
+        ));
     }
     let parts: Vec<&str> = id.split('.').collect();
     if parts.len() < 2 {

@@ -74,7 +74,8 @@ pub(super) async fn execute<R: tauri::Runtime>(
         .state::<SessionExecutionRegistry>()
         .inner()
         .clone();
-    let permission_registry = runtime_app.state::<crate::executor::permissions::PermissionRegistry>();
+    let permission_registry =
+        runtime_app.state::<crate::executor::permissions::PermissionRegistry>();
     let memory_client = ctx
         .app
         .state::<Option<MemoryServiceState>>()

@@ -65,6 +65,7 @@ function toFlowEdge(edge: WorkflowEdge): Edge {
     source: edge.source,
     target: edge.target,
     sourceHandle: edge.sourceHandle ?? undefined,
+    targetHandle: edge.targetHandle ?? undefined,
     label:
       edge.sourceHandle === 'true' || edge.sourceHandle === 'false'
         ? edge.sourceHandle
@@ -106,6 +107,7 @@ function flowToWorkflow(nodes: Node[], edges: Edge[]): WorkflowGraph {
       source: e.source,
       target: e.target,
       sourceHandle: e.sourceHandle ?? null,
+      targetHandle: e.targetHandle ?? null,
     })),
   };
 }

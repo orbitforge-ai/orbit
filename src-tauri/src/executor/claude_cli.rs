@@ -28,7 +28,8 @@ pub type SessionFn = std::sync::Arc<dyn Fn() -> Option<McpSession> + Send + Sync
 /// the MCP-gated permission path. Keep conservative — newer CLI releases may
 /// add tools; the defense-in-depth warning in the Settings UI covers the gap
 /// until this list is audited against a pinned CLI version.
-const DISALLOWED_BUILTIN_TOOLS: &str = "Bash,Edit,Read,Write,Glob,Grep,WebFetch,WebSearch,NotebookEdit,MultiEdit,Task";
+const DISALLOWED_BUILTIN_TOOLS: &str =
+    "Bash,Edit,Read,Write,Glob,Grep,WebFetch,WebSearch,NotebookEdit,MultiEdit,Task";
 
 pub struct ClaudeCliProvider {
     mcp: Option<McpServerHandle>,
@@ -85,8 +86,7 @@ fn build_mcp_config(handle: &McpServerHandle, token: &str) -> Result<PathBuf, St
         }
     });
     let dir = std::env::temp_dir().join("orbit-mcp");
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("failed to create mcp temp dir: {}", e))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create mcp temp dir: {}", e))?;
     let path = dir.join(format!("claude-{}.json", ulid::Ulid::new()));
     std::fs::write(&path, serde_json::to_string(&cfg).unwrap())
         .map_err(|e| format!("failed to write mcp config: {}", e))?;
@@ -181,13 +181,9 @@ impl LlmProvider for ClaudeCliProvider {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        let mut child = cmd.spawn().map_err(|e| {
-            format!(
-                "failed to spawn `{}`: {}",
-                binary.display(),
-                e
-            )
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("failed to spawn `{}`: {}", binary.display(), e))?;
 
         if let Some(mut stdin) = child.stdin.take() {
             let line = format!("{}\n", input_payload);
@@ -378,8 +374,16 @@ fn handle_assistant_message(ctx: &mut StreamContext<'_>, msg: &Value) {
                 }
             }
             "tool_use" => {
-                let id = block.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let id = block
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let name = block
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let input = block.get("input").cloned().unwrap_or(json!({}));
                 ctx.content.push(ContentBlock::ToolUse {
                     id: id.clone(),

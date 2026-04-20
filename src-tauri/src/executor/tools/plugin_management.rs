@@ -27,13 +27,12 @@ impl ToolHandler for PluginManagementTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description:
-                "Manage Orbit plugins from an agent. Actions: `list` (all installed), \
+            description: "Manage Orbit plugins from an agent. Actions: `list` (all installed), \
                  `status` (single plugin state), `logs` (recent stderr), `oauth_status` \
                  (connected providers), and when developer.pluginDevMode is enabled: \
                  `install_from_directory`, `enable`, `disable`, `reload`, `uninstall`. \
                  Used by the `create-plugin` skill to scaffold, install, and iterate."
-                    .to_string(),
+                .to_string(),
             input_schema: json!({
                 "type": "object",
                 "required": ["action"],
@@ -170,9 +169,7 @@ fn require_plugin_id(input: &Value) -> Result<String, String> {
 fn require_dev_mode() -> Result<(), String> {
     let settings = load_global_settings();
     if !settings.developer.plugin_dev_mode {
-        return Err(
-            "This action requires developer.pluginDevMode = true in settings.json".into(),
-        );
+        return Err("This action requires developer.pluginDevMode = true in settings.json".into());
     }
     Ok(())
 }

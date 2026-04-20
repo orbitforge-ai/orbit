@@ -727,10 +727,7 @@ pub fn classify_tool_call(
             // Plugin-contributed tool names are namespaced `<slug>__<name>`.
             // Never auto-allow in V1 — the user sees a permission prompt on
             // every plugin tool call and can grant an "always" rule.
-            (
-                RiskLevel::Prompt,
-                format!("Plugin tool: '{}'", tool_name),
-            )
+            (RiskLevel::Prompt, format!("Plugin tool: '{}'", tool_name))
         }
 
         _ => {

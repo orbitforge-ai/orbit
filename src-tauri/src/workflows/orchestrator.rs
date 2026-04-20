@@ -18,6 +18,7 @@ use tauri::Runtime;
 use tracing::{info, warn};
 use ulid::Ulid;
 
+use crate::commands::project_workflows::workflow_has_trigger_node;
 use crate::db::DbPool;
 use crate::models::project_workflow::{WorkflowEdge, WorkflowGraph, WorkflowNode};
 use crate::models::workflow_run::{WorkflowRun, WorkflowRunStep};
@@ -47,6 +48,13 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
         trigger_data: Value,
     ) -> Result<WorkflowRun, String> {
         let workflow = store::load_workflow(&self.db, &workflow_id).await?;
+        if !workflow_has_trigger_node(&workflow.graph) {
+            return Err(serde_json::json!({
+                "code": "workflow_missing_trigger",
+                "message": "workflow cannot run without a trigger node",
+            })
+            .to_string());
+        }
         let run =
             store::insert_run(&self.db, &self.app, &workflow, trigger_kind, &trigger_data).await?;
 
@@ -398,12 +406,14 @@ mod tests {
                 source: "if1".into(),
                 target: "yes".into(),
                 source_handle: Some("true".into()),
+                target_handle: None,
             },
             WorkflowEdge {
                 id: "e2".into(),
                 source: "if1".into(),
                 target: "no".into(),
                 source_handle: Some("false".into()),
+                target_handle: None,
             },
         ];
         let outgoing = group_edges(&edges);
@@ -488,6 +498,7 @@ mod tests {
                     source: "trigger-1".into(),
                     target: "bad-1".into(),
                     source_handle: None,
+                    target_handle: None,
                 }],
                 schema_version: 1,
             },

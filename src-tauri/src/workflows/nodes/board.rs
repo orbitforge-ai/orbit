@@ -14,8 +14,8 @@ use crate::workflows::nodes::{NodeExecutionContext, NodeOutcome};
 use crate::workflows::template::{
     json_number_to_i64, lookup_json_path, optional_labels, parse_optional_priority,
     parse_optional_work_item_kind, parse_optional_work_item_status, parse_priority,
-    parse_work_item_kind, parse_work_item_labels, render_optional_template,
-    render_required_field, render_template, required_template,
+    parse_work_item_kind, parse_work_item_labels, render_optional_template, render_required_field,
+    render_template, required_template,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -270,8 +270,9 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                 ctx.node.data.get("listColumnId").and_then(|v| v.as_str()),
                 ctx.outputs,
             );
-            let status_filter =
-                parse_optional_work_item_status(ctx.node.data.get("listStatus").and_then(|v| v.as_str()))?;
+            let status_filter = parse_optional_work_item_status(
+                ctx.node.data.get("listStatus").and_then(|v| v.as_str()),
+            )?;
             let kind_filter = parse_optional_work_item_kind(
                 ctx.node.data.get("listKind").and_then(|v| v.as_str()),
             )?;
@@ -409,7 +410,9 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                 ctx.outputs,
             );
             if status.is_none() && column_id.is_none() {
-                return Err("board.work_item move requires data.status or data.columnId".to_string());
+                return Err(
+                    "board.work_item move requires data.status or data.columnId".to_string()
+                );
             }
             let item = move_work_item_with_db(
                 ctx.db,

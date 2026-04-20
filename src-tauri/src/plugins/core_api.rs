@@ -183,7 +183,12 @@ async fn dispatch(
                 .ok_or_else(|| "data required".to_string())?;
             let project_id = params.get("projectId").and_then(Value::as_str);
             Ok(json!(entities::create(
-                db, plugin_id, entity_type, project_id, &data, None
+                db,
+                plugin_id,
+                entity_type,
+                project_id,
+                &data,
+                None
             )?))
         }
         "entity.update" => {

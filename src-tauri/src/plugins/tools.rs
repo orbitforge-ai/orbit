@@ -26,7 +26,11 @@ pub fn tool_name(plugin_id: &str, tool_name: &str) -> String {
 
 /// Compute the namespaced tool name for an auto-generated entity CRUD tool.
 pub fn entity_tool_name(plugin_id: &str, entity_type: &str) -> String {
-    format!("{}__{}", super::manifest::slugify_id(plugin_id), entity_type)
+    format!(
+        "{}__{}",
+        super::manifest::slugify_id(plugin_id),
+        entity_type
+    )
 }
 
 pub struct PluginToolHandler {
@@ -173,17 +177,9 @@ impl ToolHandler for EntityToolHandler {
                     .get("data")
                     .cloned()
                     .ok_or_else(|| "`create` requires `data`".to_string())?;
-                let project_id = input
-                    .get("projectId")
-                    .and_then(Value::as_str);
-                let entity = entities::create(
-                    db,
-                    plugin_id,
-                    entity_type,
-                    project_id,
-                    &data,
-                    agent_id,
-                )?;
+                let project_id = input.get("projectId").and_then(Value::as_str);
+                let entity =
+                    entities::create(db, plugin_id, entity_type, project_id, &data, agent_id)?;
                 spawn_cloud_upsert_entity(ctx, &entity);
                 json!(entity)
             }
@@ -351,12 +347,18 @@ mod tests {
 
     #[test]
     fn entity_tool_name_matches_spec() {
-        assert_eq!(entity_tool_name("com.orbit.social", "content"), "com_orbit_social__content");
+        assert_eq!(
+            entity_tool_name("com.orbit.social", "content"),
+            "com_orbit_social__content"
+        );
     }
 
     #[test]
     fn plugin_tool_name_matches_spec() {
-        assert_eq!(tool_name("com.orbit.github", "clone_repo"), "com_orbit_github__clone_repo");
+        assert_eq!(
+            tool_name("com.orbit.github", "clone_repo"),
+            "com_orbit_github__clone_repo"
+        );
     }
 
     #[test]

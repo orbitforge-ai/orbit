@@ -32,14 +32,7 @@ pub fn store_secret(service: &str, account: &str, value: &str) -> Result<(), Str
 
 pub fn retrieve_secret(service: &str, account: &str) -> Result<String, String> {
     let output = Command::new("security")
-        .args([
-            "find-generic-password",
-            "-s",
-            service,
-            "-a",
-            account,
-            "-w",
-        ])
+        .args(["find-generic-password", "-s", service, "-a", account, "-w"])
         .output()
         .map_err(|e| format!("failed to run security command: {}", e))?;
 
@@ -55,13 +48,7 @@ pub fn retrieve_secret(service: &str, account: &str) -> Result<String, String> {
 
 pub fn delete_secret(service: &str, account: &str) -> Result<(), String> {
     let output = Command::new("security")
-        .args([
-            "delete-generic-password",
-            "-s",
-            service,
-            "-a",
-            account,
-        ])
+        .args(["delete-generic-password", "-s", service, "-a", account])
         .output()
         .map_err(|e| format!("failed to run security command: {}", e))?;
 

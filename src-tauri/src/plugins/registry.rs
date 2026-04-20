@@ -131,8 +131,10 @@ mod tests {
     fn save_load_roundtrip() {
         let dir = tempdir();
         let mut reg = PluginRegistry::default();
-        reg.upsert(RegistryEntry::new("com.orbit.a".into())).unwrap();
-        reg.upsert(RegistryEntry::new("com.orbit.b".into())).unwrap();
+        reg.upsert(RegistryEntry::new("com.orbit.a".into()))
+            .unwrap();
+        reg.upsert(RegistryEntry::new("com.orbit.b".into()))
+            .unwrap();
         reg.save(dir.path()).unwrap();
         let loaded = PluginRegistry::load(dir.path()).unwrap();
         assert_eq!(loaded.entries.len(), 2);
@@ -143,7 +145,8 @@ mod tests {
     fn set_enabled_persists() {
         let dir = tempdir();
         let mut reg = PluginRegistry::default();
-        reg.upsert(RegistryEntry::new("com.orbit.a".into())).unwrap();
+        reg.upsert(RegistryEntry::new("com.orbit.a".into()))
+            .unwrap();
         reg.save(dir.path()).unwrap();
         let mut reg = PluginRegistry::load(dir.path()).unwrap();
         reg.set_enabled("com.orbit.a", true).unwrap();
@@ -155,7 +158,8 @@ mod tests {
     #[test]
     fn upsert_replaces_existing() {
         let mut reg = PluginRegistry::default();
-        reg.upsert(RegistryEntry::new("com.orbit.a".into())).unwrap();
+        reg.upsert(RegistryEntry::new("com.orbit.a".into()))
+            .unwrap();
         let mut entry2 = RegistryEntry::new("com.orbit.a".into());
         entry2.enabled = true;
         reg.upsert(entry2).unwrap();

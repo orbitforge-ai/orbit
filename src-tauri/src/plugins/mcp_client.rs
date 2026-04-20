@@ -220,7 +220,8 @@ impl McpClient {
             ));
         }
         // MCP requires a `notifications/initialized` after the response.
-        self.notify("notifications/initialized", Value::Null).await?;
+        self.notify("notifications/initialized", Value::Null)
+            .await?;
         Ok(())
     }
 
@@ -261,8 +262,8 @@ impl McpClient {
             method,
             params,
         };
-        let mut frame = serde_json::to_string(&req)
-            .map_err(|e| format!("failed to encode request: {}", e))?;
+        let mut frame =
+            serde_json::to_string(&req).map_err(|e| format!("failed to encode request: {}", e))?;
         frame.push('\n');
         {
             let mut stdin = self.state.stdin.lock().await;
@@ -295,7 +296,9 @@ impl McpClient {
         pipe.write_all(frame.as_bytes())
             .await
             .map_err(|e| format!("write notify: {}", e))?;
-        pipe.flush().await.map_err(|e| format!("flush notify: {}", e))?;
+        pipe.flush()
+            .await
+            .map_err(|e| format!("flush notify: {}", e))?;
         Ok(())
     }
 
@@ -316,8 +319,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_missing_binary_returns_err() {
-        let sink: Arc<dyn Fn(&str, String) + Send + Sync> =
-            Arc::new(|_: &str, _: String| {});
+        let sink: Arc<dyn Fn(&str, String) + Send + Sync> = Arc::new(|_: &str, _: String| {});
         let spec = LaunchSpec {
             plugin_id: "com.orbit.test".into(),
             command: "/nonexistent-binary-path-12345".into(),

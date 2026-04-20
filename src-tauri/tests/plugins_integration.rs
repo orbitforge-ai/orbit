@@ -32,10 +32,13 @@ async fn stub_plugin_round_trips_echo_tool() {
     }
 
     let server = stub_server_path();
-    assert!(server.is_file(), "stub server missing: {}", server.display());
+    assert!(
+        server.is_file(),
+        "stub server missing: {}",
+        server.display()
+    );
 
-    let sink: Arc<dyn Fn(&str, String) + Send + Sync> =
-        Arc::new(|_id: &str, _line: String| {});
+    let sink: Arc<dyn Fn(&str, String) + Send + Sync> = Arc::new(|_id: &str, _line: String| {});
     let mut env = std::collections::BTreeMap::new();
     if let Ok(path) = std::env::var("PATH") {
         env.insert("PATH".into(), path);
@@ -56,7 +59,9 @@ async fn stub_plugin_round_trips_echo_tool() {
         tools
             .get("tools")
             .and_then(|t| t.as_array())
-            .map(|arr| arr.iter().any(|t| t.get("name").and_then(|n| n.as_str()) == Some("echo")))
+            .map(|arr| arr
+                .iter()
+                .any(|t| t.get("name").and_then(|n| n.as_str()) == Some("echo")))
             .unwrap_or(false),
         "stub must advertise echo tool"
     );
@@ -83,8 +88,7 @@ async fn crashing_subprocess_fails_initialize_cleanly() {
         return;
     }
     let server = stub_server_path();
-    let sink: Arc<dyn Fn(&str, String) + Send + Sync> =
-        Arc::new(|_: &str, _: String| {});
+    let sink: Arc<dyn Fn(&str, String) + Send + Sync> = Arc::new(|_: &str, _: String| {});
     let mut env = std::collections::BTreeMap::new();
     env.insert("STUB_MCP_EXIT_ON_INIT".into(), "1".into());
     // Put PATH in so `node` resolves.
@@ -99,5 +103,8 @@ async fn crashing_subprocess_fails_initialize_cleanly() {
         env,
     };
     let result = McpClient::spawn(spec, sink).await;
-    assert!(result.is_err(), "crashing subprocess should fail initialize");
+    assert!(
+        result.is_err(),
+        "crashing subprocess should fail initialize"
+    );
 }

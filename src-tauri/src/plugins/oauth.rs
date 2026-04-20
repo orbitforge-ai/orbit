@@ -88,10 +88,7 @@ pub fn wipe_plugin_secrets(plugin_id: &str) {
 pub fn disconnect(plugin_id: &str, provider_id: &str) {
     for suffix in ["access", "refresh"] {
         let account = format!("oauth.{}.{}", provider_id, suffix);
-        let _ = crate::executor::keychain::delete_secret(
-            &keychain_service(plugin_id),
-            &account,
-        );
+        let _ = crate::executor::keychain::delete_secret(&keychain_service(plugin_id), &account);
     }
     info!(plugin_id, provider_id, "plugin OAuth tokens cleared");
 }
@@ -175,10 +172,7 @@ pub async fn start_flow<R: Runtime>(
 /// Start the loopback HTTP listener that receives OAuth callbacks. Idempotent
 /// — safe to call multiple times; re-binds attempts log and bail (the existing
 /// listener keeps running).
-pub fn spawn_loopback_listener<R: Runtime>(
-    app: AppHandle<R>,
-    manager: Arc<super::PluginManager>,
-) {
+pub fn spawn_loopback_listener<R: Runtime>(app: AppHandle<R>, manager: Arc<super::PluginManager>) {
     tauri::async_runtime::spawn(async move {
         let addr = format!("127.0.0.1:{}", LOOPBACK_PORT);
         let listener = match TcpListener::bind(&addr).await {
@@ -260,10 +254,7 @@ async fn handle_loopback_connection<R: Runtime>(
         Ok(()) => (200u16, CALLBACK_SUCCESS_HTML.to_string()),
         Err(e) => {
             warn!("OAuth callback failed: {}", e);
-            let _ = app.emit(
-                "plugin:oauth:failed",
-                serde_json::json!({ "error": e }),
-            );
+            let _ = app.emit("plugin:oauth:failed", serde_json::json!({ "error": e }));
             (400u16, render_failure_html(e))
         }
     };
@@ -471,8 +462,7 @@ fn generate_pkce() -> (String, String) {
 
     let mut hasher = Sha256::new();
     hasher.update(verifier.as_bytes());
-    let challenge =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize());
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize());
 
     (verifier, challenge)
 }
@@ -517,7 +507,10 @@ fn parse_token_response(body: &str) -> Result<TokenResponse, String> {
             .and_then(|v| v.as_str())
             .map(str::to_string);
         if access_token.is_none() {
-            return Err(format!("token response did not contain access_token: {}", body));
+            return Err(format!(
+                "token response did not contain access_token: {}",
+                body
+            ));
         }
         return Ok(TokenResponse {
             access_token,
@@ -540,7 +533,10 @@ fn parse_token_response(body: &str) -> Result<TokenResponse, String> {
         }
     }
     if out.access_token.is_none() {
-        return Err(format!("token response did not contain access_token: {}", body));
+        return Err(format!(
+            "token response did not contain access_token: {}",
+            body
+        ));
     }
     Ok(out)
 }
@@ -566,8 +562,7 @@ mod tests {
         // Re-hashing the verifier must produce the challenge.
         let mut hasher = Sha256::new();
         hasher.update(verifier.as_bytes());
-        let expected =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize());
+        let expected = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize());
         assert_eq!(expected, challenge);
     }
 

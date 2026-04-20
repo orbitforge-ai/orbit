@@ -188,7 +188,9 @@ pub fn ensure_project_board_columns(
                 format!(
                     "col_{}_{}",
                     project_id,
-                    column.role.unwrap_or_else(|| if idx == 0 { "default" } else { "column" })
+                    column
+                        .role
+                        .unwrap_or_else(|| if idx == 0 { "default" } else { "column" })
                 ),
                 project_id,
                 column.name,
@@ -260,7 +262,10 @@ pub fn get_column_by_id_sync(
     id: &str,
 ) -> Result<Option<ProjectBoardColumn>, String> {
     conn.query_row(
-        &format!("SELECT {} FROM project_board_columns WHERE id = ?1", COLUMN_SELECT),
+        &format!(
+            "SELECT {} FROM project_board_columns WHERE id = ?1",
+            COLUMN_SELECT
+        ),
         params![id],
         map_project_board_column,
     )
@@ -290,7 +295,9 @@ fn ensure_expected_revision(
     if let Some(expected_revision) = expected_revision {
         let current = current_board_revision_sync(conn, project_id)?;
         if current.as_deref() != Some(expected_revision) {
-            return Err("board columns changed since you loaded them; refresh and try again".into());
+            return Err(
+                "board columns changed since you loaded them; refresh and try again".into(),
+            );
         }
     }
     Ok(())
@@ -327,8 +334,12 @@ pub fn resolve_board_column_sync(
 
     if let Some(status) = status {
         validate_board_role(Some(status))?;
-        return get_column_by_role_sync(conn, project_id, status)?
-            .ok_or_else(|| format!("project '{}' has no board column for role '{}'", project_id, status));
+        return get_column_by_role_sync(conn, project_id, status)?.ok_or_else(|| {
+            format!(
+                "project '{}' has no board column for role '{}'",
+                project_id, status
+            )
+        });
     }
 
     if let Some(default_column) = get_default_column_sync(conn, project_id)? {
@@ -731,34 +742,38 @@ pub async fn reorder_project_board_columns(
 ) -> Result<Vec<ProjectBoardColumn>, String> {
     let cloud = cloud.inner().clone();
     let pool = db.0.clone();
-    let columns = tokio::task::spawn_blocking(move || -> Result<Vec<ProjectBoardColumn>, String> {
-        let mut conn = pool.get().map_err(|e| e.to_string())?;
-        ensure_expected_revision(&conn, &project_id, payload.expected_revision.as_deref())?;
-        let existing = list_project_board_columns_sync(&conn, &project_id)?;
-        if existing.len() != payload.ordered_ids.len() {
-            return Err("reorder must include every board column exactly once".into());
-        }
-        let mut existing_ids = existing.iter().map(|column| column.id.clone()).collect::<Vec<_>>();
-        let mut ordered_ids = payload.ordered_ids.clone();
-        existing_ids.sort();
-        ordered_ids.sort();
-        if existing_ids != ordered_ids {
-            return Err("reorder payload does not match the project's board columns".into());
-        }
-        let now = chrono::Utc::now().to_rfc3339();
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        for (idx, column_id) in payload.ordered_ids.iter().enumerate() {
-            tx.execute(
-                "UPDATE project_board_columns SET position = ?1, updated_at = ?2 WHERE id = ?3",
-                params![((idx + 1) as f64) * 1024.0, now, column_id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        tx.commit().map_err(|e| e.to_string())?;
-        list_project_board_columns_sync(&conn, &project_id)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let columns =
+        tokio::task::spawn_blocking(move || -> Result<Vec<ProjectBoardColumn>, String> {
+            let mut conn = pool.get().map_err(|e| e.to_string())?;
+            ensure_expected_revision(&conn, &project_id, payload.expected_revision.as_deref())?;
+            let existing = list_project_board_columns_sync(&conn, &project_id)?;
+            if existing.len() != payload.ordered_ids.len() {
+                return Err("reorder must include every board column exactly once".into());
+            }
+            let mut existing_ids = existing
+                .iter()
+                .map(|column| column.id.clone())
+                .collect::<Vec<_>>();
+            let mut ordered_ids = payload.ordered_ids.clone();
+            existing_ids.sort();
+            ordered_ids.sort();
+            if existing_ids != ordered_ids {
+                return Err("reorder payload does not match the project's board columns".into());
+            }
+            let now = chrono::Utc::now().to_rfc3339();
+            let tx = conn.transaction().map_err(|e| e.to_string())?;
+            for (idx, column_id) in payload.ordered_ids.iter().enumerate() {
+                tx.execute(
+                    "UPDATE project_board_columns SET position = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![((idx + 1) as f64) * 1024.0, now, column_id],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            tx.commit().map_err(|e| e.to_string())?;
+            list_project_board_columns_sync(&conn, &project_id)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
 
     for column in &columns {
         cloud_upsert_board_column!(cloud, column);

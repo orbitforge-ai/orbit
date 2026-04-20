@@ -49,6 +49,10 @@ fn route_node_type(node_type: &str) -> Option<NodeExecutorKind> {
     }
 }
 
+pub fn node_type_has_executor(node_type: &str) -> bool {
+    route_node_type(node_type).is_some()
+}
+
 pub(crate) async fn execute<R: Runtime>(
     ctx: NodeExecutionContext<'_, R>,
 ) -> Result<NodeOutcome, String> {

@@ -129,6 +129,7 @@ export interface WorkflowEdge {
   source: string;
   target: string;
   sourceHandle?: string | null;
+  targetHandle?: string | null;
 }
 
 export interface WorkflowGraph {

@@ -198,15 +198,7 @@ pub fn link(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(from_id, to_id, relation) DO NOTHING",
         rusqlite::params![
-            id,
-            from_kind,
-            from_type,
-            from_id,
-            to_kind,
-            to_type,
-            to_id,
-            relation,
-            now
+            id, from_kind, from_type, from_id, to_kind, to_type, to_id, relation, now
         ],
     )
     .map_err(|e| format!("insert plugin_entity_relation: {}", e))?;
@@ -223,12 +215,7 @@ pub fn link(
     })
 }
 
-pub fn unlink(
-    db: &DbPool,
-    from_id: &str,
-    to_id: &str,
-    relation: &str,
-) -> Result<(), String> {
+pub fn unlink(db: &DbPool, from_id: &str, to_id: &str, relation: &str) -> Result<(), String> {
     let conn = db.get().map_err(|e| e.to_string())?;
     conn.execute(
         "DELETE FROM plugin_entity_relations
@@ -239,10 +226,7 @@ pub fn unlink(
     Ok(())
 }
 
-pub fn list_relations(
-    db: &DbPool,
-    entity_id: &str,
-) -> Result<Vec<PluginEntityRelation>, String> {
+pub fn list_relations(db: &DbPool, entity_id: &str) -> Result<Vec<PluginEntityRelation>, String> {
     let conn = db.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(

@@ -907,7 +907,10 @@ impl SupabaseClient {
             ("memory_extraction_log".to_string(), mem_log.len()),
             ("projects".to_string(), projects.len()),
             ("project_agents".to_string(), project_agents.len()),
-            ("project_board_columns".to_string(), project_board_columns.len()),
+            (
+                "project_board_columns".to_string(),
+                project_board_columns.len(),
+            ),
             ("message_reactions".to_string(), reactions.len()),
             ("work_items".to_string(), work_items.len()),
             ("work_item_comments".to_string(), work_item_comments.len()),
@@ -2010,7 +2013,10 @@ fn write_project_agents(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result
     Ok(())
 }
 
-fn write_project_board_columns(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
+fn write_project_board_columns(
+    conn: &rusqlite::Connection,
+    rows: Vec<Value>,
+) -> Result<(), String> {
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO project_board_columns (

@@ -170,9 +170,7 @@ pub fn get_plugin_entity(
 }
 
 #[tauri::command]
-pub fn list_plugin_oauth_status(
-    manager: State<'_, Arc<PluginManager>>,
-) -> Vec<PluginOAuthStatus> {
+pub fn list_plugin_oauth_status(manager: State<'_, Arc<PluginManager>>) -> Vec<PluginOAuthStatus> {
     let mut out = Vec::new();
     for manifest in manager.manifests() {
         if manifest.oauth_providers.is_empty() {
@@ -182,11 +180,9 @@ pub fn list_plugin_oauth_status(
             .oauth_providers
             .iter()
             .map(|p| {
-                let connected = plugins::oauth::get_secret(
-                    &manifest.id,
-                    &format!("oauth.{}.access", p.id),
-                )
-                .is_ok();
+                let connected =
+                    plugins::oauth::get_secret(&manifest.id, &format!("oauth.{}.access", p.id))
+                        .is_ok();
                 let has_client_id = p.client_id.is_some()
                     || plugins::oauth::get_secret(
                         &manifest.id,

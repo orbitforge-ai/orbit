@@ -89,9 +89,16 @@ impl ToolHandler for WorkItemTool {
                     other => AssigneeFilter::Agent(other.to_string()),
                 });
                 let limit = input["limit"].as_i64();
-                let items =
-                    list_work_items(db, &project_id, status, column_id, kind, assignee_filter, limit)
-                        .await?;
+                let items = list_work_items(
+                    db,
+                    &project_id,
+                    status,
+                    column_id,
+                    kind,
+                    assignee_filter,
+                    limit,
+                )
+                .await?;
                 let result = serde_json::to_string_pretty(&items)
                     .map_err(|e| format!("work_item: serialize: {}", e))?;
                 Ok((result, false))

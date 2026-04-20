@@ -98,7 +98,11 @@ impl RuntimeRegistry {
         };
         let take = ring.len().min(tail_lines);
         let start = ring.len() - take;
-        ring.iter().skip(start).cloned().collect::<Vec<_>>().join("\n")
+        ring.iter()
+            .skip(start)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Synchronous shutdown — marks state idle and queues the kill. Used by
@@ -260,7 +264,10 @@ impl RuntimeRegistry {
                 }
             });
 
-        info!(plugin_id = manifest.id.as_str(), "spawning plugin subprocess");
+        info!(
+            plugin_id = manifest.id.as_str(),
+            "spawning plugin subprocess"
+        );
         let client = McpClient::spawn(spec, log_sink).await?;
 
         let mut guard = slot.client.lock().await;
@@ -282,6 +289,9 @@ mod tests {
         let tail = reg.log_tail("com.orbit.x", LOG_RING_CAPACITY + 100);
         let lines: Vec<&str> = tail.split('\n').collect();
         assert_eq!(lines.len(), LOG_RING_CAPACITY);
-        assert_eq!(lines.last().unwrap(), &format!("line {}", LOG_RING_CAPACITY + 49));
+        assert_eq!(
+            lines.last().unwrap(),
+            &format!("line {}", LOG_RING_CAPACITY + 49)
+        );
     }
 }

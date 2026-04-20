@@ -135,7 +135,9 @@ pub async fn start() -> Result<McpServerHandle, String> {
 /// Extract a bearer token from `Authorization: Bearer <token>`.
 fn extract_token(headers: &HeaderMap) -> Option<String> {
     let header = headers.get("authorization")?.to_str().ok()?;
-    let rest = header.strip_prefix("Bearer ").or_else(|| header.strip_prefix("bearer "))?;
+    let rest = header
+        .strip_prefix("Bearer ")
+        .or_else(|| header.strip_prefix("bearer "))?;
     Some(rest.trim().to_string())
 }
 
