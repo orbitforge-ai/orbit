@@ -161,7 +161,8 @@ function NewAgentView() {
 
 function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) {
   const agent = agents.find((a) => a.id === agentId);
-  const { agentTab, setAgentTab, pendingChatSessionId, clearPendingChatSession } = useUiStore();
+  const { agentTab, setAgentTab, pendingChatSessionId, clearPendingChatSession, selectAgent } =
+    useUiStore();
   const [showRunDialog, setShowRunDialog] = useState(false);
   const [viewingRunId, setViewingRunId] = useState<string | null>(null);
   const [chatSidebarCollapsed, setChatSidebarCollapsed] = useState(false);
@@ -212,7 +213,12 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
   });
 
   async function handleInlineSave(field: 'name' | 'description', value: string) {
-    await agentsApi.update(agentId, { [field]: value || undefined });
+    const updated = await agentsApi.update(agentId, { [field]: value || undefined });
+    if (updated.id !== agentId) {
+      selectAgent(updated.id);
+      queryClient.invalidateQueries();
+      return;
+    }
     queryClient.invalidateQueries({ queryKey: ['agents'] });
   }
 

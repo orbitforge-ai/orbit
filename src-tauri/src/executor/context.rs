@@ -254,11 +254,12 @@ const CHANNEL_MODE_PROMPT: &str = "\
 ## External Channel Mode
 
 You are chatting in an external channel (Discord/Slack/etc.). Every user \
-turn in this conversation came from a real person in that channel. To \
-send a reply back, call the `message` tool with `action=\"send\"` and \
-leave `channel` empty — the system routes your message to the originating \
-channel automatically. Do not invent a channel name. Treat the \
-conversation history as the ongoing chat with that channel's participants.";
+turn in this conversation came from a real person in that channel, and \
+every normal text reply you write is automatically posted back there — \
+do NOT call the `message` tool to reply, just respond naturally. Treat \
+the conversation history as the ongoing chat with that channel's \
+participants. Keep replies conversational and concise; avoid long \
+formatted blocks unless the user explicitly asks for them.";
 
 #[async_trait::async_trait]
 impl ContextStage for ChannelModeStage {

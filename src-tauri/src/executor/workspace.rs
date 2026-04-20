@@ -44,6 +44,44 @@ pub fn agent_dir(agent_id: &str) -> PathBuf {
     agents_root().join(agent_id)
 }
 
+/// Rename an agent's root directory on disk, including workspace, skills,
+/// memory, and any managed worktrees under it.
+pub fn rename_agent_root(old_agent_id: &str, new_agent_id: &str) -> Result<(), String> {
+    if old_agent_id == new_agent_id {
+        return Ok(());
+    }
+
+    let old_root = agent_dir(old_agent_id);
+    let new_root = agent_dir(new_agent_id);
+
+    if new_root.exists() {
+        return Err(format!(
+            "destination agent directory already exists: {}",
+            new_root.display()
+        ));
+    }
+    if !old_root.exists() {
+        return Err(format!(
+            "source agent directory does not exist: {}",
+            old_root.display()
+        ));
+    }
+
+    if let Some(parent) = new_root.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create agent root parent: {}", e))?;
+    }
+
+    fs::rename(&old_root, &new_root).map_err(|e| {
+        format!(
+            "failed to rename agent directory {} -> {}: {}",
+            old_root.display(),
+            new_root.display(),
+            e
+        )
+    })
+}
+
 /// Default workspace directory for a specific agent.
 pub fn agent_workspace_dir(agent_id: &str) -> PathBuf {
     agent_dir(agent_id).join("workspace")

@@ -132,8 +132,9 @@ export function Sidebar() {
 
     unsubs.push(
       onAgentUpdated((p) => {
+        const previousAgentId = p.previousAgentId ?? p.agent.id;
         queryClient.setQueryData<Agent[]>(['agents'], (old = []) =>
-          old.map((a) => (a.id === p.agent.id ? p.agent : a))
+          old.map((a) => (a.id === previousAgentId ? p.agent : a))
         );
       })
     );

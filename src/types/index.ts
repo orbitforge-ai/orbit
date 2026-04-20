@@ -969,6 +969,7 @@ export interface AgentCreatedPayload {
 
 export interface AgentUpdatedPayload {
   agent: Agent;
+  previousAgentId?: string | null;
 }
 
 export interface AgentDeletedPayload {

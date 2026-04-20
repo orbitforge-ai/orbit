@@ -310,19 +310,20 @@ impl PluginManager {
     }
 
     /// Manual reload — kill subprocess and re-parse manifest. For dev-installed
-    /// plugins (`.dev-source` pointer present), re-copy `plugin.json` from the
-    /// original source directory first so edits to the working copy are picked
-    /// up without a full reinstall.
+    /// plugins (`.dev-source` pointer present), re-sync every source file
+    /// (manifest, runtime entrypoint, assets) from the original source
+    /// directory first so edits to the working copy are picked up without a
+    /// full reinstall. The `.dev-source` pointer itself is preserved.
     pub fn reload<R: Runtime>(&self, app: &AppHandle<R>, plugin_id: &str) -> Result<(), String> {
         self.runtime.shutdown(plugin_id);
         let plugin_dir = plugins_dir().join(plugin_id);
         let pointer = plugin_dir.join(".dev-source");
         if let Ok(source_str) = std::fs::read_to_string(&pointer) {
             let source = std::path::PathBuf::from(source_str.trim());
-            let source_manifest = source.join("plugin.json");
-            if source_manifest.is_file() {
-                std::fs::copy(&source_manifest, plugin_dir.join("plugin.json"))
-                    .map_err(|e| format!("reload: copy dev manifest failed: {}", e))?;
+            if source.is_dir() {
+                if let Err(e) = sync_dev_source(&source, &plugin_dir) {
+                    return Err(format!("reload: sync dev source failed: {}", e));
+                }
             }
         }
         let manifest = manifest::load_from_path(&plugin_dir.join("plugin.json"))
@@ -398,6 +399,50 @@ impl PluginManager {
         let _ = app.emit("plugin:uninstalled", plugin_id.to_string());
         Ok(())
     }
+}
+
+/// Mirror every entry from a dev-source directory into the installed plugin
+/// directory, preserving the `.dev-source` pointer. Used by `reload()` so
+/// edits to the original working copy (plugin.json, server.js, assets)
+/// propagate without a full reinstall. Skips `.dev-source`, hidden files,
+/// and `node_modules` to avoid clobbering the pointer or dragging over
+/// large dependency trees.
+fn sync_dev_source(source: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str == ".dev-source" || name_str == "node_modules" || name_str.starts_with('.') {
+            continue;
+        }
+        let src = entry.path();
+        let dst = target.join(&name);
+        if src.is_dir() {
+            std::fs::create_dir_all(&dst)?;
+            sync_dev_source_recursive(&src, &dst)?;
+        } else {
+            std::fs::copy(&src, &dst)?;
+        }
+    }
+    Ok(())
+}
+
+fn sync_dev_source_recursive(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let src = entry.path();
+        let dst = target.join(entry.file_name());
+        if src.is_dir() {
+            std::fs::create_dir_all(&dst)?;
+            sync_dev_source_recursive(&src, &dst)?;
+        } else {
+            std::fs::copy(&src, &dst)?;
+        }
+    }
+    Ok(())
 }
 
 /// Public summary used by the Tauri command layer + frontend.

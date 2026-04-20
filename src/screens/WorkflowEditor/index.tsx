@@ -152,6 +152,23 @@ function getUpstreamNodes(nodes: Node[], edges: Edge[], selectedNodeId: string |
   return ordered;
 }
 
+function getDirectParentNodeIds(
+  nodes: Node[],
+  edges: Edge[],
+  selectedNodeId: string | null,
+): string[] {
+  if (!selectedNodeId) {
+    return [];
+  }
+
+  const nodeOrder = new Map(nodes.map((node, index) => [node.id, index]));
+
+  return edges
+    .filter((edge) => edge.target === selectedNodeId)
+    .sort((a, b) => (nodeOrder.get(a.source) ?? 0) - (nodeOrder.get(b.source) ?? 0))
+    .map((edge) => edge.source);
+}
+
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
@@ -300,6 +317,10 @@ function Editor({ workflowId }: { workflowId: string }) {
   );
   const upstreamNodes = useMemo(
     () => getUpstreamNodes(nodes, edges, selectedNodeId),
+    [edges, nodes, selectedNodeId],
+  );
+  const directParentNodeIds = useMemo(
+    () => getDirectParentNodeIds(nodes, edges, selectedNodeId),
     [edges, nodes, selectedNodeId],
   );
   const nodesWithDownstreamLinks = useMemo(
@@ -835,6 +856,7 @@ function Editor({ workflowId }: { workflowId: string }) {
             node={selectedNode}
             nodeHasLinkedOutputs={selectedNodeHasLinkedOutputs}
             upstreamNodes={upstreamNodes}
+            directParentNodeIds={directParentNodeIds}
             projectId={workflow.projectId}
             workflowId={workflowId}
             onChangeData={updateNodeData}

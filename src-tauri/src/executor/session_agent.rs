@@ -271,6 +271,13 @@ pub async fn run_session_loop(
                 tool_ctx.cloud_client.clone(),
             )
             .await?;
+            crate::triggers::channel_session::forward_assistant_if_channel(
+                app,
+                db,
+                session_id,
+                &response.content,
+            )
+            .await;
             break;
         }
 
@@ -318,6 +325,13 @@ pub async fn run_session_loop(
             tool_ctx.cloud_client.clone(),
         )
         .await?;
+        crate::triggers::channel_session::forward_assistant_if_channel(
+            app,
+            db,
+            session_id,
+            &response.content,
+        )
+        .await;
 
         match response.stop_reason {
             llm_provider::StopReason::EndTurn => {
@@ -443,6 +457,13 @@ pub async fn run_session_loop(
                             tool_ctx.cloud_client.clone(),
                         )
                         .await?;
+                        crate::triggers::channel_session::forward_assistant_if_channel(
+                            app,
+                            db,
+                            session_id,
+                            &completion_message,
+                        )
+                        .await;
                         messages.push(ChatMessage {
                             role: "assistant".to_string(),
                             content: completion_message,

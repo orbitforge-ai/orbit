@@ -107,6 +107,12 @@ export function Plugins() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['plugins'] }),
   });
 
+  useEffect(() => {
+    if (reloadAllMut.status !== 'success' && reloadAllMut.status !== 'error') return;
+    const t = setTimeout(() => reloadAllMut.reset(), 2000);
+    return () => clearTimeout(t);
+  }, [reloadAllMut.status, reloadAllMut.reset]);
+
   const uninstallMut = useMutation({
     mutationFn: async (id: string) => {
       const ok = await confirm(
@@ -133,12 +139,31 @@ export function Plugins() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            className="flex items-center gap-1 rounded border border-edge px-3 py-1.5 text-sm text-secondary hover:bg-surface"
+            className="flex items-center gap-1 rounded border border-edge px-3 py-1.5 text-sm text-secondary hover:bg-surface disabled:opacity-70"
             onClick={() => reloadAllMut.mutate()}
             disabled={reloadAllMut.isPending}
+            title={
+              reloadAllMut.status === 'error'
+                ? String(reloadAllMut.error ?? 'Reload failed')
+                : undefined
+            }
           >
-            <RefreshCw size={13} />
-            Reload all
+            {reloadAllMut.status === 'pending' ? (
+              <Loader2 size={13} className="animate-spin" />
+            ) : reloadAllMut.status === 'success' ? (
+              <CheckCircle2 size={13} className="text-emerald-400" />
+            ) : reloadAllMut.status === 'error' ? (
+              <AlertCircle size={13} className="text-red-400" />
+            ) : (
+              <RefreshCw size={13} />
+            )}
+            {reloadAllMut.status === 'pending'
+              ? 'Reloading…'
+              : reloadAllMut.status === 'success'
+                ? 'Reloaded'
+                : reloadAllMut.status === 'error'
+                  ? 'Failed'
+                  : 'Reload all'}
           </button>
           {devMode ? (
             <button

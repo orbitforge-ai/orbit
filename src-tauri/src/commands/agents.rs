@@ -1,8 +1,12 @@
 use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
-use crate::events::emitter::{emit_agent_created, emit_agent_deleted, emit_agent_updated};
+use crate::events::emitter::{
+    emit_agent_config_changed, emit_agent_created, emit_agent_deleted, emit_agent_updated,
+};
 use crate::executor::workspace;
 use crate::models::agent::{Agent, CreateAgent, UpdateAgent};
+use rusqlite::{Connection, OptionalExtension, Transaction};
+use serde_json::Value;
 
 /// Fire-and-forget helper: clone the Arc, spawn, log failures.
 macro_rules! cloud_upsert_agent {
@@ -29,6 +33,164 @@ macro_rules! cloud_delete {
             });
         }
     };
+}
+
+fn next_available_agent_id(
+    conn: &Connection,
+    name: &str,
+    current_id: Option<&str>,
+) -> Result<String, String> {
+    let base_slug = workspace::slugify(name);
+    let base_slug = if base_slug.is_empty() {
+        "agent".to_string()
+    } else {
+        base_slug
+    };
+
+    let mut candidate = base_slug.clone();
+    let mut suffix = 1;
+
+    loop {
+        let existing = conn
+            .query_row(
+                "SELECT id FROM agents WHERE id = ?1",
+                rusqlite::params![candidate],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+
+        match existing.as_deref() {
+            None => return Ok(candidate),
+            Some(existing_id) if Some(existing_id) == current_id => return Ok(candidate),
+            Some(_) => {
+                suffix += 1;
+                candidate = format!("{}-{}", base_slug, suffix);
+            }
+        }
+    }
+}
+
+fn replace_agent_ids_in_json(value: &mut Value, old_agent_id: &str, new_agent_id: &str) -> bool {
+    match value {
+        Value::Object(map) => {
+            let mut changed = false;
+            for (key, entry) in map.iter_mut() {
+                if (key == "agentId" || key.ends_with("AgentId"))
+                    && entry.as_str() == Some(old_agent_id)
+                {
+                    *entry = Value::String(new_agent_id.to_string());
+                    changed = true;
+                    continue;
+                }
+                changed |= replace_agent_ids_in_json(entry, old_agent_id, new_agent_id);
+            }
+            changed
+        }
+        Value::Array(items) => {
+            let mut changed = false;
+            for entry in items.iter_mut() {
+                changed |= replace_agent_ids_in_json(entry, old_agent_id, new_agent_id);
+            }
+            changed
+        }
+        _ => false,
+    }
+}
+
+fn rename_agent_workflow_references(
+    tx: &Transaction<'_>,
+    old_agent_id: &str,
+    new_agent_id: &str,
+    now: &str,
+) -> Result<(), String> {
+    let mut stmt = tx
+        .prepare("SELECT id, graph, trigger_config FROM project_workflows")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    for row in rows {
+        let (workflow_id, graph_json, trigger_config_json) = row.map_err(|e| e.to_string())?;
+        let mut graph: Value = serde_json::from_str(&graph_json)
+            .map_err(|e| format!("failed to parse workflow graph {}: {}", workflow_id, e))?;
+        let mut trigger_config: Value =
+            serde_json::from_str(&trigger_config_json).map_err(|e| {
+                format!(
+                    "failed to parse workflow trigger config {}: {}",
+                    workflow_id, e
+                )
+            })?;
+
+        let graph_changed = replace_agent_ids_in_json(&mut graph, old_agent_id, new_agent_id);
+        let trigger_changed =
+            replace_agent_ids_in_json(&mut trigger_config, old_agent_id, new_agent_id);
+
+        if !graph_changed && !trigger_changed {
+            continue;
+        }
+
+        let graph_json = serde_json::to_string(&graph).map_err(|e| {
+            format!(
+                "failed to serialize updated workflow graph {}: {}",
+                workflow_id, e
+            )
+        })?;
+        let trigger_config_json = serde_json::to_string(&trigger_config).map_err(|e| {
+            format!(
+                "failed to serialize updated workflow trigger config {}: {}",
+                workflow_id, e
+            )
+        })?;
+
+        tx.execute(
+            "UPDATE project_workflows
+                SET graph = ?1, trigger_config = ?2, version = version + 1, updated_at = ?3
+              WHERE id = ?4",
+            rusqlite::params![graph_json, trigger_config_json, now, workflow_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn rename_agent_references(
+    tx: &Transaction<'_>,
+    old_agent_id: &str,
+    new_agent_id: &str,
+    now: &str,
+) -> Result<(), String> {
+    for sql in [
+        "UPDATE tasks SET agent_id = ?1 WHERE agent_id = ?2",
+        "UPDATE runs SET agent_id = ?1 WHERE agent_id = ?2",
+        "UPDATE chat_sessions SET agent_id = ?1 WHERE agent_id = ?2",
+        "UPDATE agent_conversations SET agent_id = ?1 WHERE agent_id = ?2",
+        "UPDATE agent_tasks SET agent_id = ?1 WHERE agent_id = ?2",
+        "UPDATE project_agents SET agent_id = ?1 WHERE agent_id = ?2",
+        "UPDATE bus_messages SET from_agent_id = ?1 WHERE from_agent_id = ?2",
+        "UPDATE bus_messages SET to_agent_id = ?1 WHERE to_agent_id = ?2",
+        "UPDATE bus_subscriptions SET subscriber_agent_id = ?1 WHERE subscriber_agent_id = ?2",
+        "UPDATE bus_subscriptions SET source_agent_id = ?1 WHERE source_agent_id = ?2",
+        "UPDATE work_items SET assignee_agent_id = ?1 WHERE assignee_agent_id = ?2",
+        "UPDATE work_items SET created_by_agent_id = ?1 WHERE created_by_agent_id = ?2",
+        "UPDATE work_item_comments SET author_agent_id = ?1 WHERE author_agent_id = ?2",
+        "UPDATE memory_extraction_log SET agent_id = ?1 WHERE agent_id = ?2",
+        "UPDATE channel_sessions SET agent_id = ?1 WHERE agent_id = ?2",
+        "UPDATE plugin_entities SET created_by_agent_id = ?1 WHERE created_by_agent_id = ?2",
+    ] {
+        tx.execute(sql, rusqlite::params![new_agent_id, old_agent_id])
+            .map_err(|e| e.to_string())?;
+    }
+
+    rename_agent_workflow_references(tx, old_agent_id, new_agent_id, now)
 }
 
 #[tauri::command]
@@ -81,22 +243,7 @@ pub async fn create_agent(
         let initial_role_id = payload.role_id.clone();
         let initial_role_instructions = payload.role_system_instructions.clone();
         let conn = pool.get().map_err(|e| e.to_string())?;
-        let base_slug = workspace::slugify(&payload.name);
-        let base_slug = if base_slug.is_empty() { "agent".to_string() } else { base_slug };
-
-        let id = {
-            let mut candidate = base_slug.clone();
-            let mut suffix = 1;
-            while conn.query_row(
-                "SELECT 1 FROM agents WHERE id = ?1",
-                rusqlite::params![candidate],
-                |_| Ok(()),
-            ).is_ok() {
-                suffix += 1;
-                candidate = format!("{}-{}", base_slug, suffix);
-            }
-            candidate
-        };
+        let id = next_available_agent_id(&conn, &payload.name, None)?;
 
         let now = chrono::Utc::now().to_rfc3339();
         let max_runs = payload.max_concurrent_runs.unwrap_or(5);
@@ -180,36 +327,70 @@ pub async fn update_agent(
 ) -> Result<Agent, String> {
     let cloud = cloud.inner().clone();
     let pool = db.0.clone();
-    let agent: Agent = tokio::task::spawn_blocking(move || -> Result<Agent, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
+    let (agent, previous_agent_id, role_id): (Agent, Option<String>, Option<String>) =
+        tokio::task::spawn_blocking(move || -> Result<(Agent, Option<String>, Option<String>), String> {
+        let mut conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
+        let next_id = match payload.name.as_deref() {
+            Some(name) if id != "default" => next_available_agent_id(&conn, name, Some(&id))?,
+            _ => id.clone(),
+        };
+        let slug_changed = next_id != id;
+
+        if slug_changed {
+            let active_run_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM runs
+                      WHERE agent_id = ?1 AND state IN ('pending', 'queued', 'running')",
+                    rusqlite::params![id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if active_run_count > 0 {
+                return Err("cannot rename an agent slug while it has active runs".to_string());
+            }
+        }
+
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute_batch("PRAGMA defer_foreign_keys = ON;")
+            .map_err(|e| e.to_string())?;
+
+        if slug_changed {
+            tx.execute(
+                "UPDATE agents SET id = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![next_id, now, id],
+            )
+            .map_err(|e| e.to_string())?;
+            rename_agent_references(&tx, &id, &next_id, &now)?;
+        }
 
         if let Some(name) = &payload.name {
-            conn.execute(
+            tx.execute(
                 "UPDATE agents SET name = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![name, now, id],
+                rusqlite::params![name, now, next_id],
             )
             .map_err(|e| e.to_string())?;
         }
         if let Some(desc) = &payload.description {
-            conn.execute(
+            tx.execute(
                 "UPDATE agents SET description = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![desc, now, id],
+                rusqlite::params![desc, now, next_id],
             )
             .map_err(|e| e.to_string())?;
         }
         if let Some(max_runs) = payload.max_concurrent_runs {
-            conn.execute(
+            tx.execute(
                 "UPDATE agents SET max_concurrent_runs = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![max_runs, now, id],
+                rusqlite::params![max_runs, now, next_id],
             )
             .map_err(|e| e.to_string())?;
         }
 
-        conn.query_row(
+        let agent = tx
+        .query_row(
             "SELECT id, name, description, state, max_concurrent_runs, heartbeat_at, created_at, updated_at
              FROM agents WHERE id = ?1",
-            rusqlite::params![id],
+            rusqlite::params![next_id],
             |row| {
                 Ok(Agent {
                     id: row.get(0)?,
@@ -223,12 +404,34 @@ pub async fn update_agent(
                 })
             },
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+        if slug_changed {
+            workspace::rename_agent_root(&id, &next_id)?;
+        }
+
+        if let Err(err) = tx.commit() {
+            if slug_changed {
+                let _ = workspace::rename_agent_root(&next_id, &id);
+            }
+            return Err(err.to_string());
+        }
+
+        let role_id = workspace::load_agent_config(&agent.id)
+            .ok()
+            .and_then(|config| config.role_id);
+
+        Ok((agent, slug_changed.then_some(id), role_id))
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    emit_agent_updated(&app, agent.clone());
+    emit_agent_updated(&app, agent.clone(), previous_agent_id.clone());
+    if let Some(previous_agent_id) = previous_agent_id.as_deref() {
+        emit_agent_config_changed(&app, previous_agent_id, None);
+        emit_agent_config_changed(&app, &agent.id, role_id);
+        cloud_delete!(cloud, "agents", previous_agent_id);
+    }
     cloud_upsert_agent!(cloud, agent);
     Ok(agent)
 }

@@ -43,6 +43,17 @@ function resolveTargetId(input) {
   return { channelId, threadId, targetId: threadId ?? channelId };
 }
 
+// Discord channel types where the bot can post a message. Filters out
+// categories (4) and directories (14); leaves text (0), announcement (5),
+// voice text-chat (2, 13), threads (10-12), and forum (15) in place.
+const MESSAGEABLE_CHANNEL_TYPES = new Set([0, 2, 5, 10, 11, 12, 13, 15]);
+
+function isMessageableChannel(channel) {
+  if (!channel || typeof channel !== 'object') return false;
+  if (typeof channel.type !== 'number') return true;
+  return MESSAGEABLE_CHANNEL_TYPES.has(channel.type);
+}
+
 function subscriptionKey(channelId, threadId) {
   return threadId ? `${channelId}:${threadId}` : channelId;
 }
@@ -265,10 +276,27 @@ plugin.tool('list_channels', {
     botToken = getBotToken(oauth);
     if (input.guildId) {
       const channels = await discordFetch(`/guilds/${input.guildId}/channels`);
-      return { channels };
+      return { channels: channels.filter(isMessageableChannel) };
     }
+    // No guildId: return every guild the bot is in, each with its channels
+    // embedded. Callers that want the full list (workflow inspector) get it in
+    // one call; callers that drill down (agent listen-channel picker) still
+    // find `guilds[].channels` populated without a second round-trip.
     const guilds = await discordFetch('/users/@me/guilds');
-    return { guilds };
+    const enriched = await Promise.all(
+      (guilds ?? []).map(async (guild) => {
+        try {
+          const channels = await discordFetch(`/guilds/${guild.id}/channels`);
+          return { ...guild, channels: channels.filter(isMessageableChannel) };
+        } catch (err) {
+          process.stderr.write(
+            `discord list_channels: guild ${guild.id} channels failed: ${err?.message ?? err}\n`,
+          );
+          return { ...guild, channels: [] };
+        }
+      }),
+    );
+    return { guilds: enriched };
   },
 });
 

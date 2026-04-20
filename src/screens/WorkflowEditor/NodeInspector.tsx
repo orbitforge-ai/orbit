@@ -3,6 +3,7 @@ import type { ComponentPropsWithoutRef } from 'react';
 import MonacoEditor from '@monaco-editor/react';
 import { useQuery } from '@tanstack/react-query';
 import { Node } from '@xyflow/react';
+import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import { pluginsApi, type PluginManifest } from '../../api/plugins';
 import { workflowRunsApi } from '../../api/workflowRuns';
 import { agentsApi } from '../../api/agents';
@@ -34,8 +35,10 @@ import { nodeMeta } from './nodeRegistry';
 import { RuleBuilder } from './RuleBuilder';
 import { ruleToSentence } from './ruleSentence';
 import { getWorkflowScheduleConfig } from './scheduleConfig';
+import { toast } from '../../store/toastStore';
 
 interface Props {
+  directParentNodeIds: string[];
   isOpen: boolean;
   node: Node | null;
   nodeHasLinkedOutputs: boolean;
@@ -93,6 +96,7 @@ const TEMPLATE_FIELD_CLASSNAME =
   'w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono';
 
 export function NodeInspector({
+  directParentNodeIds,
   isOpen,
   node,
   nodeHasLinkedOutputs,
@@ -261,6 +265,7 @@ export function NodeInspector({
 
               {showOutputHelper && (
                 <OutputReferencePanel
+                  directParentNodeIds={directParentNodeIds}
                   isLoadingLatestRun={isLoadingLatestRun}
                   latestRunDetail={latestRunDetail}
                   observedOutputsByNodeId={observedOutputsByNodeId}
@@ -1109,7 +1114,13 @@ function PluginWorkflowNodeField({
   const fieldType = typeof property['type'] === 'string' ? property['type'] : 'string';
   const description =
     typeof property['description'] === 'string' ? property['description'] : '';
-  const { data: sourceRaw, isLoading, isError } = useQuery<unknown>({
+  const {
+    data: sourceRaw,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery<unknown>({
     queryKey: [
       'plugin-node-field-options',
       descriptor.manifest.id,
@@ -1146,10 +1157,23 @@ function PluginWorkflowNodeField({
 
   return (
     <div className="space-y-1.5">
-      <label className="text-[11px] uppercase tracking-wider text-muted">
-        {humanizeFieldName(fieldName)}
-        {required ? ' *' : ''}
-      </label>
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-[11px] uppercase tracking-wider text-muted">
+          {humanizeFieldName(fieldName)}
+          {required ? ' *' : ''}
+        </label>
+        {fieldOption?.sourceTool ? (
+          <button
+            type="button"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            title={`Reload options from ${fieldOption.sourceTool}`}
+            className="flex items-center rounded p-1 text-muted hover:text-white disabled:opacity-50"
+          >
+            <RefreshCw size={11} className={isFetching ? 'animate-spin' : ''} />
+          </button>
+        ) : null}
+      </div>
       {enumValues.length > 0 ? (
         <select
           value={asString(data[fieldName])}
@@ -1213,11 +1237,13 @@ function PluginWorkflowNodeField({
 }
 
 function OutputReferencePanel({
+  directParentNodeIds,
   isLoadingLatestRun,
   latestRunDetail,
   observedOutputsByNodeId,
   upstreamNodes,
 }: {
+  directParentNodeIds: string[];
   isLoadingLatestRun: boolean;
   latestRunDetail: WorkflowRunWithSteps | null | undefined;
   observedOutputsByNodeId: Map<string, unknown>;
@@ -1226,6 +1252,29 @@ function OutputReferencePanel({
   const insertion = useOutputInsertion();
   const hasActiveField = insertion?.hasActiveField ?? false;
   const latestRunExists = latestRunDetail !== null && latestRunDetail !== undefined;
+  const directParentIdSet = useMemo(() => new Set(directParentNodeIds), [directParentNodeIds]);
+  const orderedUpstreamNodes = useMemo(() => {
+    const nodesById = new Map(upstreamNodes.map((upstreamNode) => [upstreamNode.id, upstreamNode]));
+    const directParents = directParentNodeIds
+      .map((nodeId) => nodesById.get(nodeId))
+      .filter((node): node is Node => Boolean(node));
+    const ancestors = upstreamNodes.filter((upstreamNode) => !directParentIdSet.has(upstreamNode.id));
+    return [...directParents, ...ancestors];
+  }, [directParentIdSet, directParentNodeIds, upstreamNodes]);
+  const [expandedNodeIds, setExpandedNodeIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    const validNodeIds = new Set(orderedUpstreamNodes.map((upstreamNode) => upstreamNode.id));
+    setExpandedNodeIds(directParentNodeIds.filter((nodeId) => validNodeIds.has(nodeId)));
+  }, [directParentNodeIds, orderedUpstreamNodes]);
+
+  const toggleNode = (nodeId: string) => {
+    setExpandedNodeIds((current) =>
+      current.includes(nodeId)
+        ? current.filter((id) => id !== nodeId)
+        : [...current, nodeId],
+    );
+  };
 
   return (
     <section className="space-y-3 rounded-xl border border-edge bg-surface/60 p-3">
@@ -1233,12 +1282,13 @@ function OutputReferencePanel({
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-[11px] uppercase tracking-wider text-muted">Output references</h3>
           <span className="text-[10px] text-muted font-mono">
-            {hasActiveField ? 'click to insert' : 'select a field first'}
+            {hasActiveField ? 'click to copy + insert' : 'click to copy'}
           </span>
         </div>
         <p className="text-[10px] text-muted">
-          Suggestions come from connected upstream nodes only. Template fields insert with braces;
-          rule fields and raw path inputs insert the plain path.
+          Suggestions come from connected upstream nodes only. Clicking a card copies the raw path.
+          If a field is active, template fields also insert with braces while rule fields and raw
+          path inputs insert the plain path.
         </p>
       </div>
 
@@ -1248,7 +1298,7 @@ function OutputReferencePanel({
         </p>
       ) : (
         <div className="space-y-3">
-          {upstreamNodes.map((upstreamNode) => {
+          {orderedUpstreamNodes.map((upstreamNode) => {
             const normalizedNode = {
               data: normalizeData(upstreamNode.data),
               id: upstreamNode.id,
@@ -1260,31 +1310,55 @@ function OutputReferencePanel({
               normalizedNode,
               observedOutputsByNodeId.get(upstreamNode.id),
             );
+            const isExpanded = expandedNodeIds.includes(upstreamNode.id);
+            const isDirectParent = directParentIdSet.has(upstreamNode.id);
 
             return (
               <div key={upstreamNode.id} className="space-y-2 rounded-lg border border-edge/70 p-2">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-[11px] font-medium text-white">
-                    {getOutputReferenceLabel(normalizedNode)}
-                  </p>
-                  <span className="text-[10px] text-muted font-mono">{referenceKey}</span>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleNode(upstreamNode.id)}
+                  className="flex w-full items-start justify-between gap-2 rounded-md text-left hover:bg-background/30"
+                >
+                  <div className="flex min-w-0 items-start gap-2">
+                    {isExpanded ? (
+                      <ChevronDown size={14} className="mt-0.5 shrink-0 text-muted" />
+                    ) : (
+                      <ChevronRight size={14} className="mt-0.5 shrink-0 text-muted" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-medium text-white">
+                        {getOutputReferenceLabel(normalizedNode)}
+                      </p>
+                      {isDirectParent ? (
+                        <p className="text-[10px] text-muted">Direct parent</p>
+                      ) : null}
+                    </div>
+                  </div>
+                  <span className="min-w-0 text-[10px] text-muted font-mono break-all">
+                    {referenceKey}
+                  </span>
+                </button>
 
-                <ReferenceSection
-                  entries={staticEntries}
-                  label="Likely paths"
-                  onInsert={(path) => insertion?.insertPath(path)}
-                  disabled={!hasActiveField}
-                />
+                {isExpanded ? (
+                  <>
+                    <ReferenceSection
+                      entries={staticEntries}
+                      label="Likely paths"
+                      onInsert={(path) => insertion?.insertPath(path)}
+                      canInsert={hasActiveField}
+                    />
 
-                {observedEntries.length > 0 && (
-                  <ReferenceSection
-                    entries={observedEntries}
-                    label="Latest run examples"
-                    onInsert={(path) => insertion?.insertPath(path)}
-                    disabled={!hasActiveField}
-                  />
-                )}
+                    {observedEntries.length > 0 && (
+                      <ReferenceSection
+                        entries={observedEntries}
+                        label="Latest run examples"
+                        onInsert={(path) => insertion?.insertPath(path)}
+                        canInsert={hasActiveField}
+                      />
+                    )}
+                  </>
+                ) : null}
               </div>
             );
           })}
@@ -1308,12 +1382,12 @@ function ReferenceSection({
   entries,
   label,
   onInsert,
-  disabled,
+  canInsert,
 }: {
   entries: OutputHintEntry[];
   label: string;
   onInsert: (path: string) => void;
-  disabled: boolean;
+  canInsert: boolean;
 }) {
   return (
     <div className="space-y-1.5">
@@ -1324,7 +1398,7 @@ function ReferenceSection({
             key={`${label}:${entry.path}`}
             entry={entry}
             onInsert={onInsert}
-            disabled={disabled}
+            canInsert={canInsert}
           />
         ))}
       </div>
@@ -1335,19 +1409,33 @@ function ReferenceSection({
 function ReferenceButton({
   entry,
   onInsert,
-  disabled,
+  canInsert,
 }: {
   entry: OutputHintEntry;
   onInsert: (path: string) => void;
-  disabled: boolean;
+  canInsert: boolean;
 }) {
+  const handleClick = async () => {
+    try {
+      await navigator.clipboard.writeText(entry.path);
+      toast.success('Copied path');
+    } catch (error) {
+      toast.error('Failed to copy path', error);
+    }
+
+    if (canInsert) {
+      onInsert(entry.path);
+    }
+  };
+
   return (
     <button
       type="button"
-      disabled={disabled}
       onMouseDown={(event) => event.preventDefault()}
-      onClick={() => onInsert(entry.path)}
-      className="w-full rounded-md border border-edge/70 bg-background/60 px-2 py-1.5 text-left transition-colors hover:border-accent/60 hover:bg-accent/5 disabled:cursor-not-allowed disabled:opacity-60"
+      onClick={() => {
+        void handleClick();
+      }}
+      className="w-full rounded-md border border-edge/70 bg-background/60 px-2 py-1.5 text-left transition-colors hover:border-accent/60 hover:bg-accent/5"
     >
       <div className="text-[11px] text-white font-mono break-all">{entry.path}</div>
       {entry.description && (

@@ -145,6 +145,8 @@ pub struct AgentCreatedPayload {
 #[serde(rename_all = "camelCase")]
 pub struct AgentUpdatedPayload {
     pub agent: crate::models::agent::Agent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -438,8 +440,18 @@ pub fn emit_agent_created(
     }
 }
 
-pub fn emit_agent_updated(app: &tauri::AppHandle, agent: crate::models::agent::Agent) {
-    if let Err(e) = app.emit("agent:updated", AgentUpdatedPayload { agent }) {
+pub fn emit_agent_updated(
+    app: &tauri::AppHandle,
+    agent: crate::models::agent::Agent,
+    previous_agent_id: Option<String>,
+) {
+    if let Err(e) = app.emit(
+        "agent:updated",
+        AgentUpdatedPayload {
+            agent,
+            previous_agent_id,
+        },
+    ) {
         warn!("failed to emit agent:updated: {}", e);
     }
 }
