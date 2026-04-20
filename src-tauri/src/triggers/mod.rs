@@ -18,6 +18,7 @@
 //! primitive and logs matched targets.
 
 pub mod bindings;
+pub mod channel_session;
 pub mod dispatcher;
 pub mod reply_registry;
 pub mod spawn;

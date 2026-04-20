@@ -1,5 +1,6 @@
 import { X, Shield, Database, Zap, Link, Eye, Workflow } from 'lucide-react';
 import { StagedInstall } from '../../api/plugins';
+import { PluginLogo } from './PluginLogo';
 
 interface Props {
   staged: StagedInstall;
@@ -21,11 +22,14 @@ export function PluginInstallModal({ staged, onConfirm, onCancel, onClose }: Pro
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60">
       <div className="w-full max-w-2xl rounded-lg border border-edge bg-background text-white shadow-xl">
         <header className="flex items-center justify-between border-b border-edge px-5 py-3">
-          <div>
-            <div className="text-sm uppercase tracking-wide text-muted">Install plugin</div>
-            <h2 className="text-lg font-semibold">{manifest.name}</h2>
-            <div className="text-xs text-muted">
-              {manifest.id} · v{manifest.version}
+          <div className="flex items-center gap-3">
+            <PluginLogo name={manifest.name} src={manifest.iconDataUrl} />
+            <div>
+              <div className="text-sm uppercase tracking-wide text-muted">Install plugin</div>
+              <h2 className="text-lg font-semibold">{manifest.name}</h2>
+              <div className="text-xs text-muted">
+                {manifest.id} · v{manifest.version}
+              </div>
             </div>
           </div>
           <button className="text-muted hover:text-white" onClick={onClose}>

@@ -5,6 +5,7 @@ export interface PluginSummary {
   name: string;
   version: string;
   description: string | null;
+  iconDataUrl: string | null;
   enabled: boolean;
   bundled: boolean;
   dev: boolean;
@@ -22,6 +23,7 @@ export interface PluginManifest {
   homepage: string | null;
   license: string | null;
   icon: string | null;
+  iconDataUrl: string | null;
   runtime: { type: string; command: string; args: string[]; workingDir: string | null; env: Record<string, string> };
   tools: Array<{ name: string; description: string | null; riskLevel: string; inputSchema: unknown | null }>;
   entityTypes: Array<{

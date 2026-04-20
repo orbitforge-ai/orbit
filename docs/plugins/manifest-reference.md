@@ -15,7 +15,7 @@ One object. Every field is documented below. For editor validation, add `"$schem
 | `author` | `string` | | |
 | `homepage` | `string` | | URL. |
 | `license` | `string` | | SPDX id. |
-| `icon` | `string` | | Path relative to plugin root. |
+| `icon` | `string` | | Path relative to plugin root. Orbit renders `.svg`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, and `.avif` files as plugin logos. |
 | `runtime` | `object` | ✓ | See [Runtime](#runtime). |
 | `tools` | `array<object>` | | See [Tools](#tools). |
 | `entityTypes` | `array<object>` | | See [Entity types](entity-types.md). |

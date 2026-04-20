@@ -20,7 +20,10 @@
     "author": { "type": "string" },
     "homepage": { "type": "string", "format": "uri" },
     "license": { "type": "string" },
-    "icon": { "type": "string" },
+    "icon": {
+      "type": "string",
+      "description": "Path to a plugin logo image, relative to the plugin root."
+    },
     "runtime": {
       "type": "object",
       "required": ["type", "command"],

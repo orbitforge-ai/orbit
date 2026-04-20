@@ -1,30 +1,33 @@
 //! Spawn an agent run from an inbound trigger event.
 //!
-//! Reads the same Tauri state the workflow-node agent invoker uses, constructs
-//! an `AgentLoopConfig` whose `goal` is the inbound message text, registers a
-//! reply target so the agent's `message` tool can reply in-place, then runs
-//! the loop on a background task.
-
-use std::path::PathBuf;
-
+//! Each `(agent, plugin, channel, thread)` tuple gets a long-lived
+//! `chat_session` (see `triggers::channel_session`). Inbound messages are
+//! saved as user turns in that session, then `session_agent::run_agent_session`
+//! loads the full non-compacted history, runs the loop, and appends
+//! assistant/tool turns back into the session. Auto-compaction fires
+//! inside `run_session_loop` once context usage crosses the configured
+//! threshold, so token cost stays bounded as the channel conversation grows.
+//!
+//! A `ReplyRegistry` entry keyed by the session's stream id (`chat:{session_id}`)
+//! lets the `message` tool reply in the same channel without the agent
+//! naming it.
 use tauri::{AppHandle, Manager};
 use tracing::{error, info};
-use ulid::Ulid;
 
 use crate::auth::{AuthMode, AuthState};
 use crate::commands::users::ActiveUser;
 use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
-use crate::executor::agent_loop;
 use crate::executor::engine::{AgentSemaphores, ExecutorTx, SessionExecutionRegistry};
+use crate::executor::llm_provider::ContentBlock;
 use crate::executor::permissions::PermissionRegistry;
-use crate::executor::workspace;
+use crate::executor::{session_agent, workspace};
 use crate::memory_service::MemoryServiceState;
 use crate::models::channel_binding::ChannelBinding;
-use crate::models::task::AgentLoopConfig;
 use crate::models::trigger_event::TriggerEventPayload;
 use crate::plugins;
 
+use super::channel_session;
 use super::reply_registry::{ReplyChannel, ReplyRegistry};
 
 /// Spawn a fresh agent run on a background task with the event's text as the
@@ -75,50 +78,56 @@ async fn run(
     let memory_user_id = resolve_memory_user_id(&runtime_app).await;
     let cloud_client = runtime_app.state::<CloudClientState>().get();
 
-    let run_id = format!("trigger-{}", Ulid::new());
+    // ── Resolve the per-channel session and persist the inbound message ──
+    let session_id = channel_session::resolve_session_id(&db, &agent_id, &event).await?;
+    let user_text = build_user_message(&event);
+    session_agent::save_chat_message(
+        &db.0,
+        &session_id,
+        "user",
+        &[ContentBlock::Text {
+            text: user_text.clone(),
+        }],
+        cloud_client.clone(),
+    )
+    .await?;
+
+    // The tool-execution context inside `run_agent_session` uses
+    // `stream_id = format!("chat:{session_id}")` as its `run_id`, so the
+    // reply registry key must match — that is what the `message` tool reads.
+    let stream_id = format!("chat:{}", session_id);
     let reply = ReplyChannel {
         plugin_id: event.plugin_id.clone(),
         provider_channel_id: event.channel.id.clone(),
         provider_thread_id: event.channel.thread_id.clone(),
     };
     if let Some(registry) = runtime_app.try_state::<ReplyRegistry>() {
-        registry.inner().set(&run_id, reply);
+        registry.inner().set(&stream_id, reply);
     }
 
-    let goal = build_goal(&event);
-    let cfg = AgentLoopConfig {
-        goal,
-        model: None,
-        max_iterations: None,
-        max_total_tokens: None,
-        template_vars: None,
-    };
-    let log_path = trigger_agent_log_path(&agent_id, &run_id);
-
     info!(
-        run_id = %run_id,
+        session_id = %session_id,
         agent_id = %agent_id,
         plugin_id = %event.plugin_id,
         channel_id = %event.channel.id,
-        "trigger: starting agent run"
+        "trigger: running channel session"
     );
 
-    // Best-effort typing indicator. Failures (plugin lacks the tool, Discord
-    // 403, etc.) are logged but don't block the agent run.
     call_typing_tool(&runtime_app, &event, "start_typing").await;
 
-    let result = agent_loop::run_agent_loop_for_workflow(
-        &run_id,
+    let result = session_agent::run_agent_session(
         &agent_id,
-        &cfg,
-        &log_path,
-        &runtime_app,
+        &session_id,
+        0,
+        false,
+        true,
         &db,
+        &runtime_app,
         &executor_tx,
-        None,
         &agent_semaphores,
         &session_registry,
         &permission_registry,
+        None,
         memory_client.as_ref(),
         &memory_user_id,
         cloud_client,
@@ -126,55 +135,35 @@ async fn run(
     .await;
 
     if let Some(registry) = runtime_app.try_state::<ReplyRegistry>() {
-        registry.inner().clear(&run_id);
+        registry.inner().clear(&stream_id);
     }
 
     call_typing_tool(&runtime_app, &event, "stop_typing").await;
 
     match result {
-        Ok(outcome) => {
+        Ok(summary) => {
             info!(
-                run_id = %run_id,
-                iterations = outcome.iterations,
-                duration_ms = outcome.duration_ms,
-                "trigger: agent run finished"
+                session_id = %session_id,
+                summary = %summary,
+                "trigger: channel session finished"
             );
             Ok(())
         }
-        Err(e) => Err(format!("agent loop: {}", e)),
+        Err(e) => Err(format!("session run: {}", e)),
     }
 }
 
-/// Build the seed goal given to the agent. Provides enough context for the
-/// model to understand who wrote the message and where it came from without
-/// forcing the agent into a rigid schema.
-fn build_goal(event: &TriggerEventPayload) -> String {
+/// Format the incoming message as the user turn content. Lightweight
+/// context preamble (speaker + origin) so the model knows who is talking
+/// without needing separate metadata channels — it travels with every
+/// inbound message since each Discord user posts as the same `user` role.
+fn build_user_message(event: &TriggerEventPayload) -> String {
     let speaker = event
         .user
         .display_name
         .clone()
         .unwrap_or_else(|| event.user.id.clone());
-    let origin = event
-        .channel
-        .name
-        .as_deref()
-        .map(|n| format!("#{}", n))
-        .unwrap_or_else(|| format!("channel {}", event.channel.id));
-    format!(
-        "{speaker} sent a message in {origin}:\n\n{text}\n\n\
-         Reply to this message. Use the `message` tool with action='send' \
-         and leave `channel` empty — the system routes your reply to the \
-         originating {origin}.",
-        speaker = speaker,
-        origin = origin,
-        text = event.text,
-    )
-}
-
-fn trigger_agent_log_path(agent_id: &str, run_id: &str) -> PathBuf {
-    workspace::agent_dir(agent_id)
-        .join("trigger_runs")
-        .join(format!("{}.log", run_id))
+    format!("{speaker}: {text}", speaker = speaker, text = event.text)
 }
 
 /// Invoke `start_typing` / `stop_typing` on the originating plugin if it

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listen } from '@tauri-apps/api/event';
 import { X, Link, ScrollText, Database, Info, CheckCircle2, Key } from 'lucide-react';
 import { pluginsApi, PluginManifest, PluginOAuthStatus, PluginSecretStatus } from '../../api/plugins';
+import { PluginLogo } from './PluginLogo';
 
 type Tab = 'overview' | 'oauth' | 'secrets' | 'entities' | 'logs';
 
@@ -26,11 +27,18 @@ export function PluginDetailDrawer({ pluginId, initialTab, onClose }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-edge px-4 py-3">
-          <div>
-            <h2 className="text-sm font-semibold">
-              {manifestQuery.data?.name ?? pluginId}
-            </h2>
-            <div className="text-xs text-muted">{pluginId}</div>
+          <div className="flex items-center gap-3">
+            <PluginLogo
+              name={manifestQuery.data?.name ?? pluginId}
+              src={manifestQuery.data?.iconDataUrl}
+              size="sm"
+            />
+            <div>
+              <h2 className="text-sm font-semibold">
+                {manifestQuery.data?.name ?? pluginId}
+              </h2>
+              <div className="text-xs text-muted">{pluginId}</div>
+            </div>
           </div>
           <button className="text-muted hover:text-white" onClick={onClose}>
             <X size={16} />

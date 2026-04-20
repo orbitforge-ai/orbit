@@ -6,8 +6,9 @@
 //! struct, never from `plugin.json` directly.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Component, Path};
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -35,6 +36,8 @@ pub struct PluginManifest {
     pub license: Option<String>,
     #[serde(default)]
     pub icon: Option<String>,
+    #[serde(default, skip_deserializing)]
+    pub icon_data_url: Option<String>,
     pub runtime: RuntimeSpec,
     #[serde(default)]
     pub tools: Vec<ToolSpec>,
@@ -278,6 +281,15 @@ pub fn parse_and_validate(content: &str) -> Result<PluginManifest, String> {
     Ok(manifest)
 }
 
+/// Resolve a manifest icon relative to the plugin root and store it as a
+/// renderer-safe `data:` URL for the frontend.
+pub fn populate_icon_data_url(manifest: &mut PluginManifest, root_dir: &Path) {
+    manifest.icon_data_url = manifest
+        .icon
+        .as_deref()
+        .and_then(|icon| load_icon_data_url(icon, root_dir).ok());
+}
+
 /// Structural and policy validation — id shape, host-API compat, runtime kind,
 /// uniqueness constraints, tool/entity name sanity.
 pub fn validate(manifest: &PluginManifest) -> Result<(), String> {
@@ -294,6 +306,10 @@ pub fn validate(manifest: &PluginManifest) -> Result<(), String> {
 
     if manifest.name.trim().is_empty() {
         return Err("manifest.name must not be empty".into());
+    }
+
+    if let Some(icon) = manifest.icon.as_deref() {
+        validate_relative_asset_path(icon, "manifest.icon")?;
     }
 
     Version::parse(&manifest.version).map_err(|_| {
@@ -517,6 +533,77 @@ fn check_identifier(name: &str, field: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_relative_asset_path(path: &str, field: &str) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{} must not be empty", field));
+    }
+    let parsed = Path::new(trimmed);
+    if parsed.is_absolute() {
+        return Err(format!(
+            "{} {:?} must be relative to the plugin root",
+            field, path
+        ));
+    }
+    for component in parsed.components() {
+        match component {
+            Component::Normal(_) => {}
+            _ => {
+                return Err(format!(
+                    "{} {:?} must not contain `..`, `.`, or absolute path segments",
+                    field, path
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn load_icon_data_url(icon: &str, root_dir: &Path) -> Result<String, String> {
+    validate_relative_asset_path(icon, "manifest.icon")?;
+    let icon_path = root_dir.join(icon);
+    let canonical_root = root_dir.canonicalize().map_err(|e| {
+        format!(
+            "failed to resolve plugin root {}: {}",
+            root_dir.display(),
+            e
+        )
+    })?;
+    let canonical_icon = icon_path
+        .canonicalize()
+        .map_err(|e| format!("failed to resolve icon {}: {}", icon_path.display(), e))?;
+    if !canonical_icon.starts_with(&canonical_root) {
+        return Err(format!(
+            "icon {:?} resolves outside the plugin root {}",
+            icon,
+            root_dir.display()
+        ));
+    }
+    let bytes = std::fs::read(&canonical_icon)
+        .map_err(|e| format!("failed to read icon {}: {}", canonical_icon.display(), e))?;
+    let mime = icon_mime_type(&canonical_icon)?;
+    Ok(format!("data:{};base64,{}", mime, STANDARD.encode(bytes)))
+}
+
+fn icon_mime_type(path: &Path) -> Result<&'static str, String> {
+    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+        return Err(format!("icon {} has no file extension", path.display()));
+    };
+    match ext.to_ascii_lowercase().as_str() {
+        "svg" => Ok("image/svg+xml"),
+        "png" => Ok("image/png"),
+        "jpg" | "jpeg" => Ok("image/jpeg"),
+        "webp" => Ok("image/webp"),
+        "gif" => Ok("image/gif"),
+        "avif" => Ok("image/avif"),
+        other => Err(format!(
+            "icon {} uses unsupported extension {:?}",
+            path.display(),
+            other
+        )),
+    }
+}
+
 /// Convert a reverse-DNS plugin id into its tool-name slug by replacing `.`
 /// and `-` with `_`. Used to namespace tool names: `<slug>__<tool-name>`.
 pub fn slugify_id(id: &str) -> String {
@@ -622,5 +709,50 @@ mod tests {
             subscription_tool: None,
         });
         assert!(validate(&m).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_icon_path_traversal() {
+        let mut m = fixture();
+        m.icon = Some("../logo.svg".into());
+        assert!(validate(&m).is_err());
+    }
+
+    #[test]
+    fn populate_icon_data_url_embeds_supported_icon() {
+        let dir = tempdir();
+        let icon_path = dir.path().join("logo.svg");
+        std::fs::write(
+            &icon_path,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"></svg>"#,
+        )
+        .unwrap();
+        let mut m = fixture();
+        m.icon = Some("logo.svg".into());
+
+        populate_icon_data_url(&mut m, dir.path());
+
+        assert!(m
+            .icon_data_url
+            .as_deref()
+            .is_some_and(|url| url.starts_with("data:image/svg+xml;base64,")));
+    }
+
+    struct TempDir(std::path::PathBuf);
+    impl TempDir {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn tempdir() -> TempDir {
+        let base =
+            std::env::temp_dir().join(format!("orbit-plugin-manifest-test-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&base).unwrap();
+        TempDir(base)
     }
 }

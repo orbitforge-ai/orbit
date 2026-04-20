@@ -59,7 +59,11 @@ pub async fn plugin_call_tool(
 
 #[tauri::command]
 pub fn stage_plugin_install(path: String) -> Result<StagedInstall, String> {
-    let (staging_id, manifest) = plugins::install::stage_from_zip(&PathBuf::from(path))?;
+    let (staging_id, mut manifest) = plugins::install::stage_from_zip(&PathBuf::from(path))?;
+    plugins::manifest::populate_icon_data_url(
+        &mut manifest,
+        &plugins::staging_dir().join(&staging_id),
+    );
     Ok(StagedInstall {
         staging_id,
         manifest,
@@ -72,7 +76,13 @@ pub fn confirm_plugin_install(
     app: tauri::AppHandle,
     manager: State<'_, Arc<PluginManager>>,
 ) -> Result<PluginManifest, String> {
-    manager.confirm_install(&app, &staging_id)
+    let mut manifest = manager.confirm_install(&app, &staging_id)?;
+    let plugin_id = manifest.id.clone();
+    plugins::manifest::populate_icon_data_url(
+        &mut manifest,
+        &plugins::install::resolve_source_dir(&plugin_id),
+    );
+    Ok(manifest)
 }
 
 #[tauri::command]
@@ -87,7 +97,10 @@ pub fn install_plugin_from_directory(
     manager: State<'_, Arc<PluginManager>>,
 ) -> Result<PluginManifest, String> {
     require_dev_mode()?;
-    manager.install_from_directory(&app, &PathBuf::from(path))
+    let source = PathBuf::from(path);
+    let mut manifest = manager.install_from_directory(&app, &source)?;
+    plugins::manifest::populate_icon_data_url(&mut manifest, &source);
+    Ok(manifest)
 }
 
 #[tauri::command]

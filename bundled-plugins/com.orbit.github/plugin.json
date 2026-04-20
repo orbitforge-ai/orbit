@@ -7,6 +7,7 @@
   "description": "Bundled flagship plugin: clone repos, open PRs. Bring your own classic GitHub OAuth App (paste client_id + client_secret in the OAuth tab).",
   "author": "Orbit",
   "license": "MIT",
+  "icon": "assets/logo.svg",
   "runtime": {
     "type": "mcp-stdio",
     "command": "node",

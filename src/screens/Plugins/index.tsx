@@ -23,6 +23,7 @@ import {
 import { useSettingsStore } from '../../store/settingsStore';
 import { PluginInstallModal } from './PluginInstallModal';
 import { PluginDetailDrawer } from './PluginDetailDrawer';
+import { PluginLogo } from './PluginLogo';
 
 type DrawerTab = 'overview' | 'oauth' | 'entities' | 'logs';
 
@@ -268,30 +269,33 @@ function PluginCard({
     <div className="rounded-lg border border-edge bg-background px-4 py-3">
       <div className="flex items-start justify-between gap-3">
         <button
-          className="flex-1 text-left"
+          className="flex flex-1 items-start gap-3 text-left"
           onClick={onOpen}
           aria-label={`Open plugin ${plugin.name}`}
         >
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-white">{plugin.name}</span>
-            {plugin.bundled ? (
-              <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
-                Bundled
-              </span>
-            ) : null}
-            {plugin.dev ? (
-              <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
-                Dev
-              </span>
+          <PluginLogo name={plugin.name} src={plugin.iconDataUrl} size="sm" />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-white">{plugin.name}</span>
+              {plugin.bundled ? (
+                <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+                  Bundled
+                </span>
+              ) : null}
+              {plugin.dev ? (
+                <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+                  Dev
+                </span>
+              ) : null}
+            </div>
+            <div className="mt-0.5 text-xs text-muted">{plugin.id}</div>
+            <div className="mt-1 text-xs text-secondary">v{plugin.version}</div>
+            {plugin.description ? (
+              <div className="mt-2 line-clamp-2 text-xs text-secondary">
+                {plugin.description}
+              </div>
             ) : null}
           </div>
-          <div className="mt-0.5 text-xs text-muted">{plugin.id}</div>
-          <div className="mt-1 text-xs text-secondary">v{plugin.version}</div>
-          {plugin.description ? (
-            <div className="mt-2 line-clamp-2 text-xs text-secondary">
-              {plugin.description}
-            </div>
-          ) : null}
         </button>
         <StatusDot running={plugin.running} enabled={plugin.enabled} />
       </div>

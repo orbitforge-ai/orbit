@@ -143,6 +143,7 @@ pub fn default_pipeline(memory_client: Option<MemoryClient>) -> ContextPipeline 
     let mut p = ContextPipeline::new();
     p.add_stage(Box::new(BasePromptStage));
     p.add_stage(Box::new(GuardrailStage));
+    p.add_stage(Box::new(ChannelModeStage));
     if let Some(client) = memory_client {
         p.add_stage(Box::new(MemoryStage { client }));
     }
@@ -237,6 +238,45 @@ impl ContextStage for GuardrailStage {
 
     fn name(&self) -> &str {
         "Guardrails"
+    }
+}
+
+// ─── ChannelModeStage ─────────────────────────────────────────────────────
+
+/// Adds external-channel instructions when the session is bound to a
+/// plugin-provided channel (Discord, Slack, etc.). Tells the agent that
+/// user turns originate from an external chat and that it must reply via
+/// the `message` tool — the reply registry then routes the send back to
+/// the originating channel/thread.
+pub struct ChannelModeStage;
+
+const CHANNEL_MODE_PROMPT: &str = "\
+## External Channel Mode
+
+You are chatting in an external channel (Discord/Slack/etc.). Every user \
+turn in this conversation came from a real person in that channel. To \
+send a reply back, call the `message` tool with `action=\"send\"` and \
+leave `channel` empty — the system routes your message to the originating \
+channel automatically. Do not invent a channel name. Treat the \
+conversation history as the ongoing chat with that channel's participants.";
+
+#[async_trait::async_trait]
+impl ContextStage for ChannelModeStage {
+    async fn process(
+        &self,
+        mut snapshot: ContextSnapshot,
+        request: &ContextRequest,
+        _db: &DbPool,
+    ) -> Result<ContextSnapshot, String> {
+        if request.session_type.as_deref() == Some("channel") {
+            snapshot.system_prompt.push_str("\n\n");
+            snapshot.system_prompt.push_str(CHANNEL_MODE_PROMPT);
+        }
+        Ok(snapshot)
+    }
+
+    fn name(&self) -> &str {
+        "ChannelMode"
     }
 }
 

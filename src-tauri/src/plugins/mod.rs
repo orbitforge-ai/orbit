@@ -183,6 +183,14 @@ impl PluginManager {
                         .unwrap_or_else(|| entry.id.clone()),
                     version: manifest.map(|m| m.version.clone()).unwrap_or_default(),
                     description: manifest.and_then(|m| m.description.clone()),
+                    icon_data_url: manifest.and_then(|m| {
+                        let mut manifest = m.clone();
+                        manifest::populate_icon_data_url(
+                            &mut manifest,
+                            &install::resolve_source_dir(&entry.id),
+                        );
+                        manifest.icon_data_url
+                    }),
                     enabled: entry.enabled,
                     bundled: entry.bundled,
                     dev: entry.dev,
@@ -195,7 +203,18 @@ impl PluginManager {
     /// Parsed manifest for a plugin, if installed.
     pub fn manifest(&self, plugin_id: &str) -> Option<PluginManifest> {
         let inner = self.inner.read().expect("plugin manager lock poisoned");
-        inner.manifests.iter().find(|m| m.id == plugin_id).cloned()
+        inner
+            .manifests
+            .iter()
+            .find(|m| m.id == plugin_id)
+            .cloned()
+            .map(|mut manifest| {
+                manifest::populate_icon_data_url(
+                    &mut manifest,
+                    &install::resolve_source_dir(plugin_id),
+                );
+                manifest
+            })
     }
 
     /// Every manifest currently loaded. Used by the tools layer to build the
@@ -389,6 +408,7 @@ pub struct PluginSummary {
     pub name: String,
     pub version: String,
     pub description: Option<String>,
+    pub icon_data_url: Option<String>,
     pub enabled: bool,
     pub bundled: bool,
     pub dev: bool,
