@@ -3,6 +3,7 @@ import type { ComponentProps } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { StreamingCursor } from './StreamingCursor';
+import { MentionPill } from '../../features/mentions/MentionPill';
 
 interface TextBlockProps {
   text: string;
@@ -46,6 +47,9 @@ export function TextBlock({ text, isStreaming }: TextBlockProps) {
         remarkPlugins={[remarkGfm]}
         components={{
           a: ({ href, children, ...props }: ComponentProps<'a'>) => {
+            if (typeof href === 'string' && href.startsWith('mention:')) {
+              return <MentionPill href={href}>{children}</MentionPill>;
+            }
             const external = typeof href === 'string' && isExternalHref(href);
 
             return (

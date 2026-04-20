@@ -20,6 +20,7 @@ import { usePermissionStore } from '../../store/permissionStore';
 import { selectAvatarArchetype } from '../../lib/agentIdentity';
 import { AvatarOverlay, useAvatarState, useAvatarSpeech } from '../../components/avatar';
 import { FEATURES } from '../../lib/features';
+import { resolveMentionsToContentBlocks } from '../../features/mentions/resolveMentions';
 
 const PAGE_SIZE = 50;
 
@@ -337,18 +338,21 @@ export function ChatPanel({
   const handlePersistedSend = useCallback(
     async (content: ContentBlock[], modelOverride?: ChatModelOverride | null) => {
       if (!sessionId) return;
+      const effectiveOverride = modelOverride ?? selectedModelOverride ?? undefined;
+      const resolved = await resolveMentionsToContentBlocks(content, {
+        sessionId,
+        agentId: currentAgentId,
+        projectId: sessionMeta?.projectId ?? null,
+        modelOverride: effectiveOverride ?? null,
+      });
       const currentStreamId = `chat:${sessionId}`;
       const localUserMessageId = useLiveChatStore
         .getState()
-        .startChatStream(currentStreamId, sessionId, historyMessages, content);
+        .startChatStream(currentStreamId, sessionId, historyMessages, resolved);
       forceThinking();
 
       try {
-        const resp = await chatApi.sendMessage(
-          sessionId,
-          content,
-          modelOverride ?? selectedModelOverride ?? undefined
-        );
+        const resp = await chatApi.sendMessage(sessionId, resolved, effectiveOverride);
         useLiveChatStore
           .getState()
           .setUserMessageDbId(currentStreamId, localUserMessageId, resp.userMessageId);
@@ -358,20 +362,25 @@ export function ChatPanel({
         throw err;
       }
     },
-    [historyMessages, selectedModelOverride, sessionId]
+    [currentAgentId, forceThinking, historyMessages, selectedModelOverride, sessionId, sessionMeta?.projectId]
   );
 
   const handleSend = useCallback(
     async (content: ContentBlock[], modelOverride?: ChatModelOverride | null) => {
       if (isDraft) {
         if (!onDraftSend) return;
-        await onDraftSend(content, modelOverride ?? selectedModelOverride);
+        const resolved = await resolveMentionsToContentBlocks(content, {
+          agentId: currentAgentId,
+          projectId: draft?.projectId ?? null,
+          modelOverride: (modelOverride ?? selectedModelOverride) ?? null,
+        });
+        await onDraftSend(resolved, modelOverride ?? selectedModelOverride);
         return;
       }
 
       await handlePersistedSend(content, modelOverride);
     },
-    [handlePersistedSend, isDraft, onDraftSend, selectedModelOverride]
+    [currentAgentId, draft?.projectId, handlePersistedSend, isDraft, onDraftSend, selectedModelOverride]
   );
 
   const handleStop = useCallback(async () => {
@@ -713,6 +722,14 @@ export function ChatPanel({
         selectedModelOverride={selectedModelOverride}
         textValue={isDraft ? (draft?.text ?? '') : undefined}
         onTextChange={isDraft ? onDraftTextChange : undefined}
+        pickerContext={
+          currentAgentId
+            ? {
+                agentId: currentAgentId,
+                projectId: sessionMeta?.projectId ?? draft?.projectId ?? null,
+              }
+            : null
+        }
         contextGauge={
           sessionId ? (
             <ContextGauge

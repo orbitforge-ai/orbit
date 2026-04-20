@@ -1,6 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Send, Paperclip, X, Image as ImageIcon, FileText, Loader2, Square } from 'lucide-react';
 import { ChatModelOverride, ContentBlock } from '../../types';
+import { useMentionPicker } from '../../features/mentions/useMentionPicker';
+import { MentionPopup } from '../../features/mentions/MentionPopup';
+import { PickerContext } from '../../features/mentions/types';
 
 interface ChatInputProps {
   onSend: (
@@ -15,6 +18,7 @@ interface ChatInputProps {
   textValue?: string;
   onTextChange?: (text: string) => void;
   selectedModelOverride?: ChatModelOverride | null;
+  pickerContext?: PickerContext | null;
 }
 
 interface Attachment {
@@ -37,6 +41,7 @@ export function ChatInput({
   textValue,
   onTextChange,
   selectedModelOverride,
+  pickerContext,
 }: ChatInputProps) {
   const [internalText, setInternalText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -63,6 +68,13 @@ export function ChatInput({
     textareaRef.current.style.height = 'auto';
     textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
   }, [text]);
+
+  const picker = useMentionPicker({
+    textareaRef,
+    text,
+    setText,
+    pickerContext: pickerContext ?? null,
+  });
 
   const handleSend = useCallback(() => {
     if (sending || streaming) return;
@@ -118,7 +130,8 @@ export function ChatInput({
     void run();
   }, [onStop, stopping]);
 
-  function handleKeyDown(e: React.KeyboardEvent) {
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (picker.onKeyDown(e)) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -130,6 +143,7 @@ export function ChatInput({
     const el = e.target;
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    picker.syncCaret();
   }
 
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -228,10 +242,17 @@ export function ChatInput({
           onChange={handleTextareaInput}
           onKeyDown={handleKeyDown}
           disabled={inputDisabled}
-          placeholder="Type a message..."
+          placeholder="Type a message... (@ for agents, # for files & work items)"
           rows={1}
           className="flex-1 px-3 py-2 rounded-xl bg-background border border-edge text-white text-sm resize-none focus:outline-none focus:border-accent disabled:opacity-50 placeholder:text-border-hover"
           style={{ maxHeight: 200 }}
+        />
+        <MentionPopup
+          textareaRef={textareaRef}
+          open={picker.open}
+          groups={picker.groups}
+          onSelect={picker.onSelect}
+          onClose={picker.close}
         />
 
         {modelPicker && <div className="shrink-0 mb-0.5">{modelPicker}</div>}
