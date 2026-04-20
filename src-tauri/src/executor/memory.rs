@@ -1,5 +1,6 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use tokio::time::{sleep, Duration};
 
 /// Constant agent_id sent to mem0 cloud so all agents share a single memory pool.
 const GLOBAL_AGENT_ID: &str = "global";
@@ -112,6 +113,7 @@ struct CloudAddBody {
     user_id: String,
     agent_id: String,
     metadata: serde_json::Value,
+    infer: bool,
     async_mode: bool,
     output_format: &'static str,
 }
@@ -165,8 +167,12 @@ impl CloudResponse {
 
 #[derive(Debug, Deserialize)]
 struct CloudMemoryItem {
-    id: String,
-    memory: String,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    memory: Option<String>,
+    #[serde(default)]
+    data: Option<CloudMemoryData>,
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
@@ -177,6 +183,24 @@ struct CloudMemoryItem {
     metadata: serde_json::Value,
     #[serde(default)]
     event: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CloudMemoryData {
+    #[serde(default)]
+    memory: Option<String>,
+}
+
+impl CloudMemoryItem {
+    fn has_materialized_memory(&self) -> bool {
+        self.id.is_some() && self.memory_text().is_some()
+    }
+
+    fn memory_text(&self) -> Option<&str> {
+        self.memory
+            .as_deref()
+            .or_else(|| self.data.as_ref().and_then(|data| data.memory.as_deref()))
+    }
 }
 
 /// The update endpoint returns the item directly, not wrapped in {results:[...]}.
@@ -215,6 +239,43 @@ impl MemoryClient {
         format!("Token {}", self.api_key)
     }
 
+    fn v2_filters(user_id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "AND": [
+                { "user_id": user_id },
+                { "agent_id": GLOBAL_AGENT_ID },
+            ]
+        })
+    }
+
+    async fn wait_for_explicit_memory(
+        &self,
+        text: &str,
+        user_id: &str,
+        memory_type: &str,
+    ) -> Result<Option<MemoryEntry>, String> {
+        const ATTEMPTS: usize = 12;
+        const DELAY_MS: u64 = 250;
+
+        for attempt in 0..ATTEMPTS {
+            let entries = self
+                .list_memories(user_id, Some(memory_type), 200, 0)
+                .await?;
+            if let Some(entry) = entries
+                .into_iter()
+                .find(|entry| entry.text.trim() == text.trim())
+            {
+                return Ok(Some(entry));
+            }
+
+            if attempt + 1 < ATTEMPTS {
+                sleep(Duration::from_millis(DELAY_MS)).await;
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Add a new memory.
     pub async fn add_memory(
         &self,
@@ -246,7 +307,8 @@ impl MemoryClient {
             user_id: user_id.to_string(),
             agent_id: GLOBAL_AGENT_ID.to_string(),
             metadata: meta,
-            async_mode: false,
+            infer: false,
+            async_mode: true,
             output_format: "v1.1",
         };
 
@@ -271,7 +333,7 @@ impl MemoryClient {
             .map_err(|e| format!("add_memory body read failed: {}", e))?;
         let cloud = parse_cloud_response(&body, "add_memory")?;
 
-        let entries = cloud
+        let entries: Vec<MemoryEntry> = cloud
             .into_results()
             .into_iter()
             .filter(|item| {
@@ -279,10 +341,19 @@ impl MemoryClient {
                 matches!(
                     item.event.as_deref(),
                     Some("ADD") | Some("add") | Some("UPDATE") | Some("update") | None
-                ) && !item.id.is_empty()
+                ) && item.has_materialized_memory()
             })
-            .map(|item| cloud_item_to_entry(item, user_id))
+            .filter_map(|item| cloud_item_to_entry(item, user_id))
             .collect();
+
+        if entries.is_empty() {
+            if let Some(entry) = self
+                .wait_for_explicit_memory(text, user_id, memory_type)
+                .await?
+            {
+                return Ok(vec![entry]);
+            }
+        }
 
         Ok(entries)
     }
@@ -300,7 +371,7 @@ impl MemoryClient {
             user_id: user_id.to_string(),
             agent_id: GLOBAL_AGENT_ID.to_string(),
             top_k: limit,
-            filters: None,
+            filters: Some(Self::v2_filters(user_id)),
         };
 
         let resp = self
@@ -327,7 +398,7 @@ impl MemoryClient {
         let mut entries: Vec<MemoryEntry> = cloud
             .into_results()
             .into_iter()
-            .map(|item| cloud_item_to_entry(item, user_id))
+            .filter_map(|item| cloud_item_to_entry(item, user_id))
             .collect();
 
         // Post-filter by memory_type if requested (cloud may not filter metadata natively)
@@ -352,7 +423,7 @@ impl MemoryClient {
         let body = CloudListBody {
             user_id: user_id.to_string(),
             agent_id: GLOBAL_AGENT_ID.to_string(),
-            filters: None,
+            filters: Some(Self::v2_filters(user_id)),
             page,
             page_size: limit,
         };
@@ -381,7 +452,7 @@ impl MemoryClient {
         let mut entries: Vec<MemoryEntry> = cloud
             .into_results()
             .into_iter()
-            .map(|item| cloud_item_to_entry(item, user_id))
+            .filter_map(|item| cloud_item_to_entry(item, user_id))
             .collect();
 
         if let Some(mt) = memory_type {
@@ -453,8 +524,9 @@ impl MemoryClient {
                 memory,
                 metadata,
             } => CloudMemoryItem {
-                id,
-                memory,
+                id: Some(id),
+                memory: Some(memory),
+                data: None,
                 created_at: None,
                 updated_at: None,
                 score: None,
@@ -463,7 +535,9 @@ impl MemoryClient {
             },
         };
 
-        Ok(cloud_item_to_entry(item, ""))
+        cloud_item_to_entry(item, "").ok_or_else(|| {
+            "update_memory: response did not include a materialized memory entry".to_string()
+        })
     }
 
     /// Auto-extract memories from a conversation.
@@ -488,6 +562,7 @@ impl MemoryClient {
             user_id: user_id.to_string(),
             agent_id: GLOBAL_AGENT_ID.to_string(),
             metadata: meta,
+            infer: true,
             async_mode: false,
             output_format: "v1.1",
         };
@@ -520,9 +595,9 @@ impl MemoryClient {
                 matches!(
                     item.event.as_deref(),
                     Some("ADD") | Some("add") | Some("UPDATE") | Some("update") | None
-                ) && !item.id.is_empty()
+                ) && item.has_materialized_memory()
             })
-            .map(|item| cloud_item_to_entry(item, user_id))
+            .filter_map(|item| cloud_item_to_entry(item, user_id))
             .collect();
 
         Ok(entries)
@@ -538,7 +613,9 @@ fn parse_cloud_response(body: &str, operation: &str) -> Result<CloudResponse, St
     })
 }
 
-fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> MemoryEntry {
+fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> Option<MemoryEntry> {
+    let memory = item.memory_text()?.to_string();
+    let id = item.id?;
     let meta = &item.metadata;
 
     let source = meta
@@ -563,9 +640,9 @@ fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> MemoryEntry {
         .unwrap_or("")
         .to_string();
     let memory_type = match (source.as_str(), raw_memory_type.as_deref()) {
-        ("auto_extracted", _) => infer_memory_type(&item.memory),
+        ("auto_extracted", _) => infer_memory_type(&memory),
         (_, Some(mt)) => mt.to_string(),
-        _ => infer_memory_type(&item.memory),
+        _ => infer_memory_type(&memory),
     };
 
     // Strip known fields from residual metadata
@@ -586,9 +663,9 @@ fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> MemoryEntry {
         other => other.clone(),
     };
 
-    MemoryEntry {
-        id: item.id,
-        text: item.memory,
+    Some(MemoryEntry {
+        id,
+        text: memory,
         memory_type,
         user_id: user_id.to_string(),
         created_at,
@@ -596,12 +673,14 @@ fn cloud_item_to_entry(item: CloudMemoryItem, user_id: &str) -> MemoryEntry {
         source,
         score: item.score,
         metadata: residual_metadata,
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{cloud_item_to_entry, infer_memory_type, parse_cloud_response, MemoryEntry};
+    use super::{
+        cloud_item_to_entry, infer_memory_type, parse_cloud_response, MemoryClient, MemoryEntry,
+    };
     use serde_json::json;
 
     #[test]
@@ -625,7 +704,7 @@ mod tests {
         let results = parsed.into_results();
 
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].id, "mem_1");
+        assert_eq!(results[0].id.as_deref(), Some("mem_1"));
     }
 
     #[test]
@@ -645,7 +724,8 @@ mod tests {
         let parsed =
             parse_cloud_response(body, "search_memories").expect("bare response should parse");
         let results = parsed.into_results();
-        let entry = cloud_item_to_entry(results.into_iter().next().expect("result"), "user_1");
+        let entry = cloud_item_to_entry(results.into_iter().next().expect("result"), "user_1")
+            .expect("entry should materialize");
 
         assert_eq!(entry.text, "Bare response");
         assert_eq!(entry.created_at, "2026-04-03T12:00:00Z");
@@ -686,8 +766,9 @@ mod tests {
     #[test]
     fn auto_extracted_entries_are_reclassified_from_text() {
         let item = super::CloudMemoryItem {
-            id: "mem_5".to_string(),
-            memory: "User's favorite color is red.".to_string(),
+            id: Some("mem_5".to_string()),
+            memory: Some("User's favorite color is red.".to_string()),
+            data: None,
             created_at: Some("2026-04-04T12:00:00Z".to_string()),
             updated_at: Some("2026-04-04T12:00:00Z".to_string()),
             score: None,
@@ -698,8 +779,104 @@ mod tests {
             event: None,
         };
 
-        let entry = cloud_item_to_entry(item, "user_1");
+        let entry = cloud_item_to_entry(item, "user_1").expect("entry should materialize");
 
         assert_eq!(entry.memory_type, "user");
+    }
+
+    #[test]
+    fn parses_v11_add_response_with_nested_memory_data() {
+        let body = r#"{
+            "results": [
+                {
+                    "id": "mem_6",
+                    "event": "ADD",
+                    "data": {
+                        "memory": "The user likes sci-fi movies."
+                    },
+                    "metadata": {
+                        "memory_type": "user"
+                    }
+                }
+            ]
+        }"#;
+
+        let parsed = parse_cloud_response(body, "add_memory").expect("add response should parse");
+        let entry = cloud_item_to_entry(
+            parsed.into_results().into_iter().next().expect("result"),
+            "user_1",
+        )
+        .expect("entry should materialize");
+
+        assert_eq!(entry.id, "mem_6");
+        assert_eq!(entry.text, "The user likes sci-fi movies.");
+        assert_eq!(entry.memory_type, "user");
+    }
+
+    #[test]
+    fn parses_pending_add_response_without_materialized_memory() {
+        let body = r#"{
+            "results": [
+                {
+                    "message": "Memory processing has been queued for background execution",
+                    "status": "PENDING",
+                    "event_id": "d7b5282a-0031-4cc2-98ba-5a02d8531e17",
+                    "id": null,
+                    "event": null,
+                    "memory": null
+                }
+            ]
+        }"#;
+
+        let parsed =
+            parse_cloud_response(body, "add_memory").expect("pending response should parse");
+        let mut results = parsed.into_results().into_iter();
+        let item = results.next().expect("result");
+
+        assert!(!item.has_materialized_memory());
+        assert!(cloud_item_to_entry(item, "user_1").is_none());
+    }
+
+    #[test]
+    fn direct_add_body_serializes_as_async_direct_import() {
+        let body = super::CloudAddBody {
+            messages: vec![super::CloudMessage {
+                role: "user".to_string(),
+                content: "The user's name is Boss Mcgee".to_string(),
+            }],
+            user_id: "user_1".to_string(),
+            agent_id: "global".to_string(),
+            metadata: json!({
+                "memory_type": "user",
+                "source": "explicit",
+            }),
+            infer: false,
+            async_mode: true,
+            output_format: "v1.1",
+        };
+
+        let value = serde_json::to_value(&body).expect("body should serialize");
+
+        assert_eq!(value["infer"], false);
+        assert_eq!(value["async_mode"], true);
+        assert_eq!(
+            value["messages"][0]["content"],
+            "The user's name is Boss Mcgee"
+        );
+    }
+
+    #[test]
+    fn v2_filters_include_user_and_global_agent() {
+        let filters = MemoryClient::v2_filters("user_123");
+
+        assert_eq!(
+            filters,
+            json!({
+                "AND": [
+                    { "user_id": "user_123" },
+                    { "agent_id": "global" },
+                ]
+            })
+        );
     }
 }

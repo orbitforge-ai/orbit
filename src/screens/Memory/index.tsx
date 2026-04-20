@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import * as Select from '@radix-ui/react-select';
 import { memoryApi } from '../../api/memory';
+import { toast } from '../../store/toastStore';
 import { MemoryEntry, MemoryType } from '../../types';
 
 const TYPE_FILTER_OPTIONS: { value: MemoryType | 'all'; label: string }[] = [
@@ -96,10 +97,20 @@ export function Memory() {
     if (!newText.trim()) return;
     setAdding(true);
     try {
-      await memoryApi.add(newText.trim(), newType);
+      const savedText = newText.trim();
+      const created = await memoryApi.add(savedText, newType);
       setNewText('');
       setShowAddForm(false);
       queryClient.invalidateQueries({ queryKey: ['memories'] });
+      if (created.length > 0) {
+        toast.success('Memory saved');
+      } else {
+        toast.info('Memory queued. It may take a moment to appear.');
+        window.setTimeout(() => queryClient.invalidateQueries({ queryKey: ['memories'] }), 1500);
+        window.setTimeout(() => queryClient.invalidateQueries({ queryKey: ['memories'] }), 4000);
+      }
+    } catch (error) {
+      toast.error('Failed to save memory', error);
     } finally {
       setAdding(false);
     }
