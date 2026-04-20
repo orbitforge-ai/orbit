@@ -10,7 +10,7 @@ use ulid::Ulid;
 
 use crate::events::emitter::{LogLine, RunLogChunkPayload};
 use crate::executor::workspace;
-use crate::workflows::nodes::{NodeExecutionContext, NodeOutcome};
+use crate::workflows::nodes::{NodeExecutionContext, NodeFailure, NodeOutcome};
 use crate::workflows::template::{render_template, OUTPUT_ALIASES_KEY};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
@@ -24,17 +24,17 @@ struct ProcessCapture {
 
 pub(super) async fn execute<R: tauri::Runtime>(
     ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, String> {
+) -> Result<NodeOutcome, NodeFailure> {
     match ctx.node.node_type.as_str() {
         "code.bash.run" => execute_bash(ctx).await,
         "code.script.run" => execute_script(ctx).await,
-        other => Err(format!("unsupported code node type `{}`", other)),
+        other => Err(format!("unsupported code node type `{}`", other).into()),
     }
 }
 
 async fn execute_bash<R: tauri::Runtime>(
     ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, String> {
+) -> Result<NodeOutcome, NodeFailure> {
     let script_template = required_code_field(&ctx.node.data, "script", "code.bash.run")?;
     let cwd = resolve_working_directory(ctx.project_id, working_directory(&ctx.node.data))?;
     let timeout_secs = timeout_seconds(&ctx.node.data);
@@ -60,10 +60,15 @@ async fn execute_bash<R: tauri::Runtime>(
     emit_process_logs(ctx.app, ctx.run_id, &capture.stdout, &capture.stderr);
 
     if capture.exit_code != 0 {
-        return Err(format_process_failure(
-            "code.bash.run",
-            capture.exit_code,
-            &capture.stderr,
+        return Err(NodeFailure::with_output(
+            format_process_failure("code.bash.run", capture.exit_code, &capture.stderr),
+            json!({
+                "cwd": cwd.to_string_lossy(),
+                "stdout": capture.stdout,
+                "stderr": capture.stderr,
+                "exitCode": capture.exit_code,
+                "parsed": parse_json_or_null(&capture.stdout),
+            }),
         ));
     }
 
@@ -81,7 +86,7 @@ async fn execute_bash<R: tauri::Runtime>(
 
 async fn execute_script<R: tauri::Runtime>(
     ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, String> {
+) -> Result<NodeOutcome, NodeFailure> {
     let source = required_code_field(&ctx.node.data, "source", "code.script.run")?;
     let language = script_language(&ctx.node.data)?;
     let cwd = resolve_working_directory(ctx.project_id, working_directory(&ctx.node.data))?;
@@ -145,17 +150,31 @@ async fn execute_script<R: tauri::Runtime>(
     emit_process_logs(ctx.app, ctx.run_id, &capture.stdout, &capture.stderr);
 
     if capture.exit_code != 0 {
-        return Err(format_process_failure(
-            "code.script.run",
-            capture.exit_code,
-            &capture.stderr,
+        return Err(NodeFailure::with_output(
+            format_process_failure("code.script.run", capture.exit_code, &capture.stderr),
+            json!({
+                "language": language,
+                "cwd": cwd.to_string_lossy(),
+                "stdout": capture.stdout,
+                "stderr": capture.stderr,
+                "exitCode": capture.exit_code,
+            }),
         ));
     }
 
     let payload: Value = serde_json::from_str(capture.stdout.trim()).map_err(|e| {
-        format!(
-            "code.script.run expected a structured result on stdout: {}",
-            e
+        NodeFailure::with_output(
+            format!(
+                "code.script.run expected a structured result on stdout: {}",
+                e
+            ),
+            json!({
+                "language": language,
+                "cwd": cwd.to_string_lossy(),
+                "stdout": capture.stdout,
+                "stderr": capture.stderr,
+                "exitCode": capture.exit_code,
+            }),
         )
     })?;
     let result = payload.get("result").cloned().unwrap_or(Value::Null);

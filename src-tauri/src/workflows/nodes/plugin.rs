@@ -1,12 +1,12 @@
 use serde_json::{json, Map, Value};
 
 use crate::plugins;
-use crate::workflows::nodes::{NodeExecutionContext, NodeOutcome};
+use crate::workflows::nodes::{NodeExecutionContext, NodeFailure, NodeOutcome};
 use crate::workflows::template::render_template;
 
 pub(super) async fn execute<R: tauri::Runtime>(
     ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, String> {
+) -> Result<NodeOutcome, NodeFailure> {
     let manager = plugins::from_state(ctx.app);
     let (manifest, tool_name) = manager
         .manifests()
@@ -27,7 +27,7 @@ pub(super) async fn execute<R: tauri::Runtime>(
         })?;
 
     if !manager.is_enabled(&manifest.id) {
-        return Err(format!("plugin '{}' is disabled", manifest.id));
+        return Err(format!("plugin '{}' is disabled", manifest.id).into());
     }
 
     let rendered_input = render_value(&ctx.node.data, ctx.outputs);

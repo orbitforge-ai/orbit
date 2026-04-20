@@ -6,18 +6,20 @@ use tauri::Manager;
 use crate::auth::{AuthMode, AuthState};
 use crate::commands::users::ActiveUser;
 use crate::db::cloud::CloudClientState;
-use crate::executor::engine::{AgentSemaphores, ExecutorTx, SessionExecutionRegistry};
+use crate::executor::engine::{
+    AgentSemaphores, ExecutorTx, SessionExecutionRegistry, UserQuestionRegistry,
+};
 use crate::executor::{agent_loop, workspace};
 use crate::memory_service::MemoryServiceState;
 use crate::models::task::AgentLoopConfig;
-use crate::workflows::nodes::{NodeExecutionContext, NodeOutcome};
+use crate::workflows::nodes::{NodeExecutionContext, NodeFailure, NodeOutcome};
 use crate::workflows::template::{
     parse_agent_output, render_agent_prompt, render_optional_template,
 };
 
 pub(super) async fn execute<R: tauri::Runtime>(
     ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, String> {
+) -> Result<NodeOutcome, NodeFailure> {
     let agent_id = ctx
         .node
         .data
@@ -61,7 +63,7 @@ pub(super) async fn execute<R: tauri::Runtime>(
 
     let ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
     if ws_config.provider.is_empty() {
-        return Err(format!("agent {} has no provider configured", agent_id));
+        return Err(format!("agent {} has no provider configured", agent_id).into());
     }
     let runtime_app = ctx
         .app
@@ -74,6 +76,7 @@ pub(super) async fn execute<R: tauri::Runtime>(
         .state::<SessionExecutionRegistry>()
         .inner()
         .clone();
+    let user_question_registry = runtime_app.state::<UserQuestionRegistry>().inner().clone();
     let permission_registry =
         runtime_app.state::<crate::executor::permissions::PermissionRegistry>();
     let memory_client = ctx
@@ -104,6 +107,7 @@ pub(super) async fn execute<R: tauri::Runtime>(
         &agent_semaphores,
         &session_registry,
         &permission_registry,
+        Some(&user_question_registry),
         memory_client.as_ref(),
         &memory_user_id,
         cloud_client,
@@ -112,23 +116,40 @@ pub(super) async fn execute<R: tauri::Runtime>(
     .map_err(|e| format!("agent.run LLM loop failed: {}", e))?;
 
     let text = outcome.finish_summary.unwrap_or_default();
-    let parsed = parse_agent_output(output_mode, &text)?;
+    let base_output = json!({
+        "agentId": agent_id,
+        "prompt": prompt,
+        "context": context,
+        "outputMode": output_mode,
+        "iterations": outcome.iterations,
+        "usage": {
+            "inputTokens": outcome.input_tokens,
+            "outputTokens": outcome.output_tokens,
+            "totalTokens": outcome.input_tokens + outcome.output_tokens,
+        },
+        "text": text,
+    });
+    let parsed = match parse_agent_output(output_mode, &text) {
+        Ok(value) => value,
+        Err(err) => {
+            let mut diagnostic = base_output.clone();
+            if let Some(obj) = diagnostic.as_object_mut() {
+                obj.insert("parsed".to_string(), serde_json::Value::Null);
+                obj.insert(
+                    "parseError".to_string(),
+                    serde_json::Value::String(err.clone()),
+                );
+            }
+            return Err(NodeFailure::with_output(err, diagnostic));
+        }
+    };
 
+    let mut output = base_output;
+    if let Some(obj) = output.as_object_mut() {
+        obj.insert("parsed".to_string(), parsed);
+    }
     Ok(NodeOutcome {
-        output: json!({
-            "agentId": agent_id,
-            "prompt": prompt,
-            "context": context,
-            "outputMode": output_mode,
-            "iterations": outcome.iterations,
-            "usage": {
-                "inputTokens": outcome.input_tokens,
-                "outputTokens": outcome.output_tokens,
-                "totalTokens": outcome.input_tokens + outcome.output_tokens,
-            },
-            "text": text,
-            "parsed": parsed,
-        }),
+        output,
         next_handle: None,
     })
 }

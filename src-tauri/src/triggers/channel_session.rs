@@ -157,10 +157,7 @@ struct ChannelBindingRow {
     provider_thread_id: String,
 }
 
-async fn load_binding(
-    db: &DbPool,
-    session_id: &str,
-) -> Result<Option<ChannelBindingRow>, String> {
+async fn load_binding(db: &DbPool, session_id: &str) -> Result<Option<ChannelBindingRow>, String> {
     let pool = db.0.clone();
     let sid = session_id.to_string();
     tokio::task::spawn_blocking(move || -> Result<Option<ChannelBindingRow>, String> {

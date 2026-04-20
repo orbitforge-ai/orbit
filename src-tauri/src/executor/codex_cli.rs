@@ -127,11 +127,57 @@ bearer_token_env_var = "{env_var}"
     Ok(dir)
 }
 
-fn build_prompt(history: &str, current: &str, system_prompt: &str) -> String {
+fn build_mcp_tool_guidance(tools: &[ToolDefinition]) -> String {
+    if tools.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::from(
+        "Orbit MCP tool access:\n\
+These Orbit capabilities are available as MCP function tools, not MCP resources.\n\
+Do not search for them via MCP resource discovery; call the function tools directly.\n\
+When in doubt, use the namespaced MCP form `mcp__orbit__<tool_name>`.\n\
+Important examples:\n\
+- Project backlog / kanban updates: `mcp__orbit__work_item`\n\
+- Workflow edits/runs: `mcp__orbit__workflow`\n\
+- File reads/writes: `mcp__orbit__read_file`, `mcp__orbit__write_file`, `mcp__orbit__edit_file`\n\
+- Shell commands: `mcp__orbit__shell_command`\n\
+\n\
+Available Orbit MCP function tools:\n",
+    );
+
+    for tool in tools {
+        out.push_str("- `mcp__orbit__");
+        out.push_str(&tool.name);
+        out.push_str("`");
+        if !tool.description.trim().is_empty() {
+            out.push_str(": ");
+            out.push_str(tool.description.trim());
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
+fn build_prompt(
+    history: &str,
+    current: &str,
+    system_prompt: &str,
+    tools: &[ToolDefinition],
+) -> String {
     let mut out = String::new();
+    let mcp_guidance = build_mcp_tool_guidance(tools);
     if !system_prompt.is_empty() {
         out.push_str("System instructions:\n");
         out.push_str(system_prompt);
+        if !mcp_guidance.is_empty() {
+            out.push_str("\n\n---\n\n");
+            out.push_str(&mcp_guidance);
+        }
+        out.push_str("\n\n---\n\n");
+    } else if !mcp_guidance.is_empty() {
+        out.push_str(&mcp_guidance);
         out.push_str("\n\n---\n\n");
     }
     if !history.is_empty() {
@@ -182,7 +228,7 @@ impl LlmProvider for CodexCliProvider {
         }
 
         let (history, current) = cli_common::transcript_for_cli(messages);
-        let prompt = build_prompt(&history, &current, &config.system_prompt);
+        let prompt = build_prompt(&history, &current, &config.system_prompt, tools);
 
         let mut cmd = Command::new(&binary);
         cmd.arg("exec")
@@ -456,7 +502,7 @@ mod tests {
 
     #[test]
     fn build_prompt_includes_history_and_system() {
-        let p = build_prompt("prev", "now", "sys");
+        let p = build_prompt("prev", "now", "sys", &[]);
         assert!(p.contains("System instructions:"));
         assert!(p.contains("sys"));
         assert!(p.contains("Prior conversation"));
@@ -467,8 +513,24 @@ mod tests {
 
     #[test]
     fn build_prompt_with_no_history_and_no_system_is_plain() {
-        let p = build_prompt("", "hi", "");
+        let p = build_prompt("", "hi", "", &[]);
         assert_eq!(p, "hi");
+    }
+
+    #[test]
+    fn build_prompt_includes_mcp_tool_guidance() {
+        let p = build_prompt(
+            "",
+            "hi",
+            "",
+            &[ToolDefinition {
+                name: "work_item".into(),
+                description: "Update the project backlog".into(),
+                input_schema: json!({ "type": "object" }),
+            }],
+        );
+        assert!(p.contains("mcp__orbit__work_item"));
+        assert!(p.contains("not MCP resources"));
     }
 
     #[test]

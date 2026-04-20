@@ -2,19 +2,19 @@ use chrono::Utc;
 use reqwest::header::CONTENT_TYPE;
 use serde_json::{json, Value};
 
-use crate::workflows::nodes::{NodeExecutionContext, NodeOutcome};
+use crate::workflows::nodes::{NodeExecutionContext, NodeFailure, NodeOutcome};
 use crate::workflows::seen_items::{filter_unseen_items, hash_text};
 use crate::workflows::template::{normalize_http_body, render_template, required_template};
 
 pub(super) async fn execute<R: tauri::Runtime>(
     ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, String> {
+) -> Result<NodeOutcome, NodeFailure> {
     let url_template = required_template(&ctx.node.data, "url", "integration.http.request")?;
     let url = render_template(&url_template, ctx.outputs)
         .trim()
         .to_string();
     if url.is_empty() {
-        return Err("integration.http.request rendered an empty URL".to_string());
+        return Err("integration.http.request rendered an empty URL".into());
     }
     let client = reqwest::Client::builder()
         .user_agent("Orbit/0.1 workflow http request")

@@ -22,7 +22,7 @@ use crate::commands::project_workflows::workflow_has_trigger_node;
 use crate::db::DbPool;
 use crate::models::project_workflow::{WorkflowEdge, WorkflowGraph, WorkflowNode};
 use crate::models::workflow_run::{WorkflowRun, WorkflowRunStep};
-use crate::workflows::nodes::{self, NodeExecutionContext, NodeOutcome};
+use crate::workflows::nodes::{self, NodeExecutionContext, NodeFailure, NodeOutcome};
 use crate::workflows::store;
 use crate::workflows::template::{build_reference_aliases, OUTPUT_ALIASES_KEY};
 
@@ -170,11 +170,11 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
                     sequence += 1;
                     current = pick_next(&outgoing, &node.id, next_handle.as_deref());
                 }
-                Err(err_msg) => {
-                    store::fail_run(&self.db, &self.app, &workflow_id, &run.id, &err_msg)
+                Err(failure) => {
+                    store::fail_run(&self.db, &self.app, &workflow_id, &run.id, &failure.message)
                         .await
                         .ok();
-                    return Err(err_msg);
+                    return Err(failure.message);
                 }
             }
         }
@@ -204,7 +204,7 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
         node: &WorkflowNode,
         outputs: &Value,
         sequence: i64,
-    ) -> Result<NodeOutcome, String> {
+    ) -> Result<NodeOutcome, NodeFailure> {
         let step_id = Ulid::new().to_string();
         let started_at = Utc::now().to_rfc3339();
         let input = json!({ "node_data": node.data, "upstream": outputs });
@@ -253,7 +253,7 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
                 )
                 .await?;
             }
-            Err(err) => {
+            Err(failure) => {
                 store::finish_step(
                     &self.db,
                     &self.app,
@@ -263,8 +263,8 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
                     &node.id,
                     &node.node_type,
                     store::STATUS_FAILED,
-                    None,
-                    Some(err),
+                    failure.partial_output.as_ref(),
+                    Some(&failure.message),
                     &completed_at,
                 )
                 .await?;

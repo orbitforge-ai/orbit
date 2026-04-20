@@ -27,6 +27,38 @@ pub(crate) struct NodeOutcome {
     pub next_handle: Option<String>,
 }
 
+pub(crate) struct NodeFailure {
+    pub message: String,
+    pub partial_output: Option<Value>,
+}
+
+impl NodeFailure {
+    pub fn with_output(message: impl Into<String>, output: Value) -> Self {
+        Self {
+            message: message.into(),
+            partial_output: Some(output),
+        }
+    }
+}
+
+impl From<String> for NodeFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            partial_output: None,
+        }
+    }
+}
+
+impl From<&str> for NodeFailure {
+    fn from(message: &str) -> Self {
+        Self {
+            message: message.to_string(),
+            partial_output: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NodeExecutorKind {
     Trigger,
@@ -61,7 +93,7 @@ pub fn node_type_has_executor(node_type: &str) -> bool {
 
 pub(crate) async fn execute<R: Runtime>(
     ctx: NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, String> {
+) -> Result<NodeOutcome, NodeFailure> {
     match route_node_type(ctx.node.node_type.as_str()) {
         Some(NodeExecutorKind::Trigger) => Ok(NodeOutcome {
             output: ctx.outputs.get("trigger").cloned().unwrap_or(Value::Null),
@@ -75,7 +107,7 @@ pub(crate) async fn execute<R: Runtime>(
         Some(NodeExecutorKind::Plugin) => plugin::execute(&ctx).await,
         Some(NodeExecutorKind::ProposalQueue) => board::execute_proposal_enqueue(&ctx).await,
         Some(NodeExecutorKind::WorkItem) => board::execute_work_item(&ctx).await,
-        None => Err(format!("unknown node type `{}`", ctx.node.node_type)),
+        None => Err(format!("unknown node type `{}`", ctx.node.node_type).into()),
     }
 }
 

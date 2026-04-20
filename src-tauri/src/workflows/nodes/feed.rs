@@ -3,7 +3,7 @@ use std::io::Cursor;
 use feed_rs::parser;
 use serde_json::json;
 
-use crate::workflows::nodes::{NodeExecutionContext, NodeOutcome};
+use crate::workflows::nodes::{NodeExecutionContext, NodeFailure, NodeOutcome};
 use crate::workflows::seen_items::filter_unseen_items;
 use crate::workflows::template::{
     json_number_to_i64, parse_multiline_templates, required_template,
@@ -11,12 +11,12 @@ use crate::workflows::template::{
 
 pub(super) async fn execute<R: tauri::Runtime>(
     ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, String> {
+) -> Result<NodeOutcome, NodeFailure> {
     let feed_urls_text =
         required_template(&ctx.node.data, "feedUrlsText", "integration.feed.fetch")?;
     let feed_urls = parse_multiline_templates(&feed_urls_text, ctx.outputs);
     if feed_urls.is_empty() {
-        return Err("integration.feed.fetch requires at least one feed URL".to_string());
+        return Err("integration.feed.fetch requires at least one feed URL".into());
     }
 
     let limit = ctx

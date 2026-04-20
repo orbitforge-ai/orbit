@@ -10,7 +10,7 @@ use crate::commands::work_items::{
 use crate::db::cloud::CloudClientState;
 use crate::models::work_item::{CreateWorkItem, UpdateWorkItem};
 use crate::models::work_item_comment::{CommentAuthor, WorkItemComment};
-use crate::workflows::nodes::{NodeExecutionContext, NodeOutcome};
+use crate::workflows::nodes::{NodeExecutionContext, NodeFailure, NodeOutcome};
 use crate::workflows::template::{
     json_number_to_i64, lookup_json_path, optional_labels, parse_optional_priority,
     parse_optional_work_item_kind, parse_optional_work_item_status, parse_priority,
@@ -73,7 +73,7 @@ impl WorkItemAction {
 
 pub(super) async fn execute_proposal_enqueue<R: tauri::Runtime>(
     ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, String> {
+) -> Result<NodeOutcome, NodeFailure> {
     let candidates_path =
         required_template(&ctx.node.data, "candidatesPath", "board.proposal.enqueue")?;
     let review_column_id =
@@ -116,7 +116,7 @@ pub(super) async fn execute_proposal_enqueue<R: tauri::Runtime>(
             .unwrap_or("")
             .to_string();
         if proposal_draft.trim().is_empty() {
-            return Err("board.proposal.enqueue candidate is missing proposalDraft".to_string());
+            return Err("board.proposal.enqueue candidate is missing proposalDraft".into());
         }
         let fit_score = candidate.get("fitScore").cloned().unwrap_or(Value::Null);
         let fit_reason = candidate
@@ -175,7 +175,7 @@ pub(super) async fn execute_proposal_enqueue<R: tauri::Runtime>(
 
 pub(super) async fn execute_work_item<R: tauri::Runtime>(
     ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, String> {
+) -> Result<NodeOutcome, NodeFailure> {
     let action = WorkItemAction::parse(ctx.node.data.get("action").and_then(|v| v.as_str()))?;
 
     match action {
@@ -186,7 +186,7 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                 .trim()
                 .to_string();
             if title.is_empty() {
-                return Err("board.work_item rendered an empty title".to_string());
+                return Err("board.work_item rendered an empty title".into());
             }
 
             let description = render_optional_template(
@@ -410,9 +410,7 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                 ctx.outputs,
             );
             if status.is_none() && column_id.is_none() {
-                return Err(
-                    "board.work_item move requires data.status or data.columnId".to_string()
-                );
+                return Err("board.work_item move requires data.status or data.columnId".into());
             }
             let item = move_work_item_with_db(
                 ctx.db,

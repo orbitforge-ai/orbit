@@ -8,7 +8,7 @@ use crate::db::DbPool;
 use crate::events::emitter::{emit_agent_iteration, emit_agent_tool_result, emit_log_chunk};
 use crate::executor::agent_tools::ToolExecutionContext;
 use crate::executor::context::{self, ContextMode, ContextRequest};
-use crate::executor::engine::{AgentSemaphores, SessionExecutionRegistry};
+use crate::executor::engine::{AgentSemaphores, SessionExecutionRegistry, UserQuestionRegistry};
 use crate::executor::keychain;
 use crate::executor::llm_provider::{
     self, AgentMcpWiring, ChatMessage, ContentBlock, LlmConfig, LlmProvider, ToolDefinition,
@@ -80,6 +80,15 @@ pub(crate) struct AgentLoopOutcome {
     pub duration_ms: i64,
 }
 
+#[derive(Clone)]
+struct LoopSessionContext {
+    session_id: String,
+    session_type: String,
+    existing_messages: Vec<ChatMessage>,
+    worktree_state: Option<session_worktree::SessionWorktreeState>,
+    user_question_registry: Option<UserQuestionRegistry>,
+}
+
 // ─── Agent loop ─────────────────────────────────────────────────────────────
 
 async fn execute_agent_loop_internal(
@@ -101,6 +110,7 @@ async fn execute_agent_loop_internal(
     memory_client: Option<&MemoryClient>,
     memory_user_id: &str,
     cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+    session_ctx: Option<LoopSessionContext>,
 ) -> Result<AgentLoopOutcome, String> {
     let start = std::time::Instant::now();
     let log = AgentLog::new();
@@ -147,16 +157,21 @@ async fn execute_agent_loop_internal(
     // ── Build context via pipeline ──────────────────────────────────────
     let pipeline = context::default_pipeline(memory_client.cloned());
     let allowed_tools = ContextRequest::effective_allowed_tools(&ws_config);
+    let session_id = session_ctx.as_ref().map(|ctx| ctx.session_id.clone());
+    let session_type = session_ctx.as_ref().map(|ctx| ctx.session_type.clone());
+    let existing_messages = session_ctx
+        .as_ref()
+        .map(|ctx| ctx.existing_messages.clone());
     let ctx_request = ContextRequest {
         agent_id: agent_id.to_string(),
         mode: ContextMode::AgentLoop,
-        session_id: None,
-        session_type: None,
+        session_id: session_id.clone(),
+        session_type,
         project_id: project_id.map(str::to_string),
         goal: Some(goal.clone()),
         ws_config: ws_config.clone(),
         allowed_tools,
-        existing_messages: None,
+        existing_messages,
         is_sub_agent,
         allow_sub_agents: !is_sub_agent,
         chain_depth,
@@ -176,18 +191,21 @@ async fn execute_agent_loop_internal(
     };
 
     let tools: Vec<ToolDefinition> = snapshot.tools;
+    let worktree_state = session_ctx
+        .as_ref()
+        .and_then(|ctx| ctx.worktree_state.clone());
     let tool_ctx = if is_sub_agent {
         ToolExecutionContext::new_for_sub_agent(
             agent_id,
             run_id,
-            None,
+            session_id.as_deref(),
             chain_depth,
             db.clone(),
             executor_tx.clone(),
             app.clone(),
             agent_semaphores.clone(),
             session_registry.clone(),
-            None,
+            worktree_state.clone(),
             project_id,
         )
         .with_permission_registry(permission_registry.clone())
@@ -199,20 +217,28 @@ async fn execute_agent_loop_internal(
         ToolExecutionContext::new_with_bus(
             agent_id,
             run_id,
-            None,
+            session_id.as_deref(),
             chain_depth,
             db.clone(),
             executor_tx.clone(),
             app.clone(),
             agent_semaphores.clone(),
             session_registry.clone(),
-            None,
+            worktree_state,
             project_id,
         )
         .with_permission_registry(permission_registry.clone())
         .with_memory_client(memory_client.cloned())
         .with_memory_user_id(memory_user_id.to_string())
         .with_cloud_client(cloud_client.clone())
+    };
+    let tool_ctx = if let Some(question_registry) = session_ctx
+        .as_ref()
+        .and_then(|ctx| ctx.user_question_registry.clone())
+    {
+        tool_ctx.with_user_question_registry(question_registry)
+    } else {
+        tool_ctx
     };
     let tool_ctx = Arc::new(tool_ctx);
 
@@ -253,8 +279,11 @@ async fn execute_agent_loop_internal(
             (
                 "stdout".to_string(),
                 format!(
-                    "Model: {} | Max iterations: {} | Token budget: {}",
-                    llm_config.model, max_iterations, max_total_tokens
+                    "Model: {} | Max iterations: {} | Token budget: {} | Tools: {}",
+                    llm_config.model,
+                    max_iterations,
+                    max_total_tokens,
+                    tools.len()
                 ),
             ),
             ("stdout".to_string(), "".to_string()),
@@ -682,6 +711,7 @@ pub async fn run_agent_loop(
         memory_client,
         memory_user_id,
         cloud_client,
+        None,
     )
     .await?;
 
@@ -703,11 +733,22 @@ pub async fn run_agent_loop_for_workflow(
     agent_semaphores: &AgentSemaphores,
     session_registry: &SessionExecutionRegistry,
     permission_registry: &PermissionRegistry,
+    user_question_registry: Option<&UserQuestionRegistry>,
     memory_client: Option<&MemoryClient>,
     memory_user_id: &str,
     cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<AgentLoopOutcome, String> {
-    execute_agent_loop_internal(
+    let session_ctx = create_workflow_loop_session(
+        db,
+        agent_id,
+        run_id,
+        project_id,
+        &cfg.goal,
+        user_question_registry.cloned(),
+    )
+    .await?;
+    let session_id = session_ctx.session_id.clone();
+    let result = execute_agent_loop_internal(
         run_id,
         agent_id,
         cfg,
@@ -726,8 +767,107 @@ pub async fn run_agent_loop_for_workflow(
         memory_client,
         memory_user_id,
         cloud_client,
+        Some(session_ctx),
     )
+    .await;
+
+    match &result {
+        Ok(outcome) => {
+            session_agent::update_session_execution_state(
+                db,
+                &session_id,
+                "success",
+                outcome.finish_summary.clone(),
+                None,
+            )
+            .await?;
+        }
+        Err(reason) => {
+            session_agent::update_session_execution_state(
+                db,
+                &session_id,
+                "failure",
+                None,
+                Some(reason.clone()),
+            )
+            .await?;
+        }
+    }
+
+    result
+}
+
+async fn create_workflow_loop_session(
+    db: &DbPool,
+    agent_id: &str,
+    run_id: &str,
+    project_id: Option<&str>,
+    goal: &str,
+    user_question_registry: Option<UserQuestionRegistry>,
+) -> Result<LoopSessionContext, String> {
+    let session_id = ulid::Ulid::new().to_string();
+    let agent_id = agent_id.to_string();
+    let run_id = run_id.to_string();
+    let project_id = project_id.map(str::to_string);
+    let goal_for_db = goal.to_string();
+    let goal_for_message = goal.to_string();
+    let session_id_for_db = session_id.clone();
+    let pool = db.0.clone();
+
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO chat_sessions (
+               id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
+               chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
+               project_id, allow_sub_agents, worktree_name, worktree_branch, worktree_path
+             ) VALUES (?1, ?2, ?3, 0, 'workflow', NULL, NULL, 0, 'running', NULL, NULL, ?4, ?4, ?5, 1, NULL, NULL, NULL)",
+            rusqlite::params![
+                session_id_for_db,
+                agent_id,
+                format!("Workflow run {}", run_id),
+                now,
+                project_id,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+        let user_content = serde_json::to_string(&vec![serde_json::json!({
+            "type": "text",
+            "text": goal_for_db,
+        })])
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO chat_messages (id, session_id, role, content, created_at)
+             VALUES (?1, ?2, 'user', ?3, ?4)",
+            rusqlite::params![
+                ulid::Ulid::new().to_string(),
+                session_id_for_db,
+                user_content,
+                now
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+        Ok(())
+    })
     .await
+    .map_err(|e| e.to_string())??;
+
+    Ok(LoopSessionContext {
+        session_id,
+        session_type: "workflow".to_string(),
+        existing_messages: vec![ChatMessage {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: goal_for_message,
+            }],
+            created_at: None,
+        }],
+        worktree_state: None,
+        user_question_registry,
+    })
 }
 
 // ─── Agent prompt (single-shot) ─────────────────────────────────────────────

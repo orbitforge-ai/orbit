@@ -1,12 +1,12 @@
 use serde_json::json;
 
 use crate::models::project_workflow::RuleNode;
-use crate::workflows::nodes::{NodeExecutionContext, NodeOutcome};
+use crate::workflows::nodes::{NodeExecutionContext, NodeFailure, NodeOutcome};
 use crate::workflows::rule_eval::eval_rule;
 
 pub(super) fn execute<R: tauri::Runtime>(
     ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, String> {
+) -> Result<NodeOutcome, NodeFailure> {
     let rule_value = ctx
         .node
         .data
