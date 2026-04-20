@@ -419,6 +419,7 @@ pub fn run() {
             // Plugins
             commands::plugins::list_plugins,
             commands::plugins::get_plugin_manifest,
+            commands::plugins::plugin_call_tool,
             commands::plugins::stage_plugin_install,
             commands::plugins::confirm_plugin_install,
             commands::plugins::cancel_plugin_install,

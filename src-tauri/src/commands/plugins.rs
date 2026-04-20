@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use serde_json::Value;
 use tauri::State;
 
 use crate::db::DbPool;
@@ -21,6 +22,39 @@ pub fn get_plugin_manifest(
     manager: State<'_, Arc<PluginManager>>,
 ) -> Option<PluginManifest> {
     manager.manifest(&plugin_id)
+}
+
+#[tauri::command]
+pub async fn plugin_call_tool(
+    plugin_id: String,
+    tool_name: String,
+    args: Option<Value>,
+    _app: tauri::AppHandle,
+    manager: State<'_, Arc<PluginManager>>,
+) -> Result<Value, String> {
+    let manifest = manager
+        .manifest(&plugin_id)
+        .ok_or_else(|| format!("plugin '{}' not installed", plugin_id))?;
+    if !manager.is_enabled(&plugin_id) {
+        return Err(format!("plugin '{}' is disabled", plugin_id));
+    }
+    if !manifest.tools.iter().any(|tool| tool.name == tool_name) {
+        return Err(format!(
+            "plugin '{}' does not expose a '{}' tool",
+            plugin_id, tool_name
+        ));
+    }
+    let extra_env = plugins::oauth::build_env_for_subprocess(&manifest);
+    let raw = manager
+        .runtime
+        .call_tool(
+            &manifest,
+            &tool_name,
+            &args.unwrap_or_else(|| Value::Object(Default::default())),
+            &extra_env,
+        )
+        .await?;
+    Ok(unwrap_mcp_text_payload(raw))
 }
 
 #[tauri::command]
@@ -67,20 +101,31 @@ pub fn set_plugin_enabled(
 }
 
 #[tauri::command]
-pub fn reload_plugin(
+pub async fn reload_plugin(
     plugin_id: String,
     app: tauri::AppHandle,
+    db: State<'_, DbPool>,
     manager: State<'_, Arc<PluginManager>>,
 ) -> Result<(), String> {
-    manager.reload(&app, &plugin_id)
+    manager.reload(&app, &plugin_id)?;
+    // A reload replaces the subprocess; its in-memory subscription set is
+    // empty until we re-apply it. Without this, a listening agent stops
+    // matching inbound messages after any reload (secret save, dev edit, etc.).
+    let db = db.inner().clone();
+    crate::triggers::subscriptions::reconcile_plugin(&app, &db, &plugin_id).await;
+    Ok(())
 }
 
 #[tauri::command]
-pub fn reload_all_plugins(
+pub async fn reload_all_plugins(
     app: tauri::AppHandle,
+    db: State<'_, DbPool>,
     manager: State<'_, Arc<PluginManager>>,
 ) -> Result<(), String> {
-    manager.reload_all(&app)
+    manager.reload_all(&app)?;
+    let db = db.inner().clone();
+    crate::triggers::subscriptions::reconcile_all(&app, &db).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -132,11 +177,12 @@ pub fn disconnect_plugin_oauth(plugin_id: String, provider_id: String) -> Result
 }
 
 #[tauri::command]
-pub fn set_plugin_secret(
+pub async fn set_plugin_secret(
     plugin_id: String,
     key: String,
     value: String,
     app: tauri::AppHandle,
+    db: State<'_, DbPool>,
     manager: State<'_, Arc<PluginManager>>,
 ) -> Result<(), String> {
     let manifest = manager
@@ -149,20 +195,26 @@ pub fn set_plugin_secret(
         ));
     }
     plugins::oauth::set_secret(&plugin_id, &plugins::oauth::secret_account(&key), &value)?;
-    // Reload so the subprocess picks up the new env var.
+    // Reload so the subprocess picks up the new env var, then re-apply
+    // subscriptions so a listening agent keeps matching inbound events.
     let _ = manager.reload(&app, &plugin_id);
+    let db = db.inner().clone();
+    crate::triggers::subscriptions::reconcile_plugin(&app, &db, &plugin_id).await;
     Ok(())
 }
 
 #[tauri::command]
-pub fn delete_plugin_secret(
+pub async fn delete_plugin_secret(
     plugin_id: String,
     key: String,
     app: tauri::AppHandle,
+    db: State<'_, DbPool>,
     manager: State<'_, Arc<PluginManager>>,
 ) -> Result<(), String> {
     plugins::oauth::delete_secret(&plugin_id, &plugins::oauth::secret_account(&key));
     let _ = manager.reload(&app, &plugin_id);
+    let db = db.inner().clone();
+    crate::triggers::subscriptions::reconcile_plugin(&app, &db, &plugin_id).await;
     Ok(())
 }
 
@@ -308,6 +360,22 @@ pub struct PluginSecretStatus {
     pub plugin_id: String,
     pub any_needs_value: bool,
     pub secrets: Vec<PluginSecretEntryStatus>,
+}
+
+fn unwrap_mcp_text_payload(raw: Value) -> Value {
+    let text = raw
+        .as_object()
+        .and_then(|obj| obj.get("content"))
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|item| item.get("text"))
+        .and_then(|t| t.as_str());
+    if let Some(text) = text {
+        if let Ok(parsed) = serde_json::from_str::<Value>(text) {
+            return parsed;
+        }
+    }
+    raw
 }
 
 #[derive(Debug, serde::Serialize)]

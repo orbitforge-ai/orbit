@@ -3,6 +3,7 @@ import type { ComponentPropsWithoutRef } from 'react';
 import MonacoEditor from '@monaco-editor/react';
 import { useQuery } from '@tanstack/react-query';
 import { Node } from '@xyflow/react';
+import { pluginsApi, type PluginManifest } from '../../api/plugins';
 import { workflowRunsApi } from '../../api/workflowRuns';
 import { agentsApi } from '../../api/agents';
 import { projectsApi } from '../../api/projects';
@@ -141,6 +142,21 @@ export function NodeInspector({
     return outputs;
   }, [latestRunDetail]);
 
+  const { data: pluginManifests = [] } = useQuery<PluginManifest[]>({
+    queryKey: ['plugin-manifests', 'workflow-node-inspector'],
+    queryFn: async () => {
+      const plugins = await pluginsApi.list();
+      const manifests = await Promise.all(plugins.map((plugin) => pluginsApi.getManifest(plugin.id)));
+      return manifests.filter((manifest): manifest is PluginManifest => manifest !== null);
+    },
+    enabled: Boolean(node?.type?.startsWith('integration.com_')),
+  });
+
+  const pluginNodeDescriptor = useMemo(
+    () => resolvePluginWorkflowNodeDescriptor(node?.type ?? '', pluginManifests),
+    [node?.type, pluginManifests],
+  );
+
   return (
     <OutputInsertionProvider>
       <aside
@@ -225,8 +241,12 @@ export function NodeInspector({
                 <FeedFetchInspector data={data} onUpdate={update} />
               )}
 
-              {node.type === 'integration.com_orbit_discord.send_message' && (
-                <DiscordSendInspector data={data} onUpdate={update} />
+              {pluginNodeDescriptor && (
+                <PluginWorkflowNodeInspector
+                  data={data}
+                  descriptor={pluginNodeDescriptor}
+                  onUpdate={update}
+                />
               )}
 
               {node.type === 'integration.http.request' && (
@@ -1034,53 +1054,160 @@ function HttpRequestInspector({
   );
 }
 
-function DiscordSendInspector({
+function PluginWorkflowNodeInspector({
   data,
+  descriptor,
   onUpdate,
 }: {
   data: Record<string, unknown>;
+  descriptor: PluginWorkflowNodeDescriptor;
   onUpdate: (patch: Record<string, unknown>) => void;
 }) {
-  const channelId = asString(data.channelId);
-  const threadId = asString(data.threadId);
-  const text = asString(data.text);
+  const properties = getObjectSchemaProperties(descriptor.node.inputSchema);
+  const requiredFields = getObjectSchemaRequiredFields(descriptor.node.inputSchema);
 
   return (
     <div className="space-y-3">
-      <div className="space-y-1.5">
-        <label className="text-[11px] uppercase tracking-wider text-muted">Channel ID</label>
-        <HintableInput
-          value={channelId}
-          onValueChange={(value) => onUpdate({ channelId: value })}
-          placeholder="123456789012345678"
+      {Object.entries(properties).map(([fieldName, property]) => (
+        <PluginWorkflowNodeField
+          key={fieldName}
+          data={data}
+          descriptor={descriptor}
+          fieldName={fieldName}
+          onUpdate={onUpdate}
+          property={property}
+          required={requiredFields.has(fieldName)}
+        />
+      ))}
+      <p className="text-[10px] text-muted">
+        This form is generated from the plugin&apos;s workflow node schema and field option
+        metadata. String fields support workflow templates.
+      </p>
+    </div>
+  );
+}
+
+function PluginWorkflowNodeField({
+  data,
+  descriptor,
+  fieldName,
+  onUpdate,
+  property,
+  required,
+}: {
+  data: Record<string, unknown>;
+  descriptor: PluginWorkflowNodeDescriptor;
+  fieldName: string;
+  onUpdate: (patch: Record<string, unknown>) => void;
+  property: Record<string, unknown>;
+  required: boolean;
+}) {
+  const fieldOption = descriptor.node.fieldOptions.find((item) => item.field === fieldName);
+  const enumValues = Array.isArray(property['enum'])
+    ? property['enum'].filter((value): value is string => typeof value === 'string')
+    : [];
+  const fieldType = typeof property['type'] === 'string' ? property['type'] : 'string';
+  const description =
+    typeof property['description'] === 'string' ? property['description'] : '';
+  const { data: sourceRaw, isLoading, isError } = useQuery<unknown>({
+    queryKey: [
+      'plugin-node-field-options',
+      descriptor.manifest.id,
+      descriptor.node.kind,
+      fieldName,
+      fieldOption?.sourceTool ?? '',
+    ],
+    queryFn: () => pluginsApi.callTool(descriptor.manifest.id, fieldOption?.sourceTool ?? '', {}),
+    enabled: Boolean(fieldOption?.sourceTool),
+    retry: false,
+  });
+
+  const channelOptions =
+    fieldOption?.format === 'channels' ? flattenPluginChannels(sourceRaw) : [];
+
+  if (fieldType === 'boolean') {
+    return (
+      <label className="flex items-center justify-between gap-3 rounded-lg border border-edge/70 bg-surface/40 px-3 py-2">
+        <div className="space-y-0.5">
+          <span className="text-[11px] uppercase tracking-wider text-muted">
+            {humanizeFieldName(fieldName)}
+            {required ? ' *' : ''}
+          </span>
+          {description ? <p className="text-[10px] text-muted">{description}</p> : null}
+        </div>
+        <input
+          type="checkbox"
+          checked={Boolean(data[fieldName])}
+          onChange={(event) => onUpdate({ [fieldName]: event.target.checked })}
+        />
+      </label>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <label className="text-[11px] uppercase tracking-wider text-muted">
+        {humanizeFieldName(fieldName)}
+        {required ? ' *' : ''}
+      </label>
+      {enumValues.length > 0 ? (
+        <select
+          value={asString(data[fieldName])}
+          onChange={(event) => onUpdate({ [fieldName]: event.target.value })}
+          className={TEMPLATE_FIELD_CLASSNAME}
+        >
+          <option value="">— pick an option —</option>
+          {enumValues.map((value) => (
+            <option key={value} value={value}>
+              {value}
+            </option>
+          ))}
+        </select>
+      ) : channelOptions.length > 0 ? (
+        <select
+          value={asString(data[fieldName])}
+          onChange={(event) => onUpdate({ [fieldName]: event.target.value })}
+          className={TEMPLATE_FIELD_CLASSNAME}
+        >
+          <option value="">— pick an option —</option>
+          {channelOptions.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      ) : fieldType === 'number' || fieldType === 'integer' ? (
+        <input
+          type="number"
+          value={String(data[fieldName] ?? '')}
+          onChange={(event) => onUpdate({ [fieldName]: Number(event.target.value) })}
           className={TEMPLATE_FIELD_CLASSNAME}
         />
-      </div>
-      <div className="space-y-1.5">
-        <label className="text-[11px] uppercase tracking-wider text-muted">
-          Thread ID (optional)
-        </label>
-        <HintableInput
-          value={threadId}
-          onValueChange={(value) => onUpdate({ threadId: value })}
-          placeholder="{{trigger.data.channel.threadId}}"
-          className={TEMPLATE_FIELD_CLASSNAME}
-        />
-      </div>
-      <div className="space-y-1.5">
-        <label className="text-[11px] uppercase tracking-wider text-muted">Message text</label>
+      ) : isTextareaProperty(fieldName, property) ? (
         <HintableTextarea
-          value={text}
-          onValueChange={(value) => onUpdate({ text: value })}
+          value={asString(data[fieldName])}
+          onValueChange={(value) => onUpdate({ [fieldName]: value })}
           rows={6}
-          placeholder="Ship it: {{run-agent-1.output.text}}"
+          placeholder={description || fieldName}
           className={`${TEMPLATE_FIELD_CLASSNAME} resize-none`}
         />
-      </div>
-      <p className="text-[10px] text-muted">
-        All fields support workflow templates. Leave thread ID blank to send directly to the
-        channel.
-      </p>
+      ) : (
+        <HintableInput
+          value={asString(data[fieldName])}
+          onValueChange={(value) => onUpdate({ [fieldName]: value })}
+          placeholder={description || fieldName}
+          className={TEMPLATE_FIELD_CLASSNAME}
+        />
+      )}
+      {description ? <p className="text-[10px] text-muted">{description}</p> : null}
+      {isLoading && fieldOption ? (
+        <p className="text-[10px] text-muted">Loading options from {fieldOption.sourceTool}…</p>
+      ) : null}
+      {isError && fieldOption ? (
+        <p className="text-[10px] text-muted">
+          Couldn&apos;t load plugin-defined options, so this field falls back to manual entry.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -1323,7 +1450,7 @@ function nodeSupportsOutputReferences(type: string): boolean {
     type === 'board.work_item.create' ||
     type === 'board.proposal.enqueue' ||
     type === 'integration.feed.fetch' ||
-    type === 'integration.com_orbit_discord.send_message' ||
+    type.startsWith('integration.com_') ||
     type === 'integration.http.request'
   );
 }
@@ -1332,6 +1459,109 @@ function normalizeData(data: unknown): Record<string, unknown> {
   return data && typeof data === 'object' && !Array.isArray(data)
     ? (data as Record<string, unknown>)
     : {};
+}
+
+type PluginWorkflowNodeDescriptor = {
+  manifest: PluginManifest;
+  node: PluginManifest['workflow']['nodes'][number];
+};
+
+function flattenPluginChannels(raw: unknown): Array<{ id: string; label: string }> {
+  if (!raw) return [];
+
+  if (Array.isArray(raw)) {
+    const first = raw[0];
+    if (first && typeof first === 'object' && Array.isArray((first as any).channels)) {
+      return (raw as any[]).flatMap((guild) =>
+        Array.isArray(guild.channels)
+          ? guild.channels
+              .filter((channel: any) => channel && channel.id)
+              .map((channel: any) => ({
+                id: String(channel.id),
+                label: formatPluginChannelLabel(channel, guild),
+              }))
+          : [],
+      );
+    }
+
+    return (raw as any[])
+      .filter((channel) => channel && channel.id)
+      .map((channel) => ({
+        id: String(channel.id),
+        label: formatPluginChannelLabel(channel, null),
+      }));
+  }
+
+  if (typeof raw === 'object') {
+    const obj = raw as any;
+    if (Array.isArray(obj.channels)) return flattenPluginChannels(obj.channels);
+    if (Array.isArray(obj.guilds)) return flattenPluginChannels(obj.guilds);
+  }
+
+  return [];
+}
+
+function formatPluginChannelLabel(channel: any, guild: any): string {
+  const channelName = channel?.name ? `#${String(channel.name)}` : String(channel?.id ?? '');
+  const guildName = guild?.name ? String(guild.name) : '';
+  return guildName ? `${guildName} / ${channelName}` : channelName;
+}
+
+function resolvePluginWorkflowNodeDescriptor(
+  nodeType: string,
+  manifests: PluginManifest[],
+): PluginWorkflowNodeDescriptor | null {
+  for (const manifest of manifests) {
+    const node = manifest.workflow.nodes.find((candidate) => candidate.kind === nodeType);
+    if (node) {
+      return { manifest, node };
+    }
+  }
+  return null;
+}
+
+function getObjectSchemaProperties(schema: unknown): Record<string, Record<string, unknown>> {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return {};
+  }
+  const properties = (schema as Record<string, unknown>).properties;
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(properties).filter(
+      (entry): entry is [string, Record<string, unknown>] =>
+        typeof entry[0] === 'string' &&
+        Boolean(entry[1]) &&
+        typeof entry[1] === 'object' &&
+        !Array.isArray(entry[1]),
+    ),
+  );
+}
+
+function getObjectSchemaRequiredFields(schema: unknown): Set<string> {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return new Set();
+  }
+  const required = (schema as Record<string, unknown>).required;
+  if (!Array.isArray(required)) {
+    return new Set();
+  }
+  return new Set(required.filter((value): value is string => typeof value === 'string'));
+}
+
+function humanizeFieldName(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function isTextareaProperty(fieldName: string, property: Record<string, unknown>): boolean {
+  if (property['format'] === 'textarea' || property['format'] === 'multiline') {
+    return true;
+  }
+  return /text|body|message|prompt|content|description|template/i.test(fieldName);
 }
 
 function asString(value: unknown): string {

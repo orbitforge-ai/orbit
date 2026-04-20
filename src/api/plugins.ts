@@ -59,7 +59,15 @@ export interface PluginManifest {
   hooks: { subscribe: string[] };
   workflow: {
     triggers: Array<{ kind: string; displayName: string; icon: string | null; configSchema: unknown | null; outputSchema: unknown | null; subscriptionTool: string | null }>;
-    nodes: Array<{ kind: string; displayName: string; icon: string | null; tool: string; inputSchema: unknown | null; outputSchema: unknown | null }>;
+    nodes: Array<{
+      kind: string;
+      displayName: string;
+      icon: string | null;
+      tool: string;
+      fieldOptions: Array<{ field: string; sourceTool: string; format: string }>;
+      inputSchema: unknown | null;
+      outputSchema: unknown | null;
+    }>;
   };
   ui: {
     sidebarItems: unknown[];
@@ -119,6 +127,9 @@ export const pluginsApi = {
 
   getManifest: (pluginId: string): Promise<PluginManifest | null> =>
     invoke('get_plugin_manifest', { pluginId }),
+
+  callTool: (pluginId: string, toolName: string, args: Record<string, unknown> = {}): Promise<unknown> =>
+    invoke('plugin_call_tool', { pluginId, toolName, args }),
 
   stageInstall: (path: string): Promise<StagedInstall> =>
     invoke('stage_plugin_install', { path }),

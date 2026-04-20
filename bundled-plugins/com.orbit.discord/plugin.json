@@ -3,7 +3,7 @@
   "hostApiVersion": "^1.0.0",
   "id": "com.orbit.discord",
   "name": "Discord",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Bundled Discord plugin for Orbit: bot gateway, channel/thread subscriptions, bidirectional messaging. Bring your own Discord application (paste bot token + application credentials in the OAuth tab).",
   "author": "Orbit",
   "license": "MIT",
@@ -50,6 +50,36 @@
           "channelId": { "type": "string" },
           "threadId": { "type": "string" },
           "text": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "add_reaction",
+      "description": "React to a Discord message with a unicode emoji (e.g. '✅') or a custom emoji ('name:id').",
+      "riskLevel": "low",
+      "inputSchema": {
+        "type": "object",
+        "required": ["channelId", "messageId", "emoji"],
+        "properties": {
+          "channelId": { "type": "string" },
+          "threadId": { "type": "string" },
+          "messageId": { "type": "string" },
+          "emoji": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "remove_reaction",
+      "description": "Remove the bot's own reaction from a Discord message.",
+      "riskLevel": "low",
+      "inputSchema": {
+        "type": "object",
+        "required": ["channelId", "messageId", "emoji"],
+        "properties": {
+          "channelId": { "type": "string" },
+          "threadId": { "type": "string" },
+          "messageId": { "type": "string" },
+          "emoji": { "type": "string" }
         }
       }
     },
@@ -132,6 +162,13 @@
         "kind": "integration.com_orbit_discord.send_message",
         "displayName": "Discord · Send message",
         "tool": "send_message",
+        "fieldOptions": [
+          {
+            "field": "channelId",
+            "sourceTool": "list_channels",
+            "format": "channels"
+          }
+        ],
         "inputSchema": {
           "type": "object",
           "required": ["channelId", "text"],

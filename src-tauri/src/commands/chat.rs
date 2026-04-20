@@ -27,6 +27,74 @@ use crate::memory_service::MemoryServiceState;
 use crate::models::chat::ChatSession;
 
 const MAX_TOKENS_PER_CALL: u32 = 4096;
+const CHAT_CANCEL_POLL_INTERVAL_MS: u64 = 100;
+
+fn can_cancel_chat_session(session_type: &str) -> bool {
+    matches!(
+        session_type,
+        "user_chat" | "bus_message" | "sub_agent" | "pulse"
+    )
+}
+
+async fn is_chat_session_cancelled(
+    session_id: &str,
+    db: &DbPool,
+    session_registry: &SessionExecutionRegistry,
+) -> bool {
+    if session_registry.is_cancelled(session_id).await {
+        return true;
+    }
+
+    let pool = db.0.clone();
+    let session_id = session_id.to_string();
+    tokio::task::spawn_blocking(move || -> bool {
+        let conn = match pool.get() {
+            Ok(conn) => conn,
+            Err(_) => return false,
+        };
+        let state: Option<String> = conn
+            .query_row(
+                "SELECT execution_state FROM chat_sessions WHERE id = ?1",
+                rusqlite::params![session_id],
+                |row| row.get(0),
+            )
+            .ok();
+        matches!(state.as_deref(), Some("cancelled"))
+    })
+    .await
+    .unwrap_or(false)
+}
+
+async fn chat_streaming_with_cancellation(
+    provider: &dyn llm_provider::LlmProvider,
+    config: &LlmConfig,
+    messages: &[ChatMessage],
+    tools: &[llm_provider::ToolDefinition],
+    app: &tauri::AppHandle,
+    stream_id: &str,
+    iteration: u32,
+    session_id: &str,
+    db: &DbPool,
+    session_registry: &SessionExecutionRegistry,
+) -> Result<llm_provider::LlmResponse, String> {
+    let stream_future = provider.chat_streaming(config, messages, tools, app, stream_id, iteration);
+    tokio::pin!(stream_future);
+
+    let mut cancellation_poll = tokio::time::interval(tokio::time::Duration::from_millis(
+        CHAT_CANCEL_POLL_INTERVAL_MS,
+    ));
+
+    loop {
+        tokio::select! {
+            response = &mut stream_future => return response,
+            _ = cancellation_poll.tick() => {
+                if is_chat_session_cancelled(session_id, db, session_registry).await {
+                    return Err("cancelled".to_string());
+                }
+            }
+        }
+    }
+}
 
 // ─── Session CRUD ───────────────────────────────────────────────────────────
 
@@ -803,6 +871,8 @@ pub async fn send_chat_message(
         });
     }
 
+    session_registry.clear_cancelled(&session_id).await;
+
     if let Err(err) =
         session_agent::update_session_execution_state(&db_bg, &session_id, "running", None, None)
             .await
@@ -1023,7 +1093,7 @@ async fn do_llm_chat(
         executor_tx.clone(),
         app.clone(),
         agent_semaphores,
-        session_registry,
+        session_registry.clone(),
         chat_worktree,
         chat_project_id.as_deref(),
     )
@@ -1064,6 +1134,10 @@ async fn do_llm_chat(
             break;
         }
 
+        if is_chat_session_cancelled(session_id, db, &session_registry).await {
+            return Err("cancelled".to_string());
+        }
+
         debug!(
             session_id = session_id,
             message_count = messages.len(),
@@ -1082,12 +1156,26 @@ async fn do_llm_chat(
             None,
         );
 
-        let response = provider
-            .chat_streaming(&config, &messages, &tools, app, stream_id, iteration)
-            .await?;
+        let response = chat_streaming_with_cancellation(
+            provider.as_ref(),
+            &config,
+            &messages,
+            &tools,
+            app,
+            stream_id,
+            iteration,
+            session_id,
+            db,
+            &session_registry,
+        )
+        .await?;
 
         cumulative_input_tokens += response.usage.input_tokens;
         cumulative_output_tokens += response.usage.output_tokens;
+
+        if is_chat_session_cancelled(session_id, db, &session_registry).await {
+            return Err("cancelled".to_string());
+        }
 
         // Save assistant response to DB
         save_chat_message(
@@ -1179,6 +1267,10 @@ async fn do_llm_chat(
 
                 for block in &response.content {
                     if let ContentBlock::ToolUse { id, name, input } = block {
+                        if is_chat_session_cancelled(session_id, db, &session_registry).await {
+                            return Err("cancelled".to_string());
+                        }
+
                         emit_agent_iteration(
                             app,
                             stream_id,
@@ -1230,6 +1322,10 @@ async fn do_llm_chat(
                                     true,
                                 );
                             }
+                        }
+
+                        if is_chat_session_cancelled(session_id, db, &session_registry).await {
+                            return Err("cancelled".to_string());
                         }
                     }
                 }
@@ -1478,8 +1574,11 @@ pub async fn cancel_agent_session(
     .await
     .map_err(|e| e.to_string())??;
 
-    if !matches!(session_type.as_str(), "bus_message" | "sub_agent" | "pulse") {
-        return Err("only bus_message, sub_agent, and pulse sessions can be cancelled".to_string());
+    if !can_cancel_chat_session(&session_type) {
+        return Err(
+            "only user_chat, bus_message, sub_agent, and pulse sessions can be cancelled"
+                .to_string(),
+        );
     }
 
     session_registry.cancel(&session_id).await;
@@ -1692,7 +1791,8 @@ pub struct SendChatMessageResponse {
 #[cfg(test)]
 mod tests {
     use super::{
-        sanitize_history_for_provider, ChatMessage, ContentBlock, INTERRUPTED_TOOL_CALL_ERROR,
+        can_cancel_chat_session, sanitize_history_for_provider, ChatMessage, ContentBlock,
+        INTERRUPTED_TOOL_CALL_ERROR,
     };
 
     #[test]
@@ -1774,5 +1874,14 @@ mod tests {
             &sanitized[0].content[0],
             ContentBlock::Text { text } if text == "All done"
         ));
+    }
+
+    #[test]
+    fn user_chat_sessions_can_be_cancelled() {
+        assert!(can_cancel_chat_session("user_chat"));
+        assert!(can_cancel_chat_session("bus_message"));
+        assert!(can_cancel_chat_session("sub_agent"));
+        assert!(can_cancel_chat_session("pulse"));
+        assert!(!can_cancel_chat_session("unknown"));
     }
 }

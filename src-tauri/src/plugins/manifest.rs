@@ -224,9 +224,19 @@ pub struct WorkflowNodeSpec {
     pub icon: Option<String>,
     pub tool: String,
     #[serde(default)]
+    pub field_options: Vec<WorkflowNodeFieldOptionSpec>,
+    #[serde(default)]
     pub input_schema: Option<Value>,
     #[serde(default)]
     pub output_schema: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowNodeFieldOptionSpec {
+    pub field: String,
+    pub source_tool: String,
+    pub format: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -405,6 +415,36 @@ pub fn validate(manifest: &PluginManifest) -> Result<(), String> {
                 "workflow.nodes[{}].tool must not be empty",
                 node.kind
             ));
+        }
+        for field_option in &node.field_options {
+            if field_option.field.trim().is_empty() {
+                return Err(format!(
+                    "workflow.nodes[{}].fieldOptions[].field must not be empty",
+                    node.kind
+                ));
+            }
+            if field_option.source_tool.trim().is_empty() {
+                return Err(format!(
+                    "workflow.nodes[{}].fieldOptions[{}].sourceTool must not be empty",
+                    node.kind, field_option.field
+                ));
+            }
+            if field_option.format.trim().is_empty() {
+                return Err(format!(
+                    "workflow.nodes[{}].fieldOptions[{}].format must not be empty",
+                    node.kind, field_option.field
+                ));
+            }
+            if !manifest
+                .tools
+                .iter()
+                .any(|tool| tool.name == field_option.source_tool)
+            {
+                return Err(format!(
+                    "workflow.nodes[{}].fieldOptions[{}].sourceTool {:?} must match a declared tool",
+                    node.kind, field_option.field, field_option.source_tool
+                ));
+            }
         }
     }
 

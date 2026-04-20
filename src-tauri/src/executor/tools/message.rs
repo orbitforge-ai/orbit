@@ -237,9 +237,27 @@ async fn send_via_plugin(
         "text": text,
     });
     let extra_env = plugins::oauth::build_env_for_subprocess(&manifest);
-    manager
+    let send_result = manager
         .runtime
         .call_tool(&manifest, PLUGIN_SEND_TOOL, &args, &extra_env)
-        .await
-        .map(|_| format!("Message delivered to channel '{}'.", channel.name))
+        .await;
+
+    // Clear any active typing indicator as soon as the reply lands. Otherwise
+    // Discord keeps the "Bot is typing…" display for ~10s after the last
+    // pulse, which flashes back in after the message is posted.
+    if manifest.tools.iter().any(|t| t.name == "stop_typing") {
+        let stop_args = json!({
+            "channelId": provider_channel_id,
+            "threadId": channel.provider_thread_id,
+        });
+        if let Err(err) = manager
+            .runtime
+            .call_tool(&manifest, "stop_typing", &stop_args, &extra_env)
+            .await
+        {
+            tracing::warn!(plugin_id, "stop_typing after send failed: {}", err);
+        }
+    }
+
+    send_result.map(|_| format!("Message delivered to channel '{}'.", channel.name))
 }

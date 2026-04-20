@@ -143,6 +143,60 @@ plugin.tool('send_message', {
   },
 });
 
+plugin.tool('add_reaction', {
+  description: 'React to a Discord message. Supply a unicode emoji (e.g. "✅") or a custom emoji in the form "name:id".',
+  inputSchema: {
+    type: 'object',
+    required: ['channelId', 'messageId', 'emoji'],
+    properties: {
+      channelId: { type: 'string' },
+      threadId: { type: 'string' },
+      messageId: { type: 'string' },
+      emoji: { type: 'string' },
+    },
+  },
+  run: async ({ input, oauth }) => {
+    botToken = getBotToken(oauth);
+    const { targetId } = resolveTargetId(input);
+    const messageId = normalizeOptionalId(input?.messageId);
+    const emoji = typeof input?.emoji === 'string' ? input.emoji.trim() : '';
+    if (!messageId) throw new Error('messageId is required');
+    if (!emoji) throw new Error('emoji is required');
+    await discordFetch(
+      `/channels/${targetId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`,
+      { method: 'PUT' },
+    );
+    return { ok: true };
+  },
+});
+
+plugin.tool('remove_reaction', {
+  description: 'Remove the bot\'s own reaction from a Discord message.',
+  inputSchema: {
+    type: 'object',
+    required: ['channelId', 'messageId', 'emoji'],
+    properties: {
+      channelId: { type: 'string' },
+      threadId: { type: 'string' },
+      messageId: { type: 'string' },
+      emoji: { type: 'string' },
+    },
+  },
+  run: async ({ input, oauth }) => {
+    botToken = getBotToken(oauth);
+    const { targetId } = resolveTargetId(input);
+    const messageId = normalizeOptionalId(input?.messageId);
+    const emoji = typeof input?.emoji === 'string' ? input.emoji.trim() : '';
+    if (!messageId) throw new Error('messageId is required');
+    if (!emoji) throw new Error('emoji is required');
+    await discordFetch(
+      `/channels/${targetId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`,
+      { method: 'DELETE' },
+    );
+    return { ok: true };
+  },
+});
+
 plugin.tool('start_typing', {
   description: 'Show the "Bot is typing…" indicator in a channel or thread. Idempotent — calling again extends the pulse. Auto-stops after 2 minutes as a safety cap.',
   inputSchema: {

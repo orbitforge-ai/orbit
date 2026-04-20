@@ -106,6 +106,8 @@ export function ChatInput({
       setStopping(true);
       try {
         await Promise.resolve(onStop());
+      } catch (error) {
+        console.error('Failed to stop response:', error);
       } finally {
         setStopping(false);
       }
