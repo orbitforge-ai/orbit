@@ -76,6 +76,15 @@
       "redirectUri": "http://127.0.0.1:47821/oauth/callback"
     }
   ],
+  "secrets": [
+    {
+      "key": "botToken",
+      "envVar": "ORBIT_DISCORD_BOT_TOKEN",
+      "displayName": "Bot Token",
+      "description": "Discord bot token from the Developer Portal (Applications → your app → Bot → Reset Token). Required — the Discord API authenticates bots with a token, not the OAuth access_token.",
+      "placeholder": "MTxxxxxxxxxx.xxxxxx.xxxxxxxx"
+    }
+  ],
   "workflow": {
     "triggers": [
       {

@@ -70,7 +70,6 @@ pub fn get_secret(plugin_id: &str, account: &str) -> Result<String, String> {
     crate::executor::keychain::retrieve_secret(&keychain_service(plugin_id), account)
 }
 
-#[allow(dead_code)]
 pub fn delete_secret(plugin_id: &str, account: &str) {
     let _ = crate::executor::keychain::delete_secret(&keychain_service(plugin_id), account);
 }
@@ -446,12 +445,22 @@ pub fn build_env_for_subprocess(
             env.insert(var, token);
         }
     }
+    for spec in &manifest.secrets {
+        if let Ok(value) = get_secret(&manifest.id, &secret_account(&spec.key)) {
+            env.insert(spec.env_var.clone(), value);
+        }
+    }
     let socket_path = super::core_api_socket_path(&manifest.id);
     env.insert(
         "ORBIT_CORE_API_SOCKET".into(),
         socket_path.to_string_lossy().to_string(),
     );
     env
+}
+
+/// Keychain account name for a plugin-declared secret.
+pub fn secret_account(key: &str) -> String {
+    format!("secret.{}", key)
 }
 
 fn generate_pkce() -> (String, String) {

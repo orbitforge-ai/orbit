@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listen } from '@tauri-apps/api/event';
-import { X, Link, ScrollText, Database, Info, CheckCircle2 } from 'lucide-react';
-import { pluginsApi, PluginManifest, PluginOAuthStatus } from '../../api/plugins';
+import { X, Link, ScrollText, Database, Info, CheckCircle2, Key } from 'lucide-react';
+import { pluginsApi, PluginManifest, PluginOAuthStatus, PluginSecretStatus } from '../../api/plugins';
 
-type Tab = 'overview' | 'oauth' | 'entities' | 'logs';
+type Tab = 'overview' | 'oauth' | 'secrets' | 'entities' | 'logs';
 
 interface Props {
   pluginId: string;
@@ -40,6 +40,7 @@ export function PluginDetailDrawer({ pluginId, initialTab, onClose }: Props) {
         <nav className="flex items-center gap-1 border-b border-edge px-3 py-1 text-xs">
           <TabButton icon={<Info size={11} />} label="Overview" active={tab === 'overview'} onClick={() => setTab('overview')} />
           <TabButton icon={<Link size={11} />} label="OAuth" active={tab === 'oauth'} onClick={() => setTab('oauth')} />
+          <TabButton icon={<Key size={11} />} label="Secrets" active={tab === 'secrets'} onClick={() => setTab('secrets')} />
           <TabButton icon={<Database size={11} />} label="Entities" active={tab === 'entities'} onClick={() => setTab('entities')} />
           <TabButton icon={<ScrollText size={11} />} label="Live log" active={tab === 'logs'} onClick={() => setTab('logs')} />
         </nav>
@@ -47,6 +48,7 @@ export function PluginDetailDrawer({ pluginId, initialTab, onClose }: Props) {
         <div className="h-[calc(100%-6rem)] overflow-auto px-4 py-3 text-sm">
           {tab === 'overview' ? <OverviewTab manifest={manifestQuery.data ?? null} /> : null}
           {tab === 'oauth' ? <OAuthTab pluginId={pluginId} manifest={manifestQuery.data ?? null} /> : null}
+          {tab === 'secrets' ? <SecretsTab pluginId={pluginId} manifest={manifestQuery.data ?? null} /> : null}
           {tab === 'entities' ? <EntitiesTab pluginId={pluginId} manifest={manifestQuery.data ?? null} /> : null}
           {tab === 'logs' ? <LogsTab pluginId={pluginId} /> : null}
         </div>
@@ -227,6 +229,112 @@ function OAuthTab({
                   Connect
                 </button>
               )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SecretsTab({
+  pluginId,
+  manifest,
+}: {
+  pluginId: string;
+  manifest: PluginManifest | null;
+}) {
+  const queryClient = useQueryClient();
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState<string | null>(null);
+
+  const statusQuery = useQuery<PluginSecretStatus[]>({
+    queryKey: ['plugin-secret-status'],
+    queryFn: () => pluginsApi.listSecretStatus(),
+  });
+  const secretStatus = statusQuery.data
+    ?.find((s) => s.pluginId === pluginId)
+    ?.secrets ?? [];
+
+  const save = useCallback(
+    async (key: string) => {
+      const value = drafts[key]?.trim();
+      if (!value) return;
+      setSaving(key);
+      try {
+        await pluginsApi.setSecret(pluginId, key, value);
+        setDrafts((d) => ({ ...d, [key]: '' }));
+        queryClient.invalidateQueries({ queryKey: ['plugin-secret-status'] });
+      } finally {
+        setSaving(null);
+      }
+    },
+    [pluginId, drafts, queryClient]
+  );
+
+  const clear = useCallback(
+    async (key: string) => {
+      await pluginsApi.deleteSecret(pluginId, key);
+      queryClient.invalidateQueries({ queryKey: ['plugin-secret-status'] });
+    },
+    [pluginId, queryClient]
+  );
+
+  if (!manifest) return <div className="text-muted">Loading…</div>;
+  if (manifest.secrets.length === 0) {
+    return <div className="text-muted">This plugin declares no secrets.</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {manifest.secrets.map((spec) => {
+        const hasValue =
+          secretStatus.find((s) => s.key === spec.key)?.hasValue ?? false;
+        return (
+          <div key={spec.key} className="rounded-lg border border-edge px-3 py-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">{spec.displayName}</span>
+                  {hasValue ? (
+                    <span className="inline-flex items-center gap-1 rounded bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success">
+                      <CheckCircle2 size={10} />
+                      Stored
+                    </span>
+                  ) : null}
+                </div>
+                <div className="text-xs text-muted">
+                  Injected as <span className="font-mono">{spec.envVar}</span>
+                </div>
+              </div>
+            </div>
+            {spec.description ? (
+              <div className="mt-2 text-xs text-secondary">{spec.description}</div>
+            ) : null}
+            <div className="mt-3 flex items-center gap-2">
+              <input
+                className="flex-1 rounded border border-edge bg-background px-2 py-1 text-xs"
+                placeholder={hasValue ? 'Replace value…' : spec.placeholder ?? 'Paste secret…'}
+                type="password"
+                autoComplete="off"
+                value={drafts[spec.key] ?? ''}
+                onChange={(e) => setDrafts({ ...drafts, [spec.key]: e.target.value })}
+              />
+              <button
+                className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50"
+                disabled={saving === spec.key || !drafts[spec.key]?.trim()}
+                onClick={() => save(spec.key)}
+              >
+                {saving === spec.key ? 'Saving…' : 'Save'}
+              </button>
+              {hasValue ? (
+                <button
+                  className="rounded border border-edge px-2.5 py-1 text-xs text-secondary hover:bg-surface"
+                  onClick={() => clear(spec.key)}
+                >
+                  Clear
+                </button>
+              ) : null}
             </div>
           </div>
         );

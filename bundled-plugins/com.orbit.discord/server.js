@@ -7,6 +7,14 @@ const GATEWAY_URL = 'wss://gateway.discord.gg/?v=10&encoding=json';
 const API_BASE = 'https://discord.com/api/v10';
 const TRIGGER_KIND = 'trigger.com_orbit_discord.message';
 
+process.stderr.write(`discord plugin: boot (node=${process.version}, pid=${process.pid})\n`);
+process.on('uncaughtException', (err) => {
+  process.stderr.write(`discord plugin: uncaught ${err?.stack ?? err}\n`);
+});
+process.on('unhandledRejection', (err) => {
+  process.stderr.write(`discord plugin: unhandled rejection ${err?.stack ?? err}\n`);
+});
+
 const plugin = new Plugin({ id: PLUGIN_ID });
 
 const subscriptions = new Map();
@@ -24,10 +32,12 @@ function matchesSubscription(channelId, threadId) {
   return false;
 }
 
-function getBotToken(oauth) {
-  const token = oauth.discord?.accessToken ?? process.env.ORBIT_DISCORD_BOT_TOKEN;
+function getBotToken(_oauth) {
+  // Discord's bot API requires a bot token from the Developer Portal, not an
+  // OAuth access_token. The user pastes it into Plugins → Discord → Secrets.
+  const token = process.env.ORBIT_DISCORD_BOT_TOKEN;
   if (!token) {
-    throw new Error('Discord not connected (Plugins → Discord → Connect)');
+    throw new Error('Discord bot token not set (Plugins → Discord → Secrets → Bot Token)');
   }
   return token;
 }

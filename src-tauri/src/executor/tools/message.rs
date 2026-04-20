@@ -1,11 +1,15 @@
 use serde_json::json;
+use tauri::Manager;
 use tracing::{info, warn};
 
-use crate::executor::channels::{self, ChannelConfig, ChannelType};
+use crate::executor::channels::{
+    self, ChannelConfig, ChannelMode, ChannelType,
+};
 use crate::executor::global_settings;
 use crate::executor::llm_provider::ToolDefinition;
 use crate::executor::workspace;
 use crate::plugins;
+use crate::triggers::reply_registry::{ReplyChannel, ReplyRegistry};
 
 use super::{context::ToolExecutionContext, ToolHandler};
 
@@ -81,8 +85,11 @@ impl ToolHandler for MessageTool {
                 Ok((lines.join("\n"), false))
             }
             "send" => {
-                // Resolve the channel: explicit 'channel' wins, otherwise fall
-                // back to the agent's default outbound channel id.
+                // Channel resolution order:
+                //   1. Explicit `channel` in the tool call.
+                //   2. Ambient `reply_channel` from the trigger dispatcher
+                //      (the bot replies in the same place it was mentioned).
+                //   3. Agent's configured `default_channel_id`.
                 let explicit_channel = input["channel"].as_str().map(str::to_string);
                 let resolved_channel = if let Some(raw) = explicit_channel {
                     channels::find_channel(&channels, &raw).ok_or_else(|| {
@@ -91,6 +98,8 @@ impl ToolHandler for MessageTool {
                             raw
                         )
                     })?
+                } else if let Some(reply) = lookup_reply_channel(app, run_id) {
+                    synthesize_reply_channel(&reply)
                 } else {
                     let ws_config = workspace::load_agent_config(&ctx.agent_id)
                         .map_err(|e| format!("message: {}", e))?;
@@ -152,6 +161,41 @@ impl ToolHandler for MessageTool {
                 other
             )),
         }
+    }
+}
+
+/// Consult the ambient reply registry for a reply target bound to this run.
+/// Returns `None` when the run was not spawned from a trigger event or the
+/// registry is not installed in app state.
+fn lookup_reply_channel(app: &tauri::AppHandle, run_id: &str) -> Option<ReplyChannel> {
+    let state = app.try_state::<ReplyRegistry>()?;
+    state.inner().get(run_id)
+}
+
+/// Build a synthetic bot-mode [`ChannelConfig`] from a trigger-dispatched
+/// reply context. Not persisted — only used to drive the existing send
+/// pipeline through `send_via_plugin`.
+fn synthesize_reply_channel(reply: &ReplyChannel) -> ChannelConfig {
+    ChannelConfig {
+        id: format!(
+            "reply:{}:{}{}",
+            reply.plugin_id,
+            reply.provider_channel_id,
+            reply
+                .provider_thread_id
+                .as_deref()
+                .map(|t| format!(":{}", t))
+                .unwrap_or_default()
+        ),
+        name: format!("reply to {}", reply.provider_channel_id),
+        channel_type: ChannelType::Webhook, // unused in bot path
+        webhook_url: String::new(),
+        enabled: true,
+        mode: ChannelMode::Bot,
+        plugin_id: Some(reply.plugin_id.clone()),
+        provider_channel_id: Some(reply.provider_channel_id.clone()),
+        provider_thread_id: reply.provider_thread_id.clone(),
+        credential_ref: None,
     }
 }
 

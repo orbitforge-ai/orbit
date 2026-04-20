@@ -31,6 +31,7 @@ import { ConfigTab } from './ConfigTab';
 import { SchedulesTab } from './SchedulesTab';
 import { BusTab } from './BusTab';
 import { SkillsTab } from './SkillsTab';
+import { ListenChannelsTab } from './ListenChannelsTab';
 import { AgentRunDialog } from './AgentRunDialog';
 import { AgentRunView } from './AgentRunView';
 import { AgentIdentitySection } from './AgentIdentitySection';
@@ -303,6 +304,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
     { id: 'skills' as const, label: 'Skills', icon: Sparkles },
     { id: 'schedules' as const, label: 'Schedules', icon: Clock },
     { id: 'bus' as const, label: 'Bus', icon: Radio },
+    { id: 'listen' as const, label: 'Listen', icon: MessageSquare },
   ];
 
   return (
@@ -515,6 +517,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
         </div>
         {agentTab === 'skills' && <SkillsTab agentId={agentId} />}
         {agentTab === 'bus' && <BusTab agentId={agentId} />}
+        {agentTab === 'listen' && <ListenChannelsTab agentId={agentId} />}
       </div>
 
       <AgentRunDialog

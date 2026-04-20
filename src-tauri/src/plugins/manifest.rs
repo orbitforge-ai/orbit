@@ -43,6 +43,8 @@ pub struct PluginManifest {
     #[serde(default)]
     pub oauth_providers: Vec<OAuthProviderSpec>,
     #[serde(default)]
+    pub secrets: Vec<SecretSpec>,
+    #[serde(default)]
     pub permissions: PermissionsSpec,
     #[serde(default)]
     pub hooks: HooksSpec,
@@ -149,6 +151,22 @@ fn default_redirect_uri() -> String {
         "http://127.0.0.1:{}/oauth/callback",
         super::oauth::LOOPBACK_PORT
     )
+}
+
+/// User-supplied secret (e.g. a bot token pasted from a provider dashboard).
+/// Stored in the OS keychain and injected into the subprocess env as
+/// `env_var` at launch. Declarative so the UI can render the right input
+/// fields without hardcoding per-plugin knowledge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretSpec {
+    pub key: String,
+    pub env_var: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub placeholder: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -330,6 +348,41 @@ pub fn validate(manifest: &PluginManifest) -> Result<(), String> {
                     provider.id, other
                 ))
             }
+        }
+    }
+
+    let mut secret_keys: HashSet<&str> = HashSet::new();
+    let mut secret_envs: HashSet<&str> = HashSet::new();
+    for spec in &manifest.secrets {
+        check_identifier(&spec.key, "secrets.key")?;
+        if !secret_keys.insert(spec.key.as_str()) {
+            return Err(format!("duplicate secrets.key {:?}", spec.key));
+        }
+        if spec.env_var.trim().is_empty() {
+            return Err(format!(
+                "secrets[{}].envVar must not be empty",
+                spec.key
+            ));
+        }
+        if !spec
+            .env_var
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            || spec.env_var.starts_with(|c: char| c.is_ascii_digit())
+        {
+            return Err(format!(
+                "secrets[{}].envVar {:?} must be SCREAMING_SNAKE_CASE",
+                spec.key, spec.env_var
+            ));
+        }
+        if !secret_envs.insert(spec.env_var.as_str()) {
+            return Err(format!("duplicate secrets.envVar {:?}", spec.env_var));
+        }
+        if spec.display_name.trim().is_empty() {
+            return Err(format!(
+                "secrets[{}].displayName must not be empty",
+                spec.key
+            ));
         }
     }
 

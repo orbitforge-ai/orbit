@@ -130,9 +130,9 @@ impl DispatchBindings for ProductionBindings {
         binding: &ChannelBinding,
         event: &TriggerEventPayload,
     ) {
-        // Phase 1: surface as a Tauri event. The agent-runner integration
-        // (spawning a new run seeded with the inbound message and reply
-        // context) lands in the next slice.
+        // Inform the UI side (history, toasts, logs) that a trigger-driven
+        // run is starting, then spawn the actual agent loop on a detached
+        // task.
         let _ = self.app.emit(
             "trigger:agent",
             json!({
@@ -141,11 +141,11 @@ impl DispatchBindings for ProductionBindings {
                 "event": event,
             }),
         );
-        tracing::info!(
-            agent_id,
-            binding_id = %binding.id,
-            event_id = %event.event_id,
-            "trigger dispatch → agent (awaiting runner wiring)"
+        super::spawn::spawn_agent_run_from_event(
+            self.app.clone(),
+            agent_id.to_string(),
+            binding.clone(),
+            event.clone(),
         );
     }
 }

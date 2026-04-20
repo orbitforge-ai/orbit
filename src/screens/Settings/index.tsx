@@ -23,6 +23,7 @@ import {
 } from '../../constants/providers';
 import { TOOL_CATEGORIES, TOOL_LABEL_BY_ID } from '../../constants/tools';
 import { useSettingsStore } from '../../store/settingsStore';
+import { invoke } from '@tauri-apps/api/core';
 import {
   AgentDefaults,
   ChannelConfig,
@@ -196,15 +197,29 @@ function ChannelsSection() {
       type: 'slack',
       webhookUrl: '',
       enabled: true,
+      mode: 'webhook',
     });
   }
 
   async function handleSave() {
     if (!draft) return;
     if (!draft.name.trim()) return;
-    if (!draft.webhookUrl.trim()) return;
+    const isBot = draft.mode === 'bot';
+    if (isBot) {
+      if (!draft.pluginId || !draft.providerChannelId?.trim()) return;
+    } else {
+      if (!draft.webhookUrl.trim()) return;
+    }
     try {
-      await upsertChannel({ ...draft, name: draft.name.trim(), webhookUrl: draft.webhookUrl.trim() });
+      const normalized: ChannelConfig = {
+        ...draft,
+        name: draft.name.trim(),
+        webhookUrl: isBot ? '' : draft.webhookUrl.trim(),
+        providerChannelId: isBot ? draft.providerChannelId?.trim() : undefined,
+        providerThreadId: isBot ? draft.providerThreadId?.trim() || undefined : undefined,
+        pluginId: isBot ? draft.pluginId : undefined,
+      };
+      await upsertChannel(normalized);
       setDraft(null);
     } catch (err) {
       console.error('Failed to save channel:', err);
@@ -266,9 +281,18 @@ function ChannelsSection() {
                   <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
                     {channel.type}
                   </span>
+                  {channel.mode === 'bot' && (
+                    <span className="rounded bg-accent/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-accent-hover">
+                      bot
+                    </span>
+                  )}
                 </div>
                 <p className="mt-1 truncate font-mono text-xs text-muted">
-                  {channel.webhookUrl}
+                  {channel.mode === 'bot'
+                    ? `${channel.pluginId ?? '?'} · ${channel.providerChannelId ?? '?'}${
+                        channel.providerThreadId ? ` › ${channel.providerThreadId}` : ''
+                      }`
+                    : channel.webhookUrl}
                 </p>
               </div>
               <div className="flex items-center gap-3">
@@ -293,82 +317,300 @@ function ChannelsSection() {
       </div>
 
       {draft && (
-        <div className="space-y-3 rounded-lg border border-accent/60 bg-background px-4 py-3">
-          <div className="grid grid-cols-2 gap-3">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted">Name</span>
-              <input
-                value={draft.name}
-                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                placeholder="e.g. #ops-alerts"
-                className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted">Type</span>
-              <Select.Root
-                value={draft.type}
-                onValueChange={(v) => setDraft({ ...draft, type: v as ChannelType })}
-              >
-                <Select.Trigger className="flex items-center justify-between rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-accent">
-                  <Select.Value />
-                  <Select.Icon>
-                    <ChevronDown size={14} />
-                  </Select.Icon>
-                </Select.Trigger>
-                <Select.Portal>
-                  <Select.Content
-                    position="popper"
-                    sideOffset={4}
-                    className="z-50 min-w-[var(--radix-select-trigger-width)] rounded-md border border-edge bg-surface p-1 shadow-lg"
-                  >
-                    <Select.Viewport>
-                      {CHANNEL_TYPE_OPTIONS.map((opt) => (
-                        <Select.Item
-                          key={opt.value}
-                          value={opt.value}
-                          className="cursor-pointer rounded px-2 py-1 text-sm text-white data-[highlighted]:bg-panel data-[highlighted]:outline-none"
-                        >
-                          <Select.ItemText>{opt.label}</Select.ItemText>
-                        </Select.Item>
-                      ))}
-                    </Select.Viewport>
-                  </Select.Content>
-                </Select.Portal>
-              </Select.Root>
-            </label>
-          </div>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-muted">Webhook URL</span>
-            <input
-              value={draft.webhookUrl}
-              onChange={(e) => setDraft({ ...draft, webhookUrl: e.target.value })}
-              placeholder="https://hooks.slack.com/services/..."
-              className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-accent"
-            />
-            <span className="text-[11px] text-muted">
-              {CHANNEL_TYPE_OPTIONS.find((o) => o.value === draft.type)?.hint}
-            </span>
-          </label>
-          <div className="flex justify-end gap-2">
-            <button
-              onClick={() => setDraft(null)}
-              className="rounded-md px-3 py-1.5 text-xs text-muted hover:text-white transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={!draft.name.trim() || !draft.webhookUrl.trim()}
-              className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
-            >
-              Save channel
-            </button>
-          </div>
-        </div>
+        <ChannelDraftForm
+          draft={draft}
+          setDraft={setDraft}
+          onCancel={() => setDraft(null)}
+          onSave={handleSave}
+        />
       )}
     </section>
   );
+}
+
+interface PluginSummary {
+  id: string;
+  name: string;
+}
+
+function ChannelDraftForm({
+  draft,
+  setDraft,
+  onCancel,
+  onSave,
+}: {
+  draft: ChannelConfig;
+  setDraft: (draft: ChannelConfig) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  const isBot = draft.mode === 'bot';
+
+  const { data: plugins = [] } = useQuery<PluginSummary[]>({
+    queryKey: ['trigger-capable-plugins'],
+    queryFn: () => invoke('list_trigger_capable_plugins'),
+    enabled: isBot,
+  });
+
+  // When switching to bot mode, preselect the first available plugin.
+  useEffect(() => {
+    if (isBot && !draft.pluginId && plugins.length > 0) {
+      setDraft({ ...draft, pluginId: plugins[0].id });
+    }
+  }, [isBot, draft, plugins, setDraft]);
+
+  const { data: channelsRaw } = useQuery<unknown>({
+    queryKey: ['plugin-channels', draft.pluginId],
+    queryFn: () =>
+      invoke('plugin_list_channels', { pluginId: draft.pluginId, guildId: null }),
+    enabled: isBot && Boolean(draft.pluginId),
+  });
+
+  const flatChannels = flattenChannels(channelsRaw);
+
+  const saveDisabled =
+    !draft.name.trim() ||
+    (isBot ? !draft.pluginId || !draft.providerChannelId?.trim() : !draft.webhookUrl.trim());
+
+  return (
+    <div className="space-y-3 rounded-lg border border-accent/60 bg-background px-4 py-3">
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-muted">Mode</span>
+        <div className="flex rounded-md border border-edge bg-surface p-0.5">
+          <ModeButton
+            active={!isBot}
+            onClick={() =>
+              setDraft({
+                ...draft,
+                mode: 'webhook',
+                pluginId: undefined,
+                providerChannelId: undefined,
+                providerThreadId: undefined,
+              })
+            }
+          >
+            Webhook
+          </ModeButton>
+          <ModeButton
+            active={isBot}
+            onClick={() =>
+              setDraft({ ...draft, mode: 'bot', webhookUrl: '', type: 'discord' })
+            }
+          >
+            Bot (plugin)
+          </ModeButton>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted">Name</span>
+          <input
+            value={draft.name}
+            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            placeholder="e.g. #ops-alerts"
+            className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted">Type</span>
+          <Select.Root
+            value={draft.type}
+            onValueChange={(v) => setDraft({ ...draft, type: v as ChannelType })}
+          >
+            <Select.Trigger className="flex items-center justify-between rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-accent">
+              <Select.Value />
+              <Select.Icon>
+                <ChevronDown size={14} />
+              </Select.Icon>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Content
+                position="popper"
+                sideOffset={4}
+                className="z-50 min-w-[var(--radix-select-trigger-width)] rounded-md border border-edge bg-surface p-1 shadow-lg"
+              >
+                <Select.Viewport>
+                  {CHANNEL_TYPE_OPTIONS.map((opt) => (
+                    <Select.Item
+                      key={opt.value}
+                      value={opt.value}
+                      className="cursor-pointer rounded px-2 py-1 text-sm text-white data-[highlighted]:bg-panel data-[highlighted]:outline-none"
+                    >
+                      <Select.ItemText>{opt.label}</Select.ItemText>
+                    </Select.Item>
+                  ))}
+                </Select.Viewport>
+              </Select.Content>
+            </Select.Portal>
+          </Select.Root>
+        </label>
+      </div>
+
+      {isBot ? (
+        <div className="space-y-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted">Plugin</span>
+            {plugins.length === 0 ? (
+              <div className="rounded-md border border-edge bg-surface px-2.5 py-1.5 text-xs text-muted">
+                No trigger-capable plugins are enabled. Install one (e.g.{' '}
+                <span className="font-mono">com.orbit.discord</span>) and enable it first.
+              </div>
+            ) : (
+              <select
+                value={draft.pluginId ?? ''}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    pluginId: e.target.value,
+                    providerChannelId: undefined,
+                  })
+                }
+                className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
+              >
+                {plugins.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </label>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-muted">Channel</span>
+              {flatChannels.length > 0 ? (
+                <select
+                  value={draft.providerChannelId ?? ''}
+                  onChange={(e) => {
+                    const picked = flatChannels.find((c) => c.id === e.target.value);
+                    setDraft({
+                      ...draft,
+                      providerChannelId: e.target.value,
+                      name: draft.name || (picked?.name ? `#${picked.name}` : draft.name),
+                    });
+                  }}
+                  className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
+                >
+                  <option value="">— pick a channel —</option>
+                  {flatChannels.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name ? `#${c.name}` : c.id}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={draft.providerChannelId ?? ''}
+                  onChange={(e) =>
+                    setDraft({ ...draft, providerChannelId: e.target.value })
+                  }
+                  placeholder="channel id / snowflake"
+                  className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-accent"
+                />
+              )}
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-muted">Thread (optional)</span>
+              <input
+                value={draft.providerThreadId ?? ''}
+                onChange={(e) => setDraft({ ...draft, providerThreadId: e.target.value })}
+                placeholder="thread snowflake / ts"
+                className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-accent"
+              />
+            </label>
+          </div>
+          <p className="text-[11px] text-muted">
+            Outbound messages go through the plugin's <span className="font-mono">send_message</span>{' '}
+            tool. The plugin must be installed, enabled, and authenticated.
+          </p>
+        </div>
+      ) : (
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted">Webhook URL</span>
+          <input
+            value={draft.webhookUrl}
+            onChange={(e) => setDraft({ ...draft, webhookUrl: e.target.value })}
+            placeholder="https://hooks.slack.com/services/..."
+            className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-accent"
+          />
+          <span className="text-[11px] text-muted">
+            {CHANNEL_TYPE_OPTIONS.find((o) => o.value === draft.type)?.hint}
+          </span>
+        </label>
+      )}
+
+      <div className="flex justify-end gap-2">
+        <button
+          onClick={onCancel}
+          className="rounded-md px-3 py-1.5 text-xs text-muted hover:text-white transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={onSave}
+          disabled={saveDisabled}
+          className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+        >
+          Save channel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ModeButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+        active ? 'bg-accent text-white' : 'text-muted hover:text-white'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
+ * Flatten the plugin's `list_channels` response into a flat channel array. The
+ * payload shape is plugin-specific; Discord returns guild-wrapped channels but
+ * other providers may return a flat list. Best-effort.
+ */
+function flattenChannels(
+  raw: unknown,
+): { id: string; name?: string }[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    const first = raw[0];
+    if (first && typeof first === 'object' && Array.isArray((first as any).channels)) {
+      return (raw as any[]).flatMap((g) =>
+        Array.isArray(g.channels)
+          ? g.channels
+              .filter((c: any) => c && c.id)
+              .map((c: any) => ({ id: String(c.id), name: c.name ? String(c.name) : undefined }))
+          : [],
+      );
+    }
+    return (raw as any[])
+      .filter((c) => c && c.id)
+      .map((c) => ({ id: String(c.id), name: c.name ? String(c.name) : undefined }));
+  }
+  if (typeof raw === 'object') {
+    const obj = raw as any;
+    if (Array.isArray(obj.channels)) return flattenChannels(obj.channels);
+    if (Array.isArray(obj.guilds)) return flattenChannels(obj.guilds);
+  }
+  return [];
 }
 
 // ─── Shared agent defaults ───────────────────────────────────────────────────

@@ -43,6 +43,13 @@ export interface PluginManifest {
     clientType: string;
     redirectUri: string;
   }>;
+  secrets: Array<{
+    key: string;
+    envVar: string;
+    displayName: string;
+    description: string | null;
+    placeholder: string | null;
+  }>;
   permissions: {
     network: string[];
     filesystem: string[];
@@ -80,6 +87,20 @@ export interface PluginOAuthStatus {
   pluginId: string;
   anyNeedsConnect: boolean;
   providers: PluginOAuthProviderStatus[];
+}
+
+export interface PluginSecretEntryStatus {
+  key: string;
+  displayName: string;
+  description: string | null;
+  placeholder: string | null;
+  hasValue: boolean;
+}
+
+export interface PluginSecretStatus {
+  pluginId: string;
+  anyNeedsValue: boolean;
+  secrets: PluginSecretEntryStatus[];
 }
 
 export interface PluginEntity {
@@ -157,4 +178,13 @@ export const pluginsApi = {
 
   listOAuthStatus: (): Promise<PluginOAuthStatus[]> =>
     invoke('list_plugin_oauth_status'),
+
+  setSecret: (pluginId: string, key: string, value: string): Promise<void> =>
+    invoke('set_plugin_secret', { pluginId, key, value }),
+
+  deleteSecret: (pluginId: string, key: string): Promise<void> =>
+    invoke('delete_plugin_secret', { pluginId, key }),
+
+  listSecretStatus: (): Promise<PluginSecretStatus[]> =>
+    invoke('list_plugin_secret_status'),
 };

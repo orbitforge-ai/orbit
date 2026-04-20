@@ -132,16 +132,83 @@ pub fn disconnect_plugin_oauth(plugin_id: String, provider_id: String) -> Result
 }
 
 #[tauri::command]
+pub fn set_plugin_secret(
+    plugin_id: String,
+    key: String,
+    value: String,
+    app: tauri::AppHandle,
+    manager: State<'_, Arc<PluginManager>>,
+) -> Result<(), String> {
+    let manifest = manager
+        .manifest(&plugin_id)
+        .ok_or_else(|| format!("plugin {:?} not installed", plugin_id))?;
+    if !manifest.secrets.iter().any(|s| s.key == key) {
+        return Err(format!(
+            "plugin {:?} does not declare secret {:?}",
+            plugin_id, key
+        ));
+    }
+    plugins::oauth::set_secret(&plugin_id, &plugins::oauth::secret_account(&key), &value)?;
+    // Reload so the subprocess picks up the new env var.
+    let _ = manager.reload(&app, &plugin_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_plugin_secret(
+    plugin_id: String,
+    key: String,
+    app: tauri::AppHandle,
+    manager: State<'_, Arc<PluginManager>>,
+) -> Result<(), String> {
+    plugins::oauth::delete_secret(&plugin_id, &plugins::oauth::secret_account(&key));
+    let _ = manager.reload(&app, &plugin_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_plugin_secret_status(
+    manager: State<'_, Arc<PluginManager>>,
+) -> Vec<PluginSecretStatus> {
+    let mut out = Vec::new();
+    for manifest in manager.manifests() {
+        if manifest.secrets.is_empty() {
+            continue;
+        }
+        let secrets: Vec<_> = manifest
+            .secrets
+            .iter()
+            .map(|s| {
+                let has_value =
+                    plugins::oauth::get_secret(&manifest.id, &plugins::oauth::secret_account(&s.key))
+                        .is_ok();
+                PluginSecretEntryStatus {
+                    key: s.key.clone(),
+                    display_name: s.display_name.clone(),
+                    description: s.description.clone(),
+                    placeholder: s.placeholder.clone(),
+                    has_value,
+                }
+            })
+            .collect();
+        let any_needs_value = secrets.iter().any(|s| !s.has_value);
+        out.push(PluginSecretStatus {
+            plugin_id: manifest.id.clone(),
+            any_needs_value,
+            secrets,
+        });
+    }
+    out
+}
+
+#[tauri::command]
 pub fn get_plugin_runtime_log(
-    _plugin_id: String,
-    _tail_lines: Option<u32>,
-    _manager: State<'_, Arc<PluginManager>>,
+    plugin_id: String,
+    tail_lines: Option<u32>,
+    manager: State<'_, Arc<PluginManager>>,
 ) -> String {
-    // Runtime log surfaces via `runtime::RuntimeRegistry` on the manager; the
-    // registry is private because it's accessed exclusively from the runtime
-    // module. We return empty until the runtime MCP client lands in a
-    // follow-up slice and wires log delivery into the manager API.
-    String::new()
+    let n = tail_lines.unwrap_or(200) as usize;
+    manager.runtime.log_tail(&plugin_id, n)
 }
 
 #[tauri::command]
@@ -231,6 +298,24 @@ pub struct PluginOAuthProviderStatus {
 pub struct StagedInstall {
     pub staging_id: String,
     pub manifest: PluginManifest,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSecretStatus {
+    pub plugin_id: String,
+    pub any_needs_value: bool,
+    pub secrets: Vec<PluginSecretEntryStatus>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSecretEntryStatus {
+    pub key: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub placeholder: Option<String>,
+    pub has_value: bool,
 }
 
 fn require_dev_mode() -> Result<(), String> {

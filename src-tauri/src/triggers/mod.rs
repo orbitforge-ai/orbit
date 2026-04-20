@@ -19,3 +19,6 @@
 
 pub mod bindings;
 pub mod dispatcher;
+pub mod reply_registry;
+pub mod spawn;
+pub mod subscriptions;

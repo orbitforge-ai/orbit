@@ -180,6 +180,10 @@ pub fn run() {
             let plugin_manager = std::sync::Arc::new(PluginManager::init(db_pool.clone()));
             plugin_manager.attach_log_emitter(app.handle());
 
+            // Reply-target registry used by the `message` tool to route a
+            // trigger-spawned agent's reply back to the originating channel.
+            app.manage(triggers::reply_registry::ReplyRegistry::new());
+
             // Trigger dispatcher — plugins emit inbound events via
             // `trigger.emit` on their per-plugin JSON-RPC socket. The
             // dispatcher must be installed on the core-api server *before*
@@ -191,6 +195,17 @@ pub fn run() {
             plugin_manager.start_core_api_servers(db_pool.clone());
             plugins::oauth::spawn_loopback_listener(app.handle().clone(), plugin_manager.clone());
             app.manage(plugin_manager);
+
+            // Push the desired subscription set to every trigger-capable
+            // plugin. Runs in the background so startup is not blocked by
+            // plugin subprocess spin-up.
+            {
+                let handle = app.handle().clone();
+                let db = db_pool.clone();
+                tauri::async_runtime::spawn(async move {
+                    triggers::subscriptions::reconcile_all(&handle, &db).await;
+                });
+            }
 
             // Start execution engine (now takes tx clone for retry scheduling)
             let engine = ExecutorEngine::new(
@@ -419,6 +434,14 @@ pub fn run() {
             commands::plugins::list_plugin_entities,
             commands::plugins::get_plugin_entity,
             commands::plugins::list_plugin_oauth_status,
+            commands::plugins::set_plugin_secret,
+            commands::plugins::delete_plugin_secret,
+            commands::plugins::list_plugin_secret_status,
+            // Triggers / listen bindings
+            commands::triggers::list_agent_listen_bindings,
+            commands::triggers::set_agent_listen_bindings,
+            commands::triggers::plugin_list_channels,
+            commands::triggers::list_trigger_capable_plugins,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

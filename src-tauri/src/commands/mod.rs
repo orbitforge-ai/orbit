@@ -15,6 +15,7 @@ pub mod runs;
 pub mod schedules;
 pub mod skills;
 pub mod tasks;
+pub mod triggers;
 pub mod users;
 pub mod work_items;
 pub mod workflow_runs;

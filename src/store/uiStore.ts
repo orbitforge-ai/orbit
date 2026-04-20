@@ -33,7 +33,7 @@ function getPersistedAgentId(): string | null {
   return null;
 }
 
-type AgentTab = 'chat' | 'workspace' | 'config' | 'skills' | 'schedules' | 'bus';
+type AgentTab = 'chat' | 'workspace' | 'config' | 'skills' | 'schedules' | 'bus' | 'listen';
 type ProjectTab =
   | 'workspace'
   | 'agents'

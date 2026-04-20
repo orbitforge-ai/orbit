@@ -290,11 +290,23 @@ impl PluginManager {
         Ok(())
     }
 
-    /// Manual reload — kill subprocess and re-parse manifest.
+    /// Manual reload — kill subprocess and re-parse manifest. For dev-installed
+    /// plugins (`.dev-source` pointer present), re-copy `plugin.json` from the
+    /// original source directory first so edits to the working copy are picked
+    /// up without a full reinstall.
     pub fn reload<R: Runtime>(&self, app: &AppHandle<R>, plugin_id: &str) -> Result<(), String> {
         self.runtime.shutdown(plugin_id);
-        let manifest_path = plugins_dir().join(plugin_id).join("plugin.json");
-        let manifest = manifest::load_from_path(&manifest_path)
+        let plugin_dir = plugins_dir().join(plugin_id);
+        let pointer = plugin_dir.join(".dev-source");
+        if let Ok(source_str) = std::fs::read_to_string(&pointer) {
+            let source = std::path::PathBuf::from(source_str.trim());
+            let source_manifest = source.join("plugin.json");
+            if source_manifest.is_file() {
+                std::fs::copy(&source_manifest, plugin_dir.join("plugin.json"))
+                    .map_err(|e| format!("reload: copy dev manifest failed: {}", e))?;
+            }
+        }
+        let manifest = manifest::load_from_path(&plugin_dir.join("plugin.json"))
             .map_err(|e| format!("reload failed: {}", e))?;
         let mut inner = self.inner.write().expect("plugin manager lock poisoned");
         inner.manifests.retain(|m| m.id != manifest.id);
