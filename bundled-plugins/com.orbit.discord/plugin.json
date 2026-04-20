@@ -54,6 +54,32 @@
       }
     },
     {
+      "name": "start_typing",
+      "description": "Show the Discord 'Bot is typing…' indicator in a channel/thread. Idempotent; auto-stops after a safety cap.",
+      "riskLevel": "low",
+      "inputSchema": {
+        "type": "object",
+        "required": ["channelId"],
+        "properties": {
+          "channelId": { "type": "string" },
+          "threadId": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "stop_typing",
+      "description": "Stop the Discord typing indicator in a channel/thread.",
+      "riskLevel": "low",
+      "inputSchema": {
+        "type": "object",
+        "required": ["channelId"],
+        "properties": {
+          "channelId": { "type": "string" },
+          "threadId": { "type": "string" }
+        }
+      }
+    },
+    {
       "name": "list_channels",
       "description": "List channels the bot has access to (optionally filtered by guild id).",
       "riskLevel": "low",

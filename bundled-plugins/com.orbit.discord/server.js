@@ -22,6 +22,12 @@ let botToken = null;
 let botUserId = null;
 let gateway = null;
 
+// Active typing-indicator pulse timers, keyed by `channelId:threadId`. Discord
+// clears the indicator ~10s after the last POST, so we refresh on an interval.
+const typingTimers = new Map();
+const TYPING_PULSE_MS = 7000;
+const TYPING_MAX_MS = 2 * 60 * 1000; // safety cap: 2 minutes even if stop is missed.
+
 function subscriptionKey(channelId, threadId) {
   return threadId ? `${channelId}:${threadId}` : channelId;
 }
@@ -119,6 +125,63 @@ plugin.tool('send_message', {
       body: JSON.stringify({ content: input.text }),
     });
     return { messageId: data?.id ?? null };
+  },
+});
+
+plugin.tool('start_typing', {
+  description: 'Show the "Bot is typing…" indicator in a channel or thread. Idempotent — calling again extends the pulse. Auto-stops after 2 minutes as a safety cap.',
+  inputSchema: {
+    type: 'object',
+    required: ['channelId'],
+    properties: {
+      channelId: { type: 'string' },
+      threadId: { type: 'string' },
+    },
+  },
+  run: async ({ input, oauth }) => {
+    botToken = getBotToken(oauth);
+    const target = input.threadId ?? input.channelId;
+    const key = subscriptionKey(input.channelId, input.threadId ?? null);
+    const existing = typingTimers.get(key);
+    if (existing) {
+      clearInterval(existing.interval);
+      clearTimeout(existing.cap);
+    }
+    const pulse = () => {
+      discordFetch(`/channels/${target}/typing`, { method: 'POST' }).catch((err) => {
+        process.stderr.write(`typing pulse failed: ${err.message}\n`);
+      });
+    };
+    pulse();
+    const interval = setInterval(pulse, TYPING_PULSE_MS);
+    const cap = setTimeout(() => {
+      clearInterval(interval);
+      typingTimers.delete(key);
+    }, TYPING_MAX_MS);
+    typingTimers.set(key, { interval, cap });
+    return { ok: true };
+  },
+});
+
+plugin.tool('stop_typing', {
+  description: 'Stop the typing indicator for a channel or thread. Discord still shows the last indicator for ~10s after the final POST.',
+  inputSchema: {
+    type: 'object',
+    required: ['channelId'],
+    properties: {
+      channelId: { type: 'string' },
+      threadId: { type: 'string' },
+    },
+  },
+  run: async ({ input }) => {
+    const key = subscriptionKey(input.channelId, input.threadId ?? null);
+    const existing = typingTimers.get(key);
+    if (existing) {
+      clearInterval(existing.interval);
+      clearTimeout(existing.cap);
+      typingTimers.delete(key);
+    }
+    return { ok: true };
   },
 });
 

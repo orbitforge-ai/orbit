@@ -23,6 +23,7 @@ use crate::memory_service::MemoryServiceState;
 use crate::models::channel_binding::ChannelBinding;
 use crate::models::task::AgentLoopConfig;
 use crate::models::trigger_event::TriggerEventPayload;
+use crate::plugins;
 
 use super::reply_registry::{ReplyChannel, ReplyRegistry};
 
@@ -102,6 +103,10 @@ async fn run(
         "trigger: starting agent run"
     );
 
+    // Best-effort typing indicator. Failures (plugin lacks the tool, Discord
+    // 403, etc.) are logged but don't block the agent run.
+    call_typing_tool(&runtime_app, &event, "start_typing").await;
+
     let result = agent_loop::run_agent_loop_for_workflow(
         &run_id,
         &agent_id,
@@ -123,6 +128,8 @@ async fn run(
     if let Some(registry) = runtime_app.try_state::<ReplyRegistry>() {
         registry.inner().clear(&run_id);
     }
+
+    call_typing_tool(&runtime_app, &event, "stop_typing").await;
 
     match result {
         Ok(outcome) => {
@@ -168,6 +175,30 @@ fn trigger_agent_log_path(agent_id: &str, run_id: &str) -> PathBuf {
     workspace::agent_dir(agent_id)
         .join("trigger_runs")
         .join(format!("{}.log", run_id))
+}
+
+/// Invoke `start_typing` / `stop_typing` on the originating plugin if it
+/// declares the tool. Best-effort — errors are logged but never fail the run.
+async fn call_typing_tool(app: &AppHandle, event: &TriggerEventPayload, tool: &str) {
+    let manager = plugins::from_state(app);
+    let Some(manifest) = manager.manifest(&event.plugin_id) else {
+        return;
+    };
+    if !manifest.tools.iter().any(|t| t.name == tool) {
+        return;
+    }
+    let mut args = serde_json::json!({ "channelId": event.channel.id });
+    if let Some(thread_id) = event.channel.thread_id.as_ref() {
+        args["threadId"] = serde_json::Value::String(thread_id.clone());
+    }
+    let extra_env = plugins::oauth::build_env_for_subprocess(&manifest);
+    if let Err(err) = manager
+        .runtime
+        .call_tool(&manifest, tool, &args, &extra_env)
+        .await
+    {
+        tracing::warn!(plugin_id = %event.plugin_id, tool, "typing tool failed: {}", err);
+    }
 }
 
 async fn resolve_memory_user_id(app: &AppHandle) -> String {
