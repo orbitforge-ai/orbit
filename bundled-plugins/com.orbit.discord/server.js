@@ -28,6 +28,21 @@ const typingTimers = new Map();
 const TYPING_PULSE_MS = 7000;
 const TYPING_MAX_MS = 2 * 60 * 1000; // safety cap: 2 minutes even if stop is missed.
 
+function normalizeOptionalId(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function resolveTargetId(input) {
+  const channelId = normalizeOptionalId(input?.channelId);
+  const threadId = normalizeOptionalId(input?.threadId);
+  if (!channelId) {
+    throw new Error('channelId is required');
+  }
+  return { channelId, threadId, targetId: threadId ?? channelId };
+}
+
 function subscriptionKey(channelId, threadId) {
   return threadId ? `${channelId}:${threadId}` : channelId;
 }
@@ -119,8 +134,8 @@ plugin.tool('send_message', {
   },
   run: async ({ input, oauth }) => {
     botToken = getBotToken(oauth);
-    const target = input.threadId ?? input.channelId;
-    const data = await discordFetch(`/channels/${target}/messages`, {
+    const { targetId } = resolveTargetId(input);
+    const data = await discordFetch(`/channels/${targetId}/messages`, {
       method: 'POST',
       body: JSON.stringify({ content: input.text }),
     });
@@ -140,15 +155,15 @@ plugin.tool('start_typing', {
   },
   run: async ({ input, oauth }) => {
     botToken = getBotToken(oauth);
-    const target = input.threadId ?? input.channelId;
-    const key = subscriptionKey(input.channelId, input.threadId ?? null);
+    const { channelId, threadId, targetId } = resolveTargetId(input);
+    const key = subscriptionKey(channelId, threadId);
     const existing = typingTimers.get(key);
     if (existing) {
       clearInterval(existing.interval);
       clearTimeout(existing.cap);
     }
     const pulse = () => {
-      discordFetch(`/channels/${target}/typing`, { method: 'POST' }).catch((err) => {
+      discordFetch(`/channels/${targetId}/typing`, { method: 'POST' }).catch((err) => {
         process.stderr.write(`typing pulse failed: ${err.message}\n`);
       });
     };
@@ -174,7 +189,8 @@ plugin.tool('stop_typing', {
     },
   },
   run: async ({ input }) => {
-    const key = subscriptionKey(input.channelId, input.threadId ?? null);
+    const { channelId, threadId } = resolveTargetId(input);
+    const key = subscriptionKey(channelId, threadId);
     const existing = typingTimers.get(key);
     if (existing) {
       clearInterval(existing.interval);

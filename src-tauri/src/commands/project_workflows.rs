@@ -392,6 +392,11 @@ pub fn workflow_node_default_data(node_type: &str) -> Option<Value> {
             "feedUrlsText": "",
             "limit": 50,
         }),
+        "integration.com_orbit_discord.send_message" => json!({
+            "channelId": "",
+            "threadId": "",
+            "text": "",
+        }),
         "integration.gmail.read" | "integration.gmail.send" | "integration.slack.send" => {
             json!({})
         }
@@ -414,6 +419,7 @@ fn node_type_label(node_type: &str) -> String {
         "board.work_item.create" => "Board · Work item".to_string(),
         "board.proposal.enqueue" => "Board · Proposal queue".to_string(),
         "integration.feed.fetch" => "Feed fetch".to_string(),
+        "integration.com_orbit_discord.send_message" => "Discord · Send message".to_string(),
         "integration.gmail.read" => "Gmail · Read".to_string(),
         "integration.gmail.send" => "Gmail · Send".to_string(),
         "integration.slack.send" => "Slack · Send".to_string(),

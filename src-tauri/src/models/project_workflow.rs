@@ -152,6 +152,7 @@ pub const KNOWN_NODE_TYPES: &[&str] = &[
     "board.work_item.create",
     "board.proposal.enqueue",
     "integration.feed.fetch",
+    "integration.com_orbit_discord.send_message",
     // Integration stubs — placeable but inert in Phase 3.
     "integration.gmail.read",
     "integration.gmail.send",

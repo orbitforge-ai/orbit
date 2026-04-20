@@ -359,10 +359,7 @@ pub fn validate(manifest: &PluginManifest) -> Result<(), String> {
             return Err(format!("duplicate secrets.key {:?}", spec.key));
         }
         if spec.env_var.trim().is_empty() {
-            return Err(format!(
-                "secrets[{}].envVar must not be empty",
-                spec.key
-            ));
+            return Err(format!("secrets[{}].envVar must not be empty", spec.key));
         }
         if !spec
             .env_var

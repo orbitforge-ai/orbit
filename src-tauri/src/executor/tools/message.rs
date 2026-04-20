@@ -2,9 +2,7 @@ use serde_json::json;
 use tauri::Manager;
 use tracing::{info, warn};
 
-use crate::executor::channels::{
-    self, ChannelConfig, ChannelMode, ChannelType,
-};
+use crate::executor::channels::{self, ChannelConfig, ChannelMode, ChannelType};
 use crate::executor::global_settings;
 use crate::executor::llm_provider::ToolDefinition;
 use crate::executor::workspace;

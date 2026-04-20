@@ -229,6 +229,7 @@ export const KNOWN_NODE_TYPES = [
   'board.work_item.create',
   'board.proposal.enqueue',
   'integration.feed.fetch',
+  'integration.com_orbit_discord.send_message',
   'integration.gmail.read',
   'integration.gmail.send',
   'integration.slack.send',

@@ -4,6 +4,7 @@ mod code;
 mod feed;
 mod http;
 mod logic;
+mod plugin;
 
 use serde_json::Value;
 use tauri::Runtime;
@@ -34,6 +35,7 @@ enum NodeExecutorKind {
     Code,
     Feed,
     Http,
+    Plugin,
     ProposalQueue,
     WorkItem,
 }
@@ -46,6 +48,7 @@ fn route_node_type(node_type: &str) -> Option<NodeExecutorKind> {
         "code.bash.run" | "code.script.run" => Some(NodeExecutorKind::Code),
         "integration.feed.fetch" => Some(NodeExecutorKind::Feed),
         "integration.http.request" => Some(NodeExecutorKind::Http),
+        "integration.com_orbit_discord.send_message" => Some(NodeExecutorKind::Plugin),
         "board.proposal.enqueue" => Some(NodeExecutorKind::ProposalQueue),
         "board.work_item.create" => Some(NodeExecutorKind::WorkItem),
         _ => None,
@@ -69,6 +72,7 @@ pub(crate) async fn execute<R: Runtime>(
         Some(NodeExecutorKind::Code) => code::execute(&ctx).await,
         Some(NodeExecutorKind::Feed) => feed::execute(&ctx).await,
         Some(NodeExecutorKind::Http) => http::execute(&ctx).await,
+        Some(NodeExecutorKind::Plugin) => plugin::execute(&ctx).await,
         Some(NodeExecutorKind::ProposalQueue) => board::execute_proposal_enqueue(&ctx).await,
         Some(NodeExecutorKind::WorkItem) => board::execute_work_item(&ctx).await,
         None => Err(format!("unknown node type `{}`", ctx.node.node_type)),
@@ -90,6 +94,10 @@ mod tests {
             ("code.script.run", Some(NodeExecutorKind::Code)),
             ("integration.feed.fetch", Some(NodeExecutorKind::Feed)),
             ("integration.http.request", Some(NodeExecutorKind::Http)),
+            (
+                "integration.com_orbit_discord.send_message",
+                Some(NodeExecutorKind::Plugin),
+            ),
             (
                 "board.proposal.enqueue",
                 Some(NodeExecutorKind::ProposalQueue),

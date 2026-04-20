@@ -65,9 +65,7 @@ pub async fn reconcile_plugin(app: &AppHandle, db: &DbPool, plugin_id: &str) {
     }
 }
 
-fn compute_desired(
-    db: &DbPool,
-) -> std::collections::BTreeMap<String, BTreeSet<Subscription>> {
+fn compute_desired(db: &DbPool) -> std::collections::BTreeMap<String, BTreeSet<Subscription>> {
     let mut out: std::collections::BTreeMap<String, BTreeSet<Subscription>> =
         std::collections::BTreeMap::new();
 
@@ -84,10 +82,12 @@ fn compute_desired(
                     continue;
                 };
                 for binding in cfg.listen_bindings {
-                    out.entry(binding.plugin_id).or_default().insert(Subscription {
-                        channel_id: binding.provider_channel_id,
-                        thread_id: binding.provider_thread_id,
-                    });
+                    out.entry(binding.plugin_id)
+                        .or_default()
+                        .insert(Subscription {
+                            channel_id: binding.provider_channel_id,
+                            thread_id: binding.provider_thread_id,
+                        });
                 }
             }
         }
@@ -177,7 +177,11 @@ async fn apply_for_plugin(
             .collect::<Vec<_>>(),
     });
 
-    info!(plugin_id, count = subs.len(), "reconcile: applying subscriptions");
+    info!(
+        plugin_id,
+        count = subs.len(),
+        "reconcile: applying subscriptions"
+    );
     let extra_env = plugins::oauth::build_env_for_subprocess(&manifest);
     manager
         .runtime

@@ -280,6 +280,19 @@ export function IntegrationNode({ id, data, type, selected }: NodeProps) {
   const meta = nodeMeta(type);
   const Icon = meta?.icon;
   const referenceKey = getNodeReferenceKey({ id, type, data: (data as Record<string, unknown>) ?? {} });
+  const discordData = data as {
+    channelId?: string;
+    threadId?: string;
+    text?: string;
+  };
+  const isDiscordSend = type === 'integration.com_orbit_discord.send_message';
+  const discordPreview =
+    typeof discordData.text === 'string'
+      ? discordData.text
+          .split('\n')
+          .map((line) => line.trim())
+          .find(Boolean) ?? ''
+      : '';
   return (
     <div className={`${NODE_BASE} ${selected ? 'border-accent' : 'border-edge'} opacity-80`}>
       <Handle type="target" position={Position.Left} className="!bg-muted" />
@@ -293,6 +306,27 @@ export function IntegrationNode({ id, data, type, selected }: NodeProps) {
         <p className="text-muted text-[10px] mb-1">
           Ref: <span className="text-white font-mono">{referenceKey}</span>
         </p>
+        {isDiscordSend && (
+          <div className="mb-2 space-y-1 text-[10px] text-muted">
+            <p>
+              Channel:{' '}
+              <span className="text-white font-mono">
+                {discordData.channelId || '(unset)'}
+              </span>
+            </p>
+            {discordData.threadId && (
+              <p>
+                Thread:{' '}
+                <span className="text-white font-mono">{discordData.threadId}</span>
+              </p>
+            )}
+            {discordPreview && (
+              <p className="text-white text-[11px] whitespace-pre-wrap break-words">
+                {discordPreview}
+              </p>
+            )}
+          </div>
+        )}
         <span className="inline-block px-1.5 py-0.5 rounded bg-muted/15 text-[9px] uppercase tracking-wider text-muted font-mono">
           Integration
         </span>
@@ -312,6 +346,7 @@ export const nodeTypes = {
   'code.bash.run': CodeNode,
   'code.script.run': CodeNode,
   'integration.feed.fetch': IntegrationNode,
+  'integration.com_orbit_discord.send_message': IntegrationNode,
   'integration.gmail.read': IntegrationNode,
   'integration.gmail.send': IntegrationNode,
   'integration.slack.send': IntegrationNode,

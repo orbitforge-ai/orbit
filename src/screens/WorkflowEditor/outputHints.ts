@@ -88,6 +88,16 @@ export function getStaticOutputHintEntries(node: OutputHintNode): OutputHintEntr
           ),
         ]
       : []),
+    ...(node.type === 'integration.com_orbit_discord.send_message'
+      ? [
+          hint(`${root}.pluginId`, 'Plugin id that handled the node'),
+          hint(`${root}.tool`, 'Plugin tool invoked by the workflow node'),
+          hint(`${root}.input.channelId`, 'Rendered Discord channel id'),
+          hint(`${root}.input.threadId`, 'Rendered Discord thread id when provided'),
+          hint(`${root}.input.text`, 'Rendered Discord message text'),
+          hint(`${root}.result.messageId`, 'Discord message id returned by the bot API'),
+        ]
+      : []),
     ...(node.type === 'integration.http.request'
       ? [
           hint(`${root}.url`, 'Rendered request URL'),

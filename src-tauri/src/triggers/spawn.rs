@@ -48,8 +48,8 @@ async fn run(
     _binding: ChannelBinding,
     event: TriggerEventPayload,
 ) -> Result<(), String> {
-    let ws_config = workspace::load_agent_config(&agent_id)
-        .map_err(|e| format!("load agent config: {}", e))?;
+    let ws_config =
+        workspace::load_agent_config(&agent_id).map_err(|e| format!("load agent config: {}", e))?;
     if ws_config.provider.is_empty() {
         return Err(format!("agent {} has no provider configured", agent_id));
     }

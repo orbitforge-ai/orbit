@@ -179,9 +179,11 @@ pub fn list_plugin_secret_status(
             .secrets
             .iter()
             .map(|s| {
-                let has_value =
-                    plugins::oauth::get_secret(&manifest.id, &plugins::oauth::secret_account(&s.key))
-                        .is_ok();
+                let has_value = plugins::oauth::get_secret(
+                    &manifest.id,
+                    &plugins::oauth::secret_account(&s.key),
+                )
+                .is_ok();
                 PluginSecretEntryStatus {
                     key: s.key.clone(),
                     display_name: s.display_name.clone(),

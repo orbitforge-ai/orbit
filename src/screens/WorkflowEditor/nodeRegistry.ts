@@ -167,6 +167,17 @@ export const NODE_REGISTRY: NodeMeta[] = [
     },
   },
   {
+    type: 'integration.com_orbit_discord.send_message',
+    label: 'Discord · Send message',
+    group: 'Integrations',
+    icon: MessagesSquare,
+    defaultData: {
+      channelId: '',
+      threadId: '',
+      text: '',
+    },
+  },
+  {
     type: 'integration.gmail.read',
     label: 'Gmail · Read',
     group: 'Integrations',

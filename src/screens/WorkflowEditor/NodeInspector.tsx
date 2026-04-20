@@ -225,6 +225,10 @@ export function NodeInspector({
                 <FeedFetchInspector data={data} onUpdate={update} />
               )}
 
+              {node.type === 'integration.com_orbit_discord.send_message' && (
+                <DiscordSendInspector data={data} onUpdate={update} />
+              )}
+
               {node.type === 'integration.http.request' && (
                 <HttpRequestInspector data={data} onUpdate={update} />
               )}
@@ -1030,6 +1034,57 @@ function HttpRequestInspector({
   );
 }
 
+function DiscordSendInspector({
+  data,
+  onUpdate,
+}: {
+  data: Record<string, unknown>;
+  onUpdate: (patch: Record<string, unknown>) => void;
+}) {
+  const channelId = asString(data.channelId);
+  const threadId = asString(data.threadId);
+  const text = asString(data.text);
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Channel ID</label>
+        <HintableInput
+          value={channelId}
+          onValueChange={(value) => onUpdate({ channelId: value })}
+          placeholder="123456789012345678"
+          className={TEMPLATE_FIELD_CLASSNAME}
+        />
+      </div>
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">
+          Thread ID (optional)
+        </label>
+        <HintableInput
+          value={threadId}
+          onValueChange={(value) => onUpdate({ threadId: value })}
+          placeholder="{{trigger.data.channel.threadId}}"
+          className={TEMPLATE_FIELD_CLASSNAME}
+        />
+      </div>
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Message text</label>
+        <HintableTextarea
+          value={text}
+          onValueChange={(value) => onUpdate({ text: value })}
+          rows={6}
+          placeholder="Ship it: {{run-agent-1.output.text}}"
+          className={`${TEMPLATE_FIELD_CLASSNAME} resize-none`}
+        />
+      </div>
+      <p className="text-[10px] text-muted">
+        All fields support workflow templates. Leave thread ID blank to send directly to the
+        channel.
+      </p>
+    </div>
+  );
+}
+
 function OutputReferencePanel({
   isLoadingLatestRun,
   latestRunDetail,
@@ -1268,6 +1323,7 @@ function nodeSupportsOutputReferences(type: string): boolean {
     type === 'board.work_item.create' ||
     type === 'board.proposal.enqueue' ||
     type === 'integration.feed.fetch' ||
+    type === 'integration.com_orbit_discord.send_message' ||
     type === 'integration.http.request'
   );
 }
