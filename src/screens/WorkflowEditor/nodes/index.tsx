@@ -226,6 +226,56 @@ export function LogicIfNode({ id, data, type, selected }: NodeProps) {
   );
 }
 
+export function CodeNode({ id, data, type, selected }: NodeProps) {
+  const meta = nodeMeta(type);
+  const Icon = meta?.icon;
+  const referenceKey = getNodeReferenceKey({ id, type, data: (data as Record<string, unknown>) ?? {} });
+  const isScriptNode = type === 'code.script.run';
+  const language = typeof data?.language === 'string' ? data.language : 'bash';
+  const workingDirectory =
+    typeof data?.workingDirectory === 'string' && data.workingDirectory.trim()
+      ? data.workingDirectory
+      : '.';
+  const source = isScriptNode
+    ? typeof data?.source === 'string'
+      ? data.source
+      : ''
+    : typeof data?.script === 'string'
+      ? data.script
+      : '';
+  const preview =
+    source
+      .split('\n')
+      .map((line) => line.trim())
+      .find(Boolean) ?? (isScriptNode ? '(script required)' : '(script required)');
+
+  return (
+    <div className={`${NODE_BASE} ${selected ? 'border-accent' : 'border-edge'}`}>
+      <Handle type="target" position={Position.Left} className="!bg-muted" />
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-edge bg-orange-500/5">
+        {Icon && <Icon size={12} className="text-orange-300" />}
+        <span className="font-semibold uppercase text-[10px] tracking-wider text-orange-300">
+          {meta?.label ?? type}
+        </span>
+      </div>
+      <div className="px-3 py-2 space-y-1">
+        <p className="text-muted text-[10px]">
+          Ref: <span className="text-white font-mono">{referenceKey}</span>
+        </p>
+        <div className="flex items-center gap-2 text-[10px] text-muted font-mono">
+          <span>{isScriptNode ? language : 'bash'}</span>
+          <span>·</span>
+          <span>{workingDirectory}</span>
+        </div>
+        <p className="text-white text-[11px] whitespace-pre-wrap break-words">
+          {preview}
+        </p>
+      </div>
+      <Handle type="source" position={Position.Right} className="!bg-accent" />
+    </div>
+  );
+}
+
 export function IntegrationNode({ id, data, type, selected }: NodeProps) {
   const meta = nodeMeta(type);
   const Icon = meta?.icon;
@@ -259,6 +309,8 @@ export const nodeTypes = {
   'board.work_item.create': WorkItemNode,
   'board.proposal.enqueue': ProposalQueueNode,
   'logic.if': LogicIfNode,
+  'code.bash.run': CodeNode,
+  'code.script.run': CodeNode,
   'integration.feed.fetch': IntegrationNode,
   'integration.gmail.read': IntegrationNode,
   'integration.gmail.send': IntegrationNode,

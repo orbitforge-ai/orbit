@@ -374,6 +374,14 @@ export function ChatPanel({
     [handlePersistedSend, isDraft, onDraftSend, selectedModelOverride]
   );
 
+  const handleStop = useCallback(async () => {
+    if (!sessionId || isDraft) return;
+
+    await chatApi.cancelAgentSession(sessionId);
+    queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
+    queryClient.invalidateQueries({ queryKey: ['chat-session-execution', sessionId] });
+  }, [isDraft, queryClient, sessionId]);
+
   const queuedMessageKey = initialQueuedMessage?.key;
   const queuedMessageContent = initialQueuedMessage?.content;
   const queuedMessageModelOverride = initialQueuedMessage?.modelOverride;
@@ -699,7 +707,8 @@ export function ChatPanel({
 
       <ChatInput
         onSend={handleSend}
-        disabled={streaming}
+        streaming={streaming}
+        onStop={!isDraft && sessionId ? handleStop : undefined}
         modelPicker={modelPicker}
         selectedModelOverride={selectedModelOverride}
         textValue={isDraft ? (draft?.text ?? '') : undefined}

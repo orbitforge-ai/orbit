@@ -1,5 +1,6 @@
 import {
   Bot,
+  FileCode,
   GitBranch,
   Globe,
   KanbanSquare,
@@ -9,6 +10,7 @@ import {
   MessagesSquare,
   Play,
   Rss,
+  Terminal,
   Timer,
 } from 'lucide-react';
 import type { WorkflowNodeType } from '../../types';
@@ -36,7 +38,7 @@ export interface WorkflowNodeVariantConfig {
 export interface NodeMeta {
   type: WorkflowNodeType;
   label: string;
-  group: 'Triggers' | 'Agents' | 'Logic' | 'Board' | 'Integrations';
+  group: 'Triggers' | 'Agents' | 'Logic' | 'Code' | 'Board' | 'Integrations';
   icon: LucideIcon;
   defaultData: Record<string, unknown>;
   historyVariant?: WorkflowNodeVariantConfig;
@@ -82,6 +84,32 @@ export const NODE_REGISTRY: NodeMeta[] = [
       rule: { combinator: 'and', rules: [] },
       trueLabel: 'true',
       falseLabel: 'false',
+    },
+  },
+  {
+    type: 'code.bash.run',
+    label: 'Code · Bash',
+    group: 'Code',
+    icon: Terminal,
+    defaultData: {
+      script: '',
+      workingDirectory: '.',
+      timeoutSeconds: 120,
+    },
+  },
+  {
+    type: 'code.script.run',
+    label: 'Code · JS/TS',
+    group: 'Code',
+    icon: FileCode,
+    defaultData: {
+      language: 'typescript',
+      source: '',
+      workingDirectory: '.',
+      timeoutSeconds: 120,
+    },
+    historyVariant: {
+      fields: ['language'],
     },
   },
   {

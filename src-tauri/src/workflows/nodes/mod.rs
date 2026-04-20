@@ -1,5 +1,6 @@
 mod agent;
 mod board;
+mod code;
 mod feed;
 mod http;
 mod logic;
@@ -30,6 +31,7 @@ enum NodeExecutorKind {
     Trigger,
     Agent,
     Logic,
+    Code,
     Feed,
     Http,
     ProposalQueue,
@@ -41,6 +43,7 @@ fn route_node_type(node_type: &str) -> Option<NodeExecutorKind> {
         "trigger.manual" | "trigger.schedule" => Some(NodeExecutorKind::Trigger),
         "agent.run" => Some(NodeExecutorKind::Agent),
         "logic.if" => Some(NodeExecutorKind::Logic),
+        "code.bash.run" | "code.script.run" => Some(NodeExecutorKind::Code),
         "integration.feed.fetch" => Some(NodeExecutorKind::Feed),
         "integration.http.request" => Some(NodeExecutorKind::Http),
         "board.proposal.enqueue" => Some(NodeExecutorKind::ProposalQueue),
@@ -63,6 +66,7 @@ pub(crate) async fn execute<R: Runtime>(
         }),
         Some(NodeExecutorKind::Agent) => agent::execute(&ctx).await,
         Some(NodeExecutorKind::Logic) => logic::execute(&ctx),
+        Some(NodeExecutorKind::Code) => code::execute(&ctx).await,
         Some(NodeExecutorKind::Feed) => feed::execute(&ctx).await,
         Some(NodeExecutorKind::Http) => http::execute(&ctx).await,
         Some(NodeExecutorKind::ProposalQueue) => board::execute_proposal_enqueue(&ctx).await,
@@ -82,6 +86,8 @@ mod tests {
             ("trigger.schedule", Some(NodeExecutorKind::Trigger)),
             ("agent.run", Some(NodeExecutorKind::Agent)),
             ("logic.if", Some(NodeExecutorKind::Logic)),
+            ("code.bash.run", Some(NodeExecutorKind::Code)),
+            ("code.script.run", Some(NodeExecutorKind::Code)),
             ("integration.feed.fetch", Some(NodeExecutorKind::Feed)),
             ("integration.http.request", Some(NodeExecutorKind::Http)),
             (

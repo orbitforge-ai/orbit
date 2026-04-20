@@ -224,6 +224,8 @@ export const KNOWN_NODE_TYPES = [
   'trigger.schedule',
   'agent.run',
   'logic.if',
+  'code.bash.run',
+  'code.script.run',
   'board.work_item.create',
   'board.proposal.enqueue',
   'integration.feed.fetch',

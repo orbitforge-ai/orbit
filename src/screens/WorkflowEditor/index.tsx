@@ -169,7 +169,7 @@ type PendingCreateConnection = {
   clientY: number;
 };
 
-const EDGE_DROP_NODE_GROUPS = ['Agents', 'Logic', 'Board', 'Integrations'] as const;
+const EDGE_DROP_NODE_GROUPS = ['Agents', 'Logic', 'Code', 'Board', 'Integrations'] as const;
 
 const EDGE_DROP_NODE_OPTIONS = NODE_REGISTRY.filter((node) => !node.type.startsWith('trigger.'));
 

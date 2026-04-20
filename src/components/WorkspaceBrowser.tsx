@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo, ReactNode } from 'react';
+import { useState, useRef, useCallback, useMemo, ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Editor, { OnMount } from '@monaco-editor/react';
 import {
@@ -71,7 +71,6 @@ export function WorkspaceBrowser({
   const [filter, setFilter] = useState('');
   const [copied, setCopied] = useState(false);
   const editorRef = useRef<any>(null);
-  const monacoRef = useRef<any>(null);
 
   const specialSet = useMemo(() => new Set(specialFiles), [specialFiles]);
   const isSpecial = useCallback((name: string) => specialSet.has(name), [specialSet]);
@@ -123,24 +122,10 @@ export function WorkspaceBrowser({
   const handleEditorMount: OnMount = useCallback(
     (editor, monaco) => {
       editorRef.current = editor;
-      monacoRef.current = monaco;
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => handleSave());
     },
     [handleSave]
   );
-
-  // Swap editor content / language when switching files without remounting.
-  useEffect(() => {
-    const editor = editorRef.current;
-    const monaco = monacoRef.current;
-    if (!editor || !monaco || !editingFile) return;
-    const model = editor.getModel();
-    if (model) {
-      monaco.editor.setModelLanguage(model, getLanguageFromPath(editingFile));
-      editor.setValue(savedContent);
-      editor.setScrollPosition({ scrollTop: 0 });
-    }
-  }, [editingFile]);
 
   async function confirmDiscardIfDirty(): Promise<boolean> {
     if (!isDirty) return true;
@@ -573,9 +558,10 @@ export function WorkspaceBrowser({
               </div>
               <div className="flex-1 min-h-0">
                 <Editor
-                  defaultValue=""
+                  path={editingFile}
                   language={getLanguageFromPath(editingFile)}
                   theme="vs-dark"
+                  value={liveContent}
                   onMount={handleEditorMount}
                   onChange={(value) => setLiveContent(value ?? '')}
                   options={{

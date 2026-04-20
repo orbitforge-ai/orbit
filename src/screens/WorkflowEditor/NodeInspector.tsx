@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ComponentPropsWithoutRef } from 'react';
+import MonacoEditor from '@monaco-editor/react';
 import { useQuery } from '@tanstack/react-query';
 import { Node } from '@xyflow/react';
 import { workflowRunsApi } from '../../api/workflowRuns';
@@ -206,6 +207,12 @@ export function NodeInspector({
 
               {node.type === 'logic.if' && <LogicIfInspector data={data} onUpdate={update} />}
 
+              {node.type === 'code.bash.run' && <CodeBashInspector data={data} onUpdate={update} />}
+
+              {node.type === 'code.script.run' && (
+                <CodeScriptInspector data={data} onUpdate={update} />
+              )}
+
               {node.type === 'board.work_item.create' && (
                 <WorkItemInspector data={data} projectId={projectId} onUpdate={update} />
               )}
@@ -381,6 +388,142 @@ function LogicIfInspector({
         </div>
       </div>
     </div>
+  );
+}
+
+function CodeBashInspector({
+  data,
+  onUpdate,
+}: {
+  data: Record<string, unknown>;
+  onUpdate: (patch: Record<string, unknown>) => void;
+}) {
+  const script = asString(data.script);
+  const workingDirectory = asString(data.workingDirectory) || '.';
+  const timeoutSeconds = asNumber(data.timeoutSeconds, 120);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-[10px] text-muted">
+        Runs inside this project&apos;s workspace. Script content supports template references like{' '}
+        <span className="font-mono">{`{{trigger.data.subject}}`}</span> and parsed stdout is exposed
+        at <span className="font-mono">output.parsed</span> when valid JSON is emitted.
+      </p>
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Script</label>
+        <HintableTextarea
+          value={script}
+          onValueChange={(value) => onUpdate({ script: value })}
+          rows={10}
+          placeholder={'echo "{\"ok\":true}"\n'}
+          className={`${TEMPLATE_FIELD_CLASSNAME} resize-y min-h-[180px]`}
+        />
+      </div>
+      <CodeRuntimeFields
+        workingDirectory={workingDirectory}
+        timeoutSeconds={timeoutSeconds}
+        onUpdate={onUpdate}
+      />
+    </div>
+  );
+}
+
+function CodeScriptInspector({
+  data,
+  onUpdate,
+}: {
+  data: Record<string, unknown>;
+  onUpdate: (patch: Record<string, unknown>) => void;
+}) {
+  const language = asString(data.language) === 'javascript' ? 'javascript' : 'typescript';
+  const source = asString(data.source);
+  const workingDirectory = asString(data.workingDirectory) || '.';
+  const timeoutSeconds = asNumber(data.timeoutSeconds, 120);
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Language</label>
+        <select
+          value={language}
+          onChange={(e) => onUpdate({ language: e.target.value })}
+          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+        >
+          <option value="typescript">TypeScript</option>
+          <option value="javascript">JavaScript</option>
+        </select>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Source</label>
+        <ScriptSourceEditor
+          language={language}
+          value={source}
+          onValueChange={(value) => onUpdate({ source: value })}
+        />
+      </div>
+
+      <div className="rounded-xl border border-edge bg-surface/60 p-3 space-y-1.5">
+        <h3 className="text-[11px] uppercase tracking-wider text-muted">Runtime help</h3>
+        <p className="text-[10px] text-muted">
+          Your code runs as an async function body. Available variables are{' '}
+          <span className="font-mono">trigger</span>, <span className="font-mono">outputs</span>,{' '}
+          <span className="font-mono">refs</span>, <span className="font-mono">projectDir</span>,
+          and <span className="font-mono">cwd</span>.
+        </p>
+        <p className="text-[10px] text-muted">
+          Return a JSON-serializable value. Use{' '}
+          <span className="font-mono">await import('./helper.js')</span> for relative modules.
+          Console output is captured in run logs and does not affect <span className="font-mono">output.result</span>.
+        </p>
+      </div>
+
+      <CodeRuntimeFields
+        workingDirectory={workingDirectory}
+        timeoutSeconds={timeoutSeconds}
+        onUpdate={onUpdate}
+      />
+    </div>
+  );
+}
+
+function CodeRuntimeFields({
+  workingDirectory,
+  timeoutSeconds,
+  onUpdate,
+}: {
+  workingDirectory: string;
+  timeoutSeconds: number;
+  onUpdate: (patch: Record<string, unknown>) => void;
+}) {
+  return (
+    <>
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">
+          Working directory
+        </label>
+        <input
+          value={workingDirectory}
+          onChange={(e) => onUpdate({ workingDirectory: e.target.value })}
+          placeholder="."
+          className={TEMPLATE_FIELD_CLASSNAME}
+        />
+        <p className="text-[10px] text-muted">
+          Relative to the project workspace root. Nested paths are allowed.
+        </p>
+      </div>
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Timeout (seconds)</label>
+        <input
+          type="number"
+          min={1}
+          max={600}
+          value={timeoutSeconds}
+          onChange={(e) => onUpdate({ timeoutSeconds: Number(e.target.value) || 120 })}
+          className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent"
+        />
+      </div>
+    </>
   );
 }
 
@@ -1087,10 +1230,41 @@ function HintableTextarea({
   );
 }
 
+function ScriptSourceEditor({
+  language,
+  onValueChange,
+  value,
+}: {
+  language: 'javascript' | 'typescript';
+  onValueChange: (value: string) => void;
+  value: string;
+}) {
+  return (
+    <div className="overflow-hidden rounded-lg border border-edge bg-black/20">
+      <MonacoEditor
+        height="260px"
+        language={language}
+        theme="vs-dark"
+        value={value}
+        onChange={(next) => onValueChange(next ?? '')}
+        options={{
+          automaticLayout: true,
+          fontSize: 12,
+          minimap: { enabled: false },
+          padding: { top: 12, bottom: 12 },
+          scrollBeyondLastLine: false,
+          wordWrap: 'on',
+        }}
+      />
+    </div>
+  );
+}
+
 function nodeSupportsOutputReferences(type: string): boolean {
   return (
     type === 'agent.run' ||
     type === 'logic.if' ||
+    type === 'code.bash.run' ||
     type === 'board.work_item.create' ||
     type === 'board.proposal.enqueue' ||
     type === 'integration.feed.fetch' ||
@@ -1106,4 +1280,8 @@ function normalizeData(data: unknown): Record<string, unknown> {
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+function asNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }

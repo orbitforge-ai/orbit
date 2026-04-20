@@ -61,6 +61,22 @@ export function getStaticOutputHintEntries(node: OutputHintNode): OutputHintEntr
           hint(`${root}.branch`, 'Selected handle'),
         ]
       : []),
+    ...(node.type === 'code.bash.run'
+      ? [
+          hint(`${root}.cwd`, 'Resolved working directory'),
+          hint(`${root}.stdout`, 'Captured standard output'),
+          hint(`${root}.stderr`, 'Captured standard error'),
+          hint(`${root}.exitCode`, 'Process exit code'),
+          hint(`${root}.parsed`, 'Parsed JSON from stdout when valid'),
+        ]
+      : []),
+    ...(node.type === 'code.script.run'
+      ? [
+          hint(`${root}.language`, 'Selected script language'),
+          hint(`${root}.cwd`, 'Resolved working directory'),
+          hint(`${root}.result`, 'Returned JSON-serializable value'),
+        ]
+      : []),
     ...(node.type === 'integration.feed.fetch'
       ? [
           hint(`${root}.sourceUrls`, 'Fetched feed URLs'),

@@ -349,6 +349,17 @@ pub fn workflow_node_default_data(node_type: &str) -> Option<Value> {
             "trueLabel": "true",
             "falseLabel": "false",
         }),
+        "code.bash.run" => json!({
+            "script": "",
+            "workingDirectory": ".",
+            "timeoutSeconds": 120,
+        }),
+        "code.script.run" => json!({
+            "language": "typescript",
+            "source": "",
+            "workingDirectory": ".",
+            "timeoutSeconds": 120,
+        }),
         "board.work_item.create" => json!({
             "action": "create",
             "itemIdTemplate": "",
@@ -398,6 +409,8 @@ fn node_type_label(node_type: &str) -> String {
         "trigger.schedule" => "Schedule".to_string(),
         "agent.run" => "Run agent".to_string(),
         "logic.if" => "If / branch".to_string(),
+        "code.bash.run" => "Code · Bash".to_string(),
+        "code.script.run" => "Code · JS/TS".to_string(),
         "board.work_item.create" => "Board · Work item".to_string(),
         "board.proposal.enqueue" => "Board · Proposal queue".to_string(),
         "integration.feed.fetch" => "Feed fetch".to_string(),
@@ -968,7 +981,7 @@ pub async fn set_project_workflow_enabled(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_graph;
+    use super::{validate_graph, workflow_node_default_data, workflow_runtime_warnings};
     use crate::models::project_workflow::{
         NodePosition, WorkflowEdge, WorkflowGraph, WorkflowNode,
     };
@@ -1021,5 +1034,41 @@ mod tests {
         };
 
         assert!(validate_graph(&graph).is_ok());
+    }
+
+    #[test]
+    fn workflow_node_default_data_includes_code_nodes() {
+        assert_eq!(
+            workflow_node_default_data("code.bash.run"),
+            Some(json!({
+                "script": "",
+                "workingDirectory": ".",
+                "timeoutSeconds": 120,
+            }))
+        );
+        assert_eq!(
+            workflow_node_default_data("code.script.run"),
+            Some(json!({
+                "language": "typescript",
+                "source": "",
+                "workingDirectory": ".",
+                "timeoutSeconds": 120,
+            }))
+        );
+    }
+
+    #[test]
+    fn workflow_runtime_warnings_ignore_code_nodes_with_executors() {
+        let graph = WorkflowGraph {
+            schema_version: 1,
+            nodes: vec![
+                node("trigger-1", "trigger.manual", json!({})),
+                node("code-1", "code.bash.run", json!({})),
+                node("code-2", "code.script.run", json!({})),
+            ],
+            edges: vec![],
+        };
+
+        assert!(workflow_runtime_warnings(&graph).is_empty());
     }
 }

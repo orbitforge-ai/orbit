@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Send, Paperclip, X, Image as ImageIcon, FileText } from 'lucide-react';
+import { Send, Paperclip, X, Image as ImageIcon, FileText, Loader2, Square } from 'lucide-react';
 import { ChatModelOverride, ContentBlock } from '../../types';
 
 interface ChatInputProps {
@@ -8,6 +8,8 @@ interface ChatInputProps {
     modelOverride?: ChatModelOverride | null
   ) => Promise<void> | void;
   disabled?: boolean;
+  streaming?: boolean;
+  onStop?: () => Promise<void> | void;
   modelPicker?: React.ReactNode;
   contextGauge?: React.ReactNode;
   textValue?: string;
@@ -28,6 +30,8 @@ let attachId = 0;
 export function ChatInput({
   onSend,
   disabled,
+  streaming = false,
+  onStop,
   modelPicker,
   contextGauge,
   textValue,
@@ -37,6 +41,7 @@ export function ChatInput({
   const [internalText, setInternalText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [sending, setSending] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isControlled = textValue !== undefined;
@@ -60,7 +65,7 @@ export function ChatInput({
   }, [text]);
 
   const handleSend = useCallback(() => {
-    if (sending) return;
+    if (sending || streaming) return;
 
     const trimmed = text.trim();
     if (!trimmed && attachments.length === 0) return;
@@ -96,7 +101,22 @@ export function ChatInput({
     };
 
     void run();
-  }, [attachments, onSend, selectedModelOverride, sending, setText, text]);
+  }, [attachments, onSend, selectedModelOverride, sending, setText, streaming, text]);
+
+  const handleStop = useCallback(() => {
+    if (!onStop || stopping) return;
+
+    const run = async () => {
+      setStopping(true);
+      try {
+        await Promise.resolve(onStop());
+      } finally {
+        setStopping(false);
+      }
+    };
+
+    void run();
+  }, [onStop, stopping]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -153,8 +173,9 @@ export function ChatInput({
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   }
 
-  const inputDisabled = disabled || sending;
+  const inputDisabled = disabled || sending || stopping || streaming;
   const canSend = !inputDisabled && (text.trim().length > 0 || attachments.length > 0);
+  const showStopButton = streaming && Boolean(onStop);
 
   return (
     <div className="border-t border-edge bg-panel">
@@ -216,13 +237,33 @@ export function ChatInput({
         {modelPicker && <div className="shrink-0 mb-0.5">{modelPicker}</div>}
         {contextGauge && <div className="shrink-0 mb-0.5">{contextGauge}</div>}
 
-        <button
-          onClick={handleSend}
-          disabled={!canSend}
-          className="p-2 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-30 disabled:hover:bg-accent text-white transition-colors shrink-0 mb-0.5"
-        >
-          <Send size={16} />
-        </button>
+        {showStopButton ? (
+          <button
+            type="button"
+            onClick={handleStop}
+            disabled={stopping}
+            aria-label={stopping ? 'Stopping response' : 'Stop response'}
+            title={stopping ? 'Stopping response' : 'Stop response'}
+            className="p-2 rounded-lg bg-red-500 hover:bg-red-400 disabled:opacity-50 disabled:hover:bg-red-500 text-white transition-colors shrink-0 mb-0.5"
+          >
+            {stopping ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Square size={16} fill="currentColor" />
+            )}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleSend}
+            disabled={!canSend}
+            aria-label="Send message"
+            title="Send message"
+            className="p-2 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-30 disabled:hover:bg-accent text-white transition-colors shrink-0 mb-0.5"
+          >
+            <Send size={16} />
+          </button>
+        )}
       </div>
     </div>
   );
