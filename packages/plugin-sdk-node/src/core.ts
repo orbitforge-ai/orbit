@@ -38,18 +38,46 @@ export interface WorkItemClient {
   list(projectId: string): Promise<unknown[]>;
 }
 
-export interface WorkflowClient {
-  fireTrigger(
-    kind: string,
-    payload: unknown,
-    opts?: { dedupeKey?: string }
-  ): Promise<void>;
+export interface TriggerEventChannel {
+  id: string;
+  threadId?: string;
+  name?: string;
+  workspaceId?: string;
+}
+
+export interface TriggerEventUser {
+  id: string;
+  displayName?: string;
+  bot?: boolean;
+}
+
+export interface TriggerEventPayload {
+  eventId: string;
+  pluginId: string;
+  kind: string;
+  channel: TriggerEventChannel;
+  user: TriggerEventUser;
+  text: string;
+  mentions?: string[];
+  receivedAt: string;
+  raw?: unknown;
+}
+
+export interface TriggerDispatchResult {
+  duplicate: boolean;
+  matchedWorkflows: number;
+  matchedAgents: number;
+}
+
+export interface TriggersClient {
+  /** Emit a normalized inbound event to Orbit's dispatcher. */
+  emit(payload: TriggerEventPayload): Promise<TriggerDispatchResult>;
 }
 
 export interface CoreApi {
   entity: EntityClient;
   workItem: WorkItemClient;
-  workflow: WorkflowClient;
+  triggers: TriggersClient;
 }
 
 /**
@@ -101,13 +129,16 @@ export function createCoreApi(socketPath: string): CoreApi {
         return res?.items ?? [];
       },
     },
-    workflow: {
-      fireTrigger: async (kind, payload, opts = {}) => {
-        await send('workflow.fire_trigger', {
-          kind,
-          payload,
-          dedupeKey: opts.dedupeKey ?? null,
-        });
+    triggers: {
+      emit: async (payload) => {
+        const result = (await send('trigger.emit', payload as unknown as Record<string, unknown>)) as
+          | { duplicate?: boolean; matchedWorkflows?: number; matchedAgents?: number }
+          | null;
+        return {
+          duplicate: !!result?.duplicate,
+          matchedWorkflows: result?.matchedWorkflows ?? 0,
+          matchedAgents: result?.matchedAgents ?? 0,
+        };
       },
     },
   };

@@ -877,7 +877,7 @@ pub async fn send_chat_message(
                 }
             }
             // Emit finished with error info
-            emit_agent_iteration(&app, &stream_id, 1, "finished", None, 0);
+            emit_agent_iteration(&app, &stream_id, 1, "finished", None, 0, None);
         }
     });
 
@@ -1079,6 +1079,7 @@ async fn do_llm_chat(
             "llm_call",
             None,
             cumulative_input_tokens + cumulative_output_tokens,
+            None,
         );
 
         let response = provider
@@ -1185,6 +1186,7 @@ async fn do_llm_chat(
                             "tool_exec",
                             Some(name),
                             cumulative_input_tokens + cumulative_output_tokens,
+                            None,
                         );
 
                         match permissions::execute_tool_with_permissions(
@@ -1254,7 +1256,15 @@ async fn do_llm_chat(
     }
 
     let total_tokens = cumulative_input_tokens + cumulative_output_tokens;
-    emit_agent_iteration(app, stream_id, iteration, "finished", None, total_tokens);
+    emit_agent_iteration(
+        app,
+        stream_id,
+        iteration,
+        "finished",
+        None,
+        total_tokens,
+        None,
+    );
 
     // Emit context window usage update
     emit_chat_context_update(

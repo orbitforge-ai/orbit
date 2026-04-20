@@ -105,6 +105,34 @@ function getOrCreateAssistantMessage(msgs: DisplayMessage[]): [DisplayMessage[],
   return [[...msgs, newMsg], msgs.length];
 }
 
+function hasPrimaryContent(message: DisplayMessage | undefined): boolean {
+  if (!message) return false;
+  return message.blocks.some((block) => block.kind !== 'thinking' && block.kind !== 'tool_call');
+}
+
+function maybeAppendCompletionMessage(
+  messages: DisplayMessage[],
+  finishSummary?: string | null
+): DisplayMessage[] {
+  const summary = finishSummary?.trim();
+  if (!summary) return messages;
+
+  const last = messages[messages.length - 1];
+  if (last?.role === 'assistant' && !hasPrimaryContent(last)) {
+    return [
+      ...messages,
+      {
+        id: nextLocalMessageId('chat-complete'),
+        role: 'assistant',
+        blocks: [{ kind: 'text', text: summary, isStreaming: false }],
+        isStreaming: false,
+      },
+    ];
+  }
+
+  return messages;
+}
+
 type LiveChatStoreState = {
   chatStreams: Record<string, LiveChatStream>;
 };
@@ -399,13 +427,17 @@ export const useLiveChatStore = create<LiveChatStore>((set) => ({
     set((state) => {
       const stream = state.chatStreams[streamId];
       if (!stream) return state;
-      const messages = stream.displayMessages.map(cloneDisplayMessage);
+      let messages = stream.displayMessages.map(cloneDisplayMessage);
 
       if (messages.length > 0 && (payload.action === 'llm_call' || payload.action === 'finished')) {
         const last = messages[messages.length - 1];
         if (last.role === 'assistant' && last.isStreaming) {
           messages[messages.length - 1] = finalizeStreamingMessage(last);
         }
+      }
+
+      if (payload.action === 'finished') {
+        messages = maybeAppendCompletionMessage(messages, payload.finishSummary);
       }
 
       return {

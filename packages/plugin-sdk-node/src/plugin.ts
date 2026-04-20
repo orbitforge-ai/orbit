@@ -22,12 +22,21 @@ export interface PluginOptions {
 export class Plugin {
   private tools: Map<string, ToolHandler> = new Map();
   private hooks: Map<string, HookHandler[]> = new Map();
-  private core: CoreApi | null = null;
+  private coreClient: CoreApi | null = null;
   private oauth: Record<string, { accessToken: string | undefined }> = {};
 
   constructor(private readonly options: PluginOptions) {
     // Lazy-build the core API + oauth map on first use so test code can
     // construct a Plugin without the env vars being set.
+  }
+
+  /**
+   * Access the core API from outside a tool handler (e.g. background
+   * listeners that emit `triggers.emit` on inbound events). Lazily connects
+   * to the `ORBIT_CORE_API_SOCKET`.
+   */
+  get core(): CoreApi {
+    return this.coreApi();
   }
 
   tool(name: string, handler: ToolHandler): void {
@@ -181,13 +190,13 @@ export class Plugin {
   }
 
   private coreApi(): CoreApi {
-    if (this.core) return this.core;
+    if (this.coreClient) return this.coreClient;
     const socket = process.env.ORBIT_CORE_API_SOCKET;
     if (!socket) {
       throw new Error('ORBIT_CORE_API_SOCKET not set — core API unavailable');
     }
-    this.core = createCoreApi(socket);
-    return this.core;
+    this.coreClient = createCoreApi(socket);
+    return this.coreClient;
   }
 
   private oauthMap(): Record<string, { accessToken: string | undefined }> {

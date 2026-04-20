@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod agent_task;
 pub mod bus;
+pub mod channel_binding;
 pub mod chat;
 pub mod project;
 pub mod project_board_column;
@@ -8,6 +9,7 @@ pub mod project_workflow;
 pub mod run;
 pub mod schedule;
 pub mod task;
+pub mod trigger_event;
 pub mod user;
 pub mod work_item;
 pub mod work_item_comment;

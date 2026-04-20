@@ -69,7 +69,7 @@ export function ChatView({ messages, liveRunId, className = '' }: ChatViewProps)
     unsubs.push(
       onAgentIteration((payload) => {
         if (payload.runId === liveRunId) {
-          store.handleIteration(liveRunId, payload.iteration, payload.action, payload.totalTokens);
+          store.handleIteration(liveRunId, payload);
         }
       })
     );

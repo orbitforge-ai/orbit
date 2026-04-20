@@ -357,7 +357,7 @@ async fn execute_agent_loop_internal(
                 format!("--- Iteration {} ---", iteration),
             )],
         );
-        emit_agent_iteration(app, run_id, iteration, "llm_call", None, total_tokens);
+        emit_agent_iteration(app, run_id, iteration, "llm_call", None, total_tokens, None);
 
         let response = match call_llm_with_retry(
             provider.as_ref(),
@@ -454,6 +454,7 @@ async fn execute_agent_loop_internal(
                             "tool_exec",
                             Some(name),
                             cumulative_input_tokens + cumulative_output_tokens,
+                            None,
                         );
 
                         let perm_reg = tool_ctx
@@ -518,6 +519,9 @@ async fn execute_agent_loop_internal(
                 });
 
                 if should_finish {
+                    if let Some(summary) = finish_summary.clone() {
+                        messages.push(build_completion_message(&summary));
+                    }
                     break;
                 }
             }
@@ -569,7 +573,15 @@ async fn execute_agent_loop_internal(
     }
 
     let total_tokens = cumulative_input_tokens + cumulative_output_tokens;
-    emit_agent_iteration(app, run_id, iteration, "finished", None, total_tokens);
+    emit_agent_iteration(
+        app,
+        run_id,
+        iteration,
+        "finished",
+        None,
+        total_tokens,
+        finish_summary.as_deref(),
+    );
 
     log.log(
         app,
@@ -824,7 +836,7 @@ pub async fn run_agent_prompt(
         snapshot.messages
     };
 
-    emit_agent_iteration(app, run_id, 1, "llm_call", None, 0);
+    emit_agent_iteration(app, run_id, 1, "llm_call", None, 0, None);
 
     // Single LLM call — no tools
     let response = match call_llm_with_retry(
@@ -849,14 +861,14 @@ pub async fn run_agent_prompt(
                     ("stderr".to_string(), format!("=== LLM Error ===\n{}", e)),
                 ],
             );
-            emit_agent_iteration(app, run_id, 1, "finished", None, 0);
+            emit_agent_iteration(app, run_id, 1, "finished", None, 0, None);
             log.flush_to_file(log_path);
             return Err(e);
         }
     };
 
     let total_tokens = response.usage.input_tokens + response.usage.output_tokens;
-    emit_agent_iteration(app, run_id, 1, "finished", None, total_tokens);
+    emit_agent_iteration(app, run_id, 1, "finished", None, total_tokens, None);
 
     // Extract text from response for log
     let response_text: String = response
@@ -1336,4 +1348,14 @@ fn extract_text_summary(content: &[ContentBlock]) -> Option<String> {
         ContentBlock::Text { text } if !text.trim().is_empty() => Some(text.clone()),
         _ => None,
     })
+}
+
+fn build_completion_message(summary: &str) -> ChatMessage {
+    ChatMessage {
+        role: "assistant".to_string(),
+        content: vec![ContentBlock::Text {
+            text: summary.to_string(),
+        }],
+        created_at: None,
+    }
 }

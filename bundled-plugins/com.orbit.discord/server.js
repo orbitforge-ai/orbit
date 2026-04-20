@@ -1,0 +1,253 @@
+import { Plugin } from '@orbit/plugin-sdk';
+import WebSocket from 'ws';
+import { randomUUID } from 'node:crypto';
+
+const PLUGIN_ID = 'com.orbit.discord';
+const GATEWAY_URL = 'wss://gateway.discord.gg/?v=10&encoding=json';
+const API_BASE = 'https://discord.com/api/v10';
+const TRIGGER_KIND = 'trigger.com_orbit_discord.message';
+
+const plugin = new Plugin({ id: PLUGIN_ID });
+
+const subscriptions = new Map();
+let botToken = null;
+let botUserId = null;
+let gateway = null;
+
+function subscriptionKey(channelId, threadId) {
+  return threadId ? `${channelId}:${threadId}` : channelId;
+}
+
+function matchesSubscription(channelId, threadId) {
+  if (subscriptions.has(subscriptionKey(channelId, threadId))) return true;
+  if (threadId && subscriptions.has(subscriptionKey(channelId, null))) return true;
+  return false;
+}
+
+function getBotToken(oauth) {
+  const token = oauth.discord?.accessToken ?? process.env.ORBIT_DISCORD_BOT_TOKEN;
+  if (!token) {
+    throw new Error('Discord not connected (Plugins → Discord → Connect)');
+  }
+  return token;
+}
+
+async function discordFetch(path, init = {}) {
+  if (!botToken) throw new Error('bot token missing');
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bot ${botToken}`,
+      'Content-Type': 'application/json',
+      'User-Agent': 'DiscordBot (orbit, 0.1.0)',
+      ...(init.headers ?? {}),
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Discord ${res.status}: ${text}`);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+plugin.tool('set_subscriptions', {
+  description: 'Replace the subscription set.',
+  inputSchema: {
+    type: 'object',
+    required: ['subscriptions'],
+    properties: {
+      subscriptions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['channelId'],
+          properties: {
+            channelId: { type: 'string' },
+            threadId: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
+  run: async ({ input, oauth, log }) => {
+    const list = Array.isArray(input.subscriptions) ? input.subscriptions : [];
+    subscriptions.clear();
+    for (const sub of list) {
+      if (!sub?.channelId) continue;
+      subscriptions.set(subscriptionKey(sub.channelId, sub.threadId ?? null), {
+        channelId: sub.channelId,
+        threadId: sub.threadId ?? null,
+      });
+    }
+    log(`subscriptions set: ${subscriptions.size}`);
+    try {
+      botToken = getBotToken(oauth);
+      ensureGateway();
+    } catch (e) {
+      log(`gateway not started: ${e.message}`);
+    }
+    return { count: subscriptions.size };
+  },
+});
+
+plugin.tool('send_message', {
+  description: 'Send a message as the bot.',
+  inputSchema: {
+    type: 'object',
+    required: ['channelId', 'text'],
+    properties: {
+      channelId: { type: 'string' },
+      threadId: { type: 'string' },
+      text: { type: 'string' },
+    },
+  },
+  run: async ({ input, oauth }) => {
+    botToken = getBotToken(oauth);
+    const target = input.threadId ?? input.channelId;
+    const data = await discordFetch(`/channels/${target}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ content: input.text }),
+    });
+    return { messageId: data?.id ?? null };
+  },
+});
+
+plugin.tool('list_channels', {
+  description: 'List channels the bot can see.',
+  inputSchema: {
+    type: 'object',
+    properties: { guildId: { type: 'string' } },
+  },
+  run: async ({ input, oauth }) => {
+    botToken = getBotToken(oauth);
+    if (input.guildId) {
+      const channels = await discordFetch(`/guilds/${input.guildId}/channels`);
+      return { channels };
+    }
+    const guilds = await discordFetch('/users/@me/guilds');
+    return { guilds };
+  },
+});
+
+function ensureGateway() {
+  if (gateway) return;
+  if (!botToken) return;
+  connectGateway();
+}
+
+function connectGateway() {
+  const ws = new WebSocket(GATEWAY_URL);
+  gateway = ws;
+  let heartbeatTimer = null;
+  let lastSeq = null;
+
+  const send = (op, d) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ op, d }));
+    }
+  };
+
+  ws.on('open', () => {
+    process.stderr.write('discord gateway: open\n');
+  });
+
+  ws.on('message', async (raw) => {
+    let msg;
+    try {
+      msg = JSON.parse(raw.toString('utf8'));
+    } catch {
+      return;
+    }
+    if (msg.s != null) lastSeq = msg.s;
+
+    switch (msg.op) {
+      case 10: {
+        const interval = msg.d?.heartbeat_interval ?? 41250;
+        heartbeatTimer = setInterval(() => send(1, lastSeq), interval);
+        send(2, {
+          token: botToken,
+          intents: (1 << 0) | (1 << 9) | (1 << 15),
+          properties: {
+            os: process.platform,
+            browser: 'orbit',
+            device: 'orbit',
+          },
+        });
+        break;
+      }
+      case 0: {
+        if (msg.t === 'READY') {
+          botUserId = msg.d?.user?.id ?? null;
+          process.stderr.write(`discord gateway: ready (${botUserId})\n`);
+        } else if (msg.t === 'MESSAGE_CREATE') {
+          await handleMessageCreate(msg.d);
+        }
+        break;
+      }
+      case 7:
+      case 9: {
+        process.stderr.write(`discord gateway: op=${msg.op}, reconnecting\n`);
+        ws.close();
+        break;
+      }
+      default:
+        break;
+    }
+  });
+
+  ws.on('close', (code) => {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+    gateway = null;
+    process.stderr.write(`discord gateway: closed (${code}); reconnect in 3s\n`);
+    setTimeout(() => {
+      if (botToken && subscriptions.size > 0) connectGateway();
+    }, 3000);
+  });
+
+  ws.on('error', (err) => {
+    process.stderr.write(`discord gateway: error ${err.message}\n`);
+  });
+}
+
+async function handleMessageCreate(d) {
+  if (!d) return;
+  const channelId = d.channel_id;
+  if (!channelId) return;
+  const isThreadMessage = !!(d.thread ?? d.message_reference?.channel_id);
+  const threadId = isThreadMessage ? channelId : null;
+  const effectiveChannelId = threadId ? d.thread?.parent_id ?? channelId : channelId;
+
+  if (!matchesSubscription(effectiveChannelId, threadId)) return;
+  if (d.author?.bot) return;
+
+  const mentions = Array.isArray(d.mentions) ? d.mentions.map((m) => m?.id).filter(Boolean) : [];
+  const payload = {
+    eventId: d.id ?? randomUUID(),
+    pluginId: PLUGIN_ID,
+    kind: TRIGGER_KIND,
+    channel: {
+      id: effectiveChannelId,
+      threadId: threadId ?? undefined,
+      name: d.channel_name ?? undefined,
+      workspaceId: d.guild_id ?? undefined,
+    },
+    user: {
+      id: d.author?.id ?? 'unknown',
+      displayName: d.author?.global_name ?? d.author?.username ?? undefined,
+      bot: !!d.author?.bot,
+    },
+    text: d.content ?? '',
+    mentions: botUserId && mentions.includes(botUserId) ? [botUserId] : [],
+    receivedAt: new Date().toISOString(),
+    raw: d,
+  };
+
+  try {
+    await plugin.core.triggers.emit(payload);
+  } catch (e) {
+    process.stderr.write(`trigger.emit failed: ${e.message}\n`);
+  }
+}
+
+plugin.run();

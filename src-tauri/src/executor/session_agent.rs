@@ -31,6 +31,12 @@ const LLM_RETRY_BASE_DELAY_MS: u64 = 2000;
 const MAX_AUTO_CONTINUATIONS: u32 = 2;
 const AUTO_CONTINUE_REMINDER: &str = "You are not done yet. Continue working until the current task is complete. Do not stop after partial progress. If you are blocked, state the blocker explicitly and ask only for the missing input or permission.";
 
+fn build_completion_message(summary: &str) -> Vec<ContentBlock> {
+    vec![ContentBlock::Text {
+        text: summary.to_string(),
+    }]
+}
+
 pub async fn run_agent_session(
     agent_id: &str,
     session_id: &str,
@@ -284,6 +290,7 @@ pub async fn run_session_loop(
             "llm_call",
             None,
             cumulative_input_tokens + cumulative_output_tokens,
+            None,
         );
 
         let response = call_llm_with_retry(
@@ -358,6 +365,7 @@ pub async fn run_session_loop(
                             "tool_exec",
                             Some(name),
                             cumulative_input_tokens + cumulative_output_tokens,
+                            None,
                         );
 
                         let perm_reg = tool_ctx
@@ -425,6 +433,22 @@ pub async fn run_session_loop(
                 }
 
                 if should_finish {
+                    if let Some(summary) = finish_summary.clone() {
+                        let completion_message = build_completion_message(&summary);
+                        save_chat_message(
+                            &db.0,
+                            session_id,
+                            "assistant",
+                            &completion_message,
+                            tool_ctx.cloud_client.clone(),
+                        )
+                        .await?;
+                        messages.push(ChatMessage {
+                            role: "assistant".to_string(),
+                            content: completion_message,
+                            created_at: None,
+                        });
+                    }
                     break;
                 }
             }
@@ -469,7 +493,15 @@ pub async fn run_session_loop(
     }
 
     let total_tokens = cumulative_input_tokens + cumulative_output_tokens;
-    emit_agent_iteration(app, stream_id, iteration, "finished", None, total_tokens);
+    emit_agent_iteration(
+        app,
+        stream_id,
+        iteration,
+        "finished",
+        None,
+        total_tokens,
+        finish_summary.as_deref(),
+    );
     emit_chat_context_update(
         app,
         session_id,

@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "hostApiVersion": "^1.0.0",
+  "id": "com.orbit.discord",
+  "name": "Discord",
+  "version": "0.1.0",
+  "description": "Bundled Discord plugin for Orbit: bot gateway, channel/thread subscriptions, bidirectional messaging. Bring your own Discord application (paste bot token + application credentials in the OAuth tab).",
+  "author": "Orbit",
+  "license": "MIT",
+  "runtime": {
+    "type": "mcp-stdio",
+    "command": "node",
+    "args": ["server.js"]
+  },
+  "permissions": {
+    "network": ["discord.com", "gateway.discord.gg", "cdn.discordapp.com"],
+    "oauth": ["discord"]
+  },
+  "tools": [
+    {
+      "name": "set_subscriptions",
+      "description": "Replace the plugin's in-memory subscription set with the provided channel/thread tuples. Idempotent — calling with an empty list clears all subscriptions.",
+      "riskLevel": "low",
+      "inputSchema": {
+        "type": "object",
+        "required": ["subscriptions"],
+        "properties": {
+          "subscriptions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["channelId"],
+              "properties": {
+                "channelId": { "type": "string" },
+                "threadId": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "send_message",
+      "description": "Send a message to a Discord channel or thread as the connected bot.",
+      "riskLevel": "moderate",
+      "inputSchema": {
+        "type": "object",
+        "required": ["channelId", "text"],
+        "properties": {
+          "channelId": { "type": "string" },
+          "threadId": { "type": "string" },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "list_channels",
+      "description": "List channels the bot has access to (optionally filtered by guild id).",
+      "riskLevel": "low",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "guildId": { "type": "string" }
+        }
+      }
+    }
+  ],
+  "oauthProviders": [
+    {
+      "id": "discord",
+      "name": "Discord",
+      "authorizationUrl": "https://discord.com/oauth2/authorize",
+      "tokenUrl": "https://discord.com/api/oauth2/token",
+      "scopes": ["bot", "applications.commands"],
+      "clientType": "confidential",
+      "redirectUri": "http://127.0.0.1:47821/oauth/callback"
+    }
+  ],
+  "workflow": {
+    "triggers": [
+      {
+        "kind": "trigger.com_orbit_discord.message",
+        "displayName": "Discord message",
+        "subscriptionTool": "set_subscriptions",
+        "configSchema": {
+          "type": "object",
+          "required": ["channelId"],
+          "properties": {
+            "channelId": { "type": "string" },
+            "threadId": { "type": "string" }
+          }
+        }
+      }
+    ]
+  }
+}

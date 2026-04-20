@@ -1,14 +1,18 @@
 use serde_json::json;
 use tracing::{info, warn};
 
-use crate::executor::channels::{self, ChannelType};
+use crate::executor::channels::{self, ChannelConfig, ChannelType};
 use crate::executor::global_settings;
 use crate::executor::llm_provider::ToolDefinition;
 use crate::executor::workspace;
+use crate::plugins;
 
 use super::{context::ToolExecutionContext, ToolHandler};
 
 const MAX_MESSAGE_LEN: usize = 10_000;
+/// Tool name a bot-backed plugin must expose to receive outbound sends from
+/// the core `message` tool.
+const PLUGIN_SEND_TOOL: &str = "send_message";
 
 pub struct MessageTool;
 
@@ -48,7 +52,7 @@ impl ToolHandler for MessageTool {
         &self,
         ctx: &ToolExecutionContext,
         input: &serde_json::Value,
-        _app: &tauri::AppHandle,
+        app: &tauri::AppHandle,
         run_id: &str,
     ) -> Result<(String, bool), String> {
         let action = input["action"].as_str().unwrap_or("send");
@@ -119,11 +123,19 @@ impl ToolHandler for MessageTool {
                     run_id = run_id,
                     agent_id = %ctx.agent_id,
                     channel = %resolved_channel.name,
+                    mode = ?resolved_channel.mode,
                     "agent tool: message send"
                 );
 
-                match channels::send_to_channel(&resolved_channel, text).await {
-                    Ok(name) => Ok((format!("Message delivered to channel '{}'.", name), false)),
+                let result = if resolved_channel.is_bot() {
+                    send_via_plugin(app, &resolved_channel, text).await
+                } else {
+                    channels::send_to_channel(&resolved_channel, text)
+                        .await
+                        .map(|name| format!("Message delivered to channel '{}'.", name))
+                };
+                match result {
+                    Ok(msg) => Ok((msg, false)),
                     Err(err) => {
                         warn!(
                             run_id = run_id,
@@ -141,4 +153,51 @@ impl ToolHandler for MessageTool {
             )),
         }
     }
+}
+
+/// Route an outbound message through the plugin that owns a bot-backed
+/// channel. The plugin is expected to expose a tool named `send_message`
+/// that accepts `{ channelId, threadId?, text }`.
+async fn send_via_plugin(
+    app: &tauri::AppHandle,
+    channel: &ChannelConfig,
+    text: &str,
+) -> Result<String, String> {
+    let plugin_id = channel.plugin_id.as_deref().ok_or_else(|| {
+        format!(
+            "channel '{}' is bot-backed but has no pluginId configured",
+            channel.name
+        )
+    })?;
+    let provider_channel_id = channel.provider_channel_id.as_deref().ok_or_else(|| {
+        format!(
+            "channel '{}' is bot-backed but has no providerChannelId configured",
+            channel.name
+        )
+    })?;
+    let manager = plugins::from_state(app);
+    let manifest = manager
+        .manifest(plugin_id)
+        .ok_or_else(|| format!("plugin '{}' is not installed", plugin_id))?;
+    if !manager.is_enabled(plugin_id) {
+        return Err(format!("plugin '{}' is disabled", plugin_id));
+    }
+    if !manifest.tools.iter().any(|t| t.name == PLUGIN_SEND_TOOL) {
+        return Err(format!(
+            "plugin '{}' does not expose a '{}' tool",
+            plugin_id, PLUGIN_SEND_TOOL
+        ));
+    }
+
+    let args = json!({
+        "channelId": provider_channel_id,
+        "threadId": channel.provider_thread_id,
+        "text": text,
+    });
+    let extra_env = plugins::oauth::build_env_for_subprocess(&manifest);
+    manager
+        .runtime
+        .call_tool(&manifest, PLUGIN_SEND_TOOL, &args, &extra_env)
+        .await
+        .map(|_| format!("Message delivered to channel '{}'.", channel.name))
 }

@@ -247,6 +247,11 @@ pub struct AgentWorkspaceConfig {
     pub disabled_tools: Vec<String>,
     #[serde(default)]
     pub default_channel_id: Option<String>,
+    /// External channel/thread subscriptions this agent listens to. Populated
+    /// from UI; consumed by the trigger dispatcher to route inbound
+    /// plugin-emitted events into new agent runs.
+    #[serde(default)]
+    pub listen_bindings: Vec<crate::models::channel_binding::ChannelBinding>,
     #[serde(default = "default_agent_identity")]
     pub identity: AgentIdentityConfig,
     #[serde(default = "default_true")]
@@ -319,6 +324,7 @@ impl Default for AgentWorkspaceConfig {
             disabled_skills: Vec::new(),
             disabled_tools: Vec::new(),
             default_channel_id: None,
+            listen_bindings: Vec::new(),
             identity: default_agent_identity(),
             memory_enabled: true,
             memory_staleness_threshold_days: default_staleness_days(),

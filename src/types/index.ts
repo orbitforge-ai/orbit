@@ -663,18 +663,76 @@ export interface AgentWorkspaceConfig {
   roleId?: string;
   roleSystemInstructions?: string;
   defaultChannelId?: string;
+  /** External channel/thread subscriptions this agent listens to. */
+  listenBindings?: ChannelBinding[];
 }
 
 // ─── Global settings ─────────────────────────────────────────────────────────
 
 export type ChannelType = 'slack' | 'discord' | 'webhook';
 
+export type ChannelMode = 'webhook' | 'bot';
+
+export interface CredentialRef {
+  service: string;
+  account: string;
+}
+
 export interface ChannelConfig {
   id: string;
   name: string;
   type: ChannelType;
+  /** Optional when `mode === 'bot'` — a plugin owns delivery in that case. */
   webhookUrl: string;
   enabled: boolean;
+  /** Defaults to 'webhook' on legacy rows so existing channels keep working. */
+  mode?: ChannelMode;
+  /** Plugin id that owns this channel when `mode === 'bot'`. */
+  pluginId?: string;
+  /** Provider-native channel id (Discord snowflake / Slack C-id). */
+  providerChannelId?: string;
+  /** Provider-native thread id (Discord snowflake / Slack thread_ts). */
+  providerThreadId?: string;
+  credentialRef?: CredentialRef;
+}
+
+/**
+ * Per-agent subscription linking an external channel or thread to an agent.
+ * Matched by the trigger dispatcher when a plugin emits an inbound event.
+ */
+export interface ChannelBinding {
+  id: string;
+  pluginId: string;
+  providerChannelId: string;
+  providerThreadId?: string;
+  label?: string;
+  autoRespond: boolean;
+  mentionOnly?: boolean;
+}
+
+/**
+ * Normalized inbound-event payload emitted by a plugin over `trigger.emit`.
+ * Also the future cloud-relay contract.
+ */
+export interface TriggerEventPayload {
+  eventId: string;
+  pluginId: string;
+  kind: string;
+  channel: {
+    id: string;
+    threadId?: string;
+    name?: string;
+    workspaceId?: string;
+  };
+  user: {
+    id: string;
+    displayName?: string;
+    bot: boolean;
+  };
+  text: string;
+  mentions: string[];
+  receivedAt: string;
+  raw?: unknown;
 }
 
 export interface ChatDisplaySettings {
@@ -776,6 +834,7 @@ export interface AgentIterationPayload {
   action: 'llm_call' | 'tool_exec' | 'finished';
   toolName: string | null;
   totalTokens: number;
+  finishSummary?: string | null;
   timestamp: string;
 }
 

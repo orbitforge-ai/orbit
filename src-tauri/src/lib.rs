@@ -8,6 +8,7 @@ mod memory_service;
 mod models;
 pub mod plugins;
 mod scheduler;
+mod triggers;
 mod workflows;
 
 use std::path::PathBuf;
@@ -30,6 +31,8 @@ use scheduler::SchedulerEngine;
 use std::sync::Arc;
 use tauri_plugin_log::{Builder, Target, TargetKind};
 use tracing::info;
+use triggers::bindings::ProductionBindings;
+use triggers::dispatcher::Dispatcher;
 
 #[derive(Clone)]
 pub struct RuntimeAppHandleState(pub tauri::AppHandle);
@@ -176,6 +179,15 @@ pub fn run() {
             // every installed plugin's manifest. Subprocesses are lazy.
             let plugin_manager = std::sync::Arc::new(PluginManager::init(db_pool.clone()));
             plugin_manager.attach_log_emitter(app.handle());
+
+            // Trigger dispatcher — plugins emit inbound events via
+            // `trigger.emit` on their per-plugin JSON-RPC socket. The
+            // dispatcher must be installed on the core-api server *before*
+            // the core-api sockets start accepting connections.
+            let dispatch_bindings = ProductionBindings::new(db_pool.clone(), app.handle().clone());
+            let dispatcher = Arc::new(Dispatcher::new(dispatch_bindings));
+            plugin_manager.core_api.set_dispatcher(dispatcher);
+
             plugin_manager.start_core_api_servers(db_pool.clone());
             plugins::oauth::spawn_loopback_listener(app.handle().clone(), plugin_manager.clone());
             app.manage(plugin_manager);

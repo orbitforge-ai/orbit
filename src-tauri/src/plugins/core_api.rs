@@ -23,13 +23,19 @@ use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
 use crate::db::DbPool;
+use crate::models::trigger_event::TriggerEventPayload;
+use crate::triggers::dispatcher::Dispatcher;
 
 use super::entities;
-use super::manifest::PluginManifest;
+use super::manifest::{slugify_id, PluginManifest};
 
 pub struct CoreApiServer {
     /// Tracks spawned sockets so shutdown can remove them cleanly.
     sockets: Mutex<Vec<PathBuf>>,
+    /// Dispatcher used by `trigger.emit`. Plumbed in at startup; if absent
+    /// (e.g. very early in boot or a test that skipped setup) the method
+    /// returns an error so the caller plugin can log it.
+    dispatcher: std::sync::RwLock<Option<Arc<Dispatcher>>>,
 }
 
 impl Default for CoreApiServer {
@@ -42,7 +48,25 @@ impl CoreApiServer {
     pub fn new() -> Self {
         Self {
             sockets: Mutex::new(Vec::new()),
+            dispatcher: std::sync::RwLock::new(None),
         }
+    }
+
+    /// Install the dispatcher used by `trigger.emit`. Called once at startup
+    /// after the DbPool and PluginManager are managed state.
+    pub fn set_dispatcher(&self, dispatcher: Arc<Dispatcher>) {
+        let mut slot = self
+            .dispatcher
+            .write()
+            .expect("core-api dispatcher slot poisoned");
+        *slot = Some(dispatcher);
+    }
+
+    fn dispatcher(&self) -> Option<Arc<Dispatcher>> {
+        self.dispatcher
+            .read()
+            .ok()
+            .and_then(|guard| guard.as_ref().cloned())
     }
 
     /// Spawn a listener task for this plugin. Idempotent — if a socket for
@@ -75,14 +99,23 @@ impl CoreApiServer {
 
         let manifest = Arc::new(manifest);
         let db_pool = db;
+        let dispatcher_slot = self.dispatcher().map(|d| d.clone());
+        // We capture the *current* dispatcher Arc. If `set_dispatcher` is
+        // called later the already-spawned connection tasks keep using the
+        // one they saw at accept time — acceptable: startup orders the calls
+        // so `set_dispatcher` runs before any plugin can dial in.
+        let dispatcher_captured = dispatcher_slot;
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
                     Ok((stream, _)) => {
                         let manifest = manifest.clone();
                         let db = db_pool.clone();
+                        let dispatcher = dispatcher_captured.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_connection(stream, manifest, db).await {
+                            if let Err(e) =
+                                handle_connection(stream, manifest, db, dispatcher).await
+                            {
                                 warn!("core-api connection error: {}", e);
                             }
                         });
@@ -102,6 +135,7 @@ async fn handle_connection(
     stream: UnixStream,
     manifest: Arc<PluginManifest>,
     db: DbPool,
+    dispatcher: Option<Arc<Dispatcher>>,
 ) -> Result<(), String> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader).lines();
@@ -124,7 +158,7 @@ async fn handle_connection(
         let method = request.get("method").and_then(Value::as_str).unwrap_or("");
         let params = request.get("params").cloned().unwrap_or(Value::Null);
 
-        let response = match dispatch(&manifest, &db, method, params).await {
+        let response = match dispatch(&manifest, &db, dispatcher.as_ref(), method, params).await {
             Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
             Err(e) => json!({
                 "jsonrpc": "2.0",
@@ -145,6 +179,7 @@ async fn handle_connection(
 async fn dispatch(
     manifest: &PluginManifest,
     db: &DbPool,
+    dispatcher: Option<&Arc<Dispatcher>>,
     method: &str,
     params: Value,
 ) -> Result<Value, String> {
@@ -328,18 +363,18 @@ async fn dispatch(
                 .collect();
             Ok(json!({ "items": items }))
         }
-        "workflow.fire_trigger" => {
-            // Plugin-driven workflow trigger. Delivered to every enabled
-            // workflow whose `trigger_kind` matches. Implementation punted
-            // to the orchestrator slice; for V1 we ack and log the event so
-            // developers can see it arrived.
-            let kind = params
-                .get("kind")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            tracing::info!(plugin_id, kind = %kind, "workflow.fire_trigger received");
-            Ok(json!({ "accepted": true }))
+        "trigger.emit" => {
+            // Inbound event from the plugin's own listener (Discord gateway,
+            // Slack Socket Mode, etc.). Validated against the socket owner so
+            // a plugin cannot forge events as another plugin.
+            let slug = slugify_id(plugin_id);
+            let payload = TriggerEventPayload::from_rpc_params(params, plugin_id, &slug)?;
+            let Some(dispatcher) = dispatcher else {
+                return Err("trigger dispatcher not initialised".into());
+            };
+            let result = dispatcher.dispatch(payload);
+            Ok(serde_json::to_value(result)
+                .map_err(|e| format!("serialise dispatch result: {}", e))?)
         }
         other => Err(format!("unknown method {:?}", other)),
     }

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { LogLine, RunState, RunSummary, ContentBlock } from '../types';
+import { AgentIterationPayload, LogLine, RunState, RunSummary, ContentBlock } from '../types';
 import { DisplayMessage, DisplayBlock } from '../components/chat/types';
 import { info } from '@tauri-apps/plugin-log';
 
@@ -44,7 +44,7 @@ interface LiveRunStore {
   appendTextDelta: (runId: string, delta: string, iteration: number) => void;
   addContentBlock: (runId: string, block: ContentBlock, iteration: number) => void;
   addToolResult: (runId: string, toolUseId: string, content: string, isError: boolean) => void;
-  handleIteration: (runId: string, iteration: number, action: string, totalTokens: number) => void;
+  handleIteration: (runId: string, payload: AgentIterationPayload) => void;
 }
 
 const TERMINAL_STATES: RunState[] = ['success', 'failure', 'cancelled', 'timed_out'];
@@ -78,6 +78,34 @@ function getOrCreateAssistantMessage(msgs: DisplayMessage[]): [DisplayMessage[],
     isStreaming: true,
   };
   return [[...msgs, newMsg], msgs.length];
+}
+
+function hasPrimaryContent(message: DisplayMessage | undefined): boolean {
+  if (!message) return false;
+  return message.blocks.some((block) => block.kind !== 'thinking' && block.kind !== 'tool_call');
+}
+
+function maybeAppendCompletionMessage(
+  messages: DisplayMessage[],
+  finishSummary?: string | null
+): DisplayMessage[] {
+  const summary = finishSummary?.trim();
+  if (!summary) return messages;
+
+  const last = messages[messages.length - 1];
+  if (last?.role === 'assistant' && !hasPrimaryContent(last)) {
+    return [
+      ...messages,
+      {
+        id: nextMsgId(),
+        role: 'assistant',
+        blocks: [{ kind: 'text', text: summary, isStreaming: false }],
+        isStreaming: false,
+      },
+    ];
+  }
+
+  return messages;
 }
 
 export const useLiveRunStore = create<LiveRunStore>((set) => ({
@@ -328,7 +356,7 @@ export const useLiveRunStore = create<LiveRunStore>((set) => ({
       return state;
     }),
 
-  handleIteration: (runId, iteration, action, totalTokens) =>
+  handleIteration: (runId, payload) =>
     set((state) => {
       const run = state.activeRuns[runId];
       if (!run) return state;
@@ -336,7 +364,7 @@ export const useLiveRunStore = create<LiveRunStore>((set) => ({
       const msgs = [...prev.displayMessages];
 
       // When a new llm_call starts, finalize the previous assistant message
-      if (action === 'llm_call' && msgs.length > 0) {
+      if (payload.action === 'llm_call' && msgs.length > 0) {
         const last = msgs[msgs.length - 1];
         if (last.role === 'assistant' && last.isStreaming) {
           const blocks = [...last.blocks];
@@ -349,7 +377,7 @@ export const useLiveRunStore = create<LiveRunStore>((set) => ({
       }
 
       // When finished, mark everything as not streaming
-      if (action === 'finished' && msgs.length > 0) {
+      if (payload.action === 'finished' && msgs.length > 0) {
         const last = msgs[msgs.length - 1];
         if (last.isStreaming) {
           const blocks = [...last.blocks];
@@ -361,6 +389,11 @@ export const useLiveRunStore = create<LiveRunStore>((set) => ({
         }
       }
 
+      const displayMessages =
+        payload.action === 'finished'
+          ? maybeAppendCompletionMessage(msgs, payload.finishSummary)
+          : msgs;
+
       return {
         activeRuns: {
           ...state.activeRuns,
@@ -368,10 +401,10 @@ export const useLiveRunStore = create<LiveRunStore>((set) => ({
             ...run,
             agentLoopState: {
               ...prev,
-              iteration,
-              currentAction: action,
-              totalTokens,
-              displayMessages: msgs,
+              iteration: payload.iteration,
+              currentAction: payload.action,
+              totalTokens: payload.totalTokens,
+              displayMessages,
             },
           },
         },

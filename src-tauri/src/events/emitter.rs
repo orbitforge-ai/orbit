@@ -61,6 +61,8 @@ pub struct AgentIterationPayload {
     pub action: String, // "llm_call" | "tool_exec" | "finished"
     pub tool_name: Option<String>,
     pub total_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish_summary: Option<String>,
     pub timestamp: String,
 }
 
@@ -210,6 +212,7 @@ pub fn emit_agent_iteration(
     action: &str,
     tool_name: Option<&str>,
     total_tokens: u32,
+    finish_summary: Option<&str>,
 ) {
     let payload = AgentIterationPayload {
         run_id: run_id.to_string(),
@@ -217,6 +220,7 @@ pub fn emit_agent_iteration(
         action: action.to_string(),
         tool_name: tool_name.map(|s| s.to_string()),
         total_tokens,
+        finish_summary: finish_summary.map(|s| s.to_string()),
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
     if let Err(e) = app.emit("agent:iteration", &payload) {
