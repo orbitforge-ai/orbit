@@ -19,6 +19,18 @@
   },
   "tools": [
     {
+      "name": "resolve_surface_actions",
+      "description": "Return sidebar actions for a repo at the current path.",
+      "riskLevel": "safe",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "surface": { "type": "string" },
+          "path": { "type": ["string", "null"] }
+        }
+      }
+    },
+    {
       "name": "clone_repo",
       "description": "Clone a GitHub repo into the agent workspace.",
       "riskLevel": "moderate",
@@ -27,6 +39,41 @@
         "required": ["repo"],
         "properties": {
           "repo": { "type": "string", "description": "owner/name" }
+        }
+      }
+    },
+    {
+      "name": "git_pull",
+      "description": "Run git pull --ff-only for the resolved repo target.",
+      "riskLevel": "moderate",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "context": { "type": "object" }
+        }
+      }
+    },
+    {
+      "name": "git_push",
+      "description": "Run git push for the resolved repo target.",
+      "riskLevel": "moderate",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "context": { "type": "object" }
+        }
+      }
+    },
+    {
+      "name": "git_checkout_branch",
+      "description": "Check out a branch in the resolved repo target.",
+      "riskLevel": "moderate",
+      "inputSchema": {
+        "type": "object",
+        "required": ["branch"],
+        "properties": {
+          "branch": { "type": "string" },
+          "context": { "type": "object" }
         }
       }
     },
@@ -57,5 +104,19 @@
       "clientType": "confidential",
       "redirectUri": "http://127.0.0.1:47821/oauth/callback"
     }
-  ]
+  ],
+  "ui": {
+    "surfaceActions": [
+      {
+        "id": "main-repo-actions",
+        "surface": "mainSidebar",
+        "resolveTool": "resolve_surface_actions"
+      },
+      {
+        "id": "workspace-repo-actions",
+        "surface": "workspaceBrowser",
+        "resolveTool": "resolve_surface_actions"
+      }
+    ]
+  }
 }

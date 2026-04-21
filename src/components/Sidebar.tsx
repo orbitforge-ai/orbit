@@ -48,6 +48,7 @@ import { onAgentCreated, onAgentUpdated, onAgentDeleted, onAgentConfigChanged } 
 import { SyncIndicator } from './SyncIndicator';
 import { resolveRole } from '../lib/agentRoles';
 import { ROLE_ICON_MAP } from '../screens/AgentInspector/RoleSelector';
+import { PluginSurfaceActionBar } from './plugins/PluginSurfaceActionBar';
 
 const GLOBAL_NAV = [
   { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard },
@@ -186,6 +187,25 @@ export function Sidebar() {
     queryKey: ['agent-role-ids'],
     queryFn: workspaceApi.listAgentRoleIds,
   });
+
+  const { data: selectedAgentWorkspacePath } = useQuery<string | null>({
+    queryKey: ['sidebar-agent-workspace-path', selectedAgentId],
+    queryFn: () => workspaceApi.getWorkspacePath(selectedAgentId!),
+    enabled: screen === 'agents' && !!selectedAgentId && selectedAgentId !== '__new__',
+  });
+
+  const { data: selectedProjectWorkspacePath } = useQuery<string | null>({
+    queryKey: ['sidebar-project-workspace-path', selectedProjectId],
+    queryFn: () => projectsApi.getWorkspacePath(selectedProjectId!),
+    enabled: screen === 'projects' && !!selectedProjectId,
+  });
+
+  const sidebarActionPath =
+    screen === 'projects'
+      ? selectedProjectWorkspacePath ?? null
+      : screen === 'agents'
+        ? selectedAgentWorkspacePath ?? null
+        : null;
 
   // ─── Drag-and-drop: agent → project assignment ──────────────────────────────
   const dndSensors = useAgentDndSensors();
@@ -484,6 +504,14 @@ export function Sidebar() {
           )}
         </div>
       </nav>
+
+      <PluginSurfaceActionBar
+        surface="mainSidebar"
+        path={sidebarActionPath}
+        variant="sidebar"
+        maxInlineActions={2}
+        className="border-t border-edge px-2 py-2"
+      />
 
       <div className="flex items-center gap-1.5 border-t border-edge px-2 pt-2 min-w-0">
         <SyncIndicator />

@@ -15,6 +15,7 @@ export function PluginInstallModal({ staged, onConfirm, onCancel, onClose }: Pro
     manifest.tools.length +
     manifest.entityTypes.length +
     manifest.oauthProviders.length +
+    manifest.ui.surfaceActions.length +
     manifest.workflow.triggers.length +
     manifest.workflow.nodes.length;
 
@@ -99,6 +100,19 @@ export function PluginInstallModal({ staged, onConfirm, onCancel, onClose }: Pro
               <li key={n.kind}>
                 <span className="font-mono text-xs text-white">{n.kind}</span>
                 <span className="text-muted"> — node: {n.displayName}</span>
+              </li>
+            ))}
+          </ContributionSummary>
+
+          <ContributionSummary
+            icon={<Zap size={12} />}
+            label="Surface actions"
+            count={manifest.ui.surfaceActions.length}
+          >
+            {manifest.ui.surfaceActions.map((action) => (
+              <li key={action.id}>
+                <span className="font-mono text-xs text-white">{action.id}</span>
+                <span className="text-muted"> — {action.surface} via {action.resolveTool}</span>
               </li>
             ))}
           </ContributionSummary>

@@ -248,6 +248,8 @@ pub struct UiSpec {
     #[serde(default)]
     pub sidebar_items: Vec<Value>,
     #[serde(default)]
+    pub surface_actions: Vec<SurfaceActionSpec>,
+    #[serde(default)]
     pub entity_detail_tabs: Vec<Value>,
     #[serde(default)]
     pub agent_chat_actions: Vec<Value>,
@@ -255,6 +257,21 @@ pub struct UiSpec {
     pub slash_commands: Vec<Value>,
     #[serde(default)]
     pub settings_panels: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SurfaceActionSurface {
+    MainSidebar,
+    WorkspaceBrowser,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SurfaceActionSpec {
+    pub id: String,
+    pub surface: SurfaceActionSurface,
+    pub resolve_tool: String,
 }
 
 /// Load and validate a manifest from disk.
@@ -461,6 +478,24 @@ pub fn validate(manifest: &PluginManifest) -> Result<(), String> {
                     node.kind, field_option.field, field_option.source_tool
                 ));
             }
+        }
+    }
+
+    let mut surface_action_ids: HashSet<&str> = HashSet::new();
+    for action in &manifest.ui.surface_actions {
+        check_identifier(&action.id, "ui.surfaceActions.id")?;
+        if !surface_action_ids.insert(action.id.as_str()) {
+            return Err(format!("duplicate ui.surfaceActions.id {:?}", action.id));
+        }
+        if !manifest
+            .tools
+            .iter()
+            .any(|tool| tool.name == action.resolve_tool)
+        {
+            return Err(format!(
+                "ui.surfaceActions[{}].resolveTool {:?} must match a declared tool",
+                action.id, action.resolve_tool
+            ));
         }
     }
 
@@ -707,6 +742,34 @@ mod tests {
             config_schema: None,
             output_schema: None,
             subscription_tool: None,
+        });
+        assert!(validate(&m).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_surface_action_with_unknown_tool() {
+        let mut m = fixture();
+        m.ui.surface_actions.push(SurfaceActionSpec {
+            id: "github-actions".into(),
+            surface: SurfaceActionSurface::MainSidebar,
+            resolve_tool: "resolve_actions".into(),
+        });
+        assert!(validate(&m).is_err());
+    }
+
+    #[test]
+    fn validate_accepts_surface_action_with_declared_tool() {
+        let mut m = fixture();
+        m.tools.push(ToolSpec {
+            name: "resolve_actions".into(),
+            description: None,
+            risk_level: "moderate".into(),
+            input_schema: None,
+        });
+        m.ui.surface_actions.push(SurfaceActionSpec {
+            id: "github-actions".into(),
+            surface: SurfaceActionSurface::WorkspaceBrowser,
+            resolve_tool: "resolve_actions".into(),
         });
         assert!(validate(&m).is_ok());
     }

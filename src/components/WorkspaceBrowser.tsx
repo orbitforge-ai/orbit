@@ -22,6 +22,7 @@ import { confirm } from '@tauri-apps/plugin-dialog';
 import { FileEntry } from '../types';
 import { getLanguageFromPath } from '../lib/fileLanguage';
 import { toast } from '../store/toastStore';
+import { PluginSurfaceActionBar } from './plugins/PluginSurfaceActionBar';
 
 export interface WorkspaceAdapter {
   queryKey: readonly unknown[];
@@ -254,6 +255,10 @@ export function WorkspaceBrowser({
   }
 
   const parts = currentPath === '.' ? [] : currentPath.split('/');
+  const visibleWorkspacePath = useMemo(() => {
+    if (!workspacePath) return null;
+    return currentPath === '.' ? workspacePath : `${workspacePath}/${currentPath}`;
+  }, [currentPath, workspacePath]);
 
   return (
     <div className="flex flex-col h-full">
@@ -325,6 +330,15 @@ export function WorkspaceBrowser({
                 </span>
               ))}
             </div>
+            {visibleWorkspacePath ? (
+              <PluginSurfaceActionBar
+                surface="workspaceBrowser"
+                path={visibleWorkspacePath}
+                variant="workspace"
+                maxInlineActions={2}
+                onActionComplete={invalidateFiles}
+              />
+            ) : null}
             {adapter.createDir && (
               <button
                 onClick={() => {

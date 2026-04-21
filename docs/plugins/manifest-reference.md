@@ -132,6 +132,9 @@ Trigger `kind` must start with `trigger.<slug>.` and node `kind` with `integrati
   "sidebarItems": [
     { "id": "content-queue", "label": "Content Queue", "icon": "send", "view": "entity-list:content" }
   ],
+  "surfaceActions": [
+    { "id": "repo-actions", "surface": "workspaceBrowser", "resolveTool": "resolve_surface_actions" }
+  ],
   "entityDetailTabs": [
     { "targetEntity": "work_item", "id": "social-preview", "label": "Social preview", "renderTool": "render_preview" }
   ],
@@ -146,5 +149,7 @@ Trigger `kind` must start with `trigger.<slug>.` and node `kind` with `integrati
   ]
 }
 ```
+
+`surfaceActions` lets a plugin contribute executable buttons or menus to host-rendered sidebar surfaces. Each entry declares a `surface` (`mainSidebar` or `workspaceBrowser`) and a `resolveTool` that returns the current actions for a given `{ surface, path }` context.
 
 V1 renders these declaratively — no plugin JavaScript loads in the renderer. `renderTool` returns `{ type: "markdown" | "text" | "form", content }`. See [`INTERNAL_ARCHITECTURE.md`](INTERNAL_ARCHITECTURE.md) for how to add a new UI extension point type.

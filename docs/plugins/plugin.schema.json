@@ -2,6 +2,116 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://orbit.dev/plugins/plugin.schema.json",
   "title": "Orbit Plugin Manifest",
+  "$defs": {
+    "secretSpec": {
+      "type": "object",
+      "required": ["key", "envVar", "displayName"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+        "envVar": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$",
+          "description": "Environment variable name injected into the plugin subprocess."
+        },
+        "displayName": { "type": "string" },
+        "description": { "type": "string" },
+        "placeholder": { "type": "string" }
+      }
+    },
+    "workflowTriggerSpec": {
+      "type": "object",
+      "required": ["kind", "displayName"],
+      "properties": {
+        "kind": { "type": "string" },
+        "displayName": { "type": "string" },
+        "icon": { "type": "string" },
+        "configSchema": { "type": "object" },
+        "outputSchema": { "type": "object" },
+        "subscriptionTool": { "type": "string" }
+      }
+    },
+    "workflowNodeFieldOptionSpec": {
+      "type": "object",
+      "required": ["field", "sourceTool", "format"],
+      "properties": {
+        "field": { "type": "string" },
+        "sourceTool": { "type": "string" },
+        "format": { "type": "string" }
+      }
+    },
+    "workflowNodeSpec": {
+      "type": "object",
+      "required": ["kind", "displayName", "tool"],
+      "properties": {
+        "kind": { "type": "string" },
+        "displayName": { "type": "string" },
+        "icon": { "type": "string" },
+        "tool": { "type": "string" },
+        "fieldOptions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/workflowNodeFieldOptionSpec" }
+        },
+        "inputSchema": { "type": "object" },
+        "outputSchema": { "type": "object" }
+      }
+    },
+    "uiSidebarItemSpec": {
+      "type": "object",
+      "required": ["id", "label", "view"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+        "label": { "type": "string" },
+        "icon": { "type": "string" },
+        "view": { "type": "string" }
+      }
+    },
+    "uiSurfaceActionSpec": {
+      "type": "object",
+      "required": ["id", "surface", "resolveTool"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+        "surface": { "type": "string", "enum": ["mainSidebar", "workspaceBrowser"] },
+        "resolveTool": { "type": "string" }
+      }
+    },
+    "uiEntityDetailTabSpec": {
+      "type": "object",
+      "required": ["targetEntity", "id", "label", "renderTool"],
+      "properties": {
+        "targetEntity": { "type": "string" },
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+        "label": { "type": "string" },
+        "renderTool": { "type": "string" }
+      }
+    },
+    "uiAgentChatActionSpec": {
+      "type": "object",
+      "required": ["id", "label", "tool"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+        "label": { "type": "string" },
+        "tool": { "type": "string" }
+      }
+    },
+    "uiSlashCommandSpec": {
+      "type": "object",
+      "required": ["name", "description", "tool"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^/.+" },
+        "description": { "type": "string" },
+        "tool": { "type": "string" }
+      }
+    },
+    "uiSettingsPanelSpec": {
+      "type": "object",
+      "required": ["id", "label", "renderTool"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+        "label": { "type": "string" },
+        "renderTool": { "type": "string" }
+      }
+    }
+  },
   "type": "object",
   "required": ["schemaVersion", "hostApiVersion", "id", "name", "version", "runtime"],
   "additionalProperties": true,
@@ -95,6 +205,10 @@
         }
       }
     },
+    "secrets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/secretSpec" }
+    },
     "permissions": {
       "type": "object",
       "properties": {
@@ -130,18 +244,43 @@
     "workflow": {
       "type": "object",
       "properties": {
-        "triggers": { "type": "array" },
-        "nodes": { "type": "array" }
+        "triggers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/workflowTriggerSpec" }
+        },
+        "nodes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/workflowNodeSpec" }
+        }
       }
     },
     "ui": {
       "type": "object",
       "properties": {
-        "sidebarItems": { "type": "array" },
-        "entityDetailTabs": { "type": "array" },
-        "agentChatActions": { "type": "array" },
-        "slashCommands": { "type": "array" },
-        "settingsPanels": { "type": "array" }
+        "sidebarItems": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/uiSidebarItemSpec" }
+        },
+        "surfaceActions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/uiSurfaceActionSpec" }
+        },
+        "entityDetailTabs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/uiEntityDetailTabSpec" }
+        },
+        "agentChatActions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/uiAgentChatActionSpec" }
+        },
+        "slashCommands": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/uiSlashCommandSpec" }
+        },
+        "settingsPanels": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/uiSettingsPanelSpec" }
+        }
       }
     }
   }

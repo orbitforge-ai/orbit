@@ -73,11 +73,51 @@ export interface PluginManifest {
   };
   ui: {
     sidebarItems: unknown[];
+    surfaceActions: PluginSurfaceActionSpec[];
     entityDetailTabs: unknown[];
     agentChatActions: unknown[];
     slashCommands: unknown[];
     settingsPanels: unknown[];
   };
+}
+
+export type PluginSurface = 'mainSidebar' | 'workspaceBrowser';
+
+export interface PluginSurfaceActionSpec {
+  id: string;
+  surface: PluginSurface;
+  resolveTool: string;
+}
+
+export interface PluginSurfaceActionTarget {
+  kind: string;
+  token: string;
+  displayPath: string | null;
+}
+
+export interface PluginSurfaceActionItem {
+  id: string;
+  label: string;
+  disabled: boolean;
+  target: PluginSurfaceActionTarget;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+export interface PluginSurfaceAction {
+  id: string;
+  pluginId: string;
+  pluginName: string;
+  contributionId: string;
+  presentation: 'button' | 'menu';
+  label: string;
+  tooltip: string | null;
+  disabled: boolean;
+  stale: boolean;
+  target: PluginSurfaceActionTarget | null;
+  tool: string | null;
+  args: Record<string, unknown> | null;
+  items: PluginSurfaceActionItem[];
 }
 
 export interface StagedInstall {
@@ -132,6 +172,21 @@ export const pluginsApi = {
 
   callTool: (pluginId: string, toolName: string, args: Record<string, unknown> = {}): Promise<unknown> =>
     invoke('plugin_call_tool', { pluginId, toolName, args }),
+
+  listSurfaceActions: (
+    surface: PluginSurface,
+    path: string | null,
+  ): Promise<PluginSurfaceAction[]> =>
+    invoke('list_plugin_surface_actions', { surface, path }),
+
+  runSurfaceAction: (
+    pluginId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    surface: PluginSurface,
+    target: PluginSurfaceActionTarget,
+  ): Promise<unknown> =>
+    invoke('run_plugin_surface_action', { pluginId, toolName, args, surface, target }),
 
   stageInstall: (path: string): Promise<StagedInstall> =>
     invoke('stage_plugin_install', { path }),
