@@ -14,10 +14,10 @@ import { TaskConfigForm, defaultConfigState, type TaskConfigState } from '../../
 import {
   KIND_OPTIONS,
   CONCURRENCY_OPTIONS,
-  inputCls,
   type TaskKind,
   type ScheduleKind,
 } from '../../lib/taskConstants';
+import { Input } from '../../components/ui';
 import {
   AgentLoopConfig,
   AgentStepConfig,
@@ -227,22 +227,18 @@ export function TaskBuilder() {
         {step === 'What' && (
           <>
             <Field label="Task name">
-              <input
-                type="text"
+              <Input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. Daily database backup"
-                className={inputCls}
               />
             </Field>
 
             <Field label="Description (optional)">
-              <input
-                type="text"
+              <Input
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="What does this task do?"
-                className={inputCls}
               />
             </Field>
 
@@ -401,22 +397,20 @@ export function TaskBuilder() {
 
             <div className="grid grid-cols-2 gap-4">
               <Field label="Max retries">
-                <input
+                <Input
                   type="number"
                   min={0}
                   max={10}
                   value={maxRetries}
                   onChange={(e) => setMaxRetries(Number(e.target.value))}
-                  className={inputCls}
                 />
               </Field>
               <Field label="Retry delay (sec)">
-                <input
+                <Input
                   type="number"
                   min={10}
                   value={retryDelaySecs}
                   onChange={(e) => setRetryDelaySecs(Number(e.target.value))}
-                  className={inputCls}
                 />
               </Field>
             </div>
@@ -458,19 +452,17 @@ export function TaskBuilder() {
             {scheduleKind === 'one_shot' && (
               <div className="space-y-4">
                 <Field label="Date">
-                  <input
+                  <Input
                     type="date"
                     value={oneShotDate}
                     onChange={(e) => setOneShotDate(e.target.value)}
-                    className={inputCls}
                   />
                 </Field>
                 <Field label="Time">
-                  <input
+                  <Input
                     type="time"
                     value={oneShotTime}
                     onChange={(e) => setOneShotTime(e.target.value)}
-                    className={inputCls}
                   />
                 </Field>
                 {oneShotDate && (

@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { X, Link, ScrollText, Database, Info, CheckCircle2, Key } from 'lucide-react';
 import { pluginsApi, PluginManifest, PluginOAuthStatus, PluginSecretStatus } from '../../api/plugins';
 import { PluginLogo } from './PluginLogo';
+import { Input } from '../../components/ui';
 
 type Tab = 'overview' | 'oauth' | 'secrets' | 'entities' | 'logs';
 
@@ -206,14 +207,14 @@ function OAuthTab({
             </div>
             {!connected && p.clientType === 'confidential' ? (
               <div className="mt-3 space-y-2">
-                <input
-                  className="w-full rounded border border-edge bg-background px-2 py-1 text-xs"
+                <Input
+                  className="bg-background rounded px-2 py-1 text-xs"
                   placeholder="client_id"
                   value={clientId[p.id] ?? ''}
                   onChange={(e) => setClientId({ ...clientId, [p.id]: e.target.value })}
                 />
-                <input
-                  className="w-full rounded border border-edge bg-background px-2 py-1 text-xs"
+                <Input
+                  className="bg-background rounded px-2 py-1 text-xs"
                   placeholder="client_secret (optional)"
                   type="password"
                   value={clientSecret[p.id] ?? ''}
@@ -320,8 +321,8 @@ function SecretsTab({
               <div className="mt-2 text-xs text-secondary">{spec.description}</div>
             ) : null}
             <div className="mt-3 flex items-center gap-2">
-              <input
-                className="flex-1 rounded border border-edge bg-background px-2 py-1 text-xs"
+              <Input
+                className="flex-1 bg-background rounded px-2 py-1 text-xs"
                 placeholder={hasValue ? 'Replace value…' : spec.placeholder ?? 'Paste secret…'}
                 type="password"
                 autoComplete="off"

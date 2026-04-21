@@ -23,6 +23,7 @@ import { chatApi } from '../../api/chat';
 import { workspaceApi } from '../../api/workspace';
 import { StatusBadge } from '../../components/StatusBadge';
 import { InlineEdit } from '../../components/InlineEdit';
+import { Input } from '../../components/ui';
 import { ChatWorkspace, useChatWorkspaceController } from '../../components/chat';
 import { useUiStore } from '../../store/uiStore';
 import { Agent, ChatSession, CreateAgent, RunSummary } from '../../types';
@@ -104,20 +105,18 @@ function NewAgentView() {
     <div className="flex items-center justify-center h-full overflow-y-auto py-6">
       <div className="w-full max-w-lg rounded-xl border border-edge bg-surface p-6 space-y-4">
         <h3 className="text-base font-semibold text-white">Create New Agent</h3>
-        <input
-          type="text"
+        <Input
           placeholder="Agent name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           autoFocus
-          className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+          className="bg-background px-3 py-2"
         />
-        <input
-          type="text"
+        <Input
           placeholder="Description (optional)"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+          className="bg-background px-3 py-2"
         />
         <div className="space-y-2">
           <label className="text-xs text-muted">Role</label>
@@ -125,13 +124,13 @@ function NewAgentView() {
         </div>
         <div className="flex items-center gap-2">
           <label className="text-xs text-muted">Max concurrent runs:</label>
-          <input
+          <Input
             type="number"
             min={1}
             max={50}
             value={maxConcurrent}
             onChange={(e) => setMaxConcurrent(Number(e.target.value))}
-            className="w-20 px-2 py-1.5 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+            className="w-20 bg-background px-2 py-1.5"
           />
         </div>
         <AgentIdentitySection

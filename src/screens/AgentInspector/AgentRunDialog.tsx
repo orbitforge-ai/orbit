@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Play, X } from 'lucide-react';
 import { llmApi } from '../../api/llm';
+import { Textarea } from '../../components/ui';
 
 interface AgentRunDialogProps {
   agentId: string;
@@ -58,13 +59,13 @@ export function AgentRunDialog({
             <label className="text-xs text-muted mb-1.5 block">
               What should this agent accomplish?
             </label>
-            <textarea
+            <Textarea
               value={goal}
               onChange={(e) => setGoal(e.target.value)}
               placeholder="e.g., Create a Python script that scrapes weather data and saves it to a CSV file..."
               rows={5}
               autoFocus
-              className="w-full px-3 py-2.5 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent resize-none leading-relaxed"
+              className="bg-background px-3 py-2.5 resize-none leading-relaxed"
               onKeyDown={(e) => {
                 if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
                   handleRun();

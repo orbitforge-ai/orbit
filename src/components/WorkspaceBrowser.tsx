@@ -21,6 +21,7 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { FileEntry } from '../types';
 import { getLanguageFromPath } from '../lib/fileLanguage';
+import { Input } from './ui';
 import { toast } from '../store/toastStore';
 import { PluginSurfaceActionBar } from './plugins/PluginSurfaceActionBar';
 
@@ -368,13 +369,12 @@ export function WorkspaceBrowser({
           {/* Filter */}
           <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-edge">
             <Search size={11} className="text-muted shrink-0" />
-            <input
-              type="text"
+            <Input
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               placeholder="Filter…"
               aria-label="Filter files"
-              className="flex-1 bg-transparent text-[11px] text-white placeholder-muted focus:outline-none focus:ring-1 focus:ring-accent/50 rounded px-1 py-0.5"
+              className="flex-1 bg-transparent border-transparent rounded px-1 py-0.5 text-[11px] placeholder-muted"
             />
             {filter && (
               <button
@@ -402,8 +402,7 @@ export function WorkspaceBrowser({
                 ) : (
                   <File size={13} className="text-muted shrink-0" />
                 )}
-                <input
-                  type="text"
+                <Input
                   placeholder={creating.kind === 'dir' ? 'folder-name' : 'filename.md'}
                   value={newEntryName}
                   onChange={(e) => setNewEntryName(e.target.value)}
@@ -421,7 +420,7 @@ export function WorkspaceBrowser({
                   }}
                   autoFocus
                   aria-label={creating.kind === 'dir' ? 'New folder name' : 'New file name'}
-                  className="flex-1 px-2 py-1 rounded bg-background border border-accent text-white text-xs focus:outline-none focus:ring-1 focus:ring-accent/50"
+                  className="flex-1 bg-background border-accent rounded px-2 py-1 text-xs"
                 />
               </div>
             )}
@@ -461,7 +460,7 @@ export function WorkspaceBrowser({
                     />
                   )}
                   {isRenaming ? (
-                    <input
+                    <Input
                       autoFocus
                       value={renameValue}
                       onChange={(e) => setRenameValue(e.target.value)}
@@ -473,7 +472,7 @@ export function WorkspaceBrowser({
                       onBlur={() => handleRename(file)}
                       onClick={(e) => e.stopPropagation()}
                       aria-label="New name"
-                      className="flex-1 px-1.5 py-0.5 rounded bg-background border border-accent text-white text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent/50"
+                      className="flex-1 bg-background border-accent rounded px-1.5 py-0.5 text-xs font-mono"
                     />
                   ) : (
                     <>

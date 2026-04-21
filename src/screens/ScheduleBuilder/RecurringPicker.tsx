@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
-import * as Select from '@radix-ui/react-select';
 import { schedulesApi } from '../../api/schedules';
 import { DAY_NAMES, humanSchedule } from '../../lib/humanSchedule';
 import { parseScheduleInput } from '../../lib/parseScheduleInput';
 import { RecurringConfig } from '../../types';
+import { Input, SimpleSelect } from '../../components/ui';
 
 interface RecurringPickerProps {
   value: RecurringConfig;
@@ -79,16 +78,15 @@ export function RecurringPicker({ value, onChange }: RecurringPickerProps) {
       {mode === 'text' && (
         <div>
           <label className="block text-xs font-medium text-muted mb-1.5">Schedule</label>
-          <input
-            type="text"
+          <Input
             value={textInput}
             onChange={(e) => handleTextChange(e.target.value)}
             placeholder="e.g. every weekday at 9am, daily at 5pm, */30 * * * *"
-            className={`w-full px-3 py-2 rounded-lg bg-surface border text-white text-sm focus:outline-none transition-colors ${
+            className={
               parseError
-                ? 'border-red-500/60 focus:border-red-500'
-                : 'border-edge focus:border-accent'
-            }`}
+                ? 'px-3 py-2 border-red-500/60 focus:border-red-500'
+                : 'px-3 py-2'
+            }
           />
           {parseError && (
             <p className="mt-1 text-xs text-red-400">
@@ -110,40 +108,20 @@ export function RecurringPicker({ value, onChange }: RecurringPickerProps) {
         <div>
           <label className="block text-xs font-medium text-muted mb-1.5">Frequency</label>
           <div className="flex gap-2">
-            <input
+            <Input
               type="number"
               min={1}
               max={value.intervalUnit === 'minutes' ? 59 : value.intervalUnit === 'hours' ? 23 : 31}
               value={value.intervalValue}
               onChange={(e) => update({ intervalValue: Number(e.target.value) || 1 })}
-              className="w-20 px-3 py-2 rounded-lg bg-surface border border-edge text-white text-sm text-center focus:outline-none focus:border-accent"
+              className="w-20 px-3 py-2 text-center"
             />
-            <Select.Root
+            <SimpleSelect
               value={value.intervalUnit}
               onValueChange={(v) => update({ intervalUnit: v as RecurringConfig['intervalUnit'] })}
-            >
-              <Select.Trigger className="flex items-center justify-between flex-1 px-3 py-2 rounded-lg bg-surface border border-edge text-white text-sm focus:outline-none focus:border-accent">
-                <Select.Value />
-                <Select.Icon>
-                  <ChevronDown size={14} className="text-muted" />
-                </Select.Icon>
-              </Select.Trigger>
-              <Select.Portal>
-                <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
-                  <Select.Viewport className="p-1">
-                    {UNIT_OPTIONS.map((o) => (
-                      <Select.Item
-                        key={o.value}
-                        value={o.value}
-                        className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
-                      >
-                        <Select.ItemText>{o.label}</Select.ItemText>
-                      </Select.Item>
-                    ))}
-                  </Select.Viewport>
-                </Select.Content>
-              </Select.Portal>
-            </Select.Root>
+              className="flex-1 px-3 py-2"
+              options={UNIT_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            />
           </div>
         </div>
       )}
@@ -181,7 +159,7 @@ export function RecurringPicker({ value, onChange }: RecurringPickerProps) {
         <div>
           <label className="block text-xs font-medium text-muted mb-1.5">Time of day</label>
           <div className="flex gap-2 items-center">
-            <input
+            <Input
               type="number"
               min={0}
               max={23}
@@ -194,10 +172,10 @@ export function RecurringPicker({ value, onChange }: RecurringPickerProps) {
                   },
                 })
               }
-              className="w-16 px-2 py-2 rounded-lg bg-surface border border-edge text-white text-sm text-center focus:outline-none focus:border-accent"
+              className="w-16 px-2 py-2 text-center"
             />
             <span className="text-muted font-medium">:</span>
-            <input
+            <Input
               type="number"
               min={0}
               max={59}
@@ -210,7 +188,7 @@ export function RecurringPicker({ value, onChange }: RecurringPickerProps) {
                   },
                 })
               }
-              className="w-16 px-2 py-2 rounded-lg bg-surface border border-edge text-white text-sm text-center focus:outline-none focus:border-accent"
+              className="w-16 px-2 py-2 text-center"
             />
             <span className="text-xs text-muted">local time</span>
           </div>

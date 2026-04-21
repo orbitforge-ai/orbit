@@ -5,6 +5,7 @@ import { Pencil, Plus, Trash2, Workflow as WorkflowIcon } from 'lucide-react';
 import { projectWorkflowsApi } from '../../api/projectWorkflows';
 import { ProjectWorkflow } from '../../types';
 import { useUiStore } from '../../store/uiStore';
+import { Checkbox, Input } from '../../components/ui';
 
 export function ProjectWorkflowsTab({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
@@ -117,17 +118,14 @@ export function ProjectWorkflowsTab({ projectId }: { projectId: string }) {
                   trigger: {workflow.triggerKind} · {workflow.graph.nodes.length} nodes
                 </p>
               </div>
-              <label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={workflow.enabled}
-                  onChange={(e) =>
-                    enableMutation.mutate({ id: workflow.id, enabled: e.target.checked })
-                  }
-                  className="accent-accent"
-                />
-                Enabled
-              </label>
+              <Checkbox
+                checked={workflow.enabled}
+                onCheckedChange={(checked) =>
+                  enableMutation.mutate({ id: workflow.id, enabled: checked === true })
+                }
+                label="Enabled"
+                labelClassName="text-xs text-muted"
+              />
               <button
                 onClick={() => openWorkflowEditor(workflow.id)}
                 className="p-1.5 rounded-md text-muted hover:text-white hover:bg-surface transition-colors"
@@ -165,7 +163,7 @@ function CreateWorkflowForm({
   const [name, setName] = useState('');
   return (
     <div className="mx-4 my-3 p-3 rounded-xl border border-edge bg-surface space-y-2">
-      <input
+      <Input
         autoFocus
         value={name}
         onChange={(e) => setName(e.target.value)}
@@ -174,7 +172,7 @@ function CreateWorkflowForm({
           if (e.key === 'Escape') onCancel();
         }}
         placeholder="Workflow name"
-        className="w-full bg-background border border-edge rounded-lg px-3 py-2 text-sm text-white placeholder-muted outline-none focus:border-accent"
+        className="bg-background px-3 py-2 placeholder-muted"
       />
       <div className="flex gap-2">
         <button

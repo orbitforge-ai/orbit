@@ -5,6 +5,7 @@ import { Bot, CheckCircle, Trash2, X } from 'lucide-react';
 import { workItemsApi } from '../../api/workItems';
 import { projectsApi } from '../../api/projects';
 import { Agent, ProjectBoardColumn, WorkItem, WorkItemKind, WorkItemStatus } from '../../types';
+import { Input, SimpleSelect, Textarea } from '../../components/ui';
 import { WorkItemComments } from './WorkItemComments';
 
 const KIND_OPTIONS: { id: WorkItemKind; label: string }[] = [
@@ -169,56 +170,47 @@ export function ProjectBoardDetailDrawer({
           <div className="flex-1 min-h-0 overflow-y-auto">
             <div className="px-5 py-4 space-y-4">
               {/* Title */}
-              <input
+              <Input
                 value={title}
                 onChange={(e) => {
                   setTitle(e.target.value);
                   setDirty(true);
                 }}
-                className="w-full bg-transparent text-base font-semibold text-white outline-none border-b border-transparent hover:border-edge focus:border-accent pb-1 transition-colors"
+                className="bg-transparent border-transparent border-b hover:border-edge focus:border-accent rounded-none px-0 py-0 pb-1 text-base font-semibold"
                 placeholder="Card title"
               />
 
               {/* Status + actions */}
               <div className="flex flex-wrap items-center gap-2">
-                <select
+                <SimpleSelect
                   value={
                     item.columnId ??
                     columns.find((column) => column.role === item.status)?.id ??
                     ''
                   }
-                  onChange={(e) => handleColumnChange(e.target.value)}
-                  className="bg-surface border border-edge rounded-md px-2.5 py-1 text-xs text-white outline-none focus:border-accent"
-                >
-                  {columns.map((column) => (
-                    <option key={column.id} value={column.id}>
-                      {column.name}
-                    </option>
-                  ))}
-                </select>
+                  onValueChange={handleColumnChange}
+                  className="w-auto rounded-md px-2.5 py-1 text-xs"
+                  options={columns.map((column) => ({ value: column.id, label: column.name }))}
+                />
 
-                <select
+                <SimpleSelect
                   value={item.kind}
-                  onChange={(e) => handleKindChange(e.target.value as WorkItemKind)}
-                  className="bg-surface border border-edge rounded-md px-2.5 py-1 text-xs text-white outline-none focus:border-accent"
-                >
-                  {KIND_OPTIONS.map((k) => (
-                    <option key={k.id} value={k.id}>
-                      {k.label}
-                    </option>
-                  ))}
-                </select>
+                  onValueChange={(v) => handleKindChange(v as WorkItemKind)}
+                  className="w-auto rounded-md px-2.5 py-1 text-xs"
+                  options={KIND_OPTIONS.map((k) => ({ value: k.id, label: k.label }))}
+                />
 
-                <select
-                  value={item.priority}
-                  onChange={(e) => handlePriorityChange(Number(e.target.value))}
-                  className="bg-surface border border-edge rounded-md px-2.5 py-1 text-xs text-white outline-none focus:border-accent"
-                >
-                  <option value={0}>Low priority</option>
-                  <option value={1}>Medium priority</option>
-                  <option value={2}>High priority</option>
-                  <option value={3}>Urgent</option>
-                </select>
+                <SimpleSelect
+                  value={String(item.priority)}
+                  onValueChange={(v) => handlePriorityChange(Number(v))}
+                  className="w-auto rounded-md px-2.5 py-1 text-xs"
+                  options={[
+                    { value: '0', label: 'Low priority' },
+                    { value: '1', label: 'Medium priority' },
+                    { value: '2', label: 'High priority' },
+                    { value: '3', label: 'Urgent' },
+                  ]}
+                />
 
                 {item.status !== 'done' && (
                   <button
@@ -234,18 +226,15 @@ export function ProjectBoardDetailDrawer({
               {/* Assignee */}
               <div className="flex items-center gap-2">
                 <Bot size={14} className="text-muted" />
-                <select
+                <SimpleSelect
                   value={item.assigneeAgentId ?? ''}
-                  onChange={(e) => handleAssigneeChange(e.target.value)}
-                  className="flex-1 bg-surface border border-edge rounded-md px-2.5 py-1 text-xs text-white outline-none focus:border-accent"
-                >
-                  <option value="">Unassigned</option>
-                  {agents.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </select>
+                  onValueChange={handleAssigneeChange}
+                  className="flex-1 rounded-md px-2.5 py-1 text-xs"
+                  options={[
+                    { value: '', label: 'Unassigned' },
+                    ...agents.map((a) => ({ value: a.id, label: a.name })),
+                  ]}
+                />
               </div>
 
               {/* Description */}
@@ -253,7 +242,7 @@ export function ProjectBoardDetailDrawer({
                 <label className="block text-[10px] uppercase tracking-wide text-muted mb-1">
                   Description
                 </label>
-                <textarea
+                <Textarea
                   value={description}
                   onChange={(e) => {
                     setDescription(e.target.value);
@@ -261,7 +250,7 @@ export function ProjectBoardDetailDrawer({
                   }}
                   rows={6}
                   placeholder="Add a description… (markdown supported)"
-                  className="w-full bg-surface border border-edge rounded-lg px-3 py-2 text-sm text-white placeholder-muted outline-none focus:border-accent font-mono"
+                  className="px-3 py-2 font-mono placeholder-muted"
                 />
               </div>
 
@@ -270,14 +259,14 @@ export function ProjectBoardDetailDrawer({
                 <label className="block text-[10px] uppercase tracking-wide text-muted mb-1">
                   Labels (comma-separated)
                 </label>
-                <input
+                <Input
                   value={labelsInput}
                   onChange={(e) => {
                     setLabelsInput(e.target.value);
                     setDirty(true);
                   }}
                   placeholder="e.g. backend, urgent, feature-x"
-                  className="w-full bg-surface border border-edge rounded-lg px-3 py-2 text-sm text-white placeholder-muted outline-none focus:border-accent"
+                  className="px-3 py-2 placeholder-muted"
                 />
               </div>
 

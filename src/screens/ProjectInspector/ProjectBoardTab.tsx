@@ -39,6 +39,7 @@ import { toast } from '../../store/toastStore';
 import { Agent, ProjectBoardColumn, WorkItem, WorkItemStatus } from '../../types';
 import { ProjectBoardCard } from './ProjectBoardCard';
 import { ProjectBoardDetailDrawer } from './ProjectBoardDetailDrawer';
+import { Input, SimpleSelect } from '../../components/ui';
 
 const CARD_DRAG_PREFIX = 'work-item:';
 const COLUMN_DROP_PREFIX = 'column-drop:';
@@ -656,7 +657,7 @@ function BoardColumn({
             <GripVertical size={13} />
           </button>
           {editing ? (
-            <input
+            <Input
               data-pan-disabled="true"
               autoFocus
               value={editingTitle}
@@ -666,7 +667,7 @@ function BoardColumn({
                 if (event.key === 'Enter') onFinishEditing();
                 if (event.key === 'Escape') onCancelEditing();
               }}
-              className="min-w-0 flex-1 rounded bg-background px-2 py-1 text-xs font-semibold text-white outline-none"
+              className="min-w-0 flex-1 bg-background rounded px-2 py-1 text-xs font-semibold"
             />
           ) : (
             <button
@@ -812,7 +813,7 @@ function QuickAddRow({ projectId, columnId }: { projectId: string; columnId: str
 
   return (
     <div className="rounded-md border border-accent/40 bg-background px-2 py-1.5">
-      <input
+      <Input
         data-pan-disabled="true"
         autoFocus
         value={title}
@@ -829,7 +830,7 @@ function QuickAddRow({ projectId, columnId }: { projectId: string; columnId: str
           if (!title.trim()) setAdding(false);
         }}
         placeholder="Card title…"
-        className="w-full bg-transparent text-xs text-white outline-none placeholder-muted"
+        className="bg-transparent border-transparent rounded-none px-0 py-0 text-xs placeholder-muted"
       />
     </div>
   );
@@ -867,19 +868,15 @@ function DeleteColumnDialog({
             : `Delete ${column.name}?`}
         </p>
         {itemCount > 0 && (
-          <select
-            autoFocus
-            value={destinationColumnId}
-            onChange={(event) => setDestinationColumnId(event.target.value)}
-            className="mt-3 w-full rounded-lg border border-edge bg-background px-3 py-2 text-sm text-white outline-none focus:border-accent"
-          >
-            <option value="">Choose destination column…</option>
-            {destinationOptions.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.name}
-              </option>
-            ))}
-          </select>
+          <div className="mt-3">
+            <SimpleSelect
+              value={destinationColumnId}
+              onValueChange={setDestinationColumnId}
+              placeholder="Choose destination column…"
+              className="bg-background px-3 py-2"
+              options={destinationOptions.map((option) => ({ value: option.id, label: option.name }))}
+            />
+          </div>
         )}
         <div className="mt-4 flex justify-end gap-2">
           <button

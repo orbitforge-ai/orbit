@@ -24,6 +24,7 @@ import { useSettingsStore } from '../../store/settingsStore';
 import { PluginInstallModal } from './PluginInstallModal';
 import { PluginDetailDrawer } from './PluginDetailDrawer';
 import { PluginLogo } from './PluginLogo';
+import { Checkbox } from '../../components/ui';
 
 type DrawerTab = 'overview' | 'oauth' | 'entities' | 'logs';
 
@@ -346,14 +347,12 @@ function PluginCard({
         </div>
       ) : null}
       <div className="mt-3 flex items-center justify-between border-t border-edge pt-3">
-        <label className="flex items-center gap-2 text-xs text-secondary">
-          <input
-            type="checkbox"
-            checked={plugin.enabled}
-            onChange={(e) => onToggle(e.target.checked)}
-          />
-          Enabled
-        </label>
+        <Checkbox
+          checked={plugin.enabled}
+          onCheckedChange={(checked) => onToggle(checked === true)}
+          label="Enabled"
+          labelClassName="text-xs text-secondary"
+        />
         <div className="flex items-center gap-1">
           <button
             className="rounded p-1 text-muted hover:bg-surface hover:text-secondary"

@@ -6,6 +6,7 @@ import { busApi } from '../../api/bus';
 import { agentsApi } from '../../api/agents';
 import { tasksApi } from '../../api/tasks';
 import { onBusMessageSent } from '../../events/runEvents';
+import { Input, SimpleSelect } from '../../components/ui';
 import { Agent, Task, CreateBusSubscription } from '../../types';
 
 interface BusTabProps {
@@ -196,59 +197,50 @@ function NewSubscriptionForm({
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="text-xs text-muted mb-1 block">When this agent finishes:</label>
-          <select
+          <SimpleSelect
             value={sourceAgentId}
-            onChange={(e) => setSourceAgentId(e.target.value)}
-            className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
-          >
-            <option value="">Select agent...</option>
-            {agents
+            onValueChange={setSourceAgentId}
+            placeholder="Select agent..."
+            className="bg-background px-3 py-2"
+            options={agents
               .filter((a) => a.id !== agentId)
-              .map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-          </select>
+              .map((a) => ({ value: a.id, label: a.name }))}
+          />
         </div>
         <div>
           <label className="text-xs text-muted mb-1 block">Event type:</label>
-          <select
+          <SimpleSelect
             value={eventType}
-            onChange={(e) => setEventType(e.target.value)}
-            className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
-          >
-            <option value="run:completed">Completed (success)</option>
-            <option value="run:failed">Failed</option>
-            <option value="run:any_terminal">Any terminal state</option>
-          </select>
+            onValueChange={setEventType}
+            className="bg-background px-3 py-2"
+            options={[
+              { value: 'run:completed', label: 'Completed (success)' },
+              { value: 'run:failed', label: 'Failed' },
+              { value: 'run:any_terminal', label: 'Any terminal state' },
+            ]}
+          />
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="text-xs text-muted mb-1 block">Trigger this task:</label>
-          <select
+          <SimpleSelect
             value={taskId}
-            onChange={(e) => setTaskId(e.target.value)}
-            className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
-          >
-            <option value="">Select task...</option>
-            {agentTasks.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
+            onValueChange={setTaskId}
+            placeholder="Select task..."
+            className="bg-background px-3 py-2"
+            options={agentTasks.map((t) => ({ value: t.id, label: t.name }))}
+          />
         </div>
         <div>
           <label className="text-xs text-muted mb-1 block">Max chain depth:</label>
-          <input
+          <Input
             type="number"
             min={1}
             max={50}
             value={maxChainDepth}
             onChange={(e) => setMaxChainDepth(Number(e.target.value))}
-            className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+            className="bg-background px-3 py-2"
           />
         </div>
       </div>

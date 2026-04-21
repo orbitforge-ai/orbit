@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import { Input } from './ui';
 
 interface InlineEditProps {
   value: string;
@@ -41,7 +42,7 @@ export function InlineEdit({
 
   if (isEditing) {
     return (
-      <input
+      <Input
         ref={inputRef}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
@@ -51,7 +52,7 @@ export function InlineEdit({
           if (e.key === 'Escape') cancel();
         }}
         placeholder={placeholder}
-        className={`bg-background border border-accent rounded px-1.5 py-0.5 focus:outline-none focus:border-accent-hover ${inputClassName}`}
+        className={`bg-background border-accent rounded px-1.5 py-0.5 focus:border-accent-hover ${inputClassName}`}
         autoFocus
       />
     );

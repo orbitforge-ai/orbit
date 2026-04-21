@@ -7,6 +7,7 @@ import {
   RuleNode,
   RuleOperator,
 } from '../../types';
+import { Input, SimpleSelect } from '../../components/ui';
 import { useOutputInsertionField } from './outputInsertion';
 
 const VALUELESS_OPS: RuleOperator[] = ['exists', 'notExists', 'isTrue', 'isFalse'];
@@ -72,14 +73,15 @@ function GroupView({
       }
     >
       <div className="flex items-center gap-2">
-        <select
+        <SimpleSelect
           value={group.combinator}
-          onChange={(e) => setCombinator(e.target.value as RuleCombinator)}
-          className="bg-background border border-edge rounded px-2 py-1 text-xs text-white outline-none focus:border-accent"
-        >
-          <option value="and">AND</option>
-          <option value="or">OR</option>
-        </select>
+          onValueChange={(v) => setCombinator(v as RuleCombinator)}
+          className="w-auto bg-background rounded px-2 py-1 text-xs"
+          options={[
+            { value: 'and', label: 'AND' },
+            { value: 'or', label: 'OR' },
+          ]}
+        />
         <span className="text-[11px] text-muted">
           {group.rules.length === 0
             ? '(no conditions)'
@@ -170,26 +172,21 @@ function LeafView({
 
   return (
     <div className="flex flex-wrap items-center gap-2 p-2 rounded border border-edge bg-background">
-      <input
+      <Input
         {...fieldBinding.bind}
         value={leaf.field}
         onChange={(e) => setField(e.target.value)}
         placeholder="field (e.g. triage-agent.output.category)"
-        className="flex-1 min-w-[140px] bg-surface border border-edge rounded px-2 py-1 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono"
+        className="flex-1 min-w-[140px] rounded px-2 py-1 text-xs placeholder-muted font-mono"
       />
-      <select
+      <SimpleSelect
         value={leaf.operator}
-        onChange={(e) => setOperator(e.target.value as RuleOperator)}
-        className="bg-surface border border-edge rounded px-2 py-1 text-xs text-white outline-none focus:border-accent"
-      >
-        {RULE_OPERATORS.map((op) => (
-          <option key={op} value={op}>
-            {op}
-          </option>
-        ))}
-      </select>
+        onValueChange={(v) => setOperator(v as RuleOperator)}
+        className="w-auto rounded px-2 py-1 text-xs"
+        options={RULE_OPERATORS.map((op) => ({ value: op, label: op }))}
+      />
       {!valueless && (
-        <input
+        <Input
           value={typeof leaf.value === 'string' || typeof leaf.value === 'number' ? String(leaf.value) : ''}
           onChange={(e) => {
             const raw = e.target.value;
@@ -203,7 +200,7 @@ function LeafView({
             }
           }}
           placeholder={numeric ? 'number' : 'value'}
-          className="flex-1 min-w-[100px] bg-surface border border-edge rounded px-2 py-1 text-xs text-white placeholder-muted outline-none focus:border-accent"
+          className="flex-1 min-w-[100px] rounded px-2 py-1 text-xs placeholder-muted"
         />
       )}
       <button

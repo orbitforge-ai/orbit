@@ -13,6 +13,7 @@ import { ProjectChatTab } from './ProjectChatTab';
 import { ProjectScheduledTab } from './ProjectScheduledTab';
 import { ProjectWorkflowsTab } from './ProjectWorkflowsTab';
 import { ProjectHistoryTab } from './ProjectHistoryTab';
+import { Input, SimpleSelect } from '../../components/ui';
 
 const TABS = [
   { id: 'workspace' as const, label: 'Workspace', icon: HardDrive },
@@ -195,18 +196,18 @@ function ProjectDetail({
 
         {editing ? (
           <div className="flex-1 flex items-center gap-3">
-            <input
+            <Input
               autoFocus
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setEditing(false); }}
-              className="flex-1 bg-surface border border-edge rounded-lg px-3 py-1.5 text-sm text-white outline-none focus:border-accent"
+              className="flex-1 px-3 py-1.5"
             />
-            <input
+            <Input
               value={editDesc}
               onChange={(e) => setEditDesc(e.target.value)}
               placeholder="Description (optional)"
-              className="flex-1 bg-surface border border-edge rounded-lg px-3 py-1.5 text-sm text-white outline-none focus:border-accent placeholder-muted"
+              className="flex-1 px-3 py-1.5 placeholder-muted"
             />
             <button onClick={handleSave} className="px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-medium transition-colors">Save</button>
             <button onClick={() => setEditing(false)} className="text-xs text-muted hover:text-white transition-colors">Cancel</button>
@@ -309,28 +310,29 @@ function CreateProjectForm({
     <div className="mx-6 my-4 p-4 rounded-xl border border-edge bg-surface space-y-3">
       <h2 className="text-sm font-semibold text-white">New Project</h2>
       <div className="space-y-2">
-        <input
+        <Input
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') onCancel(); }}
           placeholder="Project name"
-          className="w-full bg-background border border-edge rounded-lg px-3 py-2 text-sm text-white placeholder-muted outline-none focus:border-accent"
+          className="bg-background px-3 py-2 placeholder-muted"
         />
-        <input
+        <Input
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           placeholder="Description (optional)"
-          className="w-full bg-background border border-edge rounded-lg px-3 py-2 text-sm text-white placeholder-muted outline-none focus:border-accent"
+          className="bg-background px-3 py-2 placeholder-muted"
         />
-        <select
+        <SimpleSelect
           value={boardPresetId}
-          onChange={(e) => setBoardPresetId(e.target.value as 'starter' | 'lean')}
-          className="w-full bg-background border border-edge rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-accent"
-        >
-          <option value="starter">Starter board</option>
-          <option value="lean">Lean board</option>
-        </select>
+          onValueChange={(v) => setBoardPresetId(v as 'starter' | 'lean')}
+          className="bg-background px-3 py-2"
+          options={[
+            { value: 'starter', label: 'Starter board' },
+            { value: 'lean', label: 'Lean board' },
+          ]}
+        />
       </div>
       {error && <p className="text-xs text-red-400">{error}</p>}
       <div className="flex gap-2">

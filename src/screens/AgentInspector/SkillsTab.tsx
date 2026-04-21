@@ -16,6 +16,7 @@ import { confirm } from '@tauri-apps/plugin-dialog';
 
 import { skillsApi } from '../../api/skills';
 import { workspaceApi } from '../../api/workspace';
+import { Input, Textarea } from '../../components/ui';
 import { SkillInfo, SkillSource } from '../../types';
 
 interface SkillsTabProps {
@@ -243,34 +244,32 @@ function CreateSkillForm({
 
       <div>
         <label className="text-xs text-muted mb-1 block">Name</label>
-        <input
-          type="text"
+        <Input
           placeholder="my-skill (lowercase, hyphens only)"
           value={name}
           onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
-          className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm font-mono focus:outline-none focus:border-accent"
+          className="bg-background px-3 py-2 font-mono"
         />
       </div>
 
       <div>
         <label className="text-xs text-muted mb-1 block">Description</label>
-        <input
-          type="text"
+        <Input
           placeholder="What this skill does and when to use it..."
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+          className="bg-background px-3 py-2"
         />
       </div>
 
       <div>
         <label className="text-xs text-muted mb-1 block">Instructions (Markdown)</label>
-        <textarea
+        <Textarea
           placeholder="Step-by-step instructions for the agent..."
           value={body}
           onChange={(e) => setBody(e.target.value)}
           rows={8}
-          className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm font-mono focus:outline-none focus:border-accent resize-y"
+          className="bg-background px-3 py-2 font-mono"
         />
       </div>
 

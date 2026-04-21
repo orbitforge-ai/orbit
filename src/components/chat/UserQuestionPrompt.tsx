@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { HelpCircle, Check } from 'lucide-react';
 import { chatApi } from '../../api/chat';
+import { Textarea } from '../ui';
 
 interface UserQuestionPromptProps {
   requestId: string;
@@ -115,12 +116,12 @@ export function UserQuestionPrompt({
         )}
 
         {allowCustom && (
-          <textarea
+          <Textarea
             value={customValue}
             onChange={(event) => setCustomValue(event.target.value)}
             rows={3}
             placeholder={choices?.length ? 'Add a custom response' : 'Type your answer'}
-            className="w-full rounded-lg border border-edge bg-background px-3 py-2 text-sm text-white placeholder:text-muted focus:outline-none focus:border-accent resize-y"
+            className="bg-background px-3 py-2"
           />
         )}
 

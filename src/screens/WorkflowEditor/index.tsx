@@ -57,6 +57,7 @@ import {
   WORKFLOW_CANVAS_DROPPABLE_ID,
 } from './dnd';
 import { useAgentDndSensors } from '../../components/dnd/agentDnd';
+import { Checkbox, Input } from '../../components/ui';
 
 function toFlowEdge(edge: WorkflowEdge): Edge {
   return {
@@ -718,36 +719,33 @@ function Editor({ workflowId }: { workflowId: string }) {
           Back
         </button>
         <div className="h-5 w-px bg-edge" />
-        <input
+        <Input
           value={name}
           onChange={(e) => {
             setName(e.target.value);
             setDirty(true);
           }}
-          className="bg-transparent border-b border-transparent hover:border-edge focus:border-accent text-sm font-semibold text-white px-1 py-0.5 outline-none min-w-[200px]"
+          className="bg-transparent border-transparent border-b hover:border-edge focus:border-accent text-sm font-semibold rounded-none px-1 py-0.5 min-w-[200px]"
         />
-        <input
+        <Input
           value={description}
           onChange={(e) => {
             setDescription(e.target.value);
             setDirty(true);
           }}
           placeholder="Description (optional)"
-          className="bg-transparent border-b border-transparent hover:border-edge focus:border-accent text-xs text-muted px-1 py-0.5 outline-none flex-1 max-w-[420px]"
+          className="bg-transparent border-transparent border-b hover:border-edge focus:border-accent text-xs text-muted rounded-none px-1 py-0.5 flex-1 max-w-[420px]"
         />
         <span className="text-[10px] uppercase tracking-wider text-muted font-mono">
           v{workflow.version}
         </span>
         <div className="flex-1" />
-        <label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => enabledMutation.mutate(e.target.checked)}
-            className="accent-accent"
-          />
-          Enabled
-        </label>
+        <Checkbox
+          checked={enabled}
+          onCheckedChange={(checked) => enabledMutation.mutate(checked === true)}
+          label="Enabled"
+          labelClassName="text-xs text-muted"
+        />
         <button
           onClick={() => {
             setRunDrawerFocusRunId(null);

@@ -16,6 +16,7 @@ import * as Select from '@radix-ui/react-select';
 import { memoryApi } from '../../api/memory';
 import { toast } from '../../store/toastStore';
 import { MemoryEntry, MemoryType } from '../../types';
+import { Input, Textarea } from '../../components/ui';
 
 const TYPE_FILTER_OPTIONS: { value: MemoryType | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -159,12 +160,12 @@ export function Memory() {
       {/* Add form */}
       {showAddForm && (
         <div className="space-y-3 p-4 rounded-lg border border-edge bg-surface">
-          <textarea
+          <Textarea
             value={newText}
             onChange={(e) => setNewText(e.target.value)}
             placeholder="Enter information to remember..."
             rows={3}
-            className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent resize-none"
+            className="bg-background px-3 py-2 resize-none"
           />
           <div className="flex items-center gap-2">
             <Select.Root value={newType} onValueChange={(v) => setNewType(v as MemoryType)}>
@@ -208,12 +209,12 @@ export function Memory() {
             size={13}
             className="absolute left-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none"
           />
-          <input
+          <Input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
             placeholder="Semantic search..."
-            className="w-full pl-8 pr-8 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+            className="bg-background pl-8 pr-8 py-2"
           />
           {searchQuery && (
             <button
@@ -346,12 +347,12 @@ function MemoryRow({
       <div className="flex items-start gap-2">
         <div className="flex-1 min-w-0">
           {isEditing ? (
-            <textarea
+            <Textarea
               value={editText}
               onChange={(e) => onEditTextChange(e.target.value)}
               rows={3}
               autoFocus
-              className="w-full px-2 py-1.5 rounded bg-background border border-edge text-white text-xs focus:outline-none focus:border-accent resize-none"
+              className="bg-background rounded px-2 py-1.5 text-xs resize-none"
             />
           ) : (
             <p className="text-sm text-white leading-relaxed break-words">{memory.text}</p>

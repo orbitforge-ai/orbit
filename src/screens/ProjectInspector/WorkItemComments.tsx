@@ -5,6 +5,7 @@ import { Bot, Pencil, Trash2, User } from 'lucide-react';
 import { workItemsApi } from '../../api/workItems';
 import { Agent, WorkItemComment } from '../../types';
 import { cn } from '../../lib/cn';
+import { Textarea } from '../../components/ui';
 
 function formatRelative(iso: string): string {
   const then = new Date(iso).getTime();
@@ -128,7 +129,7 @@ export function WorkItemComments({
                 </div>
                 {editingId === c.id ? (
                   <div className="space-y-2">
-                    <textarea
+                    <Textarea
                       value={editBody}
                       onChange={(e) => setEditBody(e.target.value)}
                       onKeyDown={(e) => {
@@ -140,7 +141,7 @@ export function WorkItemComments({
                         }
                       }}
                       rows={3}
-                      className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
+                      className="bg-background rounded px-2 py-1.5 text-xs"
                     />
                     <div className="flex items-center gap-2">
                       <button
@@ -173,7 +174,7 @@ export function WorkItemComments({
       )}
 
       <div className="space-y-1.5">
-        <textarea
+        <Textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
           onKeyDown={(e) => {
@@ -183,7 +184,7 @@ export function WorkItemComments({
           }}
           rows={3}
           placeholder="Leave a comment… (Cmd/Ctrl+Enter to submit)"
-          className="w-full bg-surface border border-edge rounded-lg px-3 py-2 text-xs text-white placeholder-muted outline-none focus:border-accent"
+          className="px-3 py-2 text-xs placeholder-muted"
         />
         <div className="flex justify-end">
           <button

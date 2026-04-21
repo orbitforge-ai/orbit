@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Cloud, WifiOff, Loader2 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
+import { Input } from '../../components/ui';
 
 type View = 'choice' | 'login' | 'register';
 
@@ -97,25 +98,29 @@ export function AuthScreen() {
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
               <label className="block text-sm font-medium text-secondary">Email</label>
-              <input
+              <Input
                 type="email"
+                name="email"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 autoFocus
-                className="w-full px-3 py-2 rounded-lg bg-surface border border-edge text-primary placeholder:text-muted text-sm focus:outline-none focus:border-accent"
+                className="px-3 py-2"
                 placeholder="you@example.com"
               />
             </div>
 
             <div className="space-y-2">
               <label className="block text-sm font-medium text-secondary">Password</label>
-              <input
+              <Input
                 type="password"
+                name="password"
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="w-full px-3 py-2 rounded-lg bg-surface border border-edge text-primary placeholder:text-muted text-sm focus:outline-none focus:border-accent"
+                className="px-3 py-2"
                 placeholder="••••••••"
               />
             </div>
@@ -158,38 +163,44 @@ export function AuthScreen() {
           <form onSubmit={handleRegister} className="space-y-4">
             <div className="space-y-2">
               <label className="block text-sm font-medium text-secondary">Email</label>
-              <input
+              <Input
                 type="email"
+                name="email"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 autoFocus
-                className="w-full px-3 py-2 rounded-lg bg-surface border border-edge text-primary placeholder:text-muted text-sm focus:outline-none focus:border-accent"
+                className="px-3 py-2"
                 placeholder="you@example.com"
               />
             </div>
 
             <div className="space-y-2">
               <label className="block text-sm font-medium text-secondary">Password</label>
-              <input
+              <Input
                 type="password"
+                name="new-password"
+                autoComplete="new-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={8}
-                className="w-full px-3 py-2 rounded-lg bg-surface border border-edge text-primary placeholder:text-muted text-sm focus:outline-none focus:border-accent"
+                className="px-3 py-2"
                 placeholder="••••••••"
               />
             </div>
 
             <div className="space-y-2">
               <label className="block text-sm font-medium text-secondary">Confirm password</label>
-              <input
+              <Input
                 type="password"
+                name="confirm-password"
+                autoComplete="new-password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
-                className="w-full px-3 py-2 rounded-lg bg-surface border border-edge text-primary placeholder:text-muted text-sm focus:outline-none focus:border-accent"
+                className="px-3 py-2"
                 placeholder="••••••••"
               />
             </div>

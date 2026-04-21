@@ -13,8 +13,8 @@ import { TaskConfigForm, defaultConfigState, type TaskConfigState } from '../../
 import {
   KIND_OPTIONS,
   CONCURRENCY_OPTIONS,
-  inputCls,
 } from '../../lib/taskConstants';
+import { Input } from '../../components/ui';
 import { humanSchedule } from '../../lib/humanSchedule';
 import { RecurringPicker } from '../ScheduleBuilder/RecurringPicker';
 import type {
@@ -329,20 +329,16 @@ export function TaskEdit() {
         {/* ── General ── */}
         <div className="space-y-4">
           <Field label="Task name">
-            <input
-              type="text"
+            <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className={inputCls}
             />
           </Field>
           <Field label="Description">
-            <input
-              type="text"
+            <Input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="What does this task do?"
-              className={inputCls}
             />
           </Field>
         </div>
@@ -441,22 +437,20 @@ export function TaskEdit() {
 
             <div className="grid grid-cols-2 gap-4">
               <Field label="Max retries">
-                <input
+                <Input
                   type="number"
                   min={0}
                   max={10}
                   value={maxRetries}
                   onChange={(e) => setMaxRetries(Number(e.target.value))}
-                  className={inputCls}
                 />
               </Field>
               <Field label="Retry delay (sec)">
-                <input
+                <Input
                   type="number"
                   min={10}
                   value={retryDelaySecs}
                   onChange={(e) => setRetryDelaySecs(Number(e.target.value))}
-                  className={inputCls}
                 />
               </Field>
             </div>
@@ -515,19 +509,17 @@ export function TaskEdit() {
                 {newScheduleKind === 'one_shot' && (
                   <div className="space-y-3">
                     <Field label="Date">
-                      <input
+                      <Input
                         type="date"
                         value={newOneShotDate}
                         onChange={(e) => setNewOneShotDate(e.target.value)}
-                        className={inputCls}
                       />
                     </Field>
                     <Field label="Time">
-                      <input
+                      <Input
                         type="time"
                         value={newOneShotTime}
                         onChange={(e) => setNewOneShotTime(e.target.value)}
-                        className={inputCls}
                       />
                     </Field>
                   </div>

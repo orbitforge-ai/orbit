@@ -4,6 +4,7 @@ import MonacoEditor from '@monaco-editor/react';
 import { useQuery } from '@tanstack/react-query';
 import { Node } from '@xyflow/react';
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
+import { Checkbox, Input, SimpleSelect, Textarea } from '../../components/ui';
 import { pluginsApi, type PluginManifest } from '../../api/plugins';
 import { workflowRunsApi } from '../../api/workflowRuns';
 import { agentsApi } from '../../api/agents';
@@ -93,7 +94,13 @@ const WORK_ITEM_ACTION_OPTIONS = [
 type WorkItemNodeAction = (typeof WORK_ITEM_ACTION_OPTIONS)[number]['value'];
 
 const TEMPLATE_FIELD_CLASSNAME =
-  'w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent font-mono';
+  'bg-background px-2 py-1.5 text-xs placeholder-muted font-mono';
+
+const SELECT_FIELD_CLASSNAME =
+  'bg-background px-2 py-1.5 text-xs';
+
+const NUMBER_FIELD_CLASSNAME =
+  'bg-background px-2 py-1.5 text-xs placeholder-muted';
 
 export function NodeInspector({
   directParentNodeIds,
@@ -319,18 +326,13 @@ function AgentRunInspector({
     <div className="space-y-3">
       <div className="space-y-1.5">
         <label className="text-[11px] uppercase tracking-wider text-muted">Agent</label>
-        <select
+        <SimpleSelect
           value={agentId}
-          onChange={(e) => onUpdate({ agentId: e.target.value })}
-          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-        >
-          <option value="">Select agent…</option>
-          {agents.map((agent) => (
-            <option key={agent.id} value={agent.id}>
-              {agent.name}
-            </option>
-          ))}
-        </select>
+          onValueChange={(v) => onUpdate({ agentId: v })}
+          placeholder="Select agent…"
+          className={SELECT_FIELD_CLASSNAME}
+          options={agents.map((agent) => ({ value: agent.id, label: agent.name }))}
+        />
       </div>
       <div className="space-y-1.5">
         <label className="text-[11px] uppercase tracking-wider text-muted">Prompt template</label>
@@ -359,15 +361,16 @@ function AgentRunInspector({
       </div>
       <div className="space-y-1.5">
         <label className="text-[11px] uppercase tracking-wider text-muted">Output mode</label>
-        <select
+        <SimpleSelect
           value={outputMode}
-          onChange={(e) => onUpdate({ outputMode: e.target.value })}
-          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-        >
-          <option value="text">Text</option>
-          <option value="json">JSON</option>
-          <option value="proposal_candidates">Proposal candidates</option>
-        </select>
+          onValueChange={(v) => onUpdate({ outputMode: v })}
+          className={SELECT_FIELD_CLASSNAME}
+          options={[
+            { value: 'text', label: 'Text' },
+            { value: 'json', label: 'JSON' },
+            { value: 'proposal_candidates', label: 'Proposal candidates' },
+          ]}
+        />
       </div>
     </div>
   );
@@ -401,18 +404,18 @@ function LogicIfInspector({
           <label className="text-[11px] uppercase tracking-wider text-emerald-300">
             True label
           </label>
-          <input
+          <Input
             value={trueLabel}
             onChange={(e) => onUpdate({ trueLabel: e.target.value })}
-            className="w-full bg-background border border-edge rounded px-2 py-1 text-xs text-white outline-none focus:border-accent"
+            className="bg-background px-2 py-1 text-xs rounded"
           />
         </div>
         <div className="space-y-1">
           <label className="text-[11px] uppercase tracking-wider text-red-300">False label</label>
-          <input
+          <Input
             value={falseLabel}
             onChange={(e) => onUpdate({ falseLabel: e.target.value })}
-            className="w-full bg-background border border-edge rounded px-2 py-1 text-xs text-white outline-none focus:border-accent"
+            className="bg-background px-2 py-1 text-xs rounded"
           />
         </div>
       </div>
@@ -473,14 +476,15 @@ function CodeScriptInspector({
     <div className="space-y-3">
       <div className="space-y-1.5">
         <label className="text-[11px] uppercase tracking-wider text-muted">Language</label>
-        <select
+        <SimpleSelect
           value={language}
-          onChange={(e) => onUpdate({ language: e.target.value })}
-          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-        >
-          <option value="typescript">TypeScript</option>
-          <option value="javascript">JavaScript</option>
-        </select>
+          onValueChange={(v) => onUpdate({ language: v })}
+          className={SELECT_FIELD_CLASSNAME}
+          options={[
+            { value: 'typescript', label: 'TypeScript' },
+            { value: 'javascript', label: 'JavaScript' },
+          ]}
+        />
       </div>
 
       <div className="space-y-1.5">
@@ -531,7 +535,7 @@ function CodeRuntimeFields({
         <label className="text-[11px] uppercase tracking-wider text-muted">
           Working directory
         </label>
-        <input
+        <Input
           value={workingDirectory}
           onChange={(e) => onUpdate({ workingDirectory: e.target.value })}
           placeholder="."
@@ -543,13 +547,13 @@ function CodeRuntimeFields({
       </div>
       <div className="space-y-1.5">
         <label className="text-[11px] uppercase tracking-wider text-muted">Timeout (seconds)</label>
-        <input
+        <Input
           type="number"
           min={1}
           max={600}
           value={timeoutSeconds}
           onChange={(e) => onUpdate({ timeoutSeconds: Number(e.target.value) || 120 })}
-          className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent"
+          className={NUMBER_FIELD_CLASSNAME + ' rounded'}
         />
       </div>
     </>
@@ -623,17 +627,12 @@ function WorkItemInspector({
 
       <div className="space-y-1.5">
         <label className="text-[11px] uppercase tracking-wider text-muted">Action</label>
-        <select
+        <SimpleSelect
           value={action}
-          onChange={(e) => onUpdate({ action: e.target.value })}
-          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-        >
-          {WORK_ITEM_ACTION_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+          onValueChange={(v) => onUpdate({ action: v })}
+          className={SELECT_FIELD_CLASSNAME}
+          options={WORK_ITEM_ACTION_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+        />
       </div>
 
       {showItemId && (
@@ -679,20 +678,17 @@ function WorkItemInspector({
       {showColumn && (
         <div className="space-y-1.5">
           <label className="text-[11px] uppercase tracking-wider text-muted">Board column</label>
-          <select
+          <SimpleSelect
             value={action === 'list' ? listColumnId : columnId}
-            onChange={(e) =>
-              onUpdate(action === 'list' ? { listColumnId: e.target.value } : { columnId: e.target.value })
+            onValueChange={(v) =>
+              onUpdate(action === 'list' ? { listColumnId: v } : { columnId: v })
             }
-            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-          >
-            <option value="">{action === 'list' ? 'Any column' : 'Resolve from status/default'}</option>
-            {boardColumns.map((column) => (
-              <option key={column.id} value={column.id}>
-                {column.name}
-              </option>
-            ))}
-          </select>
+            className={SELECT_FIELD_CLASSNAME}
+            options={[
+              { value: '', label: action === 'list' ? 'Any column' : 'Resolve from status/default' },
+              ...boardColumns.map((column) => ({ value: column.id, label: column.name })),
+            ]}
+          />
         </div>
       )}
 
@@ -703,20 +699,17 @@ function WorkItemInspector({
               <label className="text-[11px] uppercase tracking-wider text-muted">
                 {action === 'list' ? 'Kind filter' : 'Kind'}
               </label>
-              <select
+              <SimpleSelect
                 value={action === 'list' ? listKind || 'all' : kind || 'task'}
-                onChange={(e) =>
-                  onUpdate(action === 'list' ? { listKind: e.target.value } : { kind: e.target.value })
+                onValueChange={(v) =>
+                  onUpdate(action === 'list' ? { listKind: v } : { kind: v })
                 }
-                className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-              >
-                {action === 'list' && <option value="all">All kinds</option>}
-                {WORK_ITEM_KIND_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+                className={SELECT_FIELD_CLASSNAME}
+                options={[
+                  ...(action === 'list' ? [{ value: 'all', label: 'All kinds' }] : []),
+                  ...WORK_ITEM_KIND_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
+                ]}
+              />
             </div>
           )}
 
@@ -725,48 +718,41 @@ function WorkItemInspector({
               <label className="text-[11px] uppercase tracking-wider text-muted">
                 {action === 'list' ? 'Status filter' : 'Status'}
               </label>
-              <select
+              <SimpleSelect
                 value={action === 'list' ? listStatus || 'all' : status || 'backlog'}
-                onChange={(e) =>
-                  onUpdate(
-                    action === 'list' ? { listStatus: e.target.value } : { status: e.target.value },
-                  )
+                onValueChange={(v) =>
+                  onUpdate(action === 'list' ? { listStatus: v } : { status: v })
                 }
-                className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-              >
-                {action === 'list' ? (
-                  <>
-                    <option value="all">All columns</option>
-                    {ALL_STATUS_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </>
-                ) : (
-                  (action === 'move' ? ALL_STATUS_OPTIONS : CREATE_STATUS_OPTIONS).map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))
-                )}
-              </select>
+                className={SELECT_FIELD_CLASSNAME}
+                options={
+                  action === 'list'
+                    ? [
+                        { value: 'all', label: 'All columns' },
+                        ...ALL_STATUS_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
+                      ]
+                    : (action === 'move' ? ALL_STATUS_OPTIONS : CREATE_STATUS_OPTIONS).map((o) => ({
+                        value: o.value,
+                        label: o.label,
+                      }))
+                }
+              />
             </div>
           )}
 
           {showPriority && (
             <div className="space-y-1.5">
               <label className="text-[11px] uppercase tracking-wider text-muted">Priority</label>
-              <select
+              <SimpleSelect
                 value={String(priority)}
-                onChange={(e) => onUpdate({ priority: Number(e.target.value) })}
-                className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-              >
-                <option value="0">Low</option>
-                <option value="1">Normal</option>
-                <option value="2">High</option>
-                <option value="3">Urgent</option>
-              </select>
+                onValueChange={(v) => onUpdate({ priority: Number(v) })}
+                className={SELECT_FIELD_CLASSNAME}
+                options={[
+                  { value: '0', label: 'Low' },
+                  { value: '1', label: 'Normal' },
+                  { value: '2', label: 'High' },
+                  { value: '3', label: 'Urgent' },
+                ]}
+              />
             </div>
           )}
         </div>
@@ -792,18 +778,16 @@ function WorkItemInspector({
           <label className="text-[11px] uppercase tracking-wider text-muted">
             {action === 'claim' ? 'Agent to claim with' : 'Assignee'}
           </label>
-          <select
+          <SimpleSelect
             value={assigneeAgentId}
-            onChange={(e) => onUpdate({ assigneeAgentId: e.target.value })}
-            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-          >
-            {action !== 'claim' && <option value="">Unassigned</option>}
-            {projectAgents.map((agent) => (
-              <option key={agent.id} value={agent.id}>
-                {agent.name}
-              </option>
-            ))}
-          </select>
+            onValueChange={(v) => onUpdate({ assigneeAgentId: v })}
+            placeholder={action === 'claim' ? 'Select agent…' : 'Unassigned'}
+            className={SELECT_FIELD_CLASSNAME}
+            options={[
+              ...(action !== 'claim' ? [{ value: '', label: 'Unassigned' }] : []),
+              ...projectAgents.map((agent) => ({ value: agent.id, label: agent.name })),
+            ]}
+          />
         </div>
       )}
 
@@ -852,50 +836,44 @@ function WorkItemInspector({
           <label className="text-[11px] uppercase tracking-wider text-muted">
             Comment author agent ID
           </label>
-          <select
+          <SimpleSelect
             value={commentAuthorAgentId}
-            onChange={(e) => onUpdate({ commentAuthorAgentId: e.target.value })}
-            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-          >
-            <option value="">Workflow user</option>
-            {projectAgents.map((agent) => (
-              <option key={agent.id} value={agent.id}>
-                {agent.name}
-              </option>
-            ))}
-          </select>
+            onValueChange={(v) => onUpdate({ commentAuthorAgentId: v })}
+            className={SELECT_FIELD_CLASSNAME}
+            options={[
+              { value: '', label: 'Workflow user' },
+              ...projectAgents.map((agent) => ({ value: agent.id, label: agent.name })),
+            ]}
+          />
         </div>
       )}
 
       {showListAssignee && (
         <div className="space-y-1.5">
           <label className="text-[11px] uppercase tracking-wider text-muted">Assignee filter</label>
-          <select
+          <SimpleSelect
             value={listAssignee}
-            onChange={(e) => onUpdate({ listAssignee: e.target.value })}
-            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-          >
-            <option value="">Any assignee</option>
-            <option value="none">Unassigned only</option>
-            {projectAgents.map((agent) => (
-              <option key={agent.id} value={agent.id}>
-                {agent.name}
-              </option>
-            ))}
-          </select>
+            onValueChange={(v) => onUpdate({ listAssignee: v })}
+            className={SELECT_FIELD_CLASSNAME}
+            options={[
+              { value: '', label: 'Any assignee' },
+              { value: 'none', label: 'Unassigned only' },
+              ...projectAgents.map((agent) => ({ value: agent.id, label: agent.name })),
+            ]}
+          />
         </div>
       )}
 
       {showLimit && (
         <div className="space-y-1.5">
           <label className="text-[11px] uppercase tracking-wider text-muted">Result limit</label>
-          <input
+          <Input
             type="number"
             min={1}
             max={500}
             value={limit}
             onChange={(e) => onUpdate({ limit: Number(e.target.value) || 25 })}
-            className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent"
+            className={NUMBER_FIELD_CLASSNAME + ' rounded'}
           />
         </div>
       )}
@@ -940,46 +918,37 @@ function ProposalQueueInspector({
       </div>
       <div className="space-y-1.5">
         <label className="text-[11px] uppercase tracking-wider text-muted">Review column</label>
-        <select
+        <SimpleSelect
           value={reviewColumnId}
-          onChange={(e) => onUpdate({ reviewColumnId: e.target.value })}
-          className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-        >
-          <option value="">Select column…</option>
-          {boardColumns.map((column) => (
-            <option key={column.id} value={column.id}>
-              {column.name}
-            </option>
-          ))}
-        </select>
+          onValueChange={(v) => onUpdate({ reviewColumnId: v })}
+          placeholder="Select column…"
+          className={SELECT_FIELD_CLASSNAME}
+          options={boardColumns.map((column) => ({ value: column.id, label: column.name }))}
+        />
       </div>
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1.5">
           <label className="text-[11px] uppercase tracking-wider text-muted">Kind</label>
-          <select
+          <SimpleSelect
             value={kind}
-            onChange={(e) => onUpdate({ kind: e.target.value })}
-            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-          >
-            {WORK_ITEM_KIND_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+            onValueChange={(v) => onUpdate({ kind: v })}
+            className={SELECT_FIELD_CLASSNAME}
+            options={WORK_ITEM_KIND_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+          />
         </div>
         <div className="space-y-1.5">
           <label className="text-[11px] uppercase tracking-wider text-muted">Priority</label>
-          <select
+          <SimpleSelect
             value={String(priority)}
-            onChange={(e) => onUpdate({ priority: Number(e.target.value) })}
-            className="w-full bg-background border border-edge rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-accent"
-          >
-            <option value="0">Low</option>
-            <option value="1">Normal</option>
-            <option value="2">High</option>
-            <option value="3">Urgent</option>
-          </select>
+            onValueChange={(v) => onUpdate({ priority: Number(v) })}
+            className={SELECT_FIELD_CLASSNAME}
+            options={[
+              { value: '0', label: 'Low' },
+              { value: '1', label: 'Normal' },
+              { value: '2', label: 'High' },
+              { value: '3', label: 'Urgent' },
+            ]}
+          />
         </div>
       </div>
       <div className="space-y-1.5">
@@ -1019,13 +988,13 @@ function FeedFetchInspector({
       </div>
       <div className="space-y-1.5">
         <label className="text-[11px] uppercase tracking-wider text-muted">Per-feed limit</label>
-        <input
+        <Input
           type="number"
           min={1}
           max={200}
           value={limit}
           onChange={(e) => onUpdate({ limit: Number(e.target.value) || 50 })}
-          className="w-full bg-background border border-edge rounded px-2 py-1.5 text-xs text-white placeholder-muted outline-none focus:border-accent"
+          className={NUMBER_FIELD_CLASSNAME + ' rounded'}
         />
       </div>
     </div>
@@ -1138,7 +1107,7 @@ function PluginWorkflowNodeField({
 
   if (fieldType === 'boolean') {
     return (
-      <label className="flex items-center justify-between gap-3 rounded-lg border border-edge/70 bg-surface/40 px-3 py-2">
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-edge/70 bg-surface/40 px-3 py-2">
         <div className="space-y-0.5">
           <span className="text-[11px] uppercase tracking-wider text-muted">
             {humanizeFieldName(fieldName)}
@@ -1146,12 +1115,11 @@ function PluginWorkflowNodeField({
           </span>
           {description ? <p className="text-[10px] text-muted">{description}</p> : null}
         </div>
-        <input
-          type="checkbox"
+        <Checkbox
           checked={Boolean(data[fieldName])}
-          onChange={(event) => onUpdate({ [fieldName]: event.target.checked })}
+          onCheckedChange={(checked) => onUpdate({ [fieldName]: checked === true })}
         />
-      </label>
+      </div>
     );
   }
 
@@ -1175,33 +1143,23 @@ function PluginWorkflowNodeField({
         ) : null}
       </div>
       {enumValues.length > 0 ? (
-        <select
+        <SimpleSelect
           value={asString(data[fieldName])}
-          onChange={(event) => onUpdate({ [fieldName]: event.target.value })}
-          className={TEMPLATE_FIELD_CLASSNAME}
-        >
-          <option value="">— pick an option —</option>
-          {enumValues.map((value) => (
-            <option key={value} value={value}>
-              {value}
-            </option>
-          ))}
-        </select>
+          onValueChange={(v) => onUpdate({ [fieldName]: v })}
+          placeholder="— pick an option —"
+          className={SELECT_FIELD_CLASSNAME}
+          options={enumValues.map((v) => ({ value: v, label: v }))}
+        />
       ) : channelOptions.length > 0 ? (
-        <select
+        <SimpleSelect
           value={asString(data[fieldName])}
-          onChange={(event) => onUpdate({ [fieldName]: event.target.value })}
-          className={TEMPLATE_FIELD_CLASSNAME}
-        >
-          <option value="">— pick an option —</option>
-          {channelOptions.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+          onValueChange={(v) => onUpdate({ [fieldName]: v })}
+          placeholder="— pick an option —"
+          className={SELECT_FIELD_CLASSNAME}
+          options={channelOptions.map((o) => ({ value: o.id, label: o.label }))}
+        />
       ) : fieldType === 'number' || fieldType === 'integer' ? (
-        <input
+        <Input
           type="number"
           value={String(data[fieldName] ?? '')}
           onChange={(event) => onUpdate({ [fieldName]: Number(event.target.value) })}
@@ -1465,7 +1423,7 @@ function HintableInput({
   });
 
   return (
-    <input
+    <Input
       {...props}
       {...binding.bind}
       value={value}
@@ -1491,7 +1449,7 @@ function HintableTextarea({
   });
 
   return (
-    <textarea
+    <Textarea
       {...props}
       {...binding.bind}
       value={value}

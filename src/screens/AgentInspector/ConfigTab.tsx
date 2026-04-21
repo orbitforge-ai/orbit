@@ -1,9 +1,9 @@
 import { useEffect, useState, useImperativeHandle, forwardRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, ChevronDown, FolderOpen, X, ExternalLink, AlertTriangle } from 'lucide-react';
-import * as Select from '@radix-ui/react-select';
+import { Check, FolderOpen, X, ExternalLink, AlertTriangle } from 'lucide-react';
 import * as Slider from '@radix-ui/react-slider';
 import * as Switch from '@radix-ui/react-switch';
+import { Input, SimpleSelect } from '../../components/ui';
 
 import { workspaceApi } from '../../api/workspace';
 import { projectsApi } from '../../api/projects';
@@ -115,7 +115,7 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-xs text-muted mb-1 block">Provider</label>
-            <Select.Root
+            <SimpleSelect
               value={config.provider}
               onValueChange={(value) => {
                 const newModels = MODEL_OPTIONS[value] ?? [];
@@ -125,66 +125,23 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
                   ...(!currentModelValid && { model: DEFAULT_MODEL_BY_PROVIDER[value] ?? newModels[0]?.value ?? config.model }),
                 });
               }}
-            >
-              <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent">
-                <Select.Value />
-                <Select.Icon>
-                  <ChevronDown size={14} className="text-muted" />
-                </Select.Icon>
-              </Select.Trigger>
-              <Select.Portal>
-                <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
-                  <Select.Viewport className="p-1">
-                    {LLM_PROVIDERS.map((p) => (
-                      <Select.Item
-                        key={p.value}
-                        value={p.value}
-                        className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
-                      >
-                        <Select.ItemText>{p.label}</Select.ItemText>
-                      </Select.Item>
-                    ))}
-                  </Select.Viewport>
-                </Select.Content>
-              </Select.Portal>
-            </Select.Root>
+              className="bg-background px-3 py-2"
+              options={LLM_PROVIDERS.map((p) => ({ value: p.value, label: p.label }))}
+            />
           </div>
           <div>
             <label className="text-xs text-muted mb-1 block">Model</label>
-            <Select.Root
+            <SimpleSelect
               value={config.model}
               onValueChange={(value) => updateConfig({ model: value })}
-            >
-              <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent">
-                <Select.Value />
-                <Select.Icon>
-                  <ChevronDown size={14} className="text-muted" />
-                </Select.Icon>
-              </Select.Trigger>
-              <Select.Portal>
-                <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
-                  <Select.Viewport className="p-1">
-                    {models.map((m) => (
-                      <Select.Item
-                        key={m.value}
-                        value={m.value}
-                        className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
-                      >
-                        <Select.ItemText>{m.label}</Select.ItemText>
-                      </Select.Item>
-                    ))}
-                    {!models.find((m) => m.value === config.model) && (
-                      <Select.Item
-                        value={config.model}
-                        className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
-                      >
-                        <Select.ItemText>{config.model}</Select.ItemText>
-                      </Select.Item>
-                    )}
-                  </Select.Viewport>
-                </Select.Content>
-              </Select.Portal>
-            </Select.Root>
+              className="bg-background px-3 py-2"
+              options={[
+                ...models.map((m) => ({ value: m.value, label: m.label })),
+                ...(!models.find((m) => m.value === config.model)
+                  ? [{ value: config.model, label: config.model }]
+                  : []),
+              ]}
+            />
           </div>
         </div>
 
@@ -273,13 +230,13 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-muted mb-1 block">Max Iterations</label>
-                <input
+                <Input
                   type="number"
                   min={1}
                   max={100}
                   value={config.maxIterations}
                   onChange={(e) => updateConfig({ maxIterations: parseInt(e.target.value) || 25 })}
-                  className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+                  className="bg-background px-3 py-2"
                 />
                 <span className="text-[10px] text-muted mt-0.5 block">Default 25</span>
               </div>
@@ -288,7 +245,7 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
               <div>
                 <label className="text-xs text-muted mb-1 block">Compaction Threshold</label>
                 <div className="flex items-center gap-2">
-                  <input
+                  <Input
                     type="number"
                     min={10}
                     max={95}
@@ -299,14 +256,14 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
                       if (!isNaN(v) && v >= 10 && v <= 95)
                         updateConfig({ compactionThreshold: v / 100 });
                     }}
-                    className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+                    className="bg-background px-3 py-2"
                   />
                   <span className="text-xs text-muted shrink-0">%</span>
                 </div>
               </div>
               <div>
                 <label className="text-xs text-muted mb-1 block">Messages to Retain</label>
-                <input
+                <Input
                   type="number"
                   min={2}
                   max={50}
@@ -314,7 +271,7 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
                   onChange={(e) =>
                     updateConfig({ compactionRetainCount: parseInt(e.target.value) || 12 })
                   }
-                  className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+                  className="bg-background px-3 py-2"
                 />
               </div>
             </div>
@@ -465,41 +422,18 @@ function DefaultChannelSelect({
         Used by the <span className="font-mono">message</span> tool when the agent calls it
         without specifying a channel.
       </p>
-      <Select.Root
+      <SimpleSelect
         value={selected}
         onValueChange={(v) => onChange(v === NONE_VALUE ? undefined : v)}
-      >
-        <Select.Trigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent">
-          <Select.Value />
-          <Select.Icon>
-            <ChevronDown size={14} className="text-muted" />
-          </Select.Icon>
-        </Select.Trigger>
-        <Select.Portal>
-          <Select.Content className="rounded-lg bg-surface border border-edge shadow-xl overflow-hidden z-50">
-            <Select.Viewport className="p-1">
-              <Select.Item
-                value={NONE_VALUE}
-                className="px-3 py-2 text-sm text-muted rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
-              >
-                <Select.ItemText>No default</Select.ItemText>
-              </Select.Item>
-              {channels.map((channel) => (
-                <Select.Item
-                  key={channel.id}
-                  value={channel.id}
-                  className="px-3 py-2 text-sm text-white rounded-md outline-none cursor-pointer data-[highlighted]:bg-accent/20"
-                >
-                  <Select.ItemText>
-                    {channel.name}
-                    {!channel.enabled && ' (disabled)'}
-                  </Select.ItemText>
-                </Select.Item>
-              ))}
-            </Select.Viewport>
-          </Select.Content>
-        </Select.Portal>
-      </Select.Root>
+        className="bg-background px-3 py-2"
+        options={[
+          { value: NONE_VALUE, label: 'No default' },
+          ...channels.map((channel) => ({
+            value: channel.id,
+            label: channel.enabled ? channel.name : `${channel.name} (disabled)`,
+          })),
+        ]}
+      />
     </section>
   );
 }

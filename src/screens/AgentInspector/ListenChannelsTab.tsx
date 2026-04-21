@@ -4,6 +4,7 @@ import * as Switch from '@radix-ui/react-switch';
 import { Hash, Plus, Radio, RefreshCw, Trash2, X } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { ChannelBinding } from '../../types';
+import { Input, SimpleSelect } from '../../components/ui';
 
 interface ListenChannelsTabProps {
   agentId: string;
@@ -277,43 +278,35 @@ function BindingForm({
       <div className="grid grid-cols-2 gap-3">
         <label className="space-y-1">
           <span className="text-[11px] text-muted">Provider</span>
-          <select
+          <SimpleSelect
             value={pluginId}
-            onChange={(e) => {
-              setPluginId(e.target.value);
+            onValueChange={(v) => {
+              setPluginId(v);
               setGuildId(null);
               setChannelId('');
               setChannelLabel('');
             }}
-            className="w-full rounded-lg border border-edge bg-surface px-2 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
-          >
-            {plugins.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+            className="px-2 py-1.5"
+            options={plugins.map((p) => ({ value: p.id, label: p.name }))}
+          />
         </label>
 
         {guilds.length > 1 && (
           <label className="space-y-1">
             <span className="text-[11px] text-muted">Workspace / Guild</span>
-            <select
+            <SimpleSelect
               value={guildId ?? ''}
-              onChange={(e) => {
-                setGuildId(e.target.value || null);
+              onValueChange={(v) => {
+                setGuildId(v || null);
                 setChannelId('');
                 setChannelLabel('');
               }}
-              className="w-full rounded-lg border border-edge bg-surface px-2 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
-            >
-              <option value="">— any —</option>
-              {guilds.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
+              className="px-2 py-1.5"
+              options={[
+                { value: '', label: '— any —' },
+                ...guilds.map((g) => ({ value: g.id, label: g.name })),
+              ]}
+            />
           </label>
         )}
       </div>
@@ -346,22 +339,20 @@ function BindingForm({
         <div className="grid grid-cols-2 gap-3">
           <label className="space-y-1">
             <span className="text-[11px] text-muted">Channel ID</span>
-            <input
-              type="text"
+            <Input
               value={channelId}
               onChange={(e) => setChannelId(e.target.value)}
               placeholder="e.g. 1234567890"
-              className="w-full rounded-lg border border-edge bg-surface px-2 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
+              className="px-2 py-1.5"
             />
           </label>
           <label className="space-y-1">
             <span className="text-[11px] text-muted">Label (optional)</span>
-            <input
-              type="text"
+            <Input
               value={channelLabel}
               onChange={(e) => setChannelLabel(e.target.value)}
               placeholder="#general"
-              className="w-full rounded-lg border border-edge bg-surface px-2 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
+              className="px-2 py-1.5"
             />
           </label>
         </div>
@@ -380,23 +371,20 @@ function BindingForm({
       ) : (
         <label className="space-y-1 block">
           <span className="text-[11px] text-muted">Channel</span>
-          <select
+          <SimpleSelect
             value={channelId}
-            onChange={(e) => {
-              const picked = currentChannels.find((c) => c.id === e.target.value);
-              setChannelId(e.target.value);
+            onValueChange={(v) => {
+              const picked = currentChannels.find((c) => c.id === v);
+              setChannelId(v);
               setChannelLabel(picked?.name ? `#${picked.name}` : '');
             }}
-            className="w-full rounded-lg border border-edge bg-surface px-2 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
-          >
-            <option value="">— pick a channel —</option>
-            {currentChannels.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name ? `#${c.name}` : c.id}
-                {c.type ? ` (${c.type})` : ''}
-              </option>
-            ))}
-          </select>
+            placeholder="— pick a channel —"
+            className="px-2 py-1.5"
+            options={currentChannels.map((c) => ({
+              value: c.id,
+              label: `${c.name ? `#${c.name}` : c.id}${c.type ? ` (${c.type})` : ''}`,
+            }))}
+          />
         </label>
       )}
 
@@ -404,12 +392,11 @@ function BindingForm({
         <span className="text-[11px] text-muted">
           Thread ID (optional — leave empty to listen to the whole channel)
         </span>
-        <input
-          type="text"
+        <Input
           value={threadId}
           onChange={(e) => setThreadId(e.target.value)}
           placeholder="thread snowflake / ts"
-          className="w-full rounded-lg border border-edge bg-surface px-2 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
+          className="px-2 py-1.5"
         />
       </label>
 

@@ -1,17 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as Switch from '@radix-ui/react-switch';
-import * as Select from '@radix-ui/react-select';
 import {
   AlertTriangle,
   Check,
-  ChevronDown,
   Key,
   Plus,
   Terminal,
   Trash2,
   X,
 } from 'lucide-react';
+import { Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SimpleSelect } from '../../components/ui';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { llmApi, ProviderStatus } from '../../api/llm';
 import { useApiKeyStatus, useInvalidateApiKeys } from '../../hooks/useApiKeyStatus';
@@ -140,14 +139,14 @@ function ApiKeyProviderRow({ provider, label }: { provider: string; label: strin
       </div>
       {editing && !hasKey && (
         <div className="mt-3 flex gap-2">
-          <input
+          <Input
             type="password"
             placeholder={`Enter ${label} API key...`}
             value={keyInput}
             onChange={(e) => setKeyInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSave()}
             autoFocus
-            className="flex-1 px-3 py-2 rounded-lg bg-surface border border-edge text-white text-sm font-mono focus:outline-none focus:border-accent"
+            className="flex-1 px-3 py-2 font-mono"
           />
           <button
             onClick={handleSave}
@@ -405,45 +404,21 @@ function ChannelDraftForm({
       <div className="grid grid-cols-2 gap-3">
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted">Name</span>
-          <input
+          <Input
             value={draft.name}
             onChange={(e) => setDraft({ ...draft, name: e.target.value })}
             placeholder="e.g. #ops-alerts"
-            className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
+            className="rounded-md px-2.5 py-1.5"
           />
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted">Type</span>
-          <Select.Root
+          <SimpleSelect
             value={draft.type}
             onValueChange={(v) => setDraft({ ...draft, type: v as ChannelType })}
-          >
-            <Select.Trigger className="flex items-center justify-between rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-accent">
-              <Select.Value />
-              <Select.Icon>
-                <ChevronDown size={14} />
-              </Select.Icon>
-            </Select.Trigger>
-            <Select.Portal>
-              <Select.Content
-                position="popper"
-                sideOffset={4}
-                className="z-50 min-w-[var(--radix-select-trigger-width)] rounded-md border border-edge bg-surface p-1 shadow-lg"
-              >
-                <Select.Viewport>
-                  {CHANNEL_TYPE_OPTIONS.map((opt) => (
-                    <Select.Item
-                      key={opt.value}
-                      value={opt.value}
-                      className="cursor-pointer rounded px-2 py-1 text-sm text-white data-[highlighted]:bg-panel data-[highlighted]:outline-none"
-                    >
-                      <Select.ItemText>{opt.label}</Select.ItemText>
-                    </Select.Item>
-                  ))}
-                </Select.Viewport>
-              </Select.Content>
-            </Select.Portal>
-          </Select.Root>
+            className="rounded-md px-2.5 py-1.5"
+            options={CHANNEL_TYPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+          />
         </label>
       </div>
 
@@ -457,23 +432,18 @@ function ChannelDraftForm({
                 <span className="font-mono">com.orbit.discord</span>) and enable it first.
               </div>
             ) : (
-              <select
+              <SimpleSelect
                 value={draft.pluginId ?? ''}
-                onChange={(e) =>
+                onValueChange={(v) =>
                   setDraft({
                     ...draft,
-                    pluginId: e.target.value,
+                    pluginId: v,
                     providerChannelId: undefined,
                   })
                 }
-                className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
-              >
-                {plugins.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
+                className="rounded-md px-2.5 py-1.5"
+                options={plugins.map((p) => ({ value: p.id, label: p.name }))}
+              />
             )}
           </label>
 
@@ -481,43 +451,41 @@ function ChannelDraftForm({
             <label className="flex flex-col gap-1">
               <span className="text-xs text-muted">Channel</span>
               {flatChannels.length > 0 ? (
-                <select
+                <SimpleSelect
                   value={draft.providerChannelId ?? ''}
-                  onChange={(e) => {
-                    const picked = flatChannels.find((c) => c.id === e.target.value);
+                  onValueChange={(v) => {
+                    const picked = flatChannels.find((c) => c.id === v);
                     setDraft({
                       ...draft,
-                      providerChannelId: e.target.value,
+                      providerChannelId: v,
                       name: draft.name || (picked?.name ? `#${picked.name}` : draft.name),
                     });
                   }}
-                  className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
-                >
-                  <option value="">— pick a channel —</option>
-                  {flatChannels.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name ? `#${c.name}` : c.id}
-                    </option>
-                  ))}
-                </select>
+                  placeholder="— pick a channel —"
+                  className="rounded-md px-2.5 py-1.5"
+                  options={flatChannels.map((c) => ({
+                    value: c.id,
+                    label: c.name ? `#${c.name}` : c.id,
+                  }))}
+                />
               ) : (
-                <input
+                <Input
                   value={draft.providerChannelId ?? ''}
                   onChange={(e) =>
                     setDraft({ ...draft, providerChannelId: e.target.value })
                   }
                   placeholder="channel id / snowflake"
-                  className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-accent"
+                  className="rounded-md px-2.5 py-1.5 font-mono"
                 />
               )}
             </label>
             <label className="flex flex-col gap-1">
               <span className="text-xs text-muted">Thread (optional)</span>
-              <input
+              <Input
                 value={draft.providerThreadId ?? ''}
                 onChange={(e) => setDraft({ ...draft, providerThreadId: e.target.value })}
                 placeholder="thread snowflake / ts"
-                className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-accent"
+                className="rounded-md px-2.5 py-1.5 font-mono"
               />
             </label>
           </div>
@@ -529,11 +497,11 @@ function ChannelDraftForm({
       ) : (
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted">Webhook URL</span>
-          <input
+          <Input
             value={draft.webhookUrl}
             onChange={(e) => setDraft({ ...draft, webhookUrl: e.target.value })}
             placeholder="https://hooks.slack.com/services/..."
-            className="rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-accent"
+            className="rounded-md px-2.5 py-1.5 font-mono"
           />
           <span className="text-[11px] text-muted">
             {CHANNEL_TYPE_OPTIONS.find((o) => o.value === draft.type)?.hint}
@@ -680,39 +648,26 @@ function AgentDefaultsSection() {
               Controls how destructive tool calls are gated.
             </p>
           </div>
-          <Select.Root
+          <Select
             value={agentDefaults.permissionMode}
             onValueChange={(v) =>
               updateAgentDefaults({ permissionMode: v as AgentDefaults['permissionMode'] })
             }
           >
-            <Select.Trigger className="flex items-center justify-between gap-2 rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white min-w-[130px] focus:outline-none focus:border-accent">
-              <Select.Value />
-              <Select.Icon>
-                <ChevronDown size={14} />
-              </Select.Icon>
-            </Select.Trigger>
-            <Select.Portal>
-              <Select.Content
-                position="popper"
-                sideOffset={4}
-                className="z-50 rounded-md border border-edge bg-surface p-1 shadow-lg"
-              >
-                <Select.Viewport>
-                  {PERMISSION_MODE_OPTIONS.map((opt) => (
-                    <Select.Item
-                      key={opt.value}
-                      value={opt.value}
-                      className="cursor-pointer rounded px-2 py-1 text-sm text-white data-[highlighted]:bg-panel data-[highlighted]:outline-none"
-                    >
-                      <Select.ItemText>{opt.label}</Select.ItemText>
-                      <div className="text-[11px] text-muted">{opt.description}</div>
-                    </Select.Item>
-                  ))}
-                </Select.Viewport>
-              </Select.Content>
-            </Select.Portal>
-          </Select.Root>
+            <SelectTrigger className="rounded-md px-2.5 py-1.5 min-w-[130px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PERMISSION_MODE_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  <div>
+                    <div>{opt.label}</div>
+                    <div className="text-[11px] text-muted">{opt.description}</div>
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
@@ -724,36 +679,12 @@ function AgentDefaultsSection() {
               Provider used by the <span className="font-mono">web_search</span> tool.
             </p>
           </div>
-          <Select.Root
+          <SimpleSelect
             value={agentDefaults.webSearchProvider}
             onValueChange={(v) => updateAgentDefaults({ webSearchProvider: v })}
-          >
-            <Select.Trigger className="flex items-center justify-between gap-2 rounded-md bg-surface border border-edge px-2.5 py-1.5 text-sm text-white min-w-[130px] focus:outline-none focus:border-accent">
-              <Select.Value />
-              <Select.Icon>
-                <ChevronDown size={14} />
-              </Select.Icon>
-            </Select.Trigger>
-            <Select.Portal>
-              <Select.Content
-                position="popper"
-                sideOffset={4}
-                className="z-50 rounded-md border border-edge bg-surface p-1 shadow-lg"
-              >
-                <Select.Viewport>
-                  {SEARCH_PROVIDERS.map((opt) => (
-                    <Select.Item
-                      key={opt.value}
-                      value={opt.value}
-                      className="cursor-pointer rounded px-2 py-1 text-sm text-white data-[highlighted]:bg-panel data-[highlighted]:outline-none"
-                    >
-                      <Select.ItemText>{opt.label}</Select.ItemText>
-                    </Select.Item>
-                  ))}
-                </Select.Viewport>
-              </Select.Content>
-            </Select.Portal>
-          </Select.Root>
+            className="rounded-md px-2.5 py-1.5 min-w-[130px]"
+            options={SEARCH_PROVIDERS.map((o) => ({ value: o.value, label: o.label }))}
+          />
         </div>
       </div>
 

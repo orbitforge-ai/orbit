@@ -4,6 +4,7 @@ import { ChevronDown } from 'lucide-react';
 
 import { AgentIdentityConfig, AvatarArchetype } from '../../types';
 import { CollapsibleSection } from '../../components/CollapsibleSection';
+import { Input, Textarea } from '../../components/ui';
 import {
   AGENT_IDENTITY_PRESETS,
   CUSTOM_IDENTITY_OPTION,
@@ -111,34 +112,31 @@ export function AgentIdentitySection({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs text-muted mb-1 block">Identity Name</label>
-              <input
-                type="text"
+              <Input
                 maxLength={60}
                 value={resolved.identityName}
                 onChange={(e) => handleFieldChange('identityName', e.target.value)}
-                className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+                className="bg-background px-3 py-2"
               />
             </div>
             <div>
               <label className="text-xs text-muted mb-1 block">Voice</label>
-              <input
-                type="text"
+              <Input
                 maxLength={40}
                 value={resolved.voice}
                 onChange={(e) => handleFieldChange('voice', e.target.value)}
-                className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+                className="bg-background px-3 py-2"
               />
             </div>
           </div>
 
           <div>
             <label className="text-xs text-muted mb-1 block">Vibe</label>
-            <input
-              type="text"
+            <Input
               maxLength={80}
               value={resolved.vibe}
               onChange={(e) => handleFieldChange('vibe', e.target.value)}
-              className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+              className="bg-background px-3 py-2"
             />
             <span className="text-[10px] text-muted mt-0.5 block">
               Short personality summary used in the system prompt.
@@ -165,13 +163,13 @@ export function AgentIdentitySection({
 
           <div>
             <label className="text-xs text-muted mb-1 block">Custom Note</label>
-            <textarea
+            <Textarea
               rows={3}
               maxLength={240}
               value={resolved.customNote ?? ''}
               onChange={(e) => handleFieldChange('customNote', e.target.value)}
               placeholder="Optional extra note for how this identity should come through."
-              className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent resize-none leading-relaxed"
+              className="bg-background px-3 py-2 resize-none leading-relaxed"
             />
             <span className="text-[10px] text-muted mt-0.5 block">Optional and kept concise.</span>
           </div>
@@ -347,13 +345,13 @@ function TraitInput({
   return (
     <div>
       <label className="text-xs text-muted mb-1 block">{label}</label>
-      <input
+      <Input
         type="number"
         min={0}
         max={100}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm focus:outline-none focus:border-accent"
+        className="bg-background px-3 py-2"
       />
       <span className="text-[10px] text-muted mt-0.5 block">0 - 100</span>
     </div>

@@ -4,6 +4,7 @@ import { Zap, Clock, Trash2, ExternalLink, Play } from 'lucide-react';
 import * as Switch from '@radix-ui/react-switch';
 import { invoke } from '@tauri-apps/api/core';
 import { tasksApi } from '../../api/tasks';
+import { Textarea } from '../../components/ui';
 import { pulseApi, PulseConfig } from '../../api/pulse';
 import { schedulesApi } from '../../api/schedules';
 import { RecurringPicker } from '../ScheduleBuilder/RecurringPicker';
@@ -136,14 +137,14 @@ const PulseSection = forwardRef<{ triggerSave: () => void }, PulseSectionProps>(
         {/* Pulse content editor */}
         <div>
           <label className="text-xs text-muted mb-1 block">Prompt</label>
-          <textarea
+          <Textarea
             value={content}
             onChange={(e) => {
               setContent(e.target.value);
               markDirty();
             }}
             rows={6}
-            className="w-full px-3 py-2 rounded-lg bg-background border border-edge text-white text-sm font-mono resize-y focus:outline-none focus:border-accent leading-relaxed"
+            className="bg-background px-3 py-2 font-mono leading-relaxed"
             placeholder="Describe what this agent should do on each pulse..."
           />
         </div>
