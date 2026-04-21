@@ -18,6 +18,7 @@ interface ChatInputProps {
   onTextChange?: (text: string) => void;
   selectedModelOverride?: ChatModelOverride | null;
   pickerContext?: PickerContext | null;
+  queued?: boolean;
 }
 
 interface Attachment {
@@ -41,6 +42,7 @@ export function ChatInput({
   onTextChange,
   selectedModelOverride,
   pickerContext,
+  queued = false,
 }: ChatInputProps) {
   const [internalText, setInternalText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -63,7 +65,7 @@ export function ChatInput({
   );
 
   const handleSend = useCallback(() => {
-    if (sending || streaming) return;
+    if (sending) return;
 
     const trimmed = text.trim();
     if (!trimmed && attachments.length === 0) return;
@@ -157,9 +159,14 @@ export function ChatInput({
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   }
 
-  const inputDisabled = disabled || sending || stopping || streaming;
+  const inputDisabled = disabled || sending || stopping;
   const canSend = !inputDisabled && (text.trim().length > 0 || attachments.length > 0);
   const showStopButton = streaming && Boolean(onStop);
+  const sendLabel = streaming
+    ? queued
+      ? 'Replace queued message'
+      : 'Queue next message'
+    : 'Send message';
 
   return (
     <div className="border-t border-edge bg-panel">
@@ -235,18 +242,21 @@ export function ChatInput({
               <Square size={16} fill="currentColor" />
             )}
           </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={!canSend}
-            aria-label="Send message"
-            title="Send message"
-            className="p-2 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-30 disabled:hover:bg-accent text-white transition-colors shrink-0 mb-0.5"
-          >
-            <Send size={16} />
-          </button>
-        )}
+        ) : null}
+        <button
+          type="button"
+          onClick={handleSend}
+          disabled={!canSend}
+          aria-label={sendLabel}
+          title={sendLabel}
+          className={`p-2 rounded-lg text-white transition-colors shrink-0 mb-0.5 ${
+            streaming
+              ? 'bg-amber-500 hover:bg-amber-400 disabled:hover:bg-amber-500'
+              : 'bg-accent hover:bg-accent-hover disabled:hover:bg-accent'
+          } disabled:opacity-30`}
+        >
+          <Send size={16} />
+        </button>
       </div>
     </div>
   );

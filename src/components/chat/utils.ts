@@ -107,13 +107,15 @@ function contentBlockToDisplay(block: ContentBlock): DisplayBlock {
     case 'text':
       return { kind: 'text', text: block.text, isStreaming: false };
     case 'thinking':
-      return { kind: 'thinking', thinking: block.thinking };
+      return { kind: 'thinking', thinking: block.thinking, isStreaming: false };
     case 'tool_use':
       return {
         kind: 'tool_call',
         id: block.id,
         name: block.name,
         input: block.input,
+        inputText: JSON.stringify(block.input, null, 2),
+        isStreaming: false,
       };
     case 'tool_result':
       // Standalone tool_result (shouldn't happen after merge, but handle gracefully)

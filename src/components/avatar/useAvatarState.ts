@@ -42,8 +42,16 @@ export function useAvatarState(streamId: string | null): {
     unsubs.push(
       onAgentContentBlock((payload) => {
         if (payload.runId !== streamId) return;
-        if (payload.block.type === 'tool_use') {
+        if (
+          (payload.blockType === 'tool_use' || payload.blockType === 'tool_input_delta') &&
+          'name' in payload.block
+        ) {
           setState({ phase: 'using-tool', toolName: payload.block.name });
+          return;
+        }
+        if (payload.blockType === 'thinking_delta' || payload.blockType === 'thinking') {
+          textRef.current = '';
+          setState({ phase: 'thinking' });
         }
       })
     );

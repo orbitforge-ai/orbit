@@ -14,12 +14,14 @@ export interface DisplayMessage {
 
 export type DisplayBlock =
   | { kind: 'text'; text: string; isStreaming: boolean }
-  | { kind: 'thinking'; thinking: string }
+  | { kind: 'thinking'; thinking: string; isStreaming?: boolean }
   | {
       kind: 'tool_call';
       id: string;
       name: string;
       input: Record<string, unknown>;
+      inputText?: string;
+      isStreaming?: boolean;
       result?: { content: string; isError: boolean };
     }
   | { kind: 'image'; mediaType: string; data: string }

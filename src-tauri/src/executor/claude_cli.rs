@@ -14,7 +14,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tracing::{debug, warn};
 
-use crate::events::emitter::{emit_agent_content_block, emit_agent_llm_chunk, emit_log_chunk};
+use crate::events::emitter::{
+    emit_agent_content_block, emit_agent_llm_chunk, emit_agent_tool_result, emit_log_chunk,
+};
 use crate::executor::cli_common;
 use crate::executor::llm_provider::{
     ChatMessage, ContentBlock, LlmConfig, LlmProvider, LlmResponse, StopReason, ToolDefinition,
@@ -297,13 +299,26 @@ fn handle_event(ctx: &mut StreamContext<'_>, event: &Value) {
                 if let Some(blocks) = msg.get("content").and_then(|v| v.as_array()) {
                     for block in blocks {
                         if block.get("type").and_then(|v| v.as_str()) == Some("tool_result") {
-                            emit_agent_content_block(
-                                ctx.app,
-                                ctx.run_id,
-                                ctx.iteration,
-                                "tool_result",
-                                block.clone(),
-                            );
+                            let tool_use_id = block
+                                .get("tool_use_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            let content =
+                                block.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                            let is_error = block
+                                .get("is_error")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            if !tool_use_id.is_empty() {
+                                emit_agent_tool_result(
+                                    ctx.app,
+                                    ctx.run_id,
+                                    ctx.iteration,
+                                    tool_use_id,
+                                    content,
+                                    is_error,
+                                );
+                            }
                         }
                     }
                 }

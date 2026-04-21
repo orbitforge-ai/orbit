@@ -35,6 +35,7 @@ export function ChatView({ messages, liveRunId, className = '' }: ChatViewProps)
   // Live mode: get display messages from the store
   const liveRun = liveRunId ? store.activeRuns[liveRunId] : undefined;
   const liveMessages = liveRun?.agentLoopState?.displayMessages ?? [];
+  const previewMessage = liveRun?.agentLoopState?.previewMessage ?? null;
 
   // Subscribe to live events
   useEffect(() => {
@@ -53,7 +54,7 @@ export function ChatView({ messages, liveRunId, className = '' }: ChatViewProps)
     unsubs.push(
       onAgentContentBlock((payload) => {
         if (payload.runId === liveRunId) {
-          store.addContentBlock(liveRunId, payload.block, payload.iteration);
+          store.addContentBlock(liveRunId, payload);
         }
       })
     );
@@ -81,7 +82,11 @@ export function ChatView({ messages, liveRunId, className = '' }: ChatViewProps)
 
   // Determine which messages to render
   const displayMessages: DisplayMessage[] =
-    liveRunId && liveMessages.length > 0 ? liveMessages : historyMessages;
+    liveRunId
+      ? previewMessage
+        ? [...liveMessages, previewMessage]
+        : liveMessages
+      : historyMessages;
 
   // Auto-scroll
   useEffect(() => {

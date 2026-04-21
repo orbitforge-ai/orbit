@@ -781,6 +781,11 @@ export type ContentBlock =
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error: boolean }
   | { type: 'image'; media_type: string; data: string };
 
+export type StreamContentBlock =
+  | Extract<ContentBlock, { type: 'thinking' | 'tool_use' | 'tool_result' }>
+  | { type: 'thinking_delta'; thinking: string }
+  | { type: 'tool_input_delta'; id: string; name: string; partial_json: string };
+
 export interface ChatMessage {
   id?: string;
   role: 'user' | 'assistant';
@@ -843,7 +848,7 @@ export interface AgentContentBlockPayload {
   runId: string;
   iteration: number;
   blockType: string;
-  block: ContentBlock;
+  block: StreamContentBlock;
   timestamp: string;
 }
 

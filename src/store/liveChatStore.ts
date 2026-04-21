@@ -7,24 +7,34 @@ import {
   PermissionRequestPayload,
   UserQuestionPayload,
 } from '../types';
-import { DisplayBlock, DisplayMessage } from '../components/chat/types';
+import { DisplayMessage } from '../components/chat/types';
+import {
+  appendPreviewBlock,
+  appendTextDelta as appendPreviewTextDelta,
+  applyContentBlock,
+  applyToolResult,
+  contentBlocksToDisplay,
+  createEmptyPreviewState,
+  finalizePreviewMessage,
+  StreamPreviewState,
+} from './streaming/streamReducer';
 
-interface LiveChatStream {
+interface LiveChatStream extends StreamPreviewState {
   streamId: string;
   sessionId: string;
+  turnId: string;
   isStreaming: boolean;
-  displayMessages: DisplayMessage[];
+  pendingUserMessage: DisplayMessage | null;
+  userMessageDbId: string | null;
   completedAt: number | null;
 }
 
 interface LiveChatStore {
   chatStreams: Record<string, LiveChatStream>;
-  startChatStream: (
-    streamId: string,
-    sessionId: string,
-    baseMessages: DisplayMessage[],
-    content: ContentBlock[]
-  ) => string;
+  startChatStream: (streamId: string, sessionId: string, content: ContentBlock[]) => {
+    turnId: string;
+    userMessageId: string;
+  };
   setUserMessageDbId: (streamId: string, localMessageId: string, dbId: string) => void;
   appendTextDelta: (streamId: string, delta: string) => void;
   addContentBlock: (streamId: string, payload: AgentContentBlockPayload) => void;
@@ -33,150 +43,51 @@ interface LiveChatStore {
   addUserQuestionPrompt: (streamId: string, payload: UserQuestionPayload) => void;
   addReaction: (streamId: string, payload: MessageReactionPayload) => void;
   handleIteration: (streamId: string, payload: AgentIterationPayload) => void;
-  completeChatStream: (streamId: string) => void;
   clearChatStream: (streamId: string) => void;
-}
-
-let localMessageCounter = 0;
-const cleanupTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
-
-function nextLocalMessageId(prefix: string) {
-  localMessageCounter += 1;
-  return `${prefix}-${localMessageCounter}`;
-}
-
-function contentBlocksToDisplay(content: ContentBlock[]): DisplayBlock[] {
-  return content.map((block): DisplayBlock => {
-    if (block.type === 'text') return { kind: 'text', text: block.text, isStreaming: false };
-    if (block.type === 'image') {
-      return { kind: 'image', mediaType: block.media_type, data: block.data };
-    }
-    return { kind: 'text', text: '[attachment]', isStreaming: false };
-  });
-}
-
-function finalizeStreamingMessage(message: DisplayMessage): DisplayMessage {
-  const blocks = [...message.blocks];
-  const lastBlock = blocks[blocks.length - 1];
-  if (lastBlock && lastBlock.kind === 'text' && lastBlock.isStreaming) {
-    blocks[blocks.length - 1] = { ...lastBlock, isStreaming: false };
-  }
-  return { ...message, blocks, isStreaming: false };
-}
-
-function cloneDisplayMessage(message: DisplayMessage): DisplayMessage {
-  return {
-    ...message,
-    blocks: message.blocks.map((block) => ({ ...block })),
-    reactions: message.reactions?.map((reaction) => ({ ...reaction })),
-  };
-}
-
-function ensureStream(
-  state: LiveChatStoreState,
-  streamId: string
-): LiveChatStream {
-  const existing = state.chatStreams[streamId];
-  if (existing) return existing;
-
-  const sessionId = streamId.startsWith('chat:') ? streamId.slice(5) : streamId;
-  const created: LiveChatStream = {
-    streamId,
-    sessionId,
-    isStreaming: true,
-    displayMessages: [],
-    completedAt: null,
-  };
-  return created;
-}
-
-function getOrCreateAssistantMessage(msgs: DisplayMessage[]): [DisplayMessage[], number] {
-  const last = msgs[msgs.length - 1];
-  if (last && last.role === 'assistant' && last.isStreaming) {
-    return [msgs, msgs.length - 1];
-  }
-
-  const newMsg: DisplayMessage = {
-    id: nextLocalMessageId('chat-stream'),
-    role: 'assistant',
-    blocks: [],
-    isStreaming: true,
-  };
-  return [[...msgs, newMsg], msgs.length];
-}
-
-function hasPrimaryContent(message: DisplayMessage | undefined): boolean {
-  if (!message) return false;
-  return message.blocks.some((block) => block.kind !== 'thinking' && block.kind !== 'tool_call');
-}
-
-function maybeAppendCompletionMessage(
-  messages: DisplayMessage[],
-  finishSummary?: string | null
-): DisplayMessage[] {
-  const summary = finishSummary?.trim();
-  if (!summary) return messages;
-
-  const last = messages[messages.length - 1];
-  if (last?.role === 'assistant' && !hasPrimaryContent(last)) {
-    return [
-      ...messages,
-      {
-        id: nextLocalMessageId('chat-complete'),
-        role: 'assistant',
-        blocks: [{ kind: 'text', text: summary, isStreaming: false }],
-        isStreaming: false,
-      },
-    ];
-  }
-
-  return messages;
 }
 
 type LiveChatStoreState = {
   chatStreams: Record<string, LiveChatStream>;
 };
 
-function scheduleCleanup(streamId: string) {
-  const existing = cleanupTimeouts.get(streamId);
-  if (existing) clearTimeout(existing);
-  const timeout = setTimeout(() => {
-    useLiveChatStore.getState().clearChatStream(streamId);
-  }, 30_000);
-  cleanupTimeouts.set(streamId, timeout);
+let localMessageCounter = 0;
+
+function nextLocalMessageId(prefix: string) {
+  localMessageCounter += 1;
+  return `${prefix}-${localMessageCounter}`;
 }
 
-function cancelCleanup(streamId: string) {
-  const existing = cleanupTimeouts.get(streamId);
-  if (existing) {
-    clearTimeout(existing);
-    cleanupTimeouts.delete(streamId);
-  }
+function ensureStream(state: LiveChatStoreState, streamId: string): LiveChatStream {
+  const existing = state.chatStreams[streamId];
+  if (existing) return existing;
+
+  const sessionId = streamId.startsWith('chat:') ? streamId.slice(5) : streamId;
+  return {
+    streamId,
+    sessionId,
+    turnId: nextLocalMessageId('chat-turn'),
+    isStreaming: true,
+    pendingUserMessage: null,
+    userMessageDbId: null,
+    completedAt: null,
+    ...createEmptyPreviewState(),
+  };
+}
+
+function finalizeCurrentPreview(stream: LiveChatStream, keepStreaming: boolean): LiveChatStream {
+  if (!stream.previewMessage) return stream;
+  return {
+    ...stream,
+    previewMessage: finalizePreviewMessage(stream.previewMessage, keepStreaming),
+  };
 }
 
 export const useLiveChatStore = create<LiveChatStore>((set) => ({
   chatStreams: {},
 
-  startChatStream: (streamId, sessionId, baseMessages, content) => {
-    cancelCleanup(streamId);
+  startChatStream: (streamId, sessionId, content) => {
     const userMessageId = nextLocalMessageId('chat-user');
-    const assistantMessageId = nextLocalMessageId('chat-assistant');
-    const nextMessages = [
-      ...baseMessages.map(cloneDisplayMessage),
-      {
-        id: userMessageId,
-        role: 'user' as const,
-        blocks: contentBlocksToDisplay(content),
-        isStreaming: false,
-        timestamp: new Date().toISOString(),
-      },
-      {
-        id: assistantMessageId,
-        role: 'assistant' as const,
-        blocks: [],
-        isStreaming: true,
-      },
-    ];
+    const turnId = nextLocalMessageId('chat-turn');
 
     set((state) => ({
       chatStreams: {
@@ -184,28 +95,42 @@ export const useLiveChatStore = create<LiveChatStore>((set) => ({
         [streamId]: {
           streamId,
           sessionId,
+          turnId,
           isStreaming: true,
-          displayMessages: nextMessages,
+          pendingUserMessage: {
+            id: userMessageId,
+            role: 'user',
+            blocks: contentBlocksToDisplay(content),
+            isStreaming: false,
+            timestamp: new Date().toISOString(),
+          },
+          userMessageDbId: null,
           completedAt: null,
+          ...createEmptyPreviewState(),
         },
       },
     }));
 
-    return userMessageId;
+    return { turnId, userMessageId };
   },
 
   setUserMessageDbId: (streamId, localMessageId, dbId) =>
     set((state) => {
       const stream = state.chatStreams[streamId];
-      if (!stream) return state;
+      if (!stream || !stream.pendingUserMessage || stream.pendingUserMessage.id !== localMessageId) {
+        return state;
+      }
+
       return {
         chatStreams: {
           ...state.chatStreams,
           [streamId]: {
             ...stream,
-            displayMessages: stream.displayMessages.map((message) =>
-              message.id === localMessageId ? { ...message, dbId } : message
-            ),
+            userMessageDbId: dbId,
+            pendingUserMessage: {
+              ...stream.pendingUserMessage,
+              dbId,
+            },
           },
         },
       };
@@ -213,32 +138,19 @@ export const useLiveChatStore = create<LiveChatStore>((set) => ({
 
   appendTextDelta: (streamId, delta) =>
     set((state) => {
-      const baseStream = ensureStream(state, streamId);
-      const [messages, assistantIndex] = getOrCreateAssistantMessage([
-        ...baseStream.displayMessages.map(cloneDisplayMessage),
-      ]);
-      const assistant = { ...messages[assistantIndex] };
-      const blocks = [...assistant.blocks];
-      const lastBlock = blocks[blocks.length - 1];
-
-      if (lastBlock && lastBlock.kind === 'text' && lastBlock.isStreaming) {
-        blocks[blocks.length - 1] = { ...lastBlock, text: lastBlock.text + delta };
-      } else {
-        blocks.push({ kind: 'text', text: delta, isStreaming: true });
-      }
-
-      assistant.blocks = blocks;
-      assistant.isStreaming = true;
-      messages[assistantIndex] = assistant;
+      const stream = ensureStream(state, streamId);
+      const previewState = appendPreviewTextDelta(stream, delta, () =>
+        nextLocalMessageId('chat-preview')
+      );
 
       return {
         chatStreams: {
           ...state.chatStreams,
           [streamId]: {
-            ...baseStream,
+            ...stream,
+            ...previewState,
             isStreaming: true,
             completedAt: null,
-            displayMessages: messages,
           },
         },
       };
@@ -246,45 +158,19 @@ export const useLiveChatStore = create<LiveChatStore>((set) => ({
 
   addContentBlock: (streamId, payload) =>
     set((state) => {
-      const baseStream = ensureStream(state, streamId);
-      const [messages, assistantIndex] = getOrCreateAssistantMessage([
-        ...baseStream.displayMessages.map(cloneDisplayMessage),
-      ]);
-      const assistant = { ...messages[assistantIndex] };
-      const blocks = [...assistant.blocks];
-      const lastBlock = blocks[blocks.length - 1];
-
-      if (lastBlock && lastBlock.kind === 'text' && lastBlock.isStreaming) {
-        blocks[blocks.length - 1] = { ...lastBlock, isStreaming: false };
-      }
-
-      let displayBlock: DisplayBlock | null = null;
-      if (payload.block.type === 'thinking') {
-        displayBlock = { kind: 'thinking', thinking: payload.block.thinking };
-      } else if (payload.block.type === 'tool_use') {
-        displayBlock = {
-          kind: 'tool_call',
-          id: payload.block.id,
-          name: payload.block.name,
-          input: payload.block.input,
-        };
-      }
-
-      if (!displayBlock) return state;
-
-      blocks.push(displayBlock);
-      assistant.blocks = blocks;
-      assistant.isStreaming = true;
-      messages[assistantIndex] = assistant;
+      const stream = ensureStream(state, streamId);
+      const previewState = applyContentBlock(stream, payload, () =>
+        nextLocalMessageId('chat-preview')
+      );
 
       return {
         chatStreams: {
           ...state.chatStreams,
           [streamId]: {
-            ...baseStream,
+            ...stream,
+            ...previewState,
             isStreaming: true,
             completedAt: null,
-            displayMessages: messages,
           },
         },
       };
@@ -294,44 +180,24 @@ export const useLiveChatStore = create<LiveChatStore>((set) => ({
     set((state) => {
       const stream = state.chatStreams[streamId];
       if (!stream) return state;
-      const messages = stream.displayMessages.map(cloneDisplayMessage);
 
-      for (let i = messages.length - 1; i >= 0; i -= 1) {
-        const message = messages[i];
-        if (message.role !== 'assistant') continue;
-
-        for (let j = message.blocks.length - 1; j >= 0; j -= 1) {
-          const block = message.blocks[j];
-          if (block.kind === 'tool_call' && block.id === toolUseId) {
-            const nextBlocks = [...message.blocks];
-            nextBlocks[j] = { ...block, result: { content, isError } };
-            messages[i] = { ...message, blocks: nextBlocks };
-
-            return {
-              chatStreams: {
-                ...state.chatStreams,
-                [streamId]: {
-                  ...stream,
-                  displayMessages: messages,
-                },
-              },
-            };
-          }
-        }
-      }
-
-      return state;
+      const applied = applyToolResult([], stream, toolUseId, content, isError);
+      return {
+        chatStreams: {
+          ...state.chatStreams,
+          [streamId]: {
+            ...stream,
+            ...applied.state,
+          },
+        },
+      };
     }),
 
   addPermissionPrompt: (streamId, payload) =>
     set((state) => {
-      const baseStream = ensureStream(state, streamId);
-      const [messages, assistantIndex] = getOrCreateAssistantMessage([
-        ...baseStream.displayMessages.map(cloneDisplayMessage),
-      ]);
-      const assistant = { ...messages[assistantIndex] };
-      assistant.blocks = [
-        ...assistant.blocks,
+      const stream = ensureStream(state, streamId);
+      const previewState = appendPreviewBlock(
+        stream,
         {
           kind: 'permission_prompt',
           requestId: payload.requestId,
@@ -341,18 +207,17 @@ export const useLiveChatStore = create<LiveChatStore>((set) => ({
           riskDescription: payload.riskDescription,
           suggestedPattern: payload.suggestedPattern,
         },
-      ];
-      assistant.isStreaming = true;
-      messages[assistantIndex] = assistant;
+        () => nextLocalMessageId('chat-preview')
+      );
 
       return {
         chatStreams: {
           ...state.chatStreams,
           [streamId]: {
-            ...baseStream,
+            ...stream,
+            ...previewState,
             isStreaming: true,
             completedAt: null,
-            displayMessages: messages,
           },
         },
       };
@@ -360,13 +225,9 @@ export const useLiveChatStore = create<LiveChatStore>((set) => ({
 
   addUserQuestionPrompt: (streamId, payload) =>
     set((state) => {
-      const baseStream = ensureStream(state, streamId);
-      const [messages, assistantIndex] = getOrCreateAssistantMessage([
-        ...baseStream.displayMessages.map(cloneDisplayMessage),
-      ]);
-      const assistant = { ...messages[assistantIndex] };
-      assistant.blocks = [
-        ...assistant.blocks,
+      const stream = ensureStream(state, streamId);
+      const previewState = appendPreviewBlock(
+        stream,
         {
           kind: 'user_question_prompt',
           requestId: payload.requestId,
@@ -376,18 +237,17 @@ export const useLiveChatStore = create<LiveChatStore>((set) => ({
           multiSelect: payload.multiSelect,
           context: payload.context ?? undefined,
         },
-      ];
-      assistant.isStreaming = true;
-      messages[assistantIndex] = assistant;
+        () => nextLocalMessageId('chat-preview')
+      );
 
       return {
         chatStreams: {
           ...state.chatStreams,
           [streamId]: {
-            ...baseStream,
+            ...stream,
+            ...previewState,
             isStreaming: true,
             completedAt: null,
-            displayMessages: messages,
           },
         },
       };
@@ -396,20 +256,8 @@ export const useLiveChatStore = create<LiveChatStore>((set) => ({
   addReaction: (streamId, payload) =>
     set((state) => {
       const stream = state.chatStreams[streamId];
-      if (!stream) return state;
-      const messages = stream.displayMessages.map(cloneDisplayMessage);
-
-      for (let i = 0; i < messages.length; i += 1) {
-        if (messages[i].dbId === payload.messageId) {
-          messages[i] = {
-            ...messages[i],
-            reactions: [
-              ...(messages[i].reactions ?? []),
-              { id: payload.reactionId, emoji: payload.emoji, isNew: true },
-            ],
-          };
-          break;
-        }
+      if (!stream?.pendingUserMessage || stream.pendingUserMessage.dbId !== payload.messageId) {
+        return state;
       }
 
       return {
@@ -417,7 +265,13 @@ export const useLiveChatStore = create<LiveChatStore>((set) => ({
           ...state.chatStreams,
           [streamId]: {
             ...stream,
-            displayMessages: messages,
+            pendingUserMessage: {
+              ...stream.pendingUserMessage,
+              reactions: [
+                ...(stream.pendingUserMessage.reactions ?? []),
+                { id: payload.reactionId, emoji: payload.emoji, isNew: true },
+              ],
+            },
           },
         },
       };
@@ -427,58 +281,37 @@ export const useLiveChatStore = create<LiveChatStore>((set) => ({
     set((state) => {
       const stream = state.chatStreams[streamId];
       if (!stream) return state;
-      let messages = stream.displayMessages.map(cloneDisplayMessage);
 
-      if (messages.length > 0 && (payload.action === 'llm_call' || payload.action === 'finished')) {
-        const last = messages[messages.length - 1];
-        if (last.role === 'assistant' && last.isStreaming) {
-          messages[messages.length - 1] = finalizeStreamingMessage(last);
-        }
+      if (payload.action === 'llm_call') {
+        return {
+          chatStreams: {
+            ...state.chatStreams,
+            [streamId]: {
+              ...finalizeCurrentPreview(stream, true),
+              completedAt: null,
+            },
+          },
+        };
       }
 
       if (payload.action === 'finished') {
-        messages = maybeAppendCompletionMessage(messages, payload.finishSummary);
+        return {
+          chatStreams: {
+            ...state.chatStreams,
+            [streamId]: {
+              ...finalizeCurrentPreview(stream, false),
+              isStreaming: false,
+              completedAt: Date.now(),
+            },
+          },
+        };
       }
 
-      return {
-        chatStreams: {
-          ...state.chatStreams,
-          [streamId]: {
-            ...stream,
-            isStreaming: payload.action !== 'finished',
-            completedAt: payload.action === 'finished' ? Date.now() : null,
-            displayMessages: messages,
-          },
-        },
-      };
-    }),
-
-  completeChatStream: (streamId) =>
-    set((state) => {
-      const stream = state.chatStreams[streamId];
-      if (!stream) return state;
-      scheduleCleanup(streamId);
-      const messages = stream.displayMessages.map(cloneDisplayMessage);
-      const last = messages[messages.length - 1];
-      if (last?.isStreaming) {
-        messages[messages.length - 1] = finalizeStreamingMessage(last);
-      }
-      return {
-        chatStreams: {
-          ...state.chatStreams,
-          [streamId]: {
-            ...stream,
-            isStreaming: false,
-            completedAt: Date.now(),
-            displayMessages: messages,
-          },
-        },
-      };
+      return state;
     }),
 
   clearChatStream: (streamId) =>
     set((state) => {
-      cancelCleanup(streamId);
       const { [streamId]: _removed, ...rest } = state.chatStreams;
       return { chatStreams: rest };
     }),

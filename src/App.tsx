@@ -61,7 +61,6 @@ function ChatStreamBridge() {
     unsubs.push(
       onAgentContentBlock((payload) => {
         if (!payload.runId.startsWith('chat:')) return;
-        if (payload.block.type === 'tool_use' && payload.block.name === 'react_to_message') return;
         useLiveChatStore.getState().addContentBlock(payload.runId, payload);
       })
     );
@@ -81,7 +80,6 @@ function ChatStreamBridge() {
         useLiveChatStore.getState().handleIteration(payload.runId, payload);
         if (payload.action === 'finished') {
           const sessionId = payload.runId.slice(5);
-          useLiveChatStore.getState().completeChatStream(payload.runId);
           queryClient.invalidateQueries({ queryKey: ['chat-messages', sessionId] });
           queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
           queryClient.invalidateQueries({ queryKey: ['chat-session-execution', sessionId] });

@@ -143,7 +143,7 @@ function ToolDetailPanel({ tool }: { tool: Extract<DisplayBlock, { kind: 'tool_c
   const status = getToolStatus(tool);
   const isInterrupted = status === 'interrupted';
   const presentation = buildToolPresentation(tool);
-  const inputStr = JSON.stringify(tool.input, null, 2);
+  const inputStr = tool.inputText ?? JSON.stringify(tool.input, null, 2);
   const resultStr = tool.result?.content ?? null;
 
   return (

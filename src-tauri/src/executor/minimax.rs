@@ -182,11 +182,35 @@ impl MiniMaxProvider {
                                 "thinking_delta" => {
                                     if let Some(thinking) = delta["thinking"].as_str() {
                                         current_thinking.push_str(thinking);
+                                        emit_agent_content_block(
+                                            app,
+                                            run_id,
+                                            iteration,
+                                            "thinking_delta",
+                                            json!({
+                                                "type": "thinking_delta",
+                                                "thinking": thinking,
+                                            }),
+                                        );
                                     }
                                 }
                                 "input_json_delta" => {
                                     if let Some(json_part) = delta["partial_json"].as_str() {
                                         current_tool_input_json.push_str(json_part);
+                                        if !current_tool_id.is_empty() {
+                                            emit_agent_content_block(
+                                                app,
+                                                run_id,
+                                                iteration,
+                                                "tool_input_delta",
+                                                json!({
+                                                    "type": "tool_input_delta",
+                                                    "id": current_tool_id,
+                                                    "name": current_tool_name,
+                                                    "partial_json": json_part,
+                                                }),
+                                            );
+                                        }
                                     }
                                 }
                                 _ => {}

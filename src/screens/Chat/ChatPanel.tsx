@@ -30,6 +30,22 @@ interface QueuedInitialMessage {
   modelOverride: ChatModelOverride | null;
 }
 
+interface QueuedTurn {
+  key: string;
+  content: ContentBlock[];
+  modelOverride: ChatModelOverride | null;
+}
+
+function hasPersistedAssistantAfterUser(
+  messages: Array<{ id?: string; role: 'user' | 'assistant' }>,
+  userMessageId: string | null
+) {
+  if (!userMessageId) return false;
+  const userIndex = messages.findIndex((message) => message.id === userMessageId);
+  if (userIndex < 0) return false;
+  return messages.slice(userIndex + 1).some((message) => message.role === 'assistant');
+}
+
 interface ChatPanelProps {
   sessionId?: string;
   draft?: ChatDraft | null;
@@ -60,6 +76,7 @@ export function ChatPanel({
   );
   const [modelPinned, setModelPinned] = useState(false);
   const [modelHoverState, setModelHoverState] = useState<{ x: number; y: number } | null>(null);
+  const [queuedTurn, setQueuedTurn] = useState<QueuedTurn | null>(null);
 
   const prevScrollHeightRef = useRef(0);
   const prevScrollTopRef = useRef(0);
@@ -73,7 +90,6 @@ export function ChatPanel({
     )
   );
   const streaming = streamEntry?.isStreaming ?? false;
-  const streamMessages = streamEntry?.displayMessages ?? [];
   const pendingPermissionRequestMap = usePermissionStore((s) => s.pending);
 
   // ── Avatar ────────────────────────────────────────────────────────────────
@@ -100,6 +116,7 @@ export function ChatPanel({
     consumedInitialMessageRef.current = null;
     setModelPinned(false);
     setModelHoverState(null);
+    setQueuedTurn(null);
   }, [draft?.id, sessionId]);
 
   const { data: sessionMeta } = useQuery({
@@ -251,16 +268,26 @@ export function ChatPanel({
       },
     ];
   }, [initialQueuedMessage, isDraft]);
-
-  const shouldPreferStreamMessages =
-    streamMessages.length > 0 && (streaming || streamMessages.length > historyMessages.length);
-  const displayMessages = isDraft
-    ? []
-    : shouldPreferStreamMessages
-      ? streamMessages
-      : historyMessages.length > 0
-        ? historyMessages
-        : optimisticInitialMessages;
+  const pendingUserMessage = useMemo(() => {
+    if (!streamEntry?.pendingUserMessage) return null;
+    const dbId = streamEntry.pendingUserMessage.dbId;
+    if (dbId && allDbMessages.some((message) => message.id === dbId)) {
+      return null;
+    }
+    return streamEntry.pendingUserMessage;
+  }, [allDbMessages, streamEntry?.pendingUserMessage]);
+  const previewMessage = streamEntry?.previewMessage ?? null;
+  const displayMessages = useMemo<DisplayMessage[]>(() => {
+    if (isDraft) return [];
+    const liveMessages = [
+      ...(pendingUserMessage ? [pendingUserMessage] : []),
+      ...(previewMessage ? [previewMessage] : []),
+    ];
+    if (historyMessages.length === 0 && liveMessages.length === 0) {
+      return optimisticInitialMessages;
+    }
+    return [...historyMessages, ...liveMessages];
+  }, [historyMessages, isDraft, optimisticInitialMessages, pendingUserMessage, previewMessage]);
 
   useEffect(() => {
     if (!streaming || !sessionExecution?.executionState) return;
@@ -275,7 +302,6 @@ export function ChatPanel({
       return;
     }
     if (streamId) {
-      useLiveChatStore.getState().completeChatStream(streamId);
       queryClient.invalidateQueries({ queryKey: ['chat-messages', sessionId] });
       queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
       queryClient.invalidateQueries({ queryKey: ['chat-session-execution', sessionId] });
@@ -284,10 +310,10 @@ export function ChatPanel({
 
   useEffect(() => {
     if (!streamId || !streamEntry || streaming) return;
-    if (historyMessages.length >= streamMessages.length && streamMessages.length > 0) {
+    if (hasPersistedAssistantAfterUser(allDbMessages, streamEntry.userMessageDbId)) {
       useLiveChatStore.getState().clearChatStream(streamId);
     }
-  }, [historyMessages.length, streamEntry, streamId, streamMessages.length, streaming]);
+  }, [allDbMessages, streamEntry, streamId, streaming]);
 
   useEffect(() => {
     if (!isLoadingOlderRef.current || !parentRef.current) return;
@@ -339,20 +365,14 @@ export function ChatPanel({
     async (content: ContentBlock[], modelOverride?: ChatModelOverride | null) => {
       if (!sessionId) return;
       const effectiveOverride = modelOverride ?? selectedModelOverride ?? undefined;
-      const resolved = await resolveMentionsToContentBlocks(content, {
-        sessionId,
-        agentId: currentAgentId,
-        projectId: sessionMeta?.projectId ?? null,
-        modelOverride: effectiveOverride ?? null,
-      });
       const currentStreamId = `chat:${sessionId}`;
-      const localUserMessageId = useLiveChatStore
+      const { userMessageId: localUserMessageId } = useLiveChatStore
         .getState()
-        .startChatStream(currentStreamId, sessionId, historyMessages, resolved);
+        .startChatStream(currentStreamId, sessionId, content);
       forceThinking();
 
       try {
-        const resp = await chatApi.sendMessage(sessionId, resolved, effectiveOverride);
+        const resp = await chatApi.sendMessage(sessionId, content, effectiveOverride);
         useLiveChatStore
           .getState()
           .setUserMessageDbId(currentStreamId, localUserMessageId, resp.userMessageId);
@@ -362,7 +382,7 @@ export function ChatPanel({
         throw err;
       }
     },
-    [currentAgentId, forceThinking, historyMessages, selectedModelOverride, sessionId, sessionMeta?.projectId]
+    [forceThinking, selectedModelOverride, sessionId]
   );
 
   const handleSend = useCallback(
@@ -378,9 +398,38 @@ export function ChatPanel({
         return;
       }
 
-      await handlePersistedSend(content, modelOverride);
+      if (!sessionId) return;
+
+      const effectiveOverride = modelOverride ?? selectedModelOverride ?? null;
+      const resolved = await resolveMentionsToContentBlocks(content, {
+        sessionId,
+        agentId: currentAgentId,
+        projectId: sessionMeta?.projectId ?? null,
+        modelOverride: effectiveOverride,
+      });
+
+      if (streaming) {
+        setQueuedTurn({
+          key: `queued-turn:${Date.now()}`,
+          content: resolved,
+          modelOverride: effectiveOverride,
+        });
+        return;
+      }
+
+      await handlePersistedSend(resolved, effectiveOverride);
     },
-    [currentAgentId, draft?.projectId, handlePersistedSend, isDraft, onDraftSend, selectedModelOverride]
+    [
+      currentAgentId,
+      draft?.projectId,
+      handlePersistedSend,
+      isDraft,
+      onDraftSend,
+      selectedModelOverride,
+      sessionId,
+      sessionMeta?.projectId,
+      streaming,
+    ]
   );
 
   const handleStop = useCallback(async () => {
@@ -421,6 +470,22 @@ export function ChatPanel({
     onInitialMessageHandled,
     sessionId,
   ]);
+
+  useEffect(() => {
+    if (!sessionId || !streamId || !queuedTurn || streaming) return;
+
+    const run = async () => {
+      useLiveChatStore.getState().clearChatStream(streamId);
+      try {
+        await handlePersistedSend(queuedTurn.content, queuedTurn.modelOverride);
+        setQueuedTurn(null);
+      } catch (error) {
+        console.error('Failed to send queued message:', error);
+      }
+    };
+
+    void run();
+  }, [handlePersistedSend, queuedTurn, sessionId, streamId, streaming]);
 
   const showScrollBtn = !isDraft && !autoScroll;
   const visiblePermissionRequestIds = useMemo(() => {
@@ -717,6 +782,7 @@ export function ChatPanel({
       <ChatInput
         onSend={handleSend}
         streaming={streaming}
+        queued={Boolean(queuedTurn)}
         onStop={!isDraft && sessionId ? handleStop : undefined}
         modelPicker={modelPicker}
         selectedModelOverride={selectedModelOverride}
