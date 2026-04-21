@@ -5,13 +5,11 @@ import {
   Archive,
   ArchiveRestore,
   Trash2,
-  MoreHorizontal,
   Eye,
   MessageSquare,
   Zap,
   GitBranch,
   Loader2,
-  CheckCircle2,
   XCircle,
   ChevronDown,
   Bot,
@@ -70,22 +68,9 @@ export function SessionList({
   const queryClient = useQueryClient();
   const { openAgentChat } = useUiStore();
   const [showArchived, setShowArchived] = useState(false);
-  const [menuSessionId, setMenuSessionId] = useState<string | null>(null);
   const [collapsedSenderGroups, setCollapsedSenderGroups] = useState<Record<string, boolean>>({});
   const [collapsedSourceGroups, setCollapsedSourceGroups] = useState<Record<string, boolean>>({});
-  const menuRef = useRef<HTMLDivElement>(null);
   const prevActiveSessionIdRef = useRef(activeSessionId);
-
-  useEffect(() => {
-    if (!menuSessionId) return;
-    function handleClick(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuSessionId(null);
-      }
-    }
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [menuSessionId]);
 
   const { data: sessions = [] } = useQuery({
     queryKey: ['chat-sessions', agentId, showArchived, projectId ?? null],
@@ -104,7 +89,6 @@ export function SessionList({
       console.error('Failed to archive/unarchive session:', err);
     }
     queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
-    setMenuSessionId(null);
   }
 
   async function handleCancel(session: ChatSession) {
@@ -114,7 +98,6 @@ export function SessionList({
       console.error('Failed to cancel session:', err);
     }
     queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
-    setMenuSessionId(null);
   }
 
   async function handleDelete(session: ChatSession) {
@@ -132,7 +115,6 @@ export function SessionList({
       console.error('Failed to delete session:', err);
     }
     queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
-    setMenuSessionId(null);
   }
 
   function formatTime(dateStr: string) {
@@ -404,6 +386,12 @@ export function SessionList({
     const isDraft = draftSession?.id === session.id;
     const isPulse = session.sessionType === 'pulse';
     const executionStateLabel = isDraft ? null : getExecutionStateLabel(session);
+    const isActive = !isDraft && (session.executionState === 'queued' || session.executionState === 'running');
+    const isFailed = !isDraft && (
+      session.executionState === 'failure' ||
+      session.executionState === 'cancelled' ||
+      session.executionState === 'timed_out'
+    );
     const icon = isPulse ? (
       <Zap size={14} className="shrink-0 text-warning" />
     ) : session.sessionType === 'sub_agent' ? (
@@ -414,21 +402,18 @@ export function SessionList({
       <MessageSquare size={14} className="shrink-0 opacity-50" />
     );
 
-    const stateIcon = isDraft ? null : session.executionState === 'queued' ||
-      session.executionState === 'running' ? (
-      <Loader2 size={12} className="animate-spin text-accent-hover" />
-    ) : session.executionState === 'success' ? (
-      <CheckCircle2 size={12} className="text-emerald-400" />
-    ) : session.executionState ? (
-      <XCircle size={12} className="text-red-400" />
-    ) : null;
+    const titleColorClass = isDraft
+      ? ''
+      : isFailed
+        ? 'text-red-400/80'
+        : '';
 
     return (
       <div
         id={session.id}
         key={session.id}
         onClick={() => onSelectSession(session.id)}
-        className={`group relative flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${
+        className={`group relative flex items-center gap-2.5 px-3 py-1.5 rounded-lg cursor-pointer transition-colors ${
           isDraft && activeSessionId === session.id
             ? 'border border-dashed border-accent/60 bg-accent/12 text-white'
             : isDraft
@@ -439,82 +424,74 @@ export function SessionList({
         }`}
       >
         {icon}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <p className={`text-sm truncate ${isDraft ? 'italic' : ''}`}>{session.title}</p>
-            {isDraft && (
-              <span className="shrink-0 rounded-full border border-accent/40 bg-accent/12 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-accent-hover">
-                Draft
-              </span>
-            )}
-          </div>
-          <p className="text-[10px] text-muted">{formatTime(session.updatedAt)}</p>
-        </div>
-        {stateIcon && executionStateLabel ? (
+        <p className={`flex-1 min-w-0 text-sm truncate ${isDraft ? 'italic' : ''} ${titleColorClass}`}>
+          {session.title}
+        </p>
+        {isDraft && (
+          <span className="shrink-0 rounded-full border border-accent/40 bg-accent/12 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-accent-hover">
+            Draft
+          </span>
+        )}
+        {isActive && (
           <span
             className="shrink-0"
-            title={executionStateLabel}
-            aria-label={executionStateLabel}
+            title={executionStateLabel ?? undefined}
+            aria-label={executionStateLabel ?? undefined}
           >
-            {stateIcon}
+            <Loader2 size={12} className="animate-spin text-accent-hover" />
           </span>
-        ) : stateIcon}
-
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setMenuSessionId(menuSessionId === session.id ? null : session.id);
-          }}
-          className="opacity-0 group-hover:opacity-100 p-1 rounded text-muted hover:text-white transition-opacity"
-        >
-          <MoreHorizontal size={14} />
-        </button>
-
-        {menuSessionId === session.id && (
-          <div
-            ref={menuRef}
-            className="absolute right-2 top-full mt-1 z-50 rounded-lg bg-surface border border-edge shadow-xl py-1 min-w-[140px]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {!isDraft && (session.executionState === 'queued' || session.executionState === 'running') && (
-              <button
-                onClick={() => handleCancel(session)}
-                className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-warning hover:bg-warning/10"
-              >
-                <XCircle size={12} /> Cancel
-              </button>
-            )}
-            {!isDraft && (
-              <button
-                onClick={() => handleArchive(session)}
-                className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-secondary hover:text-white hover:bg-surface-hover"
-              >
-                {session.archived ? (
-                  <>
-                    <ArchiveRestore size={12} /> Unarchive
-                  </>
-                ) : (
-                  <>
-                    <Archive size={12} /> Archive
-                  </>
-                )}
-              </button>
-            )}
-            <button
-              onClick={() => {
-                if (isDraft) {
-                  onDeleteDraft?.();
-                  setMenuSessionId(null);
-                  return;
-                }
-                void handleDelete(session);
-              }}
-              className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10"
-            >
-              <Trash2 size={12} /> {isDraft ? 'Delete draft' : 'Delete'}
-            </button>
-          </div>
         )}
+
+        <div className="shrink-0 hidden group-hover:flex items-center gap-0.5">
+          {isActive && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleCancel(session);
+              }}
+              title="Cancel"
+              aria-label="Cancel"
+              className="p-1 rounded text-muted hover:text-warning hover:bg-warning/10 transition-colors"
+            >
+              <XCircle size={13} />
+            </button>
+          )}
+          {!isDraft && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleArchive(session);
+              }}
+              title={session.archived ? 'Unarchive' : 'Archive'}
+              aria-label={session.archived ? 'Unarchive' : 'Archive'}
+              className="p-1 rounded text-muted hover:text-white hover:bg-surface-hover transition-colors"
+            >
+              {session.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (isDraft) {
+                onDeleteDraft?.();
+                return;
+              }
+              void handleDelete(session);
+            }}
+            title={isDraft ? 'Delete draft' : 'Delete'}
+            aria-label={isDraft ? 'Delete draft' : 'Delete'}
+            className="p-1 rounded text-muted hover:text-red-400 hover:bg-red-500/10 transition-colors"
+          >
+            <Trash2 size={13} />
+          </button>
+        </div>
+
+        <span className="shrink-0 text-[10px] text-muted group-hover:hidden">
+          {formatTime(session.updatedAt)}
+        </span>
       </div>
     );
   }

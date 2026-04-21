@@ -684,7 +684,7 @@ impl ContextStage for BasePromptStage {
         // Build the runtime context section
         // Interpolated values are wrapped in <data> tags to prevent prompt injection
         // through user-controlled fields (agent names, file listings, session titles).
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let today = chrono::Utc::now().to_utc().to_string();
         let mut context_section = format!(
             "## Current Context\n- Agent: <data type=\"agent_name\">{}</data>\n- Mode: {}\n",
             agent_name, request.mode
