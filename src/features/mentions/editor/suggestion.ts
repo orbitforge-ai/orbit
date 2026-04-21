@@ -3,7 +3,7 @@ import { PluginKey } from '@tiptap/pm/state';
 import Suggestion, { SuggestionProps, SuggestionKeyDownProps } from '@tiptap/suggestion';
 import { MentionToken } from '../types';
 
-export type SuggestionTrigger = '@' | '#';
+export type SuggestionTrigger = '@';
 
 export interface SuggestionRenderState {
   open: boolean;
@@ -20,12 +20,12 @@ export interface SuggestionHandlers {
   onKeyDown(event: KeyboardEvent): boolean;
 }
 
-export interface SuggestionHandlersRef {
-  current: SuggestionHandlers;
-}
-
 export interface MentionSuggestionOptions {
   handlersRef: SuggestionHandlersRef | null;
+}
+
+export interface SuggestionHandlersRef {
+  current: SuggestionHandlers;
 }
 
 function buildSuggestionConfig(trigger: SuggestionTrigger, handlersRef: SuggestionHandlersRef) {
@@ -89,11 +89,6 @@ export const MentionSuggestion = Extension.create<MentionSuggestionOptions>({
         editor: this.editor,
         pluginKey: new PluginKey('mention-suggestion-at'),
         ...buildSuggestionConfig('@', handlersRef),
-      }),
-      Suggestion({
-        editor: this.editor,
-        pluginKey: new PluginKey('mention-suggestion-hash'),
-        ...buildSuggestionConfig('#', handlersRef),
       }),
     ];
   },

@@ -219,7 +219,7 @@ export function ChatInput({
           onChange={setText}
           onSubmit={handleSend}
           disabled={inputDisabled}
-          placeholder="Type a message... (@ for agents, # for files & work items)"
+          placeholder="Type a message... (@ for agents, files, work items, and skills)"
           pickerContext={pickerContext ?? null}
           maxHeight={200}
         />

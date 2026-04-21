@@ -1,4 +1,4 @@
-export type MentionKind = 'agent' | 'file' | 'item';
+export type MentionKind = 'agent' | 'file' | 'item' | 'skill';
 
 export interface MentionToken {
   kind: MentionKind;
@@ -6,6 +6,7 @@ export interface MentionToken {
   // agent: agentId
   // file:  `${agentId}:${relPath}`
   // item:  workItemId
+  // skill: skillName
   payload: string;
 }
 

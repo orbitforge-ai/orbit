@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bot, FileText, CheckSquare } from 'lucide-react';
+import { Bot, FileText, CheckSquare, Sparkles } from 'lucide-react';
 import { useMentionGroups } from '../dataSources';
 import { MentionItem, MentionKind, MentionToken, PickerContext } from '../types';
 
@@ -8,6 +8,7 @@ const ICON_BY_KIND: Record<MentionKind, typeof Bot> = {
   agent: Bot,
   file: FileText,
   item: CheckSquare,
+  skill: Sparkles,
 };
 
 const POPUP_WIDTH = 320;
@@ -20,7 +21,7 @@ export interface InputMentionPopupHandle {
 
 interface Props {
   open: boolean;
-  trigger: '@' | '#' | null;
+  trigger: '@' | null;
   query: string;
   anchorRect: (() => DOMRect | null) | null;
   pickerContext: PickerContext | null;
@@ -35,7 +36,7 @@ export const InputMentionPopup = forwardRef<InputMentionPopupHandle, Props>(func
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   const groups = useMentionGroups({
-    trigger: open ? trigger : null,
+    enabled: open,
     query,
     currentAgentId: pickerContext?.agentId ?? null,
     projectId: pickerContext?.projectId ?? null,

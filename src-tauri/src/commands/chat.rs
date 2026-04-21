@@ -1,3 +1,4 @@
+use regex::Regex;
 use serde::Deserialize;
 use serde::Serialize;
 use tauri::Manager;
@@ -22,12 +23,15 @@ use crate::executor::memory::MemoryClient;
 use crate::executor::permissions::{self, PermissionRegistry};
 use crate::executor::session_agent;
 use crate::executor::session_worktree;
+use crate::executor::skills;
 use crate::executor::workspace;
 use crate::memory_service::MemoryServiceState;
 use crate::models::chat::ChatSession;
 
 const MAX_TOKENS_PER_CALL: u32 = 4096;
 const CHAT_CANCEL_POLL_INTERVAL_MS: u64 = 100;
+const SKILL_MENTION_PATTERN: &str =
+    r#"[@#]\[[^\]]+\]\(mention:skill:(?P<skill_name>[^)]+)\)"#;
 
 fn can_cancel_chat_session(session_type: &str) -> bool {
     matches!(
@@ -94,6 +98,70 @@ async fn chat_streaming_with_cancellation(
             }
         }
     }
+}
+
+fn extract_skill_mentions(blocks: &[ContentBlock]) -> Vec<String> {
+    let regex = match Regex::new(SKILL_MENTION_PATTERN) {
+        Ok(regex) => regex,
+        Err(err) => {
+            warn!("failed to compile skill mention regex: {}", err);
+            return Vec::new();
+        }
+    };
+
+    let mut seen = std::collections::BTreeSet::new();
+    for block in blocks {
+        let ContentBlock::Text { text } = block else {
+            continue;
+        };
+        for caps in regex.captures_iter(text) {
+            let Some(skill_name) = caps.name("skill_name") else {
+                continue;
+            };
+            seen.insert(skill_name.as_str().to_string());
+        }
+    }
+
+    seen.into_iter().collect()
+}
+
+fn activate_skill_mentions_for_session(
+    db: &DbPool,
+    session_id: &str,
+    agent_id: &str,
+    disabled_skills: &[String],
+    blocks: &[ContentBlock],
+) -> Result<Vec<String>, String> {
+    let mentioned_skill_names = extract_skill_mentions(blocks);
+    if mentioned_skill_names.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut activated = Vec::new();
+    for skill_name in mentioned_skill_names {
+        match skills::load_skill(agent_id, &skill_name, disabled_skills) {
+            Ok(loaded_skill) => {
+                skills::upsert_active_skill(
+                    db,
+                    session_id,
+                    &skill_name,
+                    &loaded_skill.instructions,
+                    loaded_skill.metadata.source_path.as_deref(),
+                )?;
+                activated.push(skill_name);
+            }
+            Err(err) => {
+                warn!(
+                    session_id = session_id,
+                    skill = skill_name,
+                    error = %err,
+                    "failed to activate mentioned skill"
+                );
+            }
+        }
+    }
+
+    Ok(activated)
 }
 
 // ─── Session CRUD ───────────────────────────────────────────────────────────
@@ -1043,6 +1111,28 @@ async fn do_llm_chat(
     let provider_name = &ws_config.provider;
     let api_key = keychain::retrieve_api_key(provider_name)
         .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
+
+    if let Some(latest_user_blocks) = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| message.content.as_slice())
+    {
+        let activated_skill_names = activate_skill_mentions_for_session(
+            db,
+            session_id,
+            agent_id,
+            &ws_config.disabled_skills,
+            latest_user_blocks,
+        )?;
+        if !activated_skill_names.is_empty() {
+            info!(
+                session_id = session_id,
+                skills = ?activated_skill_names,
+                "activated skills from chat mentions"
+            );
+        }
+    }
 
     let chat_project_id = session_worktree::load_session_project_id(db, session_id).await?;
     if let Some(pid) = chat_project_id.as_deref() {

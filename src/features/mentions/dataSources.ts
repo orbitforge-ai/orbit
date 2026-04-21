@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { agentsApi } from '../../api/agents';
+import { skillsApi } from '../../api/skills';
 import { workItemsApi } from '../../api/workItems';
 import { listFilesRecursive } from './listFilesRecursive';
 import { MentionGroup, MentionItem, MentionKind } from './types';
@@ -62,71 +63,99 @@ export function useWorkItemsMentionSource(projectId: string | null) {
   });
 }
 
+export function useSkillsMentionSource(agentId: string | null) {
+  return useQuery({
+    queryKey: ['skills', agentId],
+    queryFn: () => skillsApi.list(agentId!),
+    enabled: Boolean(agentId),
+    staleTime: 30_000,
+  });
+}
+
 interface UseMentionGroupsArgs {
-  trigger: '@' | '#' | null;
+  enabled: boolean;
   query: string;
   currentAgentId: string | null;
   projectId: string | null;
 }
 
 export function useMentionGroups({
-  trigger,
+  enabled,
   query,
   currentAgentId,
   projectId,
 }: UseMentionGroupsArgs): MentionGroup[] {
   const agentsQuery = useAgentsMentionSource(currentAgentId);
-  const filesQuery = useFilesMentionSource(trigger === '#' ? currentAgentId : null);
-  const itemsQuery = useWorkItemsMentionSource(trigger === '#' ? projectId : null);
+  const filesQuery = useFilesMentionSource(enabled ? currentAgentId : null);
+  const itemsQuery = useWorkItemsMentionSource(enabled ? projectId : null);
+  const skillsQuery = useSkillsMentionSource(enabled ? currentAgentId : null);
 
   return useMemo<MentionGroup[]>(() => {
-    if (trigger === '@') {
-      const items: MentionItem[] = (agentsQuery.data ?? []).map((agent) => ({
-        id: agent.id,
-        label: agent.name,
-        secondary: agent.id === currentAgentId ? 'current chat' : agent.description ?? undefined,
-        token: { kind: 'agent' as MentionKind, label: agent.name, payload: agent.id },
-      }));
-      return [{ kind: 'agent', title: 'Agents', items: rank(items, query) }];
+    const groups: MentionGroup[] = [];
+
+    const agentItems: MentionItem[] = (agentsQuery.data ?? []).map((agent) => ({
+      id: agent.id,
+      label: agent.name,
+      secondary: agent.id === currentAgentId ? 'current chat' : agent.description ?? undefined,
+      token: { kind: 'agent' as MentionKind, label: agent.name, payload: agent.id },
+    }));
+    const rankedAgents = rank(agentItems, query);
+    if (rankedAgents.length > 0) {
+      groups.push({ kind: 'agent', title: 'Agents', items: rankedAgents });
     }
 
-    if (trigger === '#') {
-      const groups: MentionGroup[] = [];
+    const skillItems: MentionItem[] = (skillsQuery.data ?? [])
+      .filter((skill) => skill.enabled)
+      .sort((a, b) => {
+        if (a.active !== b.active) return a.active ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      })
+      .map((skill) => ({
+        id: skill.name,
+        label: skill.name,
+        secondary: skill.active
+          ? skill.description
+            ? `active · ${skill.description}`
+            : 'active'
+          : skill.description,
+        token: { kind: 'skill' as MentionKind, label: skill.name, payload: skill.name },
+      }));
+    const rankedSkills = rank(skillItems, query);
+    if (rankedSkills.length > 0) {
+      groups.push({ kind: 'skill', title: 'Skills', items: rankedSkills });
+    }
 
-      const fileItems: MentionItem[] = (filesQuery.data?.entries ?? []).map((entry) => ({
-        id: entry.path,
+    const fileItems: MentionItem[] = (filesQuery.data?.entries ?? []).map((entry) => ({
+      id: entry.path,
+      label: entry.path,
+      secondary: entry.name,
+      token: {
+        kind: 'file' as MentionKind,
         label: entry.path,
-        secondary: entry.name,
-        token: {
-          kind: 'file' as MentionKind,
-          label: entry.path,
-          payload: `${currentAgentId ?? ''}:${entry.path}`,
-        },
-      }));
-      const rankedFiles = rank(fileItems, query);
-      if (rankedFiles.length > 0) {
-        groups.push({
-          kind: 'file',
-          title: 'Files',
-          items: rankedFiles,
-          truncated: filesQuery.data?.truncated,
-        });
-      }
-
-      const itemMentions: MentionItem[] = (itemsQuery.data ?? []).map((wi) => ({
-        id: wi.id,
-        label: wi.title,
-        secondary: `${wi.status}${wi.kind ? ` · ${wi.kind}` : ''}`,
-        token: { kind: 'item' as MentionKind, label: wi.title, payload: wi.id },
-      }));
-      const rankedItems = rank(itemMentions, query);
-      if (rankedItems.length > 0) {
-        groups.push({ kind: 'item', title: 'Work items', items: rankedItems });
-      }
-
-      return groups;
+        payload: `${currentAgentId ?? ''}:${entry.path}`,
+      },
+    }));
+    const rankedFiles = rank(fileItems, query);
+    if (rankedFiles.length > 0) {
+      groups.push({
+        kind: 'file',
+        title: 'Files',
+        items: rankedFiles,
+        truncated: filesQuery.data?.truncated,
+      });
     }
 
-    return [];
-  }, [trigger, query, agentsQuery.data, filesQuery.data, itemsQuery.data, currentAgentId]);
+    const itemMentions: MentionItem[] = (itemsQuery.data ?? []).map((wi) => ({
+      id: wi.id,
+      label: wi.title,
+      secondary: `${wi.status}${wi.kind ? ` · ${wi.kind}` : ''}`,
+      token: { kind: 'item' as MentionKind, label: wi.title, payload: wi.id },
+    }));
+    const rankedItems = rank(itemMentions, query);
+    if (rankedItems.length > 0) {
+      groups.push({ kind: 'item', title: 'Work items', items: rankedItems });
+    }
+
+    return groups;
+  }, [query, agentsQuery.data, filesQuery.data, itemsQuery.data, skillsQuery.data, currentAgentId]);
 }

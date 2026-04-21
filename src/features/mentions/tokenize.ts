@@ -1,12 +1,13 @@
 import { MentionKind, MentionToken } from './types';
 
 export const MENTION_REGEX =
-  /(?<prefix>[@#])\[(?<label>[^\]]+)\]\(mention:(?<kind>agent|file|item):(?<payload>[^)]+)\)/g;
+  /(?<prefix>[@#])\[(?<label>[^\]]+)\]\(mention:(?<kind>agent|file|item|skill):(?<payload>[^)]+)\)/g;
 
-const PREFIX_BY_KIND: Record<MentionKind, '@' | '#'> = {
+const PREFIX_BY_KIND: Record<MentionKind, '@'> = {
   agent: '@',
-  file: '#',
-  item: '#',
+  file: '@',
+  item: '@',
+  skill: '@',
 };
 
 function sanitizeLabel(label: string): string {
@@ -34,9 +35,7 @@ export function parseMentions(text: string): ParsedMention[] {
   for (const m of text.matchAll(MENTION_REGEX)) {
     const groups = m.groups;
     if (!groups) continue;
-    const prefix = groups.prefix as '@' | '#';
     const kind = groups.kind as MentionKind;
-    if ((kind === 'agent' && prefix !== '@') || (kind !== 'agent' && prefix !== '#')) continue;
     const start = m.index ?? 0;
     results.push({
       token: { kind, label: groups.label, payload: groups.payload },
@@ -55,6 +54,6 @@ export function parseMentionHref(href: string): MentionToken | null {
   if (firstColon < 0) return null;
   const kind = rest.slice(0, firstColon) as MentionKind;
   const payload = rest.slice(firstColon + 1);
-  if (kind !== 'agent' && kind !== 'file' && kind !== 'item') return null;
+  if (kind !== 'agent' && kind !== 'file' && kind !== 'item' && kind !== 'skill') return null;
   return { kind, label: '', payload };
 }

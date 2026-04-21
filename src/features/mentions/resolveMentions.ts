@@ -16,7 +16,7 @@ interface ResolveCtx {
 }
 
 interface Attachment {
-  kind: MentionKind;
+  kind: Extract<MentionKind, 'file' | 'item'>;
   label: string;
   body: string;
 }
