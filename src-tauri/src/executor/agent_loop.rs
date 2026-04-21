@@ -1090,6 +1090,7 @@ const PULSE_MAX_ITERATIONS: u32 = 10;
 pub async fn run_pulse(
     run_id: &str,
     agent_id: &str,
+    project_id: Option<&str>,
     goal: &str,
     log_path: &PathBuf,
     _timeout_secs: u64,
@@ -1105,6 +1106,9 @@ pub async fn run_pulse(
     memory_user_id: &str,
     cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<ProcessResult, String> {
+    let project_id = project_id.ok_or_else(|| {
+        "pulse is project-scoped; pulse task has no project_id".to_string()
+    })?;
     let start = std::time::Instant::now();
     let log = AgentLog::new();
     let stream_id = format!("pulse:{}", agent_id);
@@ -1129,22 +1133,24 @@ pub async fn run_pulse(
     // ── Find or create Pulse chat session + save user message ───────────
     let pool = db.0.clone();
     let aid = agent_id.to_string();
+    let pid_str = project_id.to_string();
     let goal_text = goal.to_string();
 
     let session_id = tokio::task
     ::spawn_blocking({
       let pool = pool.clone();
       let aid = aid.clone();
+      let pid_str = pid_str.clone();
       let goal_text = goal_text.clone();
       move || -> Result<String, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
 
-        // Find or create session
         let session_id: String = conn
           .query_row(
-            "SELECT id FROM chat_sessions WHERE agent_id = ?1 AND session_type = 'pulse'",
-            rusqlite::params![aid],
+            "SELECT id FROM chat_sessions
+             WHERE agent_id = ?1 AND project_id = ?2 AND session_type = 'pulse'",
+            rusqlite::params![aid, pid_str],
             |row| row.get(0)
           )
           .unwrap_or_else(|_| {
@@ -1152,14 +1158,13 @@ pub async fn run_pulse(
             let _ = conn.execute(
               "INSERT INTO chat_sessions (
                  id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
-                 chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at
-               ) VALUES (?1, ?2, 'Pulse', 0, 'pulse', NULL, NULL, 0, 'running', NULL, NULL, ?3, ?3)",
-              rusqlite::params![sid, aid, now]
+                 chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at, project_id
+               ) VALUES (?1, ?2, 'Pulse', 0, 'pulse', NULL, NULL, 0, 'running', NULL, NULL, ?3, ?3, ?4)",
+              rusqlite::params![sid, aid, now, pid_str]
             );
             sid
           });
 
-        // Save user message (the pulse prompt)
         let msg_id = ulid::Ulid::new().to_string();
         let user_content = vec![ContentBlock::Text { text: goal_text.clone() }];
         let content_json = serde_json::to_string(&user_content).map_err(|e| e.to_string())?;
@@ -1184,13 +1189,11 @@ pub async fn run_pulse(
     }).await
     .map_err(|e| e.to_string())??;
 
-    let pulse_project_id = session_worktree::load_session_project_id(db, &session_id).await?;
-    if let Some(pid) = pulse_project_id.as_deref() {
-        crate::commands::projects::assert_agent_in_project(db, pid, agent_id).await?;
-        if let Err(e) = crate::executor::workspace::init_project_workspace(pid) {
-            tracing::warn!(project_id = pid, "failed to init project workspace: {}", e);
-        }
+    crate::commands::projects::assert_agent_in_project(db, project_id, agent_id).await?;
+    if let Err(e) = crate::executor::workspace::init_project_workspace(project_id) {
+        tracing::warn!(project_id = project_id, "failed to init project workspace: {}", e);
     }
+    let pulse_project_id: Option<String> = Some(project_id.to_string());
 
     // ── Build context via pipeline ──────────────────────────────────────
     let pipeline = context::default_pipeline(memory_client.cloned());

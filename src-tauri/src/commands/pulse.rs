@@ -20,36 +20,38 @@ pub struct PulseConfig {
     pub last_run_at: Option<String>,
 }
 
-/// Get the pulse configuration for an agent.
+/// Get the pulse configuration for a given (agent, project) pair.
 #[tauri::command]
 pub async fn get_pulse_config(
     agent_id: String,
+    project_id: String,
     db: tauri::State<'_, DbPool>,
 ) -> Result<PulseConfig, String> {
     let pool = db.0.clone();
     let aid = agent_id.clone();
+    let pid = project_id.clone();
 
-    // Read pulse.md content
-    let content = workspace::read_workspace_file(&agent_id, "pulse.md").unwrap_or_default();
+    let content =
+        workspace::read_project_agent_file(&project_id, &agent_id, "pulse.md").unwrap_or_default();
 
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
 
-        // Find pulse task: task with agent_id and tags containing "pulse"
         let pulse_task: Option<(String, bool)> = conn
             .query_row(
-                "SELECT id, enabled FROM tasks WHERE agent_id = ?1 AND tags LIKE '%\"pulse\"%'",
-                rusqlite::params![aid],
+                "SELECT id, enabled FROM tasks
+                 WHERE agent_id = ?1 AND project_id = ?2 AND tags LIKE '%\"pulse\"%'",
+                rusqlite::params![aid, pid],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
             )
             .ok();
 
         let (task_id, schedule_id, enabled, schedule, next_run_at, last_run_at) =
             if let Some((tid, _task_enabled)) = pulse_task {
-                // Find schedule for this task
                 let sched: Option<(String, String, bool, Option<String>, Option<String>)> = conn
                     .query_row(
-                        "SELECT id, config, enabled, next_run_at, last_run_at FROM schedules WHERE task_id = ?1",
+                        "SELECT id, config, enabled, next_run_at, last_run_at
+                         FROM schedules WHERE task_id = ?1",
                         rusqlite::params![tid],
                         |row| {
                             Ok((
@@ -74,11 +76,11 @@ pub async fn get_pulse_config(
                 (None, None, false, None, None, None)
             };
 
-        // Find pulse chat session
         let session_id: Option<String> = conn
             .query_row(
-                "SELECT id FROM chat_sessions WHERE agent_id = ?1 AND session_type = 'pulse'",
-                rusqlite::params![aid],
+                "SELECT id FROM chat_sessions
+                 WHERE agent_id = ?1 AND project_id = ?2 AND session_type = 'pulse'",
+                rusqlite::params![aid, pid],
                 |row| row.get(0),
             )
             .ok();
@@ -98,10 +100,11 @@ pub async fn get_pulse_config(
     .map_err(|e| e.to_string())?
 }
 
-/// Update pulse configuration: content, schedule, and enabled state.
+/// Update pulse configuration for a (agent, project) pair: content, schedule, and enabled state.
 #[tauri::command]
 pub async fn update_pulse(
     agent_id: String,
+    project_id: String,
     content: String,
     schedule_config: RecurringConfig,
     enabled: bool,
@@ -109,19 +112,20 @@ pub async fn update_pulse(
 ) -> Result<PulseConfig, String> {
     let pool = db.0.clone();
     let aid = agent_id.clone();
+    let pid = project_id.clone();
 
-    // Write pulse.md content to workspace
-    workspace::write_workspace_file(&agent_id, "pulse.md", &content)?;
+    workspace::write_project_agent_file(&project_id, &agent_id, "pulse.md", &content)?;
 
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
 
-        // ── Find or create pulse task ────────────────────────────────────
+        // ── Find or create pulse task (scoped by agent + project) ──────────
         let existing_task_id: Option<String> = conn
             .query_row(
-                "SELECT id FROM tasks WHERE agent_id = ?1 AND tags LIKE '%\"pulse\"%'",
-                rusqlite::params![aid],
+                "SELECT id FROM tasks
+                 WHERE agent_id = ?1 AND project_id = ?2 AND tags LIKE '%\"pulse\"%'",
+                rusqlite::params![aid, pid],
                 |row| row.get(0),
             )
             .ok();
@@ -129,7 +133,6 @@ pub async fn update_pulse(
         let task_config = serde_json::json!({ "goal": content });
         let task_config_str = task_config.to_string();
 
-        // Look up agent name for human-readable task naming
         let agent_name: String = conn
             .query_row(
                 "SELECT name FROM agents WHERE id = ?1",
@@ -138,25 +141,34 @@ pub async fn update_pulse(
             )
             .unwrap_or_else(|_| aid.chars().take(20).collect());
 
+        let project_name: String = conn
+            .query_row(
+                "SELECT name FROM projects WHERE id = ?1",
+                rusqlite::params![pid],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| pid.chars().take(20).collect());
+
+        let task_name = format!("[Pulse] {} — {}", agent_name, project_name);
+
         let task_id = if let Some(tid) = existing_task_id {
-            // Update existing task config and name
             conn.execute(
                 "UPDATE tasks SET config = ?1, name = ?2, updated_at = ?3 WHERE id = ?4",
-                rusqlite::params![task_config_str, format!("[Pulse] {}", agent_name), now, tid],
+                rusqlite::params![task_config_str, task_name, now, tid],
             )
             .map_err(|e| e.to_string())?;
             tid
         } else {
-            // Create new pulse task
             let tid = Ulid::new().to_string();
             conn.execute(
-                "INSERT INTO tasks (id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, enabled, created_at, updated_at)
-                 VALUES (?1, ?2, 'Automated pulse schedule', 'agent_loop', ?3, 7200, 0, 60, 'skip', '[\"pulse\"]', ?4, 1, ?5, ?5)",
+                "INSERT INTO tasks (id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, project_id, enabled, created_at, updated_at)
+                 VALUES (?1, ?2, 'Automated pulse schedule', 'agent_loop', ?3, 7200, 0, 60, 'skip', '[\"pulse\"]', ?4, ?5, 1, ?6, ?6)",
                 rusqlite::params![
                     tid,
-                    format!("[Pulse] {}", agent_name),
+                    task_name,
                     task_config_str,
                     aid,
+                    pid,
                     now,
                 ],
             )
@@ -176,7 +188,6 @@ pub async fn update_pulse(
         let sched_config_str =
             serde_json::to_string(&schedule_config).map_err(|e| e.to_string())?;
 
-        // Compute next_run_at
         let next_run_at = if enabled {
             to_cron(&schedule_config)
                 .ok()
@@ -187,7 +198,6 @@ pub async fn update_pulse(
         };
 
         let schedule_id = if let Some(sid) = existing_schedule_id {
-            // Update existing schedule
             conn.execute(
                 "UPDATE schedules SET config = ?1, enabled = ?2, next_run_at = ?3, updated_at = ?4 WHERE id = ?5",
                 rusqlite::params![sched_config_str, enabled as i64, next_run_at, now, sid],
@@ -195,7 +205,6 @@ pub async fn update_pulse(
             .map_err(|e| e.to_string())?;
             sid
         } else {
-            // Create new schedule
             let sid = Ulid::new().to_string();
             conn.execute(
                 "INSERT INTO schedules (id, task_id, kind, config, enabled, next_run_at, created_at, updated_at)
@@ -206,11 +215,12 @@ pub async fn update_pulse(
             sid
         };
 
-        // ── Ensure Pulse chat session exists ─────────────────────────────
+        // ── Ensure Pulse chat session exists (scoped to this project) ────
         let session_id: String = conn
             .query_row(
-                "SELECT id FROM chat_sessions WHERE agent_id = ?1 AND session_type = 'pulse'",
-                rusqlite::params![aid],
+                "SELECT id FROM chat_sessions
+                 WHERE agent_id = ?1 AND project_id = ?2 AND session_type = 'pulse'",
+                rusqlite::params![aid, pid],
                 |row| row.get(0),
             )
             .unwrap_or_else(|_| {
@@ -218,14 +228,13 @@ pub async fn update_pulse(
                 let _ = conn.execute(
                     "INSERT INTO chat_sessions (
                        id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
-                       chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at
-                     ) VALUES (?1, ?2, 'Pulse', 0, 'pulse', NULL, NULL, 0, NULL, NULL, NULL, ?3, ?3)",
-                    rusqlite::params![sid, aid, now],
+                       chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at, project_id
+                     ) VALUES (?1, ?2, 'Pulse', 0, 'pulse', NULL, NULL, 0, NULL, NULL, NULL, ?3, ?3, ?4)",
+                    rusqlite::params![sid, aid, now, pid],
                 );
                 sid
             });
 
-        // Get last_run_at from schedule
         let last_run_at: Option<String> = conn
             .query_row(
                 "SELECT last_run_at FROM schedules WHERE id = ?1",
@@ -235,7 +244,7 @@ pub async fn update_pulse(
             .ok()
             .flatten();
 
-        info!(agent_id = %aid, enabled = enabled, "Pulse configuration updated");
+        info!(agent_id = %aid, project_id = %pid, enabled = enabled, "Pulse configuration updated");
 
         Ok(PulseConfig {
             enabled,

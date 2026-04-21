@@ -218,6 +218,44 @@ pub fn rename_project_workspace_entry(
     fs::rename(&from_path, &to_path).map_err(|e| format!("failed to rename: {}", e))
 }
 
+/// Directory for per-(project, agent) config files (e.g. per-project pulse.md).
+/// Layout: ~/.orbit/projects/{project_id}/agents/{agent_id}/
+fn project_agent_dir(project_id: &str, agent_id: &str) -> PathBuf {
+    projects_root()
+        .join(project_id)
+        .join("agents")
+        .join(agent_id)
+}
+
+/// Read a file scoped to a specific (project, agent) pair.
+pub fn read_project_agent_file(
+    project_id: &str,
+    agent_id: &str,
+    relative_path: &str,
+) -> Result<String, String> {
+    let root = project_agent_dir(project_id, agent_id);
+    fs::create_dir_all(&root).map_err(|e| format!("failed to create project-agent dir: {}", e))?;
+    let path = validate_path(&root, relative_path)?;
+    fs::read_to_string(&path).map_err(|e| format!("failed to read file: {}", e))
+}
+
+/// Write a file scoped to a specific (project, agent) pair.
+pub fn write_project_agent_file(
+    project_id: &str,
+    agent_id: &str,
+    relative_path: &str,
+    content: &str,
+) -> Result<(), String> {
+    let root = project_agent_dir(project_id, agent_id);
+    fs::create_dir_all(&root).map_err(|e| format!("failed to create project-agent dir: {}", e))?;
+    let path = validate_path(&root, relative_path)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create parent directories: {}", e))?;
+    }
+    fs::write(&path, content).map_err(|e| format!("failed to write file: {}", e))
+}
+
 /// Agent workspace configuration stored in config.json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -662,16 +700,6 @@ pub fn apply_model_config_to_disk(agent_id: &str, model_config_json: &str) -> Re
         .map_err(|e| format!("failed to write system_prompt.md: {}", e))
 }
 
-const DEFAULT_PULSE_PROMPT: &str = r#"# Agent Pulse
-
-Describe what this agent should do on each pulse cycle.
-
-For example:
-- Check system status and report anomalies
-- Summarize recent activity
-- Review and prioritize pending items
-"#;
-
 /// Create the workspace directory structure for a new agent.
 pub fn init_agent_workspace(agent_id: &str) -> Result<(), String> {
     let root = agent_dir(agent_id);
@@ -705,13 +733,6 @@ pub fn init_agent_workspace(agent_id: &str) -> Result<(), String> {
         let json = serde_json::to_string_pretty(&default_config)
             .map_err(|e| format!("failed to serialize config: {}", e))?;
         fs::write(&config_path, json).map_err(|e| format!("failed to write config.json: {}", e))?;
-    }
-
-    // Write default pulse prompt if it doesn't exist
-    let pulse_path = root.join("pulse.md");
-    if !pulse_path.exists() {
-        fs::write(&pulse_path, DEFAULT_PULSE_PROMPT)
-            .map_err(|e| format!("failed to write pulse.md: {}", e))?;
     }
 
     info!(agent_id = agent_id, path = %root.display(), "Initialised agent workspace");
@@ -809,7 +830,7 @@ pub fn create_workspace_dir(agent_id: &str, relative_path: &str) -> Result<(), S
     fs::create_dir_all(&path).map_err(|e| format!("failed to create directory: {}", e))
 }
 
-const PROTECTED_AGENT_FILES: &[&str] = &["system_prompt.md", "config.json", "pulse.md"];
+const PROTECTED_AGENT_FILES: &[&str] = &["system_prompt.md", "config.json"];
 
 /// Rename a file or folder inside the agent's workspace (path-sandboxed on both sides).
 /// Refuses to rename the protected files at the agent root.

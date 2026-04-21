@@ -171,7 +171,6 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
   const [savingTab] = useState<string | null>(null);
 
   const configSaveRef = useRef<{ triggerSave: () => void } | null>(null);
-  const schedulesSaveRef = useRef<{ triggerSave: () => void } | null>(null);
 
   useEffect(() => {
     setViewingRunId(null);
@@ -239,8 +238,6 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
   function handleHeaderSave() {
     if (agentTab === 'config' && configSaveRef.current) {
       configSaveRef.current.triggerSave();
-    } else if (agentTab === 'schedules' && schedulesSaveRef.current) {
-      schedulesSaveRef.current.triggerSave();
     }
   }
 
@@ -259,7 +256,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
   }
 
   const hasDirtyChanges = dirtyTabs[agentTab] === true;
-  const isSaveableTab = agentTab === 'config' || agentTab === 'schedules';
+  const isSaveableTab = agentTab === 'config';
 
   const successCount = recentRuns.filter((run) => run.state === 'success').length;
   const failureCount = recentRuns.filter((run) => run.state === 'failure').length;
@@ -457,7 +454,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
                     ? 'bg-warning/20 text-warning border border-warning/50 hover:bg-warning/30'
                     : 'bg-surface text-muted border border-edge'
                 }`}
-                title={agentTab === 'config' ? 'Save configuration' : 'Save pulse'}
+                title="Save configuration"
               >
                 <Save size={12} />
                 {savingTab === agentTab ? 'Saving...' : 'Save'}
@@ -514,11 +511,7 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
           />
         </div>
         <div className={agentTab === 'schedules' ? 'h-full' : 'hidden'}>
-          <SchedulesTab
-            agentId={agentId}
-            onDirtyChange={(dirty) => handleDirtyChange('schedules', dirty)}
-            ref={schedulesSaveRef}
-          />
+          <SchedulesTab agentId={agentId} />
         </div>
         {agentTab === 'skills' && <SkillsTab agentId={agentId} />}
         {agentTab === 'bus' && <BusTab agentId={agentId} />}

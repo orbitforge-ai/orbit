@@ -5,6 +5,7 @@ use ulid::Ulid;
 use crate::db::DbPool;
 use crate::executor::engine::RunRequest;
 use crate::executor::llm_provider::ToolDefinition;
+use crate::executor::session_worktree;
 use crate::executor::workspace;
 use crate::models::chat::ChatSession;
 use crate::models::schedule::{OneShotConfig, RecurringConfig, Schedule};
@@ -189,7 +190,8 @@ impl ToolHandler for ScheduleTool {
                     .map_err(|e| format!("schedule: failed to serialize result: {}", e))?
             }
             "pulse_get" => {
-                let pulse = get_pulse_config(db, &ctx.agent_id).await?;
+                let project_id = require_current_project_id(db, ctx).await?;
+                let pulse = get_pulse_config(db, &ctx.agent_id, &project_id).await?;
                 serde_json::to_string_pretty(&pulse)
                     .map_err(|e| format!("schedule: failed to serialize result: {}", e))?
             }
@@ -206,13 +208,22 @@ impl ToolHandler for ScheduleTool {
                 let pulse_schedule: RecurringConfig =
                     serde_json::from_value(pulse_schedule_value.clone())
                         .map_err(|e| format!("schedule: invalid pulse_schedule: {}", e))?;
-                let pulse =
-                    set_pulse_config(db, ctx, pulse_content, pulse_schedule, pulse_enabled).await?;
+                let project_id = require_current_project_id(db, ctx).await?;
+                let pulse = set_pulse_config(
+                    db,
+                    ctx,
+                    &project_id,
+                    pulse_content,
+                    pulse_schedule,
+                    pulse_enabled,
+                )
+                .await?;
                 serde_json::to_string_pretty(&pulse)
                     .map_err(|e| format!("schedule: failed to serialize result: {}", e))?
             }
             "pulse_run" => {
-                let result = trigger_pulse_run(db, ctx).await?;
+                let project_id = require_current_project_id(db, ctx).await?;
+                let result = trigger_pulse_run(db, ctx, &project_id).await?;
                 serde_json::to_string_pretty(&result)
                     .map_err(|e| format!("schedule: failed to serialize result: {}", e))?
             }
@@ -383,21 +394,44 @@ fn preview_schedule(kind: &str, config: &Value, count: usize) -> Result<Value, S
     }
 }
 
+async fn require_current_project_id(
+    db: &DbPool,
+    ctx: &ToolExecutionContext,
+) -> Result<String, String> {
+    let session_id = ctx.current_session_id.as_deref().ok_or(
+        "schedule: pulse actions require an active project-scoped session",
+    )?;
+    session_worktree::load_session_project_id(db, session_id)
+        .await?
+        .ok_or_else(|| {
+            "schedule: pulse is project-scoped; this session is not attached to a project"
+                .to_string()
+        })
+}
+
 async fn get_pulse_config(
     db: &DbPool,
     agent_id: &str,
+    project_id: &str,
 ) -> Result<crate::commands::pulse::PulseConfig, String> {
     let pool = db.0.clone();
     let agent_id = agent_id.to_string();
-    let content = workspace::read_workspace_file(&agent_id, "pulse.md").unwrap_or_default();
+    let project_id = project_id.to_string();
+    let content =
+        workspace::read_project_agent_file(&project_id, &agent_id, "pulse.md").unwrap_or_default();
 
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
 
         let pulse_task: Option<(String, bool)> = conn
             .query_row(
-                "SELECT id, enabled FROM tasks WHERE agent_id = ?1 AND tags LIKE ?2",
-                rusqlite::params![agent_id.clone(), format!("%{}%", PULSE_TAG)],
+                "SELECT id, enabled FROM tasks
+                 WHERE agent_id = ?1 AND project_id = ?2 AND tags LIKE ?3",
+                rusqlite::params![
+                    agent_id.clone(),
+                    project_id.clone(),
+                    format!("%{}%", PULSE_TAG)
+                ],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
             )
             .ok();
@@ -440,8 +474,9 @@ async fn get_pulse_config(
 
         let session_id: Option<String> = conn
             .query_row(
-                "SELECT id FROM chat_sessions WHERE agent_id = ?1 AND session_type = 'pulse'",
-                rusqlite::params![agent_id],
+                "SELECT id FROM chat_sessions
+                 WHERE agent_id = ?1 AND project_id = ?2 AND session_type = 'pulse'",
+                rusqlite::params![agent_id, project_id],
                 |row| row.get(0),
             )
             .ok();
@@ -464,14 +499,16 @@ async fn get_pulse_config(
 async fn set_pulse_config(
     db: &DbPool,
     ctx: &ToolExecutionContext,
+    project_id: &str,
     pulse_content: &str,
     pulse_schedule: RecurringConfig,
     pulse_enabled: bool,
 ) -> Result<crate::commands::pulse::PulseConfig, String> {
-    workspace::write_workspace_file(&ctx.agent_id, "pulse.md", pulse_content)?;
+    workspace::write_project_agent_file(project_id, &ctx.agent_id, "pulse.md", pulse_content)?;
 
     let pool = db.0.clone();
     let agent_id = ctx.agent_id.clone();
+    let project_id_str = project_id.to_string();
     let pulse_content = pulse_content.to_string();
     let pulse_content_for_db = pulse_content.clone();
     let pulse_schedule_clone = pulse_schedule.clone();
@@ -484,8 +521,13 @@ async fn set_pulse_config(
 
             let existing_task_id: Option<String> = conn
                 .query_row(
-                    "SELECT id FROM tasks WHERE agent_id = ?1 AND tags LIKE ?2",
-                    rusqlite::params![agent_id.clone(), format!("%{}%", PULSE_TAG)],
+                    "SELECT id FROM tasks
+                     WHERE agent_id = ?1 AND project_id = ?2 AND tags LIKE ?3",
+                    rusqlite::params![
+                        agent_id.clone(),
+                        project_id_str.clone(),
+                        format!("%{}%", PULSE_TAG)
+                    ],
                     |row| row.get(0),
                 )
                 .ok();
@@ -499,18 +541,21 @@ async fn set_pulse_config(
                     |row| row.get(0),
                 )
                 .unwrap_or_else(|_| agent_id.chars().take(20).collect());
+            let project_name: String = conn
+                .query_row(
+                    "SELECT name FROM projects WHERE id = ?1",
+                    rusqlite::params![project_id_str.clone()],
+                    |row| row.get(0),
+                )
+                .unwrap_or_else(|_| project_id_str.chars().take(20).collect());
+            let task_name = format!("[Pulse] {} — {}", agent_name, project_name);
 
             let task_id = if let Some(task_id) = existing_task_id {
                 conn.execute(
                     "UPDATE tasks
                      SET config = ?1, name = ?2, enabled = 1, updated_at = ?3
                      WHERE id = ?4",
-                    rusqlite::params![
-                        task_config_str,
-                        format!("[Pulse] {}", agent_name),
-                        now,
-                        task_id
-                    ],
+                    rusqlite::params![task_config_str, task_name, now, task_id],
                 )
                 .map_err(|e| e.to_string())?;
                 task_id
@@ -520,13 +565,14 @@ async fn set_pulse_config(
                     "INSERT INTO tasks (
                         id, name, description, kind, config, max_duration_seconds,
                         max_retries, retry_delay_seconds, concurrency_policy, tags,
-                        agent_id, enabled, created_at, updated_at
-                    ) VALUES (?1, ?2, 'Automated pulse schedule', 'agent_loop', ?3, 7200, 0, 60, 'skip', '[\"pulse\"]', ?4, 1, ?5, ?5)",
+                        agent_id, project_id, enabled, created_at, updated_at
+                    ) VALUES (?1, ?2, 'Automated pulse schedule', 'agent_loop', ?3, 7200, 0, 60, 'skip', '[\"pulse\"]', ?4, ?5, 1, ?6, ?6)",
                     rusqlite::params![
                         task_id,
-                        format!("[Pulse] {}", agent_name),
+                        task_name,
                         task_config_str,
                         agent_id.clone(),
+                        project_id_str.clone(),
                         now
                     ],
                 )
@@ -583,8 +629,9 @@ async fn set_pulse_config(
 
             let session_id: Option<String> = conn
                 .query_row(
-                    "SELECT id FROM chat_sessions WHERE agent_id = ?1 AND session_type = 'pulse'",
-                    rusqlite::params![agent_id.clone()],
+                    "SELECT id FROM chat_sessions
+                     WHERE agent_id = ?1 AND project_id = ?2 AND session_type = 'pulse'",
+                    rusqlite::params![agent_id.clone(), project_id_str.clone()],
                     |row| row.get(0),
                 )
                 .ok();
@@ -604,9 +651,9 @@ async fn set_pulse_config(
                     "INSERT INTO chat_sessions (
                         id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
                         chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
-                        worktree_name, worktree_branch, worktree_path
-                     ) VALUES (?1, ?2, 'Pulse', 0, 'pulse', NULL, NULL, 0, NULL, NULL, NULL, ?3, ?3, NULL, NULL, NULL)",
-                    rusqlite::params![session_id, agent_id.clone(), now],
+                        project_id, worktree_name, worktree_branch, worktree_path
+                     ) VALUES (?1, ?2, 'Pulse', 0, 'pulse', NULL, NULL, 0, NULL, NULL, NULL, ?3, ?3, ?4, NULL, NULL, NULL)",
+                    rusqlite::params![session_id, agent_id.clone(), now, project_id_str.clone()],
                 )
                 .map_err(|e| e.to_string())?;
                 conn.query_row(
@@ -664,16 +711,17 @@ async fn set_pulse_config(
 async fn trigger_pulse_run(
     db: &DbPool,
     ctx: &ToolExecutionContext,
+    project_id: &str,
 ) -> Result<PulseRunResult, String> {
     let executor_tx = ctx
         .executor_tx
         .as_ref()
         .ok_or("schedule: executor channel not available")?;
-    let pulse = get_pulse_config(db, &ctx.agent_id).await?;
+    let pulse = get_pulse_config(db, &ctx.agent_id, project_id).await?;
     let task_id = pulse
         .task_id
         .clone()
-        .ok_or("schedule: pulse is not configured for this agent")?;
+        .ok_or("schedule: pulse is not configured for this agent in this project")?;
 
     let task = load_owned_task(db, &ctx.agent_id, &task_id).await?.task;
     let run_id = Ulid::new().to_string();

@@ -603,6 +603,7 @@ async fn run_one(
                 agent_loop::run_pulse(
                     &run_id,
                     &agent_id,
+                    task.project_id.as_deref(),
                     &cfg.goal,
                     &log_path,
                     timeout_secs,

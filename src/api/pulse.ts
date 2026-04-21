@@ -13,12 +13,15 @@ export interface PulseConfig {
 }
 
 export const pulseApi = {
-  getConfig: (agentId: string): Promise<PulseConfig> => invoke('get_pulse_config', { agentId }),
+  getConfig: (agentId: string, projectId: string): Promise<PulseConfig> =>
+    invoke('get_pulse_config', { agentId, projectId }),
 
   update: (
     agentId: string,
+    projectId: string,
     content: string,
     scheduleConfig: RecurringConfig,
     enabled: boolean
-  ): Promise<PulseConfig> => invoke('update_pulse', { agentId, content, scheduleConfig, enabled }),
+  ): Promise<PulseConfig> =>
+    invoke('update_pulse', { agentId, projectId, content, scheduleConfig, enabled }),
 };
