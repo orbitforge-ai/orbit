@@ -148,6 +148,7 @@ pub fn default_pipeline(memory_client: Option<MemoryClient>) -> ContextPipeline 
         p.add_stage(Box::new(MemoryStage { client }));
     }
     p.add_stage(Box::new(SkillCatalogStage));
+    p.add_stage(Box::new(ActiveSkillsStage));
     p.add_stage(Box::new(MessageHistoryStage));
     p.add_stage(Box::new(ToolResolutionStage));
     p
@@ -1115,7 +1116,7 @@ impl ContextStage for SkillCatalogStage {
         &self,
         mut snapshot: ContextSnapshot,
         request: &ContextRequest,
-        _db: &DbPool,
+        db: &DbPool,
     ) -> Result<ContextSnapshot, String> {
         // Only inject skills catalog for modes that have tools
         match request.mode {
@@ -1123,8 +1124,32 @@ impl ContextStage for SkillCatalogStage {
             _ => return Ok(snapshot),
         }
 
-        let catalog =
-            skills::discover_skills(&request.agent_id, &request.ws_config.disabled_skills);
+        let active_skill_names = if let Some(session_id) = request.session_id.as_deref() {
+            skills::load_active_skill_names_for_session(
+                db,
+                session_id,
+                &request.agent_id,
+                &request.ws_config.disabled_skills,
+            )?
+        } else {
+            std::collections::HashSet::new()
+        };
+        let discovered_path_skills = if let Some(session_id) = request.session_id.as_deref() {
+            skills::load_discovered_skill_names_for_session(
+                db,
+                session_id,
+                &request.agent_id,
+                &request.ws_config.disabled_skills,
+            )?
+        } else {
+            std::collections::HashSet::new()
+        };
+        let catalog = skills::catalog_skills_for_session(
+            &request.agent_id,
+            &request.ws_config.disabled_skills,
+            &discovered_path_skills,
+            &active_skill_names,
+        );
 
         if catalog.skills.is_empty() {
             return Ok(snapshot);
@@ -1132,28 +1157,22 @@ impl ContextStage for SkillCatalogStage {
 
         // Build context text for relevance filtering:
         // Use the goal (agent loop) or the last user message (chat).
-        let context_text = request.goal.as_deref().or_else(|| {
-            // In chat mode, use the latest user message for matching
-            snapshot
-                .messages
-                .iter()
-                .rev()
-                .find(|m| m.role == "user")
-                .and_then(|m| {
-                    m.content.iter().find_map(|block| match block {
-                        ContentBlock::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                })
-        });
+        let context_text = request
+            .goal
+            .as_deref()
+            .or_else(|| latest_user_text(request.existing_messages.as_deref().unwrap_or(&[])));
+        let preserved_skill_names = active_skill_names
+            .union(&discovered_path_skills)
+            .cloned()
+            .collect();
 
-        let catalog = skills::filter_relevant_skills(catalog, context_text);
+        let catalog = skills::filter_relevant_skills(catalog, context_text, &preserved_skill_names);
 
         if catalog.skills.is_empty() {
             return Ok(snapshot);
         }
 
-        let catalog_xml = skills::build_catalog_xml(&catalog);
+        let catalog_xml = skills::build_catalog_xml(&catalog, &active_skill_names);
         snapshot.system_prompt.push_str(&catalog_xml);
 
         Ok(snapshot)
@@ -1162,4 +1181,52 @@ impl ContextStage for SkillCatalogStage {
     fn name(&self) -> &str {
         "SkillCatalog"
     }
+}
+
+pub struct ActiveSkillsStage;
+
+#[async_trait::async_trait]
+impl ContextStage for ActiveSkillsStage {
+    async fn process(
+        &self,
+        mut snapshot: ContextSnapshot,
+        request: &ContextRequest,
+        db: &DbPool,
+    ) -> Result<ContextSnapshot, String> {
+        let Some(session_id) = request.session_id.as_deref() else {
+            return Ok(snapshot);
+        };
+
+        let active_skills = skills::load_active_skills_for_session(
+            db,
+            session_id,
+            &request.agent_id,
+            &request.ws_config.disabled_skills,
+        )?;
+        if active_skills.is_empty() {
+            return Ok(snapshot);
+        }
+
+        snapshot
+            .system_prompt
+            .push_str(&skills::build_active_skills_xml(&active_skills));
+        Ok(snapshot)
+    }
+
+    fn name(&self) -> &str {
+        "ActiveSkills"
+    }
+}
+
+fn latest_user_text(messages: &[ChatMessage]) -> Option<&str> {
+    messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .and_then(|m| {
+            m.content.iter().find_map(|block| match block {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+        })
 }

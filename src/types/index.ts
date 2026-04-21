@@ -769,6 +769,7 @@ export interface SkillInfo {
   description: string;
   source: SkillSource;
   enabled: boolean;
+  active: boolean;
   sourcePath?: string;
 }
 

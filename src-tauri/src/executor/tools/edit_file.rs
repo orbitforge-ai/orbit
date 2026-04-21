@@ -1,6 +1,8 @@
 use serde_json::json;
+use tracing::warn;
 
 use crate::executor::llm_provider::ToolDefinition;
+use crate::executor::skills;
 
 use super::{
     context::ToolExecutionContext,
@@ -90,7 +92,9 @@ impl ToolHandler for EditFileTool {
                     "edit_file: notebook_action is only supported for .ipynb files".to_string(),
                 );
             }
-            return edit_notebook(&full_path, path, input, notebook_action);
+            let result = edit_notebook(&full_path, path, input, notebook_action)?;
+            maybe_mark_path_skill_discovery(ctx, &workspace_root, path, &full_path);
+            return Ok(result);
         }
 
         let old_text = input["old_text"]
@@ -108,6 +112,8 @@ impl ToolHandler for EditFileTool {
 
         std::fs::write(&full_path, updated)
             .map_err(|e| format!("failed to write {}: {}", path, e))?;
+
+        maybe_mark_path_skill_discovery(ctx, &workspace_root, path, &full_path);
 
         Ok((
             format!("Replaced {} occurrence(s) in '{}'", replaced, path),
@@ -192,6 +198,31 @@ fn edit_notebook(
         format!("Notebook '{}' updated via {}", path, notebook_action),
         false,
     ))
+}
+
+fn maybe_mark_path_skill_discovery(
+    ctx: &ToolExecutionContext,
+    workspace_root: &std::path::Path,
+    path: &str,
+    full_path: &std::path::PathBuf,
+) {
+    if let (Some(db), Some(session_id)) = (&ctx.db, ctx.current_session_id.as_deref()) {
+        if let Err(err) = skills::mark_matching_path_skills_discoverable(
+            db,
+            session_id,
+            &ctx.agent_id,
+            &ctx.disabled_skills,
+            workspace_root,
+            std::slice::from_ref(full_path),
+        ) {
+            warn!(
+                session_id = session_id,
+                path = path,
+                error = %err,
+                "failed to update path-scoped skill discovery after edit_file"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

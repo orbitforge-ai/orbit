@@ -1,6 +1,8 @@
 use serde_json::json;
+use tracing::warn;
 
 use crate::executor::llm_provider::ToolDefinition;
+use crate::executor::skills;
 
 use super::{
     context::ToolExecutionContext,
@@ -69,6 +71,24 @@ impl ToolHandler for WriteFileTool {
 
         std::fs::write(&full_path, &content)
             .map_err(|e| format!("failed to write {}: {}", path, e))?;
+
+        if let (Some(db), Some(session_id)) = (&ctx.db, ctx.current_session_id.as_deref()) {
+            if let Err(err) = skills::mark_matching_path_skills_discoverable(
+                db,
+                session_id,
+                &ctx.agent_id,
+                &ctx.disabled_skills,
+                &workspace_root,
+                std::slice::from_ref(&full_path),
+            ) {
+                warn!(
+                    session_id = session_id,
+                    path = path,
+                    error = %err,
+                    "failed to update path-scoped skill discovery after write_file"
+                );
+            }
+        }
 
         Ok((
             format!("Successfully wrote {} bytes to {}", content.len(), path),

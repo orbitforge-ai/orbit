@@ -1,6 +1,8 @@
 use serde_json::json;
+use tracing::warn;
 
 use crate::executor::llm_provider::ToolDefinition;
+use crate::executor::skills;
 
 use super::{
     context::ToolExecutionContext,
@@ -49,6 +51,24 @@ impl ToolHandler for ReadFileTool {
         let full_path = validate_path(&workspace_root, path)?;
         let content = std::fs::read_to_string(&full_path)
             .map_err(|e| format!("failed to read {}: {}", path, e))?;
+
+        if let (Some(db), Some(session_id)) = (&ctx.db, ctx.current_session_id.as_deref()) {
+            if let Err(err) = skills::mark_matching_path_skills_discoverable(
+                db,
+                session_id,
+                &ctx.agent_id,
+                &ctx.disabled_skills,
+                &workspace_root,
+                std::slice::from_ref(&full_path),
+            ) {
+                warn!(
+                    session_id = session_id,
+                    path = path,
+                    error = %err,
+                    "failed to update path-scoped skill discovery after read_file"
+                );
+            }
+        }
 
         if is_notebook_path(path) {
             let notebook = parse_notebook(&content).map_err(|e| format!("read_file: {}", e))?;

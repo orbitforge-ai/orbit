@@ -29,6 +29,7 @@ const MIGRATION_23: &str = include_str!("migrations/0023_customizable_project_bo
 const MIGRATION_24: &str = include_str!("migrations/0024_plugin_entities.sql");
 const MIGRATION_25: &str = include_str!("migrations/0025_channel_sessions.sql");
 const MIGRATION_26: &str = include_str!("migrations/0026_reset_pulse.sql");
+const MIGRATION_27: &str = include_str!("migrations/0027_session_skill_state.sql");
 
 /// Newtype wrapper — stored as Tauri managed state.
 /// r2d2::Pool is Arc-based internally: cheap to clone.
@@ -194,6 +195,11 @@ pub fn init(data_dir: PathBuf) -> Result<DbPool, Box<dyn std::error::Error>> {
         conn.execute_batch(MIGRATION_26)?;
         conn.execute_batch("PRAGMA user_version = 26;")?;
         info!("Applied migration 26 (reset pulse for project scoping)");
+    }
+    if version < 27 {
+        conn.execute_batch(MIGRATION_27)?;
+        conn.execute_batch("PRAGMA user_version = 27;")?;
+        info!("Applied migration 27 (session skill state)");
     }
 
     info!("Database initialised at {:?}", db_path);

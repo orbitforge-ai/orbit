@@ -150,6 +150,11 @@ export function SkillsTab({ agentId }: SkillsTabProps) {
                         <SourceIcon size={10} />
                         {sourceInfo.label}
                       </span>
+                      {skill.active && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-warning/10 text-warning">
+                          Active in Session
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-muted mt-0.5 truncate">{skill.description}</p>
                   </div>

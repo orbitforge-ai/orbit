@@ -1,10 +1,18 @@
+use crate::db::connection::DbPool;
 use crate::executor::skills::{self, SkillInfo};
 use crate::executor::workspace;
 
 #[tauri::command]
-pub async fn list_skills(agent_id: String) -> Result<Vec<SkillInfo>, String> {
+pub async fn list_skills(
+    agent_id: String,
+    db: tauri::State<'_, DbPool>,
+) -> Result<Vec<SkillInfo>, String> {
+    let db = db.inner().clone();
     tokio::task::spawn_blocking(move || {
         let ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
+        skills::clear_disabled_skill_state_for_agent(&db, &agent_id, &ws_config.disabled_skills)?;
+        let active_names =
+            skills::load_active_skill_names_for_agent(&db, &agent_id, &ws_config.disabled_skills)?;
         let catalog = skills::discover_skills(&agent_id, &[]);
 
         Ok(catalog
@@ -12,6 +20,7 @@ pub async fn list_skills(agent_id: String) -> Result<Vec<SkillInfo>, String> {
             .into_iter()
             .map(|s| SkillInfo {
                 enabled: !ws_config.disabled_skills.contains(&s.name),
+                active: active_names.contains(&s.name),
                 source_path: s.source_path.map(|p| p.to_string_lossy().to_string()),
                 name: s.name,
                 description: s.description,
@@ -45,8 +54,16 @@ pub async fn create_skill(
 }
 
 #[tauri::command]
-pub async fn delete_skill(agent_id: String, skill_name: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || skills::delete_skill(&agent_id, &skill_name))
-        .await
-        .map_err(|e| e.to_string())?
+pub async fn delete_skill(
+    agent_id: String,
+    skill_name: String,
+    db: tauri::State<'_, DbPool>,
+) -> Result<(), String> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        skills::delete_skill(&agent_id, &skill_name)?;
+        skills::clear_skill_state_for_agent_sessions(&db, &agent_id, &skill_name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
