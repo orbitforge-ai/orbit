@@ -66,52 +66,66 @@ plugin.tool('resolve_surface_actions', {
     },
   },
   run: async ({ input }) => {
+    const actions = [];
     const repoRoot = await resolveRepoRoot(input?.path);
-    if (!repoRoot) return { actions: [] };
 
-    const repoName = repoRoot.split('/').filter(Boolean).pop() ?? repoRoot;
-    const target = {
-      kind: 'gitRepo',
-      token: repoRoot,
-      displayPath: repoRoot,
-    };
-    const items = [
-      {
-        id: 'pull',
-        label: 'Pull',
-        target,
-        tool: 'git_pull',
-      },
-      {
-        id: 'push',
-        label: 'Push',
-        target,
-        tool: 'git_push',
-      },
-    ];
+    if (repoRoot) {
+      const repoName = repoRoot.split('/').filter(Boolean).pop() ?? repoRoot;
+      const target = {
+        kind: 'gitRepo',
+        token: repoRoot,
+        displayPath: repoRoot,
+      };
+      const items = [
+        { id: 'pull', label: 'Pull', target, tool: 'git_pull' },
+        { id: 'push', label: 'Push', target, tool: 'git_push' },
+      ];
 
-    const defaultBranch = await resolveDefaultBranch(repoRoot);
-    if (defaultBranch) {
-      items.push({
-        id: `checkout-${defaultBranch}`,
-        label: `Checkout ${defaultBranch}`,
-        target,
-        tool: 'git_checkout_branch',
-        args: { branch: defaultBranch },
+      const defaultBranch = await resolveDefaultBranch(repoRoot);
+      if (defaultBranch) {
+        items.push({
+          id: `checkout-${defaultBranch}`,
+          label: `Checkout ${defaultBranch}`,
+          target,
+          tool: 'git_checkout_branch',
+          args: { branch: defaultBranch },
+        });
+      }
+
+      actions.push({
+        id: 'repo-actions',
+        presentation: 'menu',
+        label: 'GitHub',
+        tooltip: `GitHub actions for ${repoName}`,
+        items,
       });
     }
 
-    return {
-      actions: [
-        {
-          id: 'repo-actions',
-          presentation: 'menu',
-          label: 'GitHub',
-          tooltip: `GitHub actions for ${repoName}`,
-          items,
+    if (input?.surface === 'workspaceBrowser' && typeof input?.path === 'string' && input.path) {
+      actions.push({
+        id: 'clone-repo',
+        presentation: 'button',
+        label: 'Clone repo',
+        tooltip: 'Clone a GitHub repository into this folder',
+        target: {
+          kind: 'workspaceDir',
+          token: input.path,
+          displayPath: input.path,
         },
-      ],
-    };
+        tool: 'clone_repo',
+        prompt: [
+          {
+            name: 'repo',
+            label: 'Repository',
+            placeholder: 'owner/name',
+            description: 'GitHub repo in owner/name form (e.g. facebook/react)',
+            required: true,
+          },
+        ],
+      });
+    }
+
+    return { actions };
   },
 });
 
@@ -125,11 +139,16 @@ plugin.tool('clone_repo', {
   run: async ({ input, oauth, log }) => {
     const token = oauth.github?.accessToken;
     if (!token) throw new Error('GitHub not connected');
-    const url = `https://x-access-token:${token}@github.com/${input.repo}.git`;
-    const dest = input.repo.split('/')[1];
-    log(`cloning ${input.repo} into ./${dest}`);
-    await execFileAsync('git', ['clone', url, dest], { cwd: process.cwd() });
-    return { clonedInto: dest };
+    const repo = typeof input?.repo === 'string' ? input.repo.trim() : '';
+    if (!/^[^\s/]+\/[^\s/]+$/.test(repo)) {
+      throw new Error('repo must be in "owner/name" form');
+    }
+    const cwd = input?.context?.target?.token || process.cwd();
+    const url = `https://x-access-token:${token}@github.com/${repo}.git`;
+    const dest = repo.split('/')[1];
+    log(`cloning ${repo} into ${cwd}/${dest}`);
+    await execFileAsync('git', ['clone', url, dest], { cwd });
+    return { clonedInto: dest, cwd };
   },
 });
 

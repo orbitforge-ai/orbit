@@ -95,6 +95,14 @@ export interface PluginSurfaceActionTarget {
   displayPath: string | null;
 }
 
+export interface SurfaceActionPromptField {
+  name: string;
+  label: string;
+  placeholder?: string;
+  description?: string;
+  required?: boolean;
+}
+
 export interface PluginSurfaceActionItem {
   id: string;
   label: string;
@@ -102,6 +110,7 @@ export interface PluginSurfaceActionItem {
   target: PluginSurfaceActionTarget;
   tool: string;
   args: Record<string, unknown>;
+  prompt?: SurfaceActionPromptField[];
 }
 
 export interface PluginSurfaceAction {
@@ -118,6 +127,7 @@ export interface PluginSurfaceAction {
   tool: string | null;
   args: Record<string, unknown> | null;
   items: PluginSurfaceActionItem[];
+  prompt?: SurfaceActionPromptField[];
 }
 
 export interface StagedInstall {

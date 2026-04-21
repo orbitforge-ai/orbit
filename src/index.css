@@ -329,6 +329,52 @@ body {
   animation: typing-bounce 1.2s ease-in-out infinite;
 }
 
+/* ─── Streaming chip ────────────────────────────────────────────────────── */
+
+@keyframes streaming-pill-orbit {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.streaming-status-pill {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.streaming-status-pill__orbit {
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background:
+    conic-gradient(
+      from 0deg,
+      rgba(165, 180, 252, 0.06) 0deg,
+      rgba(165, 180, 252, 0.16) 210deg,
+      rgba(199, 210, 254, 0.95) 300deg,
+      rgba(129, 140, 248, 0.18) 336deg,
+      rgba(165, 180, 252, 0.06) 360deg
+    );
+  opacity: 0.95;
+  pointer-events: none;
+  animation: streaming-pill-orbit 1.35s linear infinite;
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streaming-status-pill__orbit {
+    animation-duration: 4s;
+  }
+}
+
 /* ─── Chat markdown ──────────────────────────────────────────────────────── */
 
 .chat-markdown {

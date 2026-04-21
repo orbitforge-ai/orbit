@@ -2,14 +2,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listen } from '@tauri-apps/api/event';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import { ChevronRight, Loader2, MoreHorizontal } from 'lucide-react';
+import { ChevronRight, Loader2, MoreHorizontal, X } from 'lucide-react';
 import {
   pluginsApi,
   type PluginSurface,
   type PluginSurfaceAction,
   type PluginSurfaceActionItem,
+  type SurfaceActionPromptField,
 } from '../../api/plugins';
 import { cn } from '../../lib/cn';
+import { Input } from '../ui';
 import { toast } from '../../store/toastStore';
 
 interface PluginSurfaceActionBarProps {
@@ -19,6 +21,18 @@ interface PluginSurfaceActionBarProps {
   maxInlineActions?: number;
   className?: string;
   onActionComplete?: () => void;
+}
+
+interface PromptRequest {
+  pluginId: string;
+  pluginName: string;
+  actionId: string;
+  actionLabel: string;
+  itemLabel: string;
+  tool: string;
+  baseArgs: Record<string, unknown>;
+  target: PluginSurfaceActionItem['target'];
+  fields: SurfaceActionPromptField[];
 }
 
 export function PluginSurfaceActionBar({
@@ -31,6 +45,7 @@ export function PluginSurfaceActionBar({
 }: PluginSurfaceActionBarProps) {
   const queryClient = useQueryClient();
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [promptRequest, setPromptRequest] = useState<PromptRequest | null>(null);
 
   useEffect(() => {
     const unlistenChanged = listen('plugins:changed', () => {
@@ -75,6 +90,52 @@ export function PluginSurfaceActionBar({
     [onActionComplete, queryClient, surface]
   );
 
+  const requestRun = useCallback(
+    (
+      pluginId: string,
+      pluginName: string,
+      actionLabel: string,
+      itemLabel: string,
+      actionId: string,
+      item: Pick<PluginSurfaceActionItem, 'tool' | 'args' | 'target' | 'prompt'>,
+    ) => {
+      if (item.prompt && item.prompt.length > 0) {
+        setPromptRequest({
+          pluginId,
+          pluginName,
+          actionId,
+          actionLabel,
+          itemLabel,
+          tool: item.tool,
+          baseArgs: item.args ?? {},
+          target: item.target,
+          fields: item.prompt,
+        });
+        return Promise.resolve();
+      }
+      return runItem(pluginId, itemLabel, actionId, {
+        tool: item.tool,
+        args: item.args ?? {},
+        target: item.target,
+      });
+    },
+    [runItem]
+  );
+
+  const handlePromptSubmit = useCallback(
+    async (values: Record<string, string>) => {
+      if (!promptRequest) return;
+      const args = { ...promptRequest.baseArgs, ...values };
+      await runItem(promptRequest.pluginId, promptRequest.itemLabel, promptRequest.actionId, {
+        tool: promptRequest.tool,
+        args,
+        target: promptRequest.target,
+      });
+      setPromptRequest(null);
+    },
+    [promptRequest, runItem]
+  );
+
   if (actions.length === 0 && !actionsQuery.isLoading && !actionsQuery.isFetching) {
     return null;
   }
@@ -100,7 +161,9 @@ export function PluginSurfaceActionBar({
             action={action}
             pendingId={pendingId}
             variant={variant}
-            onRun={(itemId, item) => runItem(action.pluginId, item.label, itemId, item)}
+            onRun={(itemId, item) =>
+              requestRun(action.pluginId, action.pluginName, action.label, item.label, itemId, item)
+            }
           />
         ) : (
           <SurfaceButtonAction
@@ -110,11 +173,19 @@ export function PluginSurfaceActionBar({
             variant={variant}
             onRun={() => {
               if (!action.tool || !action.target) return Promise.resolve();
-              return runItem(action.pluginId, action.label, action.id, {
-                tool: action.tool,
-                args: action.args ?? {},
-                target: action.target,
-              });
+              return requestRun(
+                action.pluginId,
+                action.pluginName,
+                action.label,
+                action.label,
+                action.id,
+                {
+                  tool: action.tool,
+                  args: action.args ?? {},
+                  target: action.target,
+                  prompt: action.prompt,
+                }
+              );
             }}
           />
         )
@@ -125,9 +196,18 @@ export function PluginSurfaceActionBar({
           actions={overflowActions}
           pendingId={pendingId}
           variant={variant}
-          onRun={(pluginId, actionLabel, itemId, item) =>
-            runItem(pluginId, actionLabel, itemId, item)
+          onRun={(pluginId, pluginName, actionLabel, itemLabel, itemId, item) =>
+            requestRun(pluginId, pluginName, actionLabel, itemLabel, itemId, item)
           }
+        />
+      ) : null}
+
+      {promptRequest ? (
+        <SurfaceActionPromptDialog
+          request={promptRequest}
+          busy={pendingId === promptRequest.actionId}
+          onCancel={() => setPromptRequest(null)}
+          onSubmit={handlePromptSubmit}
         />
       ) : null}
 
@@ -242,9 +322,11 @@ function OverflowMenu({
   variant: 'sidebar' | 'workspace';
   onRun: (
     pluginId: string,
+    pluginName: string,
     actionLabel: string,
+    itemLabel: string,
     itemId: string,
-    item: Pick<PluginSurfaceActionItem, 'tool' | 'args' | 'target'>,
+    item: Pick<PluginSurfaceActionItem, 'tool' | 'args' | 'target' | 'prompt'>,
   ) => Promise<void>;
 }) {
   return (
@@ -280,7 +362,14 @@ function OverflowMenu({
                         key={item.id}
                         disabled={item.disabled || pendingId === item.id}
                         onSelect={() => {
-                          void onRun(action.pluginId, item.label, item.id, item);
+                          void onRun(
+                            action.pluginId,
+                            action.pluginName,
+                            action.label,
+                            item.label,
+                            item.id,
+                            item,
+                          );
                         }}
                         className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-secondary outline-none cursor-pointer data-[highlighted]:bg-accent/10 data-[highlighted]:text-white data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50"
                       >
@@ -299,11 +388,19 @@ function OverflowMenu({
                 disabled={action.disabled || pendingId === action.id || !action.tool || !action.target}
                 onSelect={() => {
                   if (!action.tool || !action.target) return;
-                  void onRun(action.pluginId, action.label, action.id, {
-                    tool: action.tool,
-                    args: action.args ?? {},
-                    target: action.target,
-                  });
+                  void onRun(
+                    action.pluginId,
+                    action.pluginName,
+                    action.label,
+                    action.label,
+                    action.id,
+                    {
+                      tool: action.tool,
+                      args: action.args ?? {},
+                      target: action.target,
+                      prompt: action.prompt,
+                    }
+                  );
                 }}
                 className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-secondary outline-none cursor-pointer data-[highlighted]:bg-accent/10 data-[highlighted]:text-white data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50"
               >
@@ -322,5 +419,92 @@ function buttonClassName(variant: 'sidebar' | 'workspace') {
   return cn(
     'inline-flex min-w-0 items-center gap-1.5 rounded-md border border-edge px-2 py-1 text-xs text-secondary transition-colors hover:bg-surface hover:text-white disabled:cursor-not-allowed disabled:opacity-50',
     variant === 'sidebar' ? 'max-w-full' : 'shrink-0'
+  );
+}
+
+function SurfaceActionPromptDialog({
+  request,
+  busy,
+  onCancel,
+  onSubmit,
+}: {
+  request: PromptRequest;
+  busy: boolean;
+  onCancel: () => void;
+  onSubmit: (values: Record<string, string>) => Promise<void>;
+}) {
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(request.fields.map((f) => [f.name, '']))
+  );
+
+  const canSubmit =
+    !busy &&
+    request.fields.every((f) => (f.required ?? true ? (values[f.name] ?? '').trim() !== '' : true));
+
+  function submit() {
+    if (!canSubmit) return;
+    const trimmed: Record<string, string> = {};
+    for (const f of request.fields) {
+      const v = (values[f.name] ?? '').trim();
+      if (v !== '') trimmed[f.name] = v;
+    }
+    void onSubmit(trimmed);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="w-[440px] rounded-2xl border border-edge bg-panel shadow-2xl">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-edge">
+          <h3 className="text-sm font-semibold text-white">
+            {request.pluginName}: {request.itemLabel}
+          </h3>
+          <button
+            onClick={onCancel}
+            className="p-1 rounded text-muted hover:text-white hover:bg-edge"
+            aria-label="Close"
+          >
+            <X size={14} />
+          </button>
+        </div>
+        <div className="px-5 py-4 space-y-3">
+          {request.fields.map((field, i) => (
+            <div key={field.name}>
+              <label className="text-xs text-muted mb-1 block">{field.label}</label>
+              <Input
+                value={values[field.name] ?? ''}
+                onChange={(e) =>
+                  setValues((prev) => ({ ...prev, [field.name]: e.target.value }))
+                }
+                placeholder={field.placeholder}
+                autoFocus={i === 0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') submit();
+                  if (e.key === 'Escape') onCancel();
+                }}
+              />
+              {field.description ? (
+                <p className="mt-1 text-[11px] text-muted">{field.description}</p>
+              ) : null}
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-edge">
+          <button
+            onClick={onCancel}
+            className="px-3 py-1.5 rounded-lg text-muted hover:text-white text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!canSubmit}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-sm font-medium transition-colors"
+          >
+            {busy ? <Loader2 size={12} className="animate-spin" /> : null}
+            Run
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

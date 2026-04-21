@@ -50,6 +50,19 @@ pub struct SurfaceActionTarget {
     pub display_path: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SurfaceActionPromptField {
+    pub name: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub required: bool,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginSurfaceActionItem {
@@ -59,6 +72,8 @@ pub struct PluginSurfaceActionItem {
     pub target: SurfaceActionTarget,
     pub tool: String,
     pub args: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<Vec<SurfaceActionPromptField>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -77,6 +92,8 @@ pub struct PluginSurfaceAction {
     pub tool: Option<String>,
     pub args: Option<Value>,
     pub items: Vec<PluginSurfaceActionItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<Vec<SurfaceActionPromptField>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,6 +121,8 @@ struct ResolverSurfaceAction {
     args: Option<Value>,
     #[serde(default)]
     items: Vec<ResolverSurfaceActionItem>,
+    #[serde(default)]
+    prompt: Option<Vec<SurfaceActionPromptField>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +136,8 @@ struct ResolverSurfaceActionItem {
     tool: String,
     #[serde(default)]
     args: Option<Value>,
+    #[serde(default)]
+    prompt: Option<Vec<SurfaceActionPromptField>>,
 }
 
 #[tauri::command]
@@ -794,6 +815,7 @@ fn normalize_surface_actions(
                     tool: Some(tool),
                     args: Some(args),
                     items: Vec::new(),
+                    prompt: action.prompt,
                 });
             }
             "menu" => {
@@ -836,6 +858,7 @@ fn normalize_surface_actions(
                         target: item.target,
                         tool: item.tool,
                         args,
+                        prompt: item.prompt,
                     });
                 }
                 if items.is_empty() {
@@ -855,6 +878,7 @@ fn normalize_surface_actions(
                     tool: None,
                     args: None,
                     items,
+                    prompt: None,
                 });
             }
             other => {
