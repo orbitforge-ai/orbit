@@ -1,3 +1,5 @@
 packages:
   - packages/*
   - bundled-plugins/*
+allowBuilds:
+  esbuild: true

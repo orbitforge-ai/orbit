@@ -339,26 +339,33 @@ body {
 .streaming-status-pill {
   position: relative;
   isolation: isolate;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .streaming-status-pill__orbit {
   position: absolute;
-  inset: -1px;
-  border-radius: inherit;
+  inset: -2px;
+  border-radius: 9999px;
   padding: 1px;
   background:
     conic-gradient(
       from 0deg,
-      rgba(165, 180, 252, 0.06) 0deg,
-      rgba(165, 180, 252, 0.16) 210deg,
-      rgba(199, 210, 254, 0.95) 300deg,
-      rgba(129, 140, 248, 0.18) 336deg,
-      rgba(165, 180, 252, 0.06) 360deg
+      transparent 0deg,
+      transparent 286deg,
+      rgba(129, 140, 248, 0.04) 304deg,
+      rgba(129, 140, 248, 0.12) 320deg,
+      rgba(165, 180, 252, 0.28) 336deg,
+      rgba(224, 231, 255, 0.6) 346deg,
+      rgba(165, 180, 252, 0.24) 354deg,
+      rgba(129, 140, 248, 0.08) 360deg
     );
-  opacity: 0.95;
+  opacity: 0.82;
   pointer-events: none;
-  animation: streaming-pill-orbit 1.35s linear infinite;
+  animation: streaming-pill-orbit 2.2s linear infinite;
+  filter:
+    blur(0.35px)
+    drop-shadow(0 0 2px rgba(224, 231, 255, 0.2))
+    drop-shadow(0 0 5px rgba(129, 140, 248, 0.16));
   -webkit-mask:
     linear-gradient(#fff 0 0) content-box,
     linear-gradient(#fff 0 0);

@@ -4,8 +4,8 @@ use tracing::debug;
 
 use crate::events::emitter::{emit_agent_content_block, emit_agent_llm_chunk, emit_log_chunk};
 use crate::executor::llm_provider::{
-    ChatMessage, ContentBlock, LlmConfig, LlmProvider, LlmResponse, StopReason, ToolDefinition,
-    Usage,
+    sanitize_tool_input_schema, ChatMessage, ContentBlock, LlmConfig, LlmProvider, LlmResponse,
+    StopReason, ToolDefinition, Usage,
 };
 
 /// MiniMax Anthropic-compatible Messages API endpoint.
@@ -85,7 +85,7 @@ impl MiniMaxProvider {
                 json!({
                     "name": t.name,
                     "description": t.description,
-                    "input_schema": t.input_schema,
+                    "input_schema": sanitize_tool_input_schema(&t.input_schema),
                 })
             })
             .collect()

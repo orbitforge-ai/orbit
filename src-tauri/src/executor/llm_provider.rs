@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use tracing::warn;
 
 use crate::db::DbPool;
@@ -72,6 +73,88 @@ pub struct ToolDefinition {
     pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
+}
+
+fn merge_schema_properties(into: &mut Map<String, Value>, from: &Map<String, Value>) {
+    for (key, value) in from {
+        into.entry(key.clone()).or_insert_with(|| value.clone());
+    }
+}
+
+fn required_strings(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Anthropic custom tools reject top-level `oneOf` / `anyOf` / `allOf`.
+/// Orbit tool executors still validate their inputs, so we flatten the top
+/// level schema into a permissive object form before exposing it externally.
+pub fn sanitize_tool_input_schema(schema: &Value) -> Value {
+    let Some(root) = schema.as_object() else {
+        return serde_json::json!({ "type": "object" });
+    };
+
+    let has_top_level_combinator = ["oneOf", "anyOf", "allOf"]
+        .iter()
+        .any(|key| root.contains_key(*key));
+    if !has_top_level_combinator {
+        return schema.clone();
+    }
+
+    let mut sanitized = root.clone();
+    let mut properties = sanitized
+        .get("properties")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut required = required_strings(sanitized.get("required"));
+
+    for key in ["oneOf", "anyOf", "allOf"] {
+        let Some(Value::Array(branches)) = root.get(key) else {
+            continue;
+        };
+        for branch in branches {
+            let Some(branch_obj) = branch.as_object() else {
+                continue;
+            };
+            if let Some(branch_props) = branch_obj.get("properties").and_then(Value::as_object) {
+                merge_schema_properties(&mut properties, branch_props);
+            }
+            if key == "allOf" {
+                for field in required_strings(branch_obj.get("required")) {
+                    if !required.contains(&field) {
+                        required.push(field);
+                    }
+                }
+            }
+        }
+        sanitized.remove(key);
+    }
+
+    sanitized.insert("type".to_string(), Value::String("object".to_string()));
+    sanitized.insert("properties".to_string(), Value::Object(properties));
+    if required.is_empty() {
+        sanitized.remove("required");
+    } else {
+        sanitized.insert(
+            "required".to_string(),
+            Value::Array(required.into_iter().map(Value::String).collect()),
+        );
+    }
+
+    sanitized
+        .entry("description".to_string())
+        .or_insert_with(|| Value::String("Input object.".to_string()));
+
+    Value::Object(sanitized)
 }
 
 /// The assembled response from an LLM call.
@@ -207,6 +290,77 @@ pub fn model_supports_images(provider_name: &str, model: &str) -> bool {
         // verification through the MCP bridge is completed.
         "claude-cli" | "codex-cli" => false,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::sanitize_tool_input_schema;
+    use serde_json::json;
+
+    #[test]
+    fn sanitize_tool_input_schema_removes_top_level_one_of() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" }
+            },
+            "required": ["path"],
+            "oneOf": [
+                { "required": ["path", "old_text", "new_text"] },
+                {
+                    "properties": {
+                        "notebook_action": { "type": "string" }
+                    },
+                    "required": ["path", "notebook_action"]
+                }
+            ]
+        });
+
+        let sanitized = sanitize_tool_input_schema(&schema);
+        assert!(sanitized.get("oneOf").is_none());
+        assert_eq!(sanitized["type"], "object");
+        assert_eq!(sanitized["required"], json!(["path"]));
+        assert!(sanitized["properties"].get("path").is_some());
+        assert!(sanitized["properties"].get("notebook_action").is_some());
+    }
+
+    #[test]
+    fn sanitize_tool_input_schema_promotes_all_of_required_fields() {
+        let schema = json!({
+            "allOf": [
+                {
+                    "properties": {
+                        "command": { "type": "string" }
+                    },
+                    "required": ["command"]
+                },
+                {
+                    "properties": {
+                        "timeout_seconds": { "type": "integer" }
+                    }
+                }
+            ]
+        });
+
+        let sanitized = sanitize_tool_input_schema(&schema);
+        assert!(sanitized.get("allOf").is_none());
+        assert_eq!(sanitized["required"], json!(["command"]));
+        assert!(sanitized["properties"].get("command").is_some());
+        assert!(sanitized["properties"].get("timeout_seconds").is_some());
+    }
+
+    #[test]
+    fn sanitize_tool_input_schema_leaves_plain_object_alone() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string" }
+            }
+        });
+
+        let sanitized = sanitize_tool_input_schema(&schema);
+        assert_eq!(sanitized, schema);
     }
 }
 

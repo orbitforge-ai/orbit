@@ -156,7 +156,7 @@ impl ToolHandler for ShellCommandTool {
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "The shell command to execute"
+                        "description": "The shell command to execute. Required unless using process_action."
                     },
                     "timeout_seconds": {
                         "type": "integer",
@@ -179,11 +179,7 @@ impl ToolHandler for ShellCommandTool {
                         "type": "string",
                         "description": "Background process ID for poll or kill actions."
                     }
-                },
-                "oneOf": [
-                    { "required": ["command"] },
-                    { "required": ["process_action"] }
-                ]
+                }
             }),
         }
     }

@@ -28,6 +28,7 @@ use tracing::{debug, info, warn};
 
 use crate::db::DbPool;
 use crate::executor::agent_tools::ToolExecutionContext;
+use crate::executor::llm_provider::sanitize_tool_input_schema;
 use crate::executor::llm_provider::ToolDefinition;
 use crate::executor::permissions::{self, PermissionRegistry};
 
@@ -219,7 +220,7 @@ fn list_tools(tools: &[ToolDefinition]) -> Value {
             json!({
                 "name": t.name,
                 "description": t.description,
-                "inputSchema": t.input_schema,
+                "inputSchema": sanitize_tool_input_schema(&t.input_schema),
             })
         })
         .collect();

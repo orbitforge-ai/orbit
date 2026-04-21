@@ -37,7 +37,7 @@ impl ToolHandler for EditFileTool {
                     },
                     "new_text": {
                         "type": "string",
-                        "description": "The replacement text"
+                        "description": "The replacement text. Required for text replacement mode."
                     },
                     "replace_all": {
                         "type": "boolean",
@@ -46,11 +46,11 @@ impl ToolHandler for EditFileTool {
                     "notebook_action": {
                         "type": "string",
                         "enum": ["replace_cell", "insert_cell", "delete_cell"],
-                        "description": "Notebook cell operation (only for .ipynb files)"
+                        "description": "Notebook cell operation (only for .ipynb files). Use instead of old_text/new_text for notebook mode."
                     },
                     "cell_number": {
                         "type": "integer",
-                        "description": "0-based cell index for notebook operations"
+                        "description": "0-based cell index for notebook operations. Required with notebook_action."
                     },
                     "cell_type": {
                         "type": "string",
@@ -62,11 +62,7 @@ impl ToolHandler for EditFileTool {
                         "description": "Notebook cell content for insert_cell or replace_cell"
                     }
                 },
-                "required": ["path"],
-                "oneOf": [
-                    { "required": ["path", "old_text", "new_text"] },
-                    { "required": ["path", "notebook_action", "cell_number"] }
-                ]
+                "required": ["path"]
             }),
         }
     }
