@@ -17,7 +17,8 @@ pub fn to_cron(cfg: &RecurringConfig) -> Result<String, String> {
             if n == 0 || n > 23 {
                 return Err(format!("invalid hour interval: {}", n));
             }
-            Ok(format!("0 0 */{} * * *", n))
+            let (_, minute) = time_parts(cfg)?;
+            Ok(format!("0 {} */{} * * *", minute, n))
         }
         "days" => {
             let (hour, minute) = time_parts(cfg)?;
@@ -126,6 +127,20 @@ mod tests {
             expression: None,
         };
         assert_eq!(to_cron(&cfg).unwrap(), "0 0 9 * * 1,3");
+    }
+
+    #[test]
+    fn hourly_offset_cron() {
+        let cfg = RecurringConfig {
+            interval_unit: "hours".to_string(),
+            interval_value: 1,
+            days_of_week: None,
+            time_of_day: Some(TimeOfDay { hour: 0, minute: 10 }),
+            timezone: "UTC".to_string(),
+            missed_run_policy: "skip".to_string(),
+            expression: None,
+        };
+        assert_eq!(to_cron(&cfg).unwrap(), "0 10 */1 * * *");
     }
 
     #[test]

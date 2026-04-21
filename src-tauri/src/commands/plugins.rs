@@ -85,6 +85,9 @@ pub struct PluginSurfaceAction {
     pub contribution_id: String,
     pub presentation: String,
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    pub hide_label: bool,
     pub tooltip: Option<String>,
     pub disabled: bool,
     pub stale: bool,
@@ -109,6 +112,10 @@ struct ResolverSurfaceAction {
     id: String,
     presentation: String,
     label: String,
+    #[serde(default)]
+    icon: Option<String>,
+    #[serde(default)]
+    hide_label: bool,
     #[serde(default)]
     tooltip: Option<String>,
     #[serde(default)]
@@ -808,6 +815,8 @@ fn normalize_surface_actions(
                     contribution_id: spec.id.clone(),
                     presentation: "button".into(),
                     label: action.label,
+                    icon: action.icon,
+                    hide_label: action.hide_label,
                     tooltip: action.tooltip,
                     disabled: action.disabled,
                     stale: false,
@@ -871,6 +880,8 @@ fn normalize_surface_actions(
                     contribution_id: spec.id.clone(),
                     presentation: "menu".into(),
                     label: action.label,
+                    icon: action.icon,
+                    hide_label: action.hide_label,
                     tooltip: action.tooltip,
                     disabled: action.disabled,
                     stale: false,

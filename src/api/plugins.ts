@@ -120,6 +120,8 @@ export interface PluginSurfaceAction {
   contributionId: string;
   presentation: 'button' | 'menu';
   label: string;
+  icon?: string;
+  hideLabel?: boolean;
   tooltip: string | null;
   disabled: boolean;
   stale: boolean;

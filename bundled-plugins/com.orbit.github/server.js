@@ -1,5 +1,7 @@
 import { Plugin } from '@orbit/plugin-sdk';
 import { execFile } from 'node:child_process';
+import { stat } from 'node:fs/promises';
+import path from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -48,6 +50,16 @@ async function resolveDefaultBranch(repoRoot) {
   return null;
 }
 
+async function resolveActionDirectory(targetPath) {
+  if (!targetPath || typeof targetPath !== 'string') return null;
+  try {
+    const entry = await stat(targetPath);
+    return entry.isDirectory() ? targetPath : path.dirname(targetPath);
+  } catch {
+    return null;
+  }
+}
+
 function requireRepoRoot(input) {
   const repoRoot = input?.context?.target?.token;
   if (!repoRoot || typeof repoRoot !== 'string') {
@@ -68,27 +80,78 @@ plugin.tool('resolve_surface_actions', {
   run: async ({ input }) => {
     const actions = [];
     const repoRoot = await resolveRepoRoot(input?.path);
+    const actionDirectory = await resolveActionDirectory(input?.path);
+    const repoName = repoRoot?.split('/').filter(Boolean).pop() ?? null;
+    const cloneTarget = actionDirectory
+      ? {
+          kind: 'workspaceDir',
+          token: actionDirectory,
+          displayPath: actionDirectory,
+        }
+      : null;
+    const repoTarget = repoRoot
+      ? {
+          kind: 'gitRepo',
+          token: repoRoot,
+          displayPath: repoRoot,
+        }
+      : null;
+    const repoActionTarget = repoTarget ?? cloneTarget;
 
-    if (repoRoot) {
-      const repoName = repoRoot.split('/').filter(Boolean).pop() ?? repoRoot;
-      const target = {
-        kind: 'gitRepo',
-        token: repoRoot,
-        displayPath: repoRoot,
-      };
-      const items = [
-        { id: 'pull', label: 'Pull', target, tool: 'git_pull' },
-        { id: 'push', label: 'Push', target, tool: 'git_push' },
-      ];
+    if (repoActionTarget) {
+      const items = [];
 
-      const defaultBranch = await resolveDefaultBranch(repoRoot);
-      if (defaultBranch) {
+      if (cloneTarget) {
+        items.push({
+          id: 'clone',
+          label: 'Clone repo',
+          target: cloneTarget,
+          tool: 'clone_repo',
+          prompt: [
+            {
+              name: 'repo',
+              label: 'Repository',
+              placeholder: 'owner/name',
+              description: 'GitHub repo in owner/name form (e.g. facebook/react)',
+              required: true,
+            },
+          ],
+        });
+      }
+
+      items.push(
+        {
+          id: 'pull',
+          label: 'Pull',
+          disabled: !repoTarget,
+          target: repoActionTarget,
+          tool: 'git_pull',
+        },
+        {
+          id: 'push',
+          label: 'Push',
+          disabled: !repoTarget,
+          target: repoActionTarget,
+          tool: 'git_push',
+        }
+      );
+
+      const defaultBranch = repoRoot ? await resolveDefaultBranch(repoRoot) : null;
+      if (defaultBranch && repoTarget) {
         items.push({
           id: `checkout-${defaultBranch}`,
           label: `Checkout ${defaultBranch}`,
-          target,
+          target: repoTarget,
           tool: 'git_checkout_branch',
           args: { branch: defaultBranch },
+        });
+      } else if (!repoTarget && repoActionTarget) {
+        items.push({
+          id: 'checkout-default',
+          label: 'Checkout default branch',
+          disabled: true,
+          target: repoActionTarget,
+          tool: 'git_checkout_branch',
         });
       }
 
@@ -96,32 +159,12 @@ plugin.tool('resolve_surface_actions', {
         id: 'repo-actions',
         presentation: 'menu',
         label: 'GitHub',
-        tooltip: `GitHub actions for ${repoName}`,
+        tooltip: repoName
+          ? `GitHub actions for ${repoName}`
+          : 'GitHub actions for this workspace location',
+        icon: input?.surface === 'workspaceBrowser' ? 'github' : undefined,
+        hideLabel: input?.surface === 'workspaceBrowser',
         items,
-      });
-    }
-
-    if (input?.surface === 'workspaceBrowser' && typeof input?.path === 'string' && input.path) {
-      actions.push({
-        id: 'clone-repo',
-        presentation: 'button',
-        label: 'Clone repo',
-        tooltip: 'Clone a GitHub repository into this folder',
-        target: {
-          kind: 'workspaceDir',
-          token: input.path,
-          displayPath: input.path,
-        },
-        tool: 'clone_repo',
-        prompt: [
-          {
-            name: 'repo',
-            label: 'Repository',
-            placeholder: 'owner/name',
-            description: 'GitHub repo in owner/name form (e.g. facebook/react)',
-            required: true,
-          },
-        ],
       });
     }
 

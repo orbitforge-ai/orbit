@@ -63,8 +63,14 @@ export function PluginSurfaceActionBar({
   });
 
   const actions = actionsQuery.data ?? [];
-  const visibleActions = useMemo(() => actions.slice(0, maxInlineActions), [actions, maxInlineActions]);
-  const overflowActions = useMemo(() => actions.slice(maxInlineActions), [actions, maxInlineActions]);
+  const visibleActions = useMemo(
+    () => actions.slice(0, maxInlineActions),
+    [actions, maxInlineActions]
+  );
+  const overflowActions = useMemo(
+    () => actions.slice(maxInlineActions),
+    [actions, maxInlineActions]
+  );
   const isRefreshing = actionsQuery.isFetching && actions.length > 0;
   const hasStaleActions = actions.some((action) => action.stale);
 
@@ -73,7 +79,7 @@ export function PluginSurfaceActionBar({
       pluginId: string,
       label: string,
       actionId: string,
-      item: Pick<PluginSurfaceActionItem, 'tool' | 'args' | 'target'>,
+      item: Pick<PluginSurfaceActionItem, 'tool' | 'args' | 'target'>
     ) => {
       try {
         setPendingId(actionId);
@@ -97,7 +103,7 @@ export function PluginSurfaceActionBar({
       actionLabel: string,
       itemLabel: string,
       actionId: string,
-      item: Pick<PluginSurfaceActionItem, 'tool' | 'args' | 'target' | 'prompt'>,
+      item: Pick<PluginSurfaceActionItem, 'tool' | 'args' | 'target' | 'prompt'>
     ) => {
       if (item.prompt && item.prompt.length > 0) {
         setPromptRequest({
@@ -217,7 +223,7 @@ export function PluginSurfaceActionBar({
           title="Refreshing plugin actions"
           aria-label="Refreshing plugin actions"
         >
-          <Loader2 size={11} className="animate-spin" />
+          {/* <Loader2 size={11} className="animate-spin" /> */}
         </span>
       ) : null}
 
@@ -253,10 +259,10 @@ function SurfaceButtonAction({
       disabled={pending || action.disabled || !action.tool || !action.target}
       title={action.tooltip ?? `${action.pluginName}: ${action.label}`}
       aria-label={action.label}
-      className={buttonClassName(variant)}
+      className={buttonClassName(variant, action.hideLabel)}
     >
       {pending ? <Loader2 size={11} className="animate-spin shrink-0" /> : null}
-      <span className="truncate">{action.label}</span>
+      <ActionTriggerContent action={action} />
     </button>
   );
 }
@@ -279,10 +285,9 @@ function SurfaceMenuAction({
           disabled={action.disabled}
           title={action.tooltip ?? `${action.pluginName}: ${action.label}`}
           aria-label={action.label}
-          className={buttonClassName(variant)}
+          className={buttonClassName(variant, action.hideLabel)}
         >
-          <span className="truncate">{action.label}</span>
-          <ChevronRight size={11} className="shrink-0 rotate-90" />
+          <ActionTriggerContent action={action} showMenuChevron />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -326,7 +331,7 @@ function OverflowMenu({
     actionLabel: string,
     itemLabel: string,
     itemId: string,
-    item: Pick<PluginSurfaceActionItem, 'tool' | 'args' | 'target' | 'prompt'>,
+    item: Pick<PluginSurfaceActionItem, 'tool' | 'args' | 'target' | 'prompt'>
   ) => Promise<void>;
 }) {
   return (
@@ -368,7 +373,7 @@ function OverflowMenu({
                             action.label,
                             item.label,
                             item.id,
-                            item,
+                            item
                           );
                         }}
                         className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-secondary outline-none cursor-pointer data-[highlighted]:bg-accent/10 data-[highlighted]:text-white data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50"
@@ -385,7 +390,9 @@ function OverflowMenu({
             ) : (
               <DropdownMenu.Item
                 key={action.id}
-                disabled={action.disabled || pendingId === action.id || !action.tool || !action.target}
+                disabled={
+                  action.disabled || pendingId === action.id || !action.tool || !action.target
+                }
                 onSelect={() => {
                   if (!action.tool || !action.target) return;
                   void onRun(
@@ -415,11 +422,40 @@ function OverflowMenu({
   );
 }
 
-function buttonClassName(variant: 'sidebar' | 'workspace') {
+function buttonClassName(variant: 'sidebar' | 'workspace', compact?: boolean) {
   return cn(
     'inline-flex min-w-0 items-center gap-1.5 rounded-md border border-edge px-2 py-1 text-xs text-secondary transition-colors hover:bg-surface hover:text-white disabled:cursor-not-allowed disabled:opacity-50',
-    variant === 'sidebar' ? 'max-w-full' : 'shrink-0'
+    variant === 'sidebar' ? 'max-w-full' : 'shrink-0',
+    compact ? 'px-1.5' : null
   );
+}
+
+function ActionTriggerContent({
+  action,
+  showMenuChevron = false,
+}: {
+  action: PluginSurfaceAction;
+  showMenuChevron?: boolean;
+}) {
+  return (
+    <>
+      {action.icon ? <ActionIcon icon={action.icon} /> : null}
+      {action.hideLabel ? null : <span className="truncate">{action.label}</span>}
+      {showMenuChevron ? <ChevronRight size={11} className="shrink-0 rotate-90" /> : null}
+    </>
+  );
+}
+
+function ActionIcon({ icon }: { icon: string }) {
+  if (icon === 'github') {
+    return (
+      <svg viewBox="0 0 16 16" aria-hidden="true" className="h-3.5 w-3.5 shrink-0 fill-current">
+        <path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38c0-.19-.01-.82-.01-1.49c-2.01.37-2.53-.49-2.69-.94c-.09-.23-.48-.94-.82-1.13c-.28-.15-.68-.52-.01-.53c.63-.01 1.08.58 1.23.82c.72 1.21 1.87.87 2.33.66c.07-.52.28-.87.5-1.07c-1.78-.2-3.64-.89-3.64-3.95c0-.87.31-1.59.82-2.15c-.08-.2-.36-1.02.08-2.12c0 0 .67-.21 2.2.82a7.7 7.7 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82c.44 1.1.16 1.92.08 2.12c.51.56.82 1.27.82 2.15c0 3.07-1.87 3.75-3.65 3.95c.29.25.54.73.54 1.48c0 1.07-.01 1.93-.01 2.2c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+      </svg>
+    );
+  }
+
+  return null;
 }
 
 function SurfaceActionPromptDialog({
@@ -439,7 +475,9 @@ function SurfaceActionPromptDialog({
 
   const canSubmit =
     !busy &&
-    request.fields.every((f) => (f.required ?? true ? (values[f.name] ?? '').trim() !== '' : true));
+    request.fields.every((f) =>
+      (f.required ?? true) ? (values[f.name] ?? '').trim() !== '' : true
+    );
 
   function submit() {
     if (!canSubmit) return;
@@ -472,9 +510,7 @@ function SurfaceActionPromptDialog({
               <label className="text-xs text-muted mb-1 block">{field.label}</label>
               <Input
                 value={values[field.name] ?? ''}
-                onChange={(e) =>
-                  setValues((prev) => ({ ...prev, [field.name]: e.target.value }))
-                }
+                onChange={(e) => setValues((prev) => ({ ...prev, [field.name]: e.target.value }))}
                 placeholder={field.placeholder}
                 autoFocus={i === 0}
                 onKeyDown={(e) => {

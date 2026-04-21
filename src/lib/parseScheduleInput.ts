@@ -52,6 +52,15 @@ function parseCron(input: string, timezone: string): RecurringConfig | null {
       missedRunPolicy: 'skip',
     };
   }
+  if (hour === '*' && parseSimpleNum(minute) != null) {
+    return {
+      intervalUnit: 'hours',
+      intervalValue: 1,
+      timeOfDay: { hour: 0, minute: parseSimpleNum(minute) ?? 0 },
+      timezone,
+      missedRunPolicy: 'skip',
+    };
+  }
 
   // Specific days of week
   const daysOfWeek = parseDowField(dow);
@@ -141,17 +150,7 @@ const FREQ_MAP: Record<number, RecurringConfig['intervalUnit'] | null> = {
 };
 
 function parseNatural(input: string, timezone: string): RecurringConfig | null {
-  // Pre-process phrases rrule NLP doesn't handle
-  let text = input;
-  if (/every\s+weekday/i.test(text)) {
-    text = text.replace(
-      /every\s+weekday(s)?/i,
-      'every week on monday, tuesday, wednesday, thursday and friday'
-    );
-  }
-  if (/every\s+weekend/i.test(text)) {
-    text = text.replace(/every\s+weekend(s)?/i, 'every week on saturday and sunday');
-  }
+  const text = normalizeNaturalScheduleText(input);
 
   let rule: RRule;
   try {
@@ -170,14 +169,13 @@ function parseNatural(input: string, timezone: string): RecurringConfig | null {
     daysOfWeek = opts.byweekday.map((wd) => (wd + 1) % 7).sort((a, b) => a - b);
   }
 
-  // Time mapping — default to 9:00 AM for day/week/month if no explicit time
-  const hasExplicitTime = /\d{1,2}(:\d{2})?\s*(am|pm)|at\s+\d/i.test(input);
+  // Prefer parsing explicit times from the input text directly because rrule
+  // may inherit the current minute for phrases like "9am".
+  const explicitTime = extractExplicitTime(input);
   let timeOfDay: { hour: number; minute: number } | undefined;
 
-  if (hasExplicitTime) {
-    const hour = opts.byhour?.[0] ?? 0;
-    const minute = opts.byminute?.[0] ?? 0;
-    timeOfDay = { hour, minute };
+  if (explicitTime) {
+    timeOfDay = explicitTime;
   } else if (['days', 'weeks', 'months'].includes(unit)) {
     timeOfDay = { hour: 9, minute: 0 };
   }
@@ -190,4 +188,61 @@ function parseNatural(input: string, timezone: string): RecurringConfig | null {
     timezone,
     missedRunPolicy: 'skip',
   };
+}
+
+function normalizeNaturalScheduleText(input: string): string {
+  let text = input.trim().toLowerCase().replace(/\s+/g, ' ');
+
+  const prefixAliases: Array<[RegExp, string]> = [
+    [/^daily\b/, 'every day'],
+    [/^weekly\b/, 'every week'],
+    [/^monthly\b/, 'every month'],
+    [/^hourly\b/, 'every hour'],
+    [/^minutely\b/, 'every minute'],
+    [/^weekdays?\b/, 'every weekday'],
+    [/^weekends?\b/, 'every weekend'],
+  ];
+
+  for (const [pattern, replacement] of prefixAliases) {
+    if (pattern.test(text)) {
+      text = text.replace(pattern, replacement);
+      break;
+    }
+  }
+
+  // Expand shorthand phrases that rrule's NLP parser either rejects or
+  // silently misinterprets as a yearly rule anchored to today.
+  if (/every\s+weekday/i.test(text)) {
+    text = text.replace(
+      /every\s+weekday(s)?/i,
+      'every week on monday, tuesday, wednesday, thursday and friday'
+    );
+  }
+  if (/every\s+weekend/i.test(text)) {
+    text = text.replace(/every\s+weekend(s)?/i, 'every week on saturday and sunday');
+  }
+
+  return text;
+}
+
+function extractExplicitTime(input: string): { hour: number; minute: number } | null {
+  const amPmMatch = input.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+  if (amPmMatch) {
+    const hour12 = Number(amPmMatch[1]);
+    const minute = Number(amPmMatch[2] ?? '0');
+    if (hour12 < 1 || hour12 > 12 || minute < 0 || minute > 59) return null;
+    const meridiem = amPmMatch[3].toLowerCase();
+    const hour = meridiem === 'pm' ? (hour12 % 12) + 12 : hour12 % 12;
+    return { hour, minute };
+  }
+
+  const atTimeMatch = input.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\b/i);
+  if (atTimeMatch) {
+    const hour = Number(atTimeMatch[1]);
+    const minute = Number(atTimeMatch[2] ?? '0');
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+    return { hour, minute };
+  }
+
+  return null;
 }

@@ -23,6 +23,10 @@ export function humanSchedule(cfg: RecurringConfig): string {
   const { intervalUnit, intervalValue, daysOfWeek, timeOfDay } = cfg;
 
   const timeStr = timeOfDay ? ` at ${formatTime(timeOfDay.hour, timeOfDay.minute)}` : '';
+  const hourlyMinuteStr =
+    timeOfDay && intervalUnit === 'hours'
+      ? ` at ${timeOfDay.minute} ${timeOfDay.minute === 1 ? 'minute' : 'minutes'} past`
+      : '';
 
   const n = intervalValue;
 
@@ -31,7 +35,7 @@ export function humanSchedule(cfg: RecurringConfig): string {
       return n === 1 ? 'Every minute' : `Every ${n} minutes`;
 
     case 'hours':
-      return n === 1 ? `Every hour${timeStr}` : `Every ${n} hours${timeStr}`;
+      return n === 1 ? `Every hour${hourlyMinuteStr}` : `Every ${n} hours${hourlyMinuteStr}`;
 
     case 'days':
       return n === 1 ? `Every day${timeStr}` : `Every ${n} days${timeStr}`;
