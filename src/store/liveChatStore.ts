@@ -14,6 +14,7 @@ import {
   applyContentBlock,
   applyToolResult,
   contentBlocksToDisplay,
+  createAssistantPreview,
   createEmptyPreviewState,
   finalizePreviewMessage,
   StreamPreviewState,
@@ -107,6 +108,7 @@ export const useLiveChatStore = create<LiveChatStore>((set) => ({
           userMessageDbId: null,
           completedAt: null,
           ...createEmptyPreviewState(),
+          previewMessage: createAssistantPreview(() => nextLocalMessageId('chat-preview')),
         },
       },
     }));
