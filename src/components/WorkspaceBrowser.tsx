@@ -11,8 +11,6 @@ import {
   Plus,
   Trash2,
   FolderOpen,
-  Copy,
-  Check,
   Search,
   X,
   Pencil,
@@ -452,7 +450,6 @@ export function WorkspaceBrowser({
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [filter, setFilter] = useState('');
-  const [copied, setCopied] = useState(false);
   const editorRef = useRef<any>(null);
 
   const specialSet = useMemo(() => new Set(specialFiles), [specialFiles]);
@@ -631,13 +628,6 @@ export function WorkspaceBrowser({
     [adapter, editingFile, invalidateFiles, renameValue]
   );
 
-  async function handleCopyPath() {
-    if (!workspacePath) return;
-    await navigator.clipboard.writeText(workspacePath);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
-
   async function handleOpenInFinder() {
     if (!workspacePath) return;
     try {
@@ -679,74 +669,51 @@ export function WorkspaceBrowser({
 
   return (
     <div className="flex flex-col h-full">
-      {(workspacePath || extraToolbarItems) && (
-        <div className="flex items-center gap-2 px-4 py-2 border-b border-edge bg-panel">
+      <div className="flex items-center gap-1 px-4 py-2 border-b border-edge bg-panel min-h-[40px]">
+        {selectedAbsolutePath ? (
+          <PluginSurfaceActionBar
+            surface="workspaceBrowser"
+            path={selectedAbsolutePath}
+            variant="workspace"
+            maxInlineActions={2}
+            onActionComplete={invalidateFiles}
+          />
+        ) : null}
+        {adapter.createDir && (
+          <button
+            onClick={() => startCreateIn(selectedPath, 'dir')}
+            aria-label="New folder"
+            title={`New folder in ${selectedPath === ROOT_PATH ? 'workspace' : selectedPath}`}
+            className="p-1.5 rounded text-muted hover:text-accent-hover hover:bg-accent/10 shrink-0"
+          >
+            <FolderPlus size={14} />
+          </button>
+        )}
+        <button
+          onClick={() => startCreateIn(selectedPath, 'file')}
+          aria-label="New file"
+          title={`New file in ${selectedPath === ROOT_PATH ? 'workspace' : selectedPath}`}
+          className="p-1.5 rounded text-muted hover:text-accent-hover hover:bg-accent/10 shrink-0"
+        >
+          <Plus size={14} />
+        </button>
+        <div className="ml-auto flex items-center gap-1 shrink-0">
           {workspacePath && (
             <button
-              onClick={handleCopyPath}
-              aria-label="Copy workspace path"
-              className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-mono text-muted hover:text-white hover:bg-surface transition-colors truncate min-w-0"
-              title="Click to copy path"
+              onClick={handleOpenInFinder}
+              aria-label="Reveal workspace in Finder"
+              className="p-1.5 rounded text-muted hover:text-accent-hover hover:bg-accent/10 transition-colors"
+              title="Open in Finder"
             >
-              {copied ? (
-                <Check size={11} className="text-emerald-400 shrink-0" />
-              ) : (
-                <Copy size={11} className="shrink-0" />
-              )}
-              <span className="truncate">{workspacePath}</span>
+              <FolderOpen size={14} />
             </button>
           )}
-          <div className="flex items-center gap-1 shrink-0 ml-auto">
-            {workspacePath && (
-              <button
-                onClick={handleOpenInFinder}
-                aria-label="Reveal workspace in Finder"
-                className="p-1.5 rounded text-muted hover:text-accent-hover hover:bg-accent/10 transition-colors"
-                title="Open in Finder"
-              >
-                <FolderOpen size={14} />
-              </button>
-            )}
-            {extraToolbarItems}
-          </div>
+          {extraToolbarItems}
         </div>
-      )}
+      </div>
 
       <div className="flex flex-1 min-h-0">
         <div className="w-[260px] flex flex-col border-r border-edge">
-          <div className="flex items-center gap-1 px-2 py-2 border-b border-edge min-h-[36px]">
-            <span className="flex-1 text-[11px] text-muted font-mono truncate px-1">
-              Workspace
-            </span>
-            {selectedAbsolutePath ? (
-              <PluginSurfaceActionBar
-                surface="workspaceBrowser"
-                path={selectedAbsolutePath}
-                variant="workspace"
-                maxInlineActions={2}
-                onActionComplete={invalidateFiles}
-              />
-            ) : null}
-            {adapter.createDir && (
-              <button
-                onClick={() => startCreateIn(selectedPath, 'dir')}
-                aria-label="New folder"
-                title={`New folder in ${selectedPath === ROOT_PATH ? 'workspace' : selectedPath}`}
-                className="p-1 rounded text-muted hover:text-accent-hover hover:bg-accent/10 shrink-0"
-              >
-                <FolderPlus size={13} />
-              </button>
-            )}
-            <button
-              onClick={() => startCreateIn(selectedPath, 'file')}
-              aria-label="New file"
-              title={`New file in ${selectedPath === ROOT_PATH ? 'workspace' : selectedPath}`}
-              className="p-1 rounded text-muted hover:text-accent-hover hover:bg-accent/10 shrink-0"
-            >
-              <Plus size={13} />
-            </button>
-          </div>
-
           <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-edge">
             <Search size={11} className="text-muted shrink-0" />
             <Input

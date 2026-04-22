@@ -44,6 +44,7 @@ import {
   resolveRole,
 } from '../../lib/agentRoles';
 import { AgentRoleSelect } from './Header/AgentRoleSelect';
+import { WorkspacePathChip } from '../../components/WorkspacePathChip';
 
 type ActivityItem =
   | { key: string; kind: 'session'; timestamp: number; session: ChatSession }
@@ -200,6 +201,12 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
   const { data: agentConfig } = useQuery({
     queryKey: ['agent-config', agentId],
     queryFn: () => workspaceApi.getConfig(agentId),
+    staleTime: 60_000,
+  });
+
+  const { data: agentWorkspacePath } = useQuery({
+    queryKey: ['workspace', agentId, 'path'],
+    queryFn: () => workspaceApi.getWorkspacePath(agentId),
     staleTime: 60_000,
   });
 
@@ -365,6 +372,9 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
                   label="Avg duration"
                   value={avgDuration !== null ? `${(avgDuration / 1000).toFixed(1)}s` : '--'}
                 />
+                {agentWorkspacePath && (
+                  <WorkspacePathChip path={agentWorkspacePath} className="max-w-[320px]" />
+                )}
               </div>
             </div>
           </div>

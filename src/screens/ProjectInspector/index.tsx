@@ -14,6 +14,7 @@ import { ProjectScheduledTab } from './ProjectScheduledTab';
 import { ProjectWorkflowsTab } from './ProjectWorkflowsTab';
 import { ProjectHistoryTab } from './ProjectHistoryTab';
 import { Input, SimpleSelect } from '../../components/ui';
+import { WorkspacePathChip } from '../../components/WorkspacePathChip';
 
 const TABS = [
   { id: 'workspace' as const, label: 'Workspace', icon: HardDrive },
@@ -171,6 +172,12 @@ function ProjectDetail({
   const [editName, setEditName] = useState(project.name);
   const [editDesc, setEditDesc] = useState(project.description ?? '');
 
+  const { data: workspacePath } = useQuery({
+    queryKey: ['project-workspace-path', project.id],
+    queryFn: () => projectsApi.getWorkspacePath(project.id),
+    staleTime: 60_000,
+  });
+
   async function handleSave() {
     await projectsApi.update(project.id, {
       name: editName.trim() || project.name,
@@ -219,6 +226,10 @@ function ProjectDetail({
               <p className="text-xs text-muted truncate">{project.description}</p>
             )}
           </div>
+        )}
+
+        {!editing && workspacePath && (
+          <WorkspacePathChip path={workspacePath} className="max-w-[40%]" />
         )}
 
         {!editing && (
