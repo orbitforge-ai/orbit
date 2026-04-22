@@ -14,4 +14,5 @@ pub mod trigger_event;
 pub mod user;
 pub mod work_item;
 pub mod work_item_comment;
+pub mod work_item_event;
 pub mod workflow_run;

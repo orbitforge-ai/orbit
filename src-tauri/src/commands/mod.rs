@@ -18,6 +18,7 @@ pub mod skills;
 pub mod tasks;
 pub mod triggers;
 pub mod users;
+pub mod work_item_events;
 pub mod work_items;
 pub mod workflow_runs;
 pub mod workspace;

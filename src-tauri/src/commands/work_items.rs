@@ -1,6 +1,7 @@
 use crate::commands::project_board_columns::{
     list_project_board_columns_sync, resolve_board_column_sync,
 };
+use crate::commands::work_item_events::{event_kind, insert_event, Actor};
 use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
 use crate::models::project_board_column::ProjectBoardColumn;
@@ -222,6 +223,20 @@ pub async fn create_work_item_with_db(
         )
         .map_err(|e| e.to_string())?;
 
+        insert_event(
+            &conn,
+            &id,
+            Actor::System,
+            event_kind::CREATED,
+            serde_json::json!({
+                "title": payload.title,
+                "kind": kind,
+                "status": status,
+                "priority": priority,
+                "columnId": column_id,
+            }),
+        )?;
+
         let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
         conn.query_row(&sql, params![id], map_work_item)
             .map_err(|e| e.to_string())
@@ -294,63 +309,120 @@ pub async fn update_work_item_with_db(
     tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
-        let project_id: String = conn
-            .query_row(
-                "SELECT project_id FROM work_items WHERE id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
+        let sql_before = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
+        let before: WorkItem = conn
+            .query_row(&sql_before, params![id], map_work_item)
             .map_err(|e| e.to_string())?;
+        let project_id = before.project_id.clone();
 
         if let Some(title) = &payload.title {
             if title.trim().is_empty() {
                 return Err("work_item: title must be non-empty".into());
             }
-            conn.execute(
-                "UPDATE work_items SET title = ?1, updated_at = ?2 WHERE id = ?3",
-                params![title, now, id],
-            )
-            .map_err(|e| e.to_string())?;
+            if title != &before.title {
+                conn.execute(
+                    "UPDATE work_items SET title = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![title, now, id],
+                )
+                .map_err(|e| e.to_string())?;
+                insert_event(
+                    &conn,
+                    &id,
+                    Actor::System,
+                    event_kind::TITLE_CHANGED,
+                    serde_json::json!({ "from": before.title, "to": title }),
+                )?;
+            }
         }
         if let Some(description) = &payload.description {
-            conn.execute(
-                "UPDATE work_items SET description = ?1, updated_at = ?2 WHERE id = ?3",
-                params![description, now, id],
-            )
-            .map_err(|e| e.to_string())?;
+            let before_desc = before.description.clone().unwrap_or_default();
+            if description != &before_desc {
+                conn.execute(
+                    "UPDATE work_items SET description = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![description, now, id],
+                )
+                .map_err(|e| e.to_string())?;
+                insert_event(
+                    &conn,
+                    &id,
+                    Actor::System,
+                    event_kind::DESCRIPTION_CHANGED,
+                    serde_json::json!({}),
+                )?;
+            }
         }
         if let Some(kind) = &payload.kind {
-            conn.execute(
-                "UPDATE work_items SET kind = ?1, updated_at = ?2 WHERE id = ?3",
-                params![kind, now, id],
-            )
-            .map_err(|e| e.to_string())?;
+            if kind != &before.kind {
+                conn.execute(
+                    "UPDATE work_items SET kind = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![kind, now, id],
+                )
+                .map_err(|e| e.to_string())?;
+                insert_event(
+                    &conn,
+                    &id,
+                    Actor::System,
+                    event_kind::KIND_CHANGED,
+                    serde_json::json!({ "from": before.kind, "to": kind }),
+                )?;
+            }
         }
         if let Some(column_id) = payload.column_id.as_deref() {
             let resolved_column =
                 resolve_target_column(&conn, &project_id, None, Some(column_id), None)?;
-            conn.execute(
-                "UPDATE work_items
-                    SET column_id = ?1, updated_at = ?2
-                  WHERE id = ?3",
-                params![resolved_column.id, now, id],
-            )
-            .map_err(|e| e.to_string())?;
+            if Some(resolved_column.id.as_str()) != before.column_id.as_deref() {
+                conn.execute(
+                    "UPDATE work_items
+                        SET column_id = ?1, updated_at = ?2
+                      WHERE id = ?3",
+                    params![resolved_column.id, now, id],
+                )
+                .map_err(|e| e.to_string())?;
+                insert_event(
+                    &conn,
+                    &id,
+                    Actor::System,
+                    event_kind::COLUMN_CHANGED,
+                    serde_json::json!({
+                        "fromColumnId": before.column_id,
+                        "toColumnId": resolved_column.id,
+                        "toColumnName": resolved_column.name,
+                    }),
+                )?;
+            }
         }
         if let Some(priority) = payload.priority {
-            conn.execute(
-                "UPDATE work_items SET priority = ?1, updated_at = ?2 WHERE id = ?3",
-                params![priority, now, id],
-            )
-            .map_err(|e| e.to_string())?;
+            if priority != before.priority {
+                conn.execute(
+                    "UPDATE work_items SET priority = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![priority, now, id],
+                )
+                .map_err(|e| e.to_string())?;
+                insert_event(
+                    &conn,
+                    &id,
+                    Actor::System,
+                    event_kind::PRIORITY_CHANGED,
+                    serde_json::json!({ "from": before.priority, "to": priority }),
+                )?;
+            }
         }
         if let Some(labels) = &payload.labels {
-            let labels_json = serde_json::to_string(labels).map_err(|e| e.to_string())?;
-            conn.execute(
-                "UPDATE work_items SET labels = ?1, updated_at = ?2 WHERE id = ?3",
-                params![labels_json, now, id],
-            )
-            .map_err(|e| e.to_string())?;
+            if labels != &before.labels {
+                let labels_json = serde_json::to_string(labels).map_err(|e| e.to_string())?;
+                conn.execute(
+                    "UPDATE work_items SET labels = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![labels_json, now, id],
+                )
+                .map_err(|e| e.to_string())?;
+                insert_event(
+                    &conn,
+                    &id,
+                    Actor::System,
+                    event_kind::LABELS_CHANGED,
+                    serde_json::json!({ "from": before.labels, "to": labels }),
+                )?;
+            }
         }
         if let Some(metadata) = &payload.metadata {
             let metadata_json = serde_json::to_string(metadata).map_err(|e| e.to_string())?;
@@ -390,20 +462,12 @@ pub async fn claim_work_item_with_db(
     tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
-        let project_id: String = conn
-            .query_row(
-                "SELECT project_id FROM work_items WHERE id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
+        let sql_before = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
+        let before: WorkItem = conn
+            .query_row(&sql_before, params![id], map_work_item)
             .map_err(|e| e.to_string())?;
-        let board_id: Option<String> = conn
-            .query_row(
-                "SELECT board_id FROM work_items WHERE id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
+        let project_id = before.project_id.clone();
+        let board_id = before.board_id.clone();
         let column = resolve_target_column(
             &conn,
             &project_id,
@@ -411,7 +475,7 @@ pub async fn claim_work_item_with_db(
             None,
             Some("in_progress"),
         )?;
-        let column_id = column.id;
+        let column_id = column.id.clone();
         let status = column
             .role
             .clone()
@@ -428,6 +492,33 @@ pub async fn claim_work_item_with_db(
             params![agent_id, column_id, status, now, id],
         )
         .map_err(|e| e.to_string())?;
+
+        if before.assignee_agent_id.as_deref() != Some(agent_id.as_str()) {
+            insert_event(
+                &conn,
+                &id,
+                Actor::System,
+                event_kind::ASSIGNEE_CHANGED,
+                serde_json::json!({
+                    "fromAgentId": before.assignee_agent_id,
+                    "toAgentId": agent_id,
+                }),
+            )?;
+        }
+        if before.column_id.as_deref() != Some(column_id.as_str()) {
+            insert_event(
+                &conn,
+                &id,
+                Actor::System,
+                event_kind::COLUMN_CHANGED,
+                serde_json::json!({
+                    "fromColumnId": before.column_id,
+                    "toColumnId": column_id,
+                    "toColumnName": column.name,
+                    "reason": "claim",
+                }),
+            )?;
+        }
 
         let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
         conn.query_row(&sql, params![id], map_work_item)
@@ -553,6 +644,40 @@ pub async fn move_work_item_with_db(
         conn.execute(&sql, params![column_id, status, position, id, now])
             .map_err(|e| e.to_string())?;
 
+        if current_column_id.as_deref() != Some(column_id.as_str()) {
+            insert_event(
+                &conn,
+                &id,
+                Actor::System,
+                event_kind::COLUMN_CHANGED,
+                serde_json::json!({
+                    "fromColumnId": current_column_id,
+                    "fromStatus": current_status,
+                    "toColumnId": column_id,
+                    "toColumnName": column.name,
+                    "toStatus": status,
+                }),
+            )?;
+        }
+        if status == "done" && current_status != "done" {
+            insert_event(
+                &conn,
+                &id,
+                Actor::System,
+                event_kind::COMPLETED,
+                serde_json::json!({ "via": "move" }),
+            )?;
+        }
+        if current_status == "blocked" && status != "blocked" {
+            insert_event(
+                &conn,
+                &id,
+                Actor::System,
+                event_kind::UNBLOCKED,
+                serde_json::json!({ "via": "move" }),
+            )?;
+        }
+
         let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
         conn.query_row(&sql, params![id], map_work_item)
             .map_err(|e| e.to_string())
@@ -596,6 +721,13 @@ pub async fn block_work_item_with_db(
             params![column_id, status, reason, now, id],
         )
         .map_err(|e| e.to_string())?;
+        insert_event(
+            &conn,
+            &id,
+            Actor::System,
+            event_kind::BLOCKED,
+            serde_json::json!({ "reason": reason }),
+        )?;
         let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
         conn.query_row(&sql, params![id], map_work_item)
             .map_err(|e| e.to_string())
@@ -631,6 +763,13 @@ pub async fn complete_work_item_with_db(db: &DbPool, id: String) -> Result<WorkI
             params![column_id, status, now, id],
         )
         .map_err(|e| e.to_string())?;
+        insert_event(
+            &conn,
+            &id,
+            Actor::System,
+            event_kind::COMPLETED,
+            serde_json::json!({ "via": "complete" }),
+        )?;
         let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
         conn.query_row(&sql, params![id], map_work_item)
             .map_err(|e| e.to_string())
@@ -669,6 +808,13 @@ pub async fn unblock_work_item_with_db(
             params![column_id, resolved_status, now, id],
         )
         .map_err(|e| e.to_string())?;
+        insert_event(
+            &conn,
+            &id,
+            Actor::System,
+            event_kind::UNBLOCKED,
+            serde_json::json!({ "toStatus": resolved_status }),
+        )?;
         let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
         conn.query_row(&sql, params![id], map_work_item)
             .map_err(|e| e.to_string())
@@ -725,6 +871,21 @@ pub async fn create_work_item_comment_with_db(
             params![id, work_item_id, author_kind, author_agent_id, body, now],
         )
         .map_err(|e| e.to_string())?;
+        let actor = match author_kind {
+            "agent" => match author_agent_id.as_deref() {
+                Some(aid) => Actor::Agent { agent_id: aid },
+                None => Actor::System,
+            },
+            "user" => Actor::User,
+            _ => Actor::System,
+        };
+        insert_event(
+            &conn,
+            &work_item_id,
+            actor,
+            event_kind::COMMENT_ADDED,
+            serde_json::json!({ "commentId": id }),
+        )?;
         let sql = format!(
             "SELECT {} FROM work_item_comments WHERE id = ?1",
             WORK_ITEM_COMMENT_COLUMNS
@@ -999,8 +1160,17 @@ pub async fn update_work_item_comment(
             "SELECT {} FROM work_item_comments WHERE id = ?1",
             WORK_ITEM_COMMENT_COLUMNS
         );
-        conn.query_row(&sql, params![id], map_work_item_comment)
-            .map_err(|e| e.to_string())
+        let comment: WorkItemComment = conn
+            .query_row(&sql, params![id], map_work_item_comment)
+            .map_err(|e| e.to_string())?;
+        insert_event(
+            &conn,
+            &comment.work_item_id,
+            Actor::System,
+            event_kind::COMMENT_EDITED,
+            serde_json::json!({ "commentId": comment.id }),
+        )?;
+        Ok(comment)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -1020,11 +1190,28 @@ pub async fn delete_work_item_comment(
     let id_clone = id.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
+        let work_item_id: Option<String> = conn
+            .query_row(
+                "SELECT work_item_id FROM work_item_comments WHERE id = ?1",
+                params![id_clone],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
         conn.execute(
             "DELETE FROM work_item_comments WHERE id = ?1",
             params![id_clone],
         )
         .map_err(|e| e.to_string())?;
+        if let Some(wid) = work_item_id {
+            insert_event(
+                &conn,
+                &wid,
+                Actor::System,
+                event_kind::COMMENT_DELETED,
+                serde_json::json!({ "commentId": id_clone }),
+            )?;
+        }
         Ok(())
     })
     .await

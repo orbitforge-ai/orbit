@@ -5,6 +5,7 @@ import {
   UpdateWorkItem,
   WorkItem,
   WorkItemComment,
+  WorkItemEvent,
   WorkItemStatus,
 } from '../types';
 
@@ -63,4 +64,8 @@ export const workItemsApi = {
 
   deleteComment: (id: string): Promise<void> =>
     invoke('delete_work_item_comment', { id }),
+
+  // Activity events
+  listEvents: (workItemId: string): Promise<WorkItemEvent[]> =>
+    invoke('list_work_item_events', { workItemId }),
 };

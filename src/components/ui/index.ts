@@ -12,4 +12,5 @@ export {
   type SimpleSelectProps,
 } from './Select';
 export { Checkbox, type CheckboxProps } from './Checkbox';
+export { Modal, ModalCloseButton, type ModalSize } from './Modal';
 export { inputCls } from '../../lib/taskConstants';

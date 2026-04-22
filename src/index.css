@@ -512,3 +512,84 @@ body {
   height: 0;
   pointer-events: none;
 }
+
+/* ─── Rich text (work-item description, etc.) ───────────────────────────── */
+
+.prose-orbit {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  min-width: 0;
+  line-height: 1.55;
+}
+.prose-orbit > * + * {
+  margin-top: 0.5em;
+}
+.prose-orbit p {
+  margin: 0;
+}
+.prose-orbit h1,
+.prose-orbit h2,
+.prose-orbit h3 {
+  color: var(--color-bright);
+  font-weight: 600;
+  line-height: 1.3;
+}
+.prose-orbit h1 { font-size: 1.25em; margin-top: 0.8em; }
+.prose-orbit h2 { font-size: 1.1em;  margin-top: 0.7em; }
+.prose-orbit h3 { font-size: 1em;    margin-top: 0.6em; }
+.prose-orbit strong { color: var(--color-bright); font-weight: 600; }
+.prose-orbit em { font-style: italic; }
+.prose-orbit a {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-orbit code {
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--color-inset);
+  border: 1px solid var(--color-edge);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.prose-orbit pre {
+  background: var(--color-inset);
+  border: 1px solid var(--color-edge);
+  border-radius: 8px;
+  padding: 0.7em 0.95em;
+  overflow-x: auto;
+}
+.prose-orbit pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.82em;
+  line-height: 1.5;
+}
+.prose-orbit ul,
+.prose-orbit ol {
+  margin: 0.35em 0;
+  padding-left: 1.4em;
+}
+.prose-orbit ul { list-style-type: disc; }
+.prose-orbit ol { list-style-type: decimal; }
+.prose-orbit li { margin: 0.1em 0; }
+.prose-orbit li > p { margin: 0; }
+.prose-orbit blockquote {
+  border-left: 3px solid var(--color-accent);
+  padding-left: 0.75em;
+  color: var(--color-secondary);
+  margin: 0.4em 0;
+}
+.prose-orbit hr {
+  border: none;
+  border-top: 1px solid var(--color-edge);
+  margin: 0.75em 0;
+}
+.prose-orbit p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--color-edge-hover);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}

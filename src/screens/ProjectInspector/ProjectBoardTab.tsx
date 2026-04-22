@@ -48,7 +48,7 @@ import {
   WorkItemStatus,
 } from '../../types';
 import { ProjectBoardCard } from './ProjectBoardCard';
-import { ProjectBoardDetailDrawer } from './ProjectBoardDetailDrawer';
+import { WorkItemModal } from './WorkItemModal/WorkItemModal';
 import { Input, SimpleSelect } from '../../components/ui';
 
 const CARD_DRAG_PREFIX = 'work-item:';
@@ -665,7 +665,7 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
       </DndContext>
 
       {openItemId && (
-        <ProjectBoardDetailDrawer
+        <WorkItemModal
           projectId={projectId}
           workItemId={openItemId}
           boardPrefix={activeBoard?.prefix ?? null}

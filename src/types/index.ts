@@ -140,6 +140,32 @@ export interface WorkItemComment {
 
 export type CommentAuthor = { kind: 'user' } | { kind: 'agent'; agentId: string };
 
+export type WorkItemEventKind =
+  | 'created'
+  | 'title_changed'
+  | 'description_changed'
+  | 'kind_changed'
+  | 'priority_changed'
+  | 'labels_changed'
+  | 'column_changed'
+  | 'assignee_changed'
+  | 'blocked'
+  | 'unblocked'
+  | 'completed'
+  | 'comment_added'
+  | 'comment_edited'
+  | 'comment_deleted';
+
+export interface WorkItemEvent {
+  id: string;
+  workItemId: string;
+  actorKind: 'user' | 'agent' | 'system';
+  actorAgentId: string | null;
+  kind: WorkItemEventKind;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
 // ─── Project workflows ──────────────────────────────────────────────────────
 
 export interface NodePosition {

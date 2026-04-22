@@ -395,6 +395,7 @@ pub fn run() {
             commands::work_items::create_work_item_comment,
             commands::work_items::update_work_item_comment,
             commands::work_items::delete_work_item_comment,
+            commands::work_item_events::list_work_item_events,
             // Project workflows
             commands::project_workflows::list_project_workflows,
             commands::project_workflows::get_project_workflow,

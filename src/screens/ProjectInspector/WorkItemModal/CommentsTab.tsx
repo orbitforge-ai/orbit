@@ -1,11 +1,12 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { Bot, Pencil, Trash2, User } from 'lucide-react';
-import { workItemsApi } from '../../api/workItems';
-import { Agent, WorkItemComment } from '../../types';
-import { cn } from '../../lib/cn';
-import { Textarea } from '../../components/ui';
+import { workItemsApi } from '../../../api/workItems';
+import type { Agent, WorkItemComment } from '../../../types';
+import { cn } from '../../../lib/cn';
+import { Textarea } from '../../../components/ui';
+import { CommentComposer, CommentComposerHandle } from './CommentComposer';
 
 function formatRelative(iso: string): string {
   const then = new Date(iso).getTime();
@@ -18,33 +19,44 @@ function formatRelative(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
-export function WorkItemComments({
-  workItemId,
-  agents,
-}: {
+interface Props {
   workItemId: string;
+  projectId: string;
   agents: Agent[];
-}) {
+  onCountChange?: (count: number) => void;
+}
+
+export function CommentsTab({ workItemId, projectId, agents, onCountChange }: Props) {
   const queryClient = useQueryClient();
   const queryKey = ['work-items', workItemId, 'comments'];
+  const eventsKey = ['work-items', workItemId, 'events'];
 
   const { data: comments = [], isLoading } = useQuery<WorkItemComment[]>({
     queryKey,
     queryFn: () => workItemsApi.listComments(workItemId),
   });
 
+  if (onCountChange) onCountChange(comments.length);
+
   const agentById = new Map(agents.map((a) => [a.id, a]));
 
   const [body, setBody] = useState('');
+  const composerRef = useRef<CommentComposerHandle>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState('');
+
+  function invalidateAll() {
+    queryClient.invalidateQueries({ queryKey });
+    queryClient.invalidateQueries({ queryKey: eventsKey });
+  }
 
   const createMutation = useMutation({
     mutationFn: (text: string) =>
       workItemsApi.createComment(workItemId, text, { kind: 'user' }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey });
+      invalidateAll();
       setBody('');
+      composerRef.current?.clear();
     },
   });
 
@@ -52,7 +64,7 @@ export function WorkItemComments({
     mutationFn: ({ id, text }: { id: string; text: string }) =>
       workItemsApi.updateComment(id, text),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey });
+      invalidateAll();
       setEditingId(null);
       setEditBody('');
     },
@@ -60,7 +72,7 @@ export function WorkItemComments({
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => workItemsApi.deleteComment(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
+    onSuccess: invalidateAll,
   });
 
   function handleSubmit() {
@@ -74,7 +86,9 @@ export function WorkItemComments({
       {isLoading ? (
         <div className="text-xs text-muted">Loading…</div>
       ) : comments.length === 0 ? (
-        <div className="text-xs text-muted italic">No comments yet</div>
+        <div className="rounded-lg border border-dashed border-edge px-3 py-4 text-center text-xs text-muted italic">
+          No comments yet. Use @ to mention an agent.
+        </div>
       ) : (
         <ul className="space-y-2">
           {comments.map((c) => {
@@ -85,10 +99,8 @@ export function WorkItemComments({
               <li
                 key={c.id}
                 className={cn(
-                  'rounded-lg border px-3 py-2',
-                  isAgent
-                    ? 'border-emerald-400/20 bg-emerald-400/5'
-                    : 'border-edge bg-surface',
+                  'group rounded-lg border px-3 py-2',
+                  isAgent ? 'border-emerald-400/20 bg-emerald-400/5' : 'border-edge bg-surface',
                 )}
               >
                 <div className="flex items-center justify-between gap-2 mb-1">
@@ -173,18 +185,14 @@ export function WorkItemComments({
         </ul>
       )}
 
-      <div className="space-y-1.5">
-        <Textarea
+      <div className="space-y-1.5 pt-1">
+        <CommentComposer
+          ref={composerRef}
           value={body}
-          onChange={(e) => setBody(e.target.value)}
-          onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-              handleSubmit();
-            }
-          }}
-          rows={3}
-          placeholder="Leave a comment… (Cmd/Ctrl+Enter to submit)"
-          className="px-3 py-2 text-xs placeholder-muted"
+          onChange={setBody}
+          onSubmit={handleSubmit}
+          placeholder="Leave a comment… (Cmd/Ctrl+Enter to submit, @ to mention)"
+          pickerContext={{ agentId: '', projectId }}
         />
         <div className="flex justify-end">
           <button
