@@ -1,6 +1,7 @@
 import { Bot, Bug, FileText, Lightbulb, ListChecks, Wrench } from 'lucide-react';
 import { Agent, WorkItem } from '../../types';
 import { cn } from '../../lib/cn';
+import { formatWorkItemId } from '../../lib/workItemId';
 
 const KIND_ICON_MAP: Record<string, typeof ListChecks> = {
   task: ListChecks,
@@ -34,15 +35,18 @@ const PRIORITY_LABEL: Record<number, string> = {
 
 export function ProjectBoardCard({
   item,
+  boardPrefix,
   assignee,
   onClick,
 }: {
   item: WorkItem;
+  boardPrefix: string | null;
   assignee: Agent | null;
   onClick: () => void;
 }) {
   const KindIcon = KIND_ICON_MAP[item.kind] ?? ListChecks;
   const kindColor = KIND_COLOR_MAP[item.kind] ?? 'text-muted';
+  const displayId = formatWorkItemId(boardPrefix, item.id);
 
   return (
     <div
@@ -55,6 +59,11 @@ export function ProjectBoardCard({
       <div className="flex items-start gap-2">
         <KindIcon size={12} className={cn('mt-0.5 shrink-0', kindColor)} />
         <div className="flex-1 min-w-0">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="rounded bg-edge px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-muted">
+              {displayId}
+            </span>
+          </div>
           <p className="text-xs font-medium text-white line-clamp-2">{item.title}</p>
           {item.status === 'blocked' && item.blockedReason && (
             <p className="mt-1 text-[10px] text-red-300 line-clamp-2 italic">

@@ -4,8 +4,9 @@ import { confirm } from '@tauri-apps/plugin-dialog';
 import { Bot, CheckCircle, Trash2, X } from 'lucide-react';
 import { workItemsApi } from '../../api/workItems';
 import { projectsApi } from '../../api/projects';
-import { Agent, ProjectBoardColumn, WorkItem, WorkItemKind, WorkItemStatus } from '../../types';
+import { Agent, ProjectBoardColumn, WorkItem, WorkItemKind } from '../../types';
 import { Input, SimpleSelect, Textarea } from '../../components/ui';
+import { formatWorkItemId } from '../../lib/workItemId';
 import { WorkItemComments } from './WorkItemComments';
 
 const KIND_OPTIONS: { id: WorkItemKind; label: string }[] = [
@@ -19,11 +20,13 @@ const KIND_OPTIONS: { id: WorkItemKind; label: string }[] = [
 export function ProjectBoardDetailDrawer({
   projectId,
   workItemId,
+  boardPrefix,
   agents,
   onClose,
 }: {
   projectId: string;
   workItemId: string;
+  boardPrefix: string | null;
   agents: Agent[];
   onClose: () => void;
 }) {
@@ -67,8 +70,7 @@ export function ProjectBoardDetailDrawer({
   });
 
   const moveMutation = useMutation({
-    mutationFn: ({ columnId, status }: { columnId: string; status?: WorkItemStatus }) =>
-      workItemsApi.move(workItemId, status, columnId),
+    mutationFn: ({ columnId }: { columnId: string }) => workItemsApi.move(workItemId, columnId),
     onSuccess: invalidate,
   });
 
@@ -118,7 +120,7 @@ export function ProjectBoardDetailDrawer({
       completeMutation.mutate();
       return;
     }
-    moveMutation.mutate({ columnId: nextColumnId, status: nextColumn.role ?? undefined });
+    moveMutation.mutate({ columnId: nextColumnId });
   }
 
   function handleAssigneeChange(agentId: string) {
@@ -150,7 +152,9 @@ export function ProjectBoardDetailDrawer({
           <div className="flex items-center gap-2">
             <span className="text-[10px] uppercase tracking-wide text-muted">Card</span>
             {item && (
-              <span className="text-[10px] text-muted font-mono">{item.id.slice(-8)}</span>
+              <span className="text-[10px] text-muted font-mono uppercase tracking-wider">
+                {formatWorkItemId(boardPrefix, item.id)}
+              </span>
             )}
           </div>
           <button

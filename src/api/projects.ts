@@ -1,11 +1,15 @@
 import { invoke } from '@tauri-apps/api/core';
 import {
   Agent,
+  CreateProjectBoard,
+  DeleteProjectBoard,
   FileEntry,
   Project,
   ProjectAgent,
+  ProjectBoard,
   ProjectBoardColumn,
   ProjectSummary,
+  UpdateProjectBoard,
 } from '../types';
 
 export interface ProjectAgentWithMeta {
@@ -46,11 +50,24 @@ export const projectsApi = {
   removeAgent: (projectId: string, agentId: string): Promise<void> =>
     invoke('remove_agent_from_project', { projectId, agentId }),
 
-  listBoardColumns: (projectId: string): Promise<ProjectBoardColumn[]> =>
-    invoke('list_project_board_columns', { projectId }),
+  listBoards: (projectId: string): Promise<ProjectBoard[]> =>
+    invoke('list_project_boards', { projectId }),
+
+  createBoard: (payload: CreateProjectBoard): Promise<ProjectBoard> =>
+    invoke('create_project_board', { payload }),
+
+  updateBoard: (id: string, payload: UpdateProjectBoard): Promise<ProjectBoard> =>
+    invoke('update_project_board', { id, payload }),
+
+  deleteBoard: (id: string, payload: DeleteProjectBoard = {}): Promise<void> =>
+    invoke('delete_project_board', { id, payload }),
+
+  listBoardColumns: (projectId: string, boardId?: string): Promise<ProjectBoardColumn[]> =>
+    invoke('list_project_board_columns', { projectId, boardId }),
 
   createBoardColumn: (payload: {
     projectId: string;
+    boardId?: string;
     name: string;
     role?: ProjectBoardColumn['role'];
     isDefault?: boolean;
@@ -80,11 +97,12 @@ export const projectsApi = {
   reorderBoardColumns: (
     projectId: string,
     orderedIds: string[],
+    boardId?: string,
     expectedRevision?: string,
   ): Promise<ProjectBoardColumn[]> =>
     invoke('reorder_project_board_columns', {
       projectId,
-      payload: { orderedIds, expectedRevision },
+      payload: { orderedIds, boardId, expectedRevision },
     }),
 
   // Workspace file operations

@@ -26,9 +26,37 @@ export interface ProjectAgent {
   addedAt: string;
 }
 
+export interface ProjectBoard {
+  id: string;
+  projectId: string;
+  name: string;
+  prefix: string;
+  position: number;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateProjectBoard {
+  projectId: string;
+  name: string;
+  prefix: string;
+}
+
+export interface UpdateProjectBoard {
+  name?: string;
+  prefix?: string;
+}
+
+export interface DeleteProjectBoard {
+  destinationBoardId?: string;
+  force?: boolean;
+}
+
 export interface ProjectBoardColumn {
   id: string;
   projectId: string;
+  boardId: string;
   name: string;
   role: WorkItemStatus | null;
   isDefault: boolean;
@@ -53,6 +81,7 @@ export type WorkItemKind = 'task' | 'bug' | 'story' | 'spike' | 'chore';
 export interface WorkItem {
   id: string;
   projectId: string;
+  boardId: string | null;
   title: string;
   description: string | null;
   kind: string;
@@ -74,6 +103,7 @@ export interface WorkItem {
 
 export interface CreateWorkItem {
   projectId: string;
+  boardId?: string;
   title: string;
   description?: string;
   kind?: string;

@@ -50,6 +50,16 @@ function getPersistedProjectId(): string | null {
   return null;
 }
 
+function getPersistedSelectedBoardByProject(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem('orbit:selectedBoardByProject');
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed as Record<string, string>;
+  } catch {}
+  return {};
+}
+
 interface UiStore {
   screen: Screen;
   settingsOpen: boolean;
@@ -63,6 +73,7 @@ interface UiStore {
   logPanelOpen: boolean;
   agentTab: AgentTab;
   projectTab: ProjectTab;
+  selectedBoardIdByProject: Record<string, string>;
 
   navigate: (screen: Screen) => void;
   openSettings: () => void;
@@ -79,6 +90,7 @@ interface UiStore {
   setLogPanelOpen: (open: boolean) => void;
   setAgentTab: (tab: AgentTab) => void;
   setProjectTab: (tab: ProjectTab) => void;
+  setSelectedBoard: (projectId: string, boardId: string) => void;
 }
 
 export const useUiStore = create<UiStore>((set) => ({
@@ -94,6 +106,7 @@ export const useUiStore = create<UiStore>((set) => ({
   logPanelOpen: false,
   agentTab: 'chat' as AgentTab,
   projectTab: 'workspace' as ProjectTab,
+  selectedBoardIdByProject: getPersistedSelectedBoardByProject(),
 
   navigate: (screen) => {
     if (screen === 'settings') {
@@ -157,4 +170,12 @@ export const useUiStore = create<UiStore>((set) => ({
   setLogPanelOpen: (open) => set({ logPanelOpen: open }),
   setAgentTab: (tab) => set({ agentTab: tab }),
   setProjectTab: (tab) => set({ projectTab: tab }),
+  setSelectedBoard: (projectId, boardId) =>
+    set((state) => {
+      const next = { ...state.selectedBoardIdByProject, [projectId]: boardId };
+      try {
+        localStorage.setItem('orbit:selectedBoardByProject', JSON.stringify(next));
+      } catch {}
+      return { selectedBoardIdByProject: next };
+    }),
 }));

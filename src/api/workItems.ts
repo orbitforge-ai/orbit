@@ -9,8 +9,8 @@ import {
 } from '../types';
 
 export const workItemsApi = {
-  list: (projectId: string): Promise<WorkItem[]> =>
-    invoke('list_work_items', { projectId }),
+  list: (projectId: string, boardId?: string): Promise<WorkItem[]> =>
+    invoke('list_work_items', { projectId, boardId }),
 
   get: (id: string): Promise<WorkItem> => invoke('get_work_item', { id }),
 
@@ -27,19 +27,19 @@ export const workItemsApi = {
 
   move: (
     id: string,
-    status?: WorkItemStatus,
     columnId?: string,
     position?: number,
   ): Promise<WorkItem> =>
-    invoke('move_work_item', { id, status: status ?? null, columnId: columnId ?? null, position }),
+    invoke('move_work_item', { id, columnId: columnId ?? null, position }),
 
   reorder: (
     projectId: string,
+    boardId: string | null,
     status: WorkItemStatus | null,
     columnId: string | null,
     orderedIds: string[],
   ): Promise<void> =>
-    invoke('reorder_work_items', { projectId, status, columnId, orderedIds }),
+    invoke('reorder_work_items', { projectId, boardId, status, columnId, orderedIds }),
 
   block: (id: string, reason: string): Promise<WorkItem> =>
     invoke('block_work_item', { id, reason }),

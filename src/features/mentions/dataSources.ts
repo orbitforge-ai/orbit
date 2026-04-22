@@ -1,8 +1,10 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { agentsApi } from '../../api/agents';
+import { projectsApi } from '../../api/projects';
 import { skillsApi } from '../../api/skills';
 import { workItemsApi } from '../../api/workItems';
+import { formatWorkItemId } from '../../lib/workItemId';
 import { listFilesRecursive } from './listFilesRecursive';
 import { MentionGroup, MentionItem, MentionKind } from './types';
 
@@ -63,6 +65,15 @@ export function useWorkItemsMentionSource(projectId: string | null) {
   });
 }
 
+export function useProjectBoardsMentionSource(projectId: string | null) {
+  return useQuery({
+    queryKey: ['project-boards', projectId],
+    queryFn: () => projectsApi.listBoards(projectId!),
+    enabled: Boolean(projectId),
+    staleTime: 30_000,
+  });
+}
+
 export function useSkillsMentionSource(agentId: string | null) {
   return useQuery({
     queryKey: ['skills', agentId],
@@ -88,6 +99,7 @@ export function useMentionGroups({
   const agentsQuery = useAgentsMentionSource(currentAgentId);
   const filesQuery = useFilesMentionSource(enabled ? currentAgentId : null);
   const itemsQuery = useWorkItemsMentionSource(enabled ? projectId : null);
+  const boardsQuery = useProjectBoardsMentionSource(enabled ? projectId : null);
   const skillsQuery = useSkillsMentionSource(enabled ? currentAgentId : null);
 
   return useMemo<MentionGroup[]>(() => {
@@ -145,17 +157,33 @@ export function useMentionGroups({
       });
     }
 
-    const itemMentions: MentionItem[] = (itemsQuery.data ?? []).map((wi) => ({
-      id: wi.id,
-      label: wi.title,
-      secondary: `${wi.status}${wi.kind ? ` · ${wi.kind}` : ''}`,
-      token: { kind: 'item' as MentionKind, label: wi.title, payload: wi.id },
-    }));
+    const boardPrefixById = new Map<string, string>();
+    for (const board of boardsQuery.data ?? []) {
+      boardPrefixById.set(board.id, board.prefix);
+    }
+    const itemMentions: MentionItem[] = (itemsQuery.data ?? []).map((wi) => {
+      const prefix = wi.boardId ? boardPrefixById.get(wi.boardId) ?? null : null;
+      const displayId = formatWorkItemId(prefix, wi.id);
+      return {
+        id: wi.id,
+        label: `${displayId} ${wi.title}`,
+        secondary: `${wi.status}${wi.kind ? ` · ${wi.kind}` : ''}`,
+        token: { kind: 'item' as MentionKind, label: wi.title, payload: wi.id },
+      };
+    });
     const rankedItems = rank(itemMentions, query);
     if (rankedItems.length > 0) {
       groups.push({ kind: 'item', title: 'Work items', items: rankedItems });
     }
 
     return groups;
-  }, [query, agentsQuery.data, filesQuery.data, itemsQuery.data, skillsQuery.data, currentAgentId]);
+  }, [
+    query,
+    agentsQuery.data,
+    filesQuery.data,
+    itemsQuery.data,
+    boardsQuery.data,
+    skillsQuery.data,
+    currentAgentId,
+  ]);
 }

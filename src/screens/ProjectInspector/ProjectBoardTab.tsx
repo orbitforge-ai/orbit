@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext,
@@ -22,11 +22,14 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import * as Select from '@radix-ui/react-select';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import {
+  ChevronDown,
   GripVertical,
   KanbanSquare,
   MoreHorizontal,
+  Pencil,
   Plus,
   Star,
   Trash2,
@@ -36,7 +39,14 @@ import { projectsApi } from '../../api/projects';
 import { workItemsApi } from '../../api/workItems';
 import { cn } from '../../lib/cn';
 import { toast } from '../../store/toastStore';
-import { Agent, ProjectBoardColumn, WorkItem, WorkItemStatus } from '../../types';
+import { useUiStore } from '../../store/uiStore';
+import {
+  Agent,
+  ProjectBoard,
+  ProjectBoardColumn,
+  WorkItem,
+  WorkItemStatus,
+} from '../../types';
 import { ProjectBoardCard } from './ProjectBoardCard';
 import { ProjectBoardDetailDrawer } from './ProjectBoardDetailDrawer';
 import { Input, SimpleSelect } from '../../components/ui';
@@ -116,23 +126,47 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
     columnId: string;
     force?: boolean;
   } | null>(null);
+  const [boardFormOpen, setBoardFormOpen] = useState(false);
+  const [editingBoard, setEditingBoard] = useState<ProjectBoard | null>(null);
+  const [deleteBoardState, setDeleteBoardState] = useState<ProjectBoard | null>(null);
+
+  const selectedBoardIdByProject = useUiStore((state) => state.selectedBoardIdByProject);
+  const setSelectedBoard = useUiStore((state) => state.setSelectedBoard);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor),
   );
 
+  const { data: boards = [] } = useQuery<ProjectBoard[]>({
+    queryKey: ['project-boards', projectId],
+    queryFn: () => projectsApi.listBoards(projectId),
+  });
+
+  const selectedBoardId = useMemo(() => {
+    const stored = selectedBoardIdByProject[projectId];
+    if (stored && boards.some((b) => b.id === stored)) return stored;
+    return boards.find((b) => b.isDefault)?.id ?? boards[0]?.id ?? null;
+  }, [boards, projectId, selectedBoardIdByProject]);
+
+  const activeBoard = useMemo(
+    () => boards.find((b) => b.id === selectedBoardId) ?? null,
+    [boards, selectedBoardId],
+  );
+
   const { data: items = [], isLoading } = useQuery<WorkItem[]>({
-    queryKey: ['work-items', projectId],
-    queryFn: () => workItemsApi.list(projectId),
+    queryKey: ['work-items', projectId, selectedBoardId],
+    queryFn: () => workItemsApi.list(projectId, selectedBoardId ?? undefined),
+    enabled: !!selectedBoardId,
   });
   const { data: agents = [] } = useQuery<Agent[]>({
     queryKey: ['agents'],
     queryFn: agentsApi.list,
   });
   const { data: columns = [] } = useQuery<ProjectBoardColumn[]>({
-    queryKey: ['project-board-columns', projectId],
-    queryFn: () => projectsApi.listBoardColumns(projectId),
+    queryKey: ['project-board-columns', projectId, selectedBoardId],
+    queryFn: () => projectsApi.listBoardColumns(projectId, selectedBoardId ?? undefined),
+    enabled: !!selectedBoardId,
   });
 
   const agentById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
@@ -158,24 +192,25 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
   function invalidateBoard() {
     queryClient.invalidateQueries({ queryKey: ['project-board-columns', projectId] });
     queryClient.invalidateQueries({ queryKey: ['work-items', projectId] });
+    queryClient.invalidateQueries({ queryKey: ['project-boards', projectId] });
   }
 
+  const workItemsKey = ['work-items', projectId, selectedBoardId] as const;
   const moveMutation = useMutation({
     mutationFn: ({
       id,
       columnId,
-      role,
       position,
     }: {
       id: string;
       columnId: string;
       role: ProjectBoardColumn['role'];
       position?: number;
-    }) => workItemsApi.move(id, role ?? undefined, columnId, position),
+    }) => workItemsApi.move(id, columnId, position),
     onMutate: async ({ id, columnId, role, position }) => {
-      await queryClient.cancelQueries({ queryKey: ['work-items', projectId] });
-      const previous = queryClient.getQueryData<WorkItem[]>(['work-items', projectId]);
-      queryClient.setQueryData<WorkItem[]>(['work-items', projectId], (old = []) =>
+      await queryClient.cancelQueries({ queryKey: workItemsKey });
+      const previous = queryClient.getQueryData<WorkItem[]>([...workItemsKey]);
+      queryClient.setQueryData<WorkItem[]>([...workItemsKey], (old = []) =>
         old.map((item) =>
           item.id === id
             ? {
@@ -191,7 +226,7 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
     },
     onError: (error, _vars, ctx) => {
       if (ctx?.previous) {
-        queryClient.setQueryData(['work-items', projectId], ctx.previous);
+        queryClient.setQueryData([...workItemsKey], ctx.previous);
       }
       toast.error('Failed to move card', error);
     },
@@ -214,7 +249,12 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
       role?: ProjectBoardColumn['role'];
       isDefault?: boolean;
       position?: number;
-    }) => projectsApi.createBoardColumn({ projectId, ...payload }),
+    }) =>
+      projectsApi.createBoardColumn({
+        projectId,
+        boardId: selectedBoardId ?? undefined,
+        ...payload,
+      }),
     onSuccess: (column) => {
       queryClient.invalidateQueries({ queryKey: ['project-board-columns', projectId] });
       setEditingColumnId(column.id);
@@ -243,7 +283,12 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
 
   const reorderColumnsMutation = useMutation({
     mutationFn: (orderedIds: string[]) =>
-      projectsApi.reorderBoardColumns(projectId, orderedIds, boardRevision),
+      projectsApi.reorderBoardColumns(
+        projectId,
+        orderedIds,
+        selectedBoardId ?? undefined,
+        boardRevision,
+      ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project-board-columns', projectId] });
     },
@@ -283,6 +328,54 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
       }
       toast.error('Failed to delete column', error);
     },
+  });
+
+  const createBoardMutation = useMutation({
+    mutationFn: (payload: { name: string; prefix: string }) =>
+      projectsApi.createBoard({ projectId, ...payload }),
+    onSuccess: (board) => {
+      queryClient.invalidateQueries({ queryKey: ['project-boards', projectId] });
+      setSelectedBoard(projectId, board.id);
+      setBoardFormOpen(false);
+      toast.success(`Created ${board.name}`);
+    },
+    onError: (error) => toast.error('Failed to create board', error),
+  });
+
+  const updateBoardMutation = useMutation({
+    mutationFn: ({
+      id,
+      payload,
+    }: {
+      id: string;
+      payload: { name?: string; prefix?: string };
+    }) => projectsApi.updateBoard(id, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project-boards', projectId] });
+      setEditingBoard(null);
+    },
+    onError: (error) => toast.error('Failed to update board', error),
+  });
+
+  const deleteBoardMutation = useMutation({
+    mutationFn: ({
+      id,
+      destinationBoardId,
+      force,
+    }: {
+      id: string;
+      destinationBoardId?: string;
+      force?: boolean;
+    }) => projectsApi.deleteBoard(id, { destinationBoardId, force }),
+    onSuccess: (_result, vars) => {
+      setDeleteBoardState(null);
+      if (selectedBoardId === vars.id) {
+        const fallback = boards.find((b) => b.id !== vars.id);
+        if (fallback) setSelectedBoard(projectId, fallback.id);
+      }
+      invalidateBoard();
+    },
+    onError: (error) => toast.error('Failed to delete board', error),
   });
 
   function beginEditing(column: ProjectBoardColumn) {
@@ -435,20 +528,25 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
         onDragEnd={handleDragEnd}
       >
         <div className="flex h-full flex-col">
-          <div className="flex items-center justify-between border-b border-edge px-4 py-3">
-            <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
-              <KanbanSquare size={14} className="text-emerald-400" />
-              Board
-              <span className="text-xs font-normal text-muted">({items.length})</span>
-            </h3>
+          <div className="flex items-center justify-between gap-3 border-b border-edge px-4 py-3">
+            <BoardPicker
+              boards={boards}
+              selectedBoardId={selectedBoardId}
+              itemCount={items.length}
+              onSelect={(boardId) => setSelectedBoard(projectId, boardId)}
+              onCreate={() => setBoardFormOpen(true)}
+              onRename={(board) => setEditingBoard(board)}
+              onDelete={(board) => setDeleteBoardState(board)}
+            />
             <button
               data-pan-disabled="true"
+              disabled={!selectedBoardId}
               onClick={() =>
                 createColumnMutation.mutate({
                   name: `Column ${columns.length + 1}`,
                 })
               }
-              className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover"
+              className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
             >
               <Plus size={12} />
               Add Column
@@ -520,6 +618,7 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
                           <DraggableCard key={item.id} id={item.id}>
                             <ProjectBoardCard
                               item={item}
+                              boardPrefix={activeBoard?.prefix ?? null}
                               assignee={
                                 item.assigneeAgentId
                                   ? agentById.get(item.assigneeAgentId) ?? null
@@ -548,6 +647,7 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
             <div className="rotate-1 opacity-90">
               <ProjectBoardCard
                 item={draggingItem}
+                boardPrefix={activeBoard?.prefix ?? null}
                 assignee={
                   draggingItem.assigneeAgentId
                     ? agentById.get(draggingItem.assigneeAgentId) ?? null
@@ -568,8 +668,45 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
         <ProjectBoardDetailDrawer
           projectId={projectId}
           workItemId={openItemId}
+          boardPrefix={activeBoard?.prefix ?? null}
           agents={agents}
           onClose={() => setOpenItemId(null)}
+        />
+      )}
+
+      {(boardFormOpen || editingBoard) && (
+        <BoardFormDialog
+          mode={editingBoard ? 'edit' : 'create'}
+          board={editingBoard}
+          isPending={createBoardMutation.isPending || updateBoardMutation.isPending}
+          onCancel={() => {
+            setBoardFormOpen(false);
+            setEditingBoard(null);
+          }}
+          onSubmit={({ name, prefix }) => {
+            if (editingBoard) {
+              updateBoardMutation.mutate({
+                id: editingBoard.id,
+                payload: {
+                  name: name !== editingBoard.name ? name : undefined,
+                  prefix: prefix !== editingBoard.prefix ? prefix : undefined,
+                },
+              });
+            } else {
+              createBoardMutation.mutate({ name, prefix });
+            }
+          }}
+        />
+      )}
+
+      {deleteBoardState && (
+        <DeleteBoardDialog
+          board={deleteBoardState}
+          boards={boards}
+          onCancel={() => setDeleteBoardState(null)}
+          onConfirm={(destinationBoardId) =>
+            deleteBoardMutation.mutate({ id: deleteBoardState.id, destinationBoardId })
+          }
         />
       )}
 
@@ -891,6 +1028,283 @@ function DeleteColumnDialog({
             className="rounded-lg bg-red-500 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-400 disabled:opacity-50"
           >
             Delete column
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BoardPicker({
+  boards,
+  selectedBoardId,
+  itemCount,
+  onSelect,
+  onCreate,
+  onRename,
+  onDelete,
+}: {
+  boards: ProjectBoard[];
+  selectedBoardId: string | null;
+  itemCount: number;
+  onSelect: (boardId: string) => void;
+  onCreate: () => void;
+  onRename: (board: ProjectBoard) => void;
+  onDelete: (board: ProjectBoard) => void;
+}) {
+  const active = boards.find((b) => b.id === selectedBoardId) ?? null;
+
+  return (
+    <Select.Root
+      value={selectedBoardId ?? ''}
+      onValueChange={(value) => {
+        if (value === '__create__') {
+          onCreate();
+          return;
+        }
+        if (value) onSelect(value);
+      }}
+    >
+      <Select.Trigger
+        data-pan-disabled="true"
+        className="flex items-center gap-2 rounded-lg border border-edge bg-background px-3 py-1.5 text-sm text-white focus:outline-none focus:border-accent"
+      >
+        <KanbanSquare size={14} className="text-emerald-400" />
+        <Select.Value placeholder="Select board…">
+          <span className="font-medium">{active?.name ?? 'Select board…'}</span>
+        </Select.Value>
+        {active && (
+          <span className="rounded bg-edge px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted">
+            {active.prefix}
+          </span>
+        )}
+        <span className="text-xs font-normal text-muted">({itemCount})</span>
+        <Select.Icon>
+          <ChevronDown size={14} className="text-muted" />
+        </Select.Icon>
+      </Select.Trigger>
+      <Select.Portal>
+        <Select.Content
+          position="popper"
+          sideOffset={6}
+          className="z-50 overflow-hidden rounded-lg border border-edge bg-panel shadow-xl"
+        >
+          <Select.Viewport className="min-w-56 p-1">
+            {boards.map((board) => (
+              <div
+                key={board.id}
+                className="group flex items-center rounded-md data-[highlighted]:bg-accent/20"
+              >
+                <Select.Item
+                  value={board.id}
+                  className="flex flex-1 items-center gap-2 px-2 py-1.5 text-sm text-white outline-none cursor-pointer data-[highlighted]:bg-accent/20"
+                >
+                  <KanbanSquare size={12} className="text-emerald-400" />
+                  <Select.ItemText>{board.name}</Select.ItemText>
+                  <span className="ml-auto rounded bg-edge px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted">
+                    {board.prefix}
+                  </span>
+                </Select.Item>
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger asChild>
+                    <button
+                      type="button"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => e.stopPropagation()}
+                      className="mr-1 rounded p-1 text-muted opacity-0 transition-colors hover:bg-edge hover:text-white group-hover:opacity-100"
+                      aria-label={`Manage ${board.name}`}
+                    >
+                      <MoreHorizontal size={12} />
+                    </button>
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Portal>
+                    <DropdownMenu.Content
+                      sideOffset={4}
+                      className="z-[60] min-w-36 rounded-lg border border-edge bg-panel p-1 shadow-xl"
+                    >
+                      <DropdownMenu.Item
+                        className="cursor-pointer rounded px-2 py-1.5 text-xs text-white outline-none hover:bg-edge"
+                        onSelect={() => onRename(board)}
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          <Pencil size={11} />
+                          Rename
+                        </span>
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        className="cursor-pointer rounded px-2 py-1.5 text-xs text-red-300 outline-none hover:bg-red-500/10"
+                        onSelect={() => onDelete(board)}
+                        disabled={boards.length <= 1}
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          <Trash2 size={11} />
+                          Delete
+                        </span>
+                      </DropdownMenu.Item>
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Portal>
+                </DropdownMenu.Root>
+              </div>
+            ))}
+            <Select.Separator className="my-1 h-px bg-edge" />
+            <Select.Item
+              value="__create__"
+              className="flex items-center gap-2 px-2 py-1.5 text-sm text-accent-hover outline-none cursor-pointer data-[highlighted]:bg-accent/20"
+            >
+              <Plus size={12} />
+              <Select.ItemText>New board…</Select.ItemText>
+            </Select.Item>
+          </Select.Viewport>
+        </Select.Content>
+      </Select.Portal>
+    </Select.Root>
+  );
+}
+
+function BoardFormDialog({
+  mode,
+  board,
+  isPending,
+  onCancel,
+  onSubmit,
+}: {
+  mode: 'create' | 'edit';
+  board: ProjectBoard | null;
+  isPending: boolean;
+  onCancel: () => void;
+  onSubmit: (payload: { name: string; prefix: string }) => void;
+}) {
+  const [name, setName] = useState(board?.name ?? '');
+  const [prefix, setPrefix] = useState(board?.prefix ?? '');
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setName(board?.name ?? '');
+    setPrefix(board?.prefix ?? '');
+    setError(null);
+  }, [board]);
+
+  function handleSubmit() {
+    const trimmedName = name.trim();
+    const normalizedPrefix = prefix.trim().toUpperCase();
+    if (!trimmedName) {
+      setError('Name is required');
+      return;
+    }
+    if (!/^[A-Z]{2,8}$/.test(normalizedPrefix)) {
+      setError('Prefix must be 2–8 uppercase letters');
+      return;
+    }
+    setError(null);
+    onSubmit({ name: trimmedName, prefix: normalizedPrefix });
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <div className="w-full max-w-md rounded-2xl border border-edge bg-panel p-4 shadow-2xl">
+        <h4 className="text-sm font-semibold text-white">
+          {mode === 'edit' ? 'Rename board' : 'New board'}
+        </h4>
+        <div className="mt-3 space-y-3">
+          <div>
+            <label className="mb-1 block text-[10px] uppercase tracking-wider text-muted">
+              Name
+            </label>
+            <Input
+              autoFocus
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="e.g. Plugin work"
+              className="bg-background px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-[10px] uppercase tracking-wider text-muted">
+              Prefix (2–8 uppercase letters)
+            </label>
+            <Input
+              value={prefix}
+              onChange={(event) => setPrefix(event.target.value.toUpperCase())}
+              placeholder="e.g. PLUGIN"
+              className="bg-background px-3 py-2 font-mono text-sm uppercase tracking-wider"
+              maxLength={8}
+            />
+          </div>
+          {error && <p className="text-xs text-red-300">{error}</p>}
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="rounded-lg border border-edge px-3 py-1.5 text-xs text-muted transition-colors hover:text-white"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={isPending}
+            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+          >
+            {mode === 'edit' ? 'Save' : 'Create'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteBoardDialog({
+  board,
+  boards,
+  onCancel,
+  onConfirm,
+}: {
+  board: ProjectBoard;
+  boards: ProjectBoard[];
+  onCancel: () => void;
+  onConfirm: (destinationBoardId?: string) => void;
+}) {
+  const [destinationBoardId, setDestinationBoardId] = useState('');
+  const destinationOptions = boards.filter((candidate) => candidate.id !== board.id);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <div className="w-full max-w-md rounded-2xl border border-edge bg-panel p-4 shadow-2xl">
+        <h4 className="text-sm font-semibold text-white">Delete board</h4>
+        <p className="mt-2 text-xs text-muted">
+          Move work items and columns out of {board.name} before deleting it. Existing items will
+          be re-parented to the selected destination board.
+        </p>
+        <div className="mt-3">
+          <SimpleSelect
+            value={destinationBoardId}
+            onValueChange={setDestinationBoardId}
+            placeholder="Choose destination board…"
+            className="bg-background px-3 py-2"
+            options={destinationOptions.map((option) => ({ value: option.id, label: option.name }))}
+          />
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="rounded-lg border border-edge px-3 py-1.5 text-xs text-muted transition-colors hover:text-white"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onConfirm(destinationBoardId || undefined)}
+            className="rounded-lg bg-red-500 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-400 disabled:opacity-50"
+          >
+            Delete board
           </button>
         </div>
       </div>

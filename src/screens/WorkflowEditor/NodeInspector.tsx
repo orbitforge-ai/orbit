@@ -606,7 +606,7 @@ function WorkItemInspector({
   const showDescription = action === 'create' || action === 'update';
   const showColumn = action === 'create' || action === 'update' || action === 'move' || action === 'list';
   const showKind = action === 'create' || action === 'update' || action === 'list';
-  const showStatus = action === 'create' || action === 'move' || action === 'list';
+  const showStatus = action === 'create' || action === 'list';
   const showPriority = action === 'create' || action === 'update';
   const showLabels = action === 'create' || action === 'update';
   const showAssignee = action === 'create' || action === 'claim';
@@ -629,7 +629,12 @@ function WorkItemInspector({
         <label className="text-[11px] uppercase tracking-wider text-muted">Action</label>
         <SimpleSelect
           value={action}
-          onValueChange={(v) => onUpdate({ action: v })}
+          onValueChange={(v) =>
+            onUpdate({
+              action: v,
+              ...(v === 'move' ? { status: '' } : {}),
+            })
+          }
           className={SELECT_FIELD_CLASSNAME}
           options={WORK_ITEM_ACTION_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
         />
@@ -685,7 +690,15 @@ function WorkItemInspector({
             }
             className={SELECT_FIELD_CLASSNAME}
             options={[
-              { value: '', label: action === 'list' ? 'Any column' : 'Resolve from status/default' },
+              {
+                value: '',
+                label:
+                  action === 'list'
+                    ? 'Any column'
+                    : action === 'move'
+                      ? 'Select a destination column'
+                      : 'Resolve from status/default',
+              },
               ...boardColumns.map((column) => ({ value: column.id, label: column.name })),
             ]}
           />
@@ -730,7 +743,7 @@ function WorkItemInspector({
                         { value: 'all', label: 'All columns' },
                         ...ALL_STATUS_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
                       ]
-                    : (action === 'move' ? ALL_STATUS_OPTIONS : CREATE_STATUS_OPTIONS).map((o) => ({
+                    : CREATE_STATUS_OPTIONS.map((o) => ({
                         value: o.value,
                         label: o.label,
                       }))
