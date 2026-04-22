@@ -1106,9 +1106,8 @@ pub async fn run_pulse(
     memory_user_id: &str,
     cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<ProcessResult, String> {
-    let project_id = project_id.ok_or_else(|| {
-        "pulse is project-scoped; pulse task has no project_id".to_string()
-    })?;
+    let project_id = project_id
+        .ok_or_else(|| "pulse is project-scoped; pulse task has no project_id".to_string())?;
     let start = std::time::Instant::now();
     let log = AgentLog::new();
     let stream_id = format!("pulse:{}", agent_id);
@@ -1191,7 +1190,11 @@ pub async fn run_pulse(
 
     crate::commands::projects::assert_agent_in_project(db, project_id, agent_id).await?;
     if let Err(e) = crate::executor::workspace::init_project_workspace(project_id) {
-        tracing::warn!(project_id = project_id, "failed to init project workspace: {}", e);
+        tracing::warn!(
+            project_id = project_id,
+            "failed to init project workspace: {}",
+            e
+        );
     }
     let pulse_project_id: Option<String> = Some(project_id.to_string());
 

@@ -29,7 +29,7 @@ impl ToolHandler for WorkItemTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Manipulate the project kanban board. Work items are persistent, project-scoped cards visible to every agent assigned to the project. When a user asks to create, update, or track a task for the project, prefer this tool over the session-local `task` tool. Actions: list, get, create, update, delete, claim, move, block, unblock, complete, comment, list_comments. `project_id` is inferred from the current session when omitted. `review` means 'another agent should verify'; `in_progress` means 'I am actively on it'.".to_string(),
+            description: "Manipulate the project kanban board. Work items are persistent, project-scoped cards visible to every agent assigned to the project. When a user asks to create, update, or track a task for the project, prefer this tool over the session-local `task` tool. Actions: list, get, create, update, delete, claim, move, block, unblock, complete, comment, list_comments. `project_id` is inferred from the current session when omitted. When moving a card, do not try to change `status` directly: pass `column_id` for an explicit destination, or omit it to advance to the next board column.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -48,8 +48,8 @@ impl ToolHandler for WorkItemTool {
                     "description": { "type": "string", "description": "Markdown body (create/update)." },
                     "kind": { "type": "string", "enum": ["task", "bug", "story", "spike", "chore"], "description": "Card kind." },
                     "priority": { "type": "integer", "minimum": 0, "maximum": 3, "description": "0 (low) .. 3 (urgent)." },
-                    "status": { "type": "string", "enum": ["backlog", "todo", "in_progress", "blocked", "review", "done", "cancelled"], "description": "Status filter (list) or target status (move/create compatibility)." },
-                    "column_id": { "type": "string", "description": "Explicit board column id for create, move, or list filtering." },
+                    "status": { "type": "string", "enum": ["backlog", "todo", "in_progress", "blocked", "review", "done", "cancelled"], "description": "Status filter for list, or an optional create hint used to resolve the default board column." },
+                    "column_id": { "type": "string", "description": "Explicit board column id for create, move, or list filtering. For move, omit this to advance to the next board column." },
                     "assignee": { "type": "string", "description": "Filter by assignee agent id when listing. Use 'me' for self, or 'none' for unassigned." },
                     "parent_id": { "type": "string", "description": "Parent work item id (for subtasks)." },
                     "labels": { "type": "array", "items": { "type": "string" }, "description": "Labels (create/update)." },
@@ -186,17 +186,13 @@ impl ToolHandler for WorkItemTool {
                 let id = required_str(input, "id", "move")?;
                 let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
                 enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
-                let status = input["status"].as_str().map(str::to_string);
-                let column_id = input["column_id"].as_str().map(str::to_string);
-                if status.is_none() && column_id.is_none() {
-                    return Err("work_item: move requires 'status' or 'column_id'".into());
-                }
-                if status.as_deref() == Some("blocked") {
+                if input.get("status").is_some_and(|value| !value.is_null()) {
                     return Err(
-                        "work_item: use action='block' with a reason to move to 'blocked'".into(),
+                        "work_item: move no longer accepts 'status'; pass 'column_id' or omit it to advance to the next column".into(),
                     );
                 }
-                let item = move_work_item(db, id, status, column_id).await?;
+                let column_id = input["column_id"].as_str().map(str::to_string);
+                let item = move_work_item(db, id, column_id).await?;
                 spawn_cloud_upsert(ctx, &item);
                 let result = mutation_result("moved", &item)?;
                 Ok((result, false))
@@ -564,6 +560,7 @@ async fn create_work_item(
         db,
         CreateWorkItem {
             project_id,
+            board_id: None,
             title,
             description,
             kind: Some(kind),
@@ -614,10 +611,9 @@ async fn claim_work_item(db: &DbPool, id: &str, agent_id: &str) -> Result<WorkIt
 async fn move_work_item(
     db: &DbPool,
     id: &str,
-    status: Option<String>,
     column_id: Option<String>,
 ) -> Result<WorkItem, String> {
-    move_work_item_with_db(db, id.to_string(), status, column_id, None).await
+    move_work_item_with_db(db, id.to_string(), column_id, None).await
 }
 
 async fn block_work_item(db: &DbPool, id: &str, reason: String) -> Result<WorkItem, String> {

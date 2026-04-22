@@ -8,6 +8,7 @@ pub mod memory;
 pub mod permissions;
 pub mod plugins;
 pub mod project_board_columns;
+pub mod project_boards;
 pub mod project_workflows;
 pub mod projects;
 pub mod pulse;

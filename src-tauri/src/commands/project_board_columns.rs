@@ -1,3 +1,4 @@
+use crate::commands::project_boards::{get_default_board_sync, resolve_board_sync};
 use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
 use crate::models::project_board_column::{
@@ -19,7 +20,7 @@ pub const LEGACY_BOARD_ROLES: &[&str] = &[
 ];
 
 const COLUMN_SELECT: &str =
-    "id, project_id, name, role, is_default, position, created_at, updated_at";
+    "id, project_id, board_id, name, role, is_default, position, created_at, updated_at";
 
 macro_rules! cloud_upsert_board_column {
     ($cloud:expr, $column:expr) => {
@@ -124,12 +125,13 @@ pub(crate) fn map_project_board_column(
     Ok(ProjectBoardColumn {
         id: row.get(0)?,
         project_id: row.get(1)?,
-        name: row.get(2)?,
-        role: row.get(3)?,
-        is_default: row.get::<_, bool>(4)?,
-        position: row.get(5)?,
-        created_at: row.get(6)?,
-        updated_at: row.get(7)?,
+        board_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+        name: row.get(3)?,
+        role: row.get(4)?,
+        is_default: row.get::<_, bool>(5)?,
+        position: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
     })
 }
 
@@ -179,11 +181,27 @@ pub fn ensure_project_board_columns(
         return Ok(());
     }
 
+    let board = match get_default_board_sync(conn, project_id).map_err(|e| e.to_string())? {
+        Some(board) => board,
+        None => {
+            let board_id = Ulid::new().to_string();
+            conn.execute(
+                "INSERT INTO project_boards (id, project_id, name, prefix, position, is_default, created_at, updated_at)
+                 VALUES (?1, ?2, 'Default', 'MAIN', 1024.0, 1, ?3, ?3)",
+                params![board_id, project_id, created_at],
+            )
+            .map_err(|e| e.to_string())?;
+            get_default_board_sync(conn, project_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "failed to create default board".to_string())?
+        }
+    };
+
     for (idx, column) in board_preset_columns(preset_id).into_iter().enumerate() {
         conn.execute(
             "INSERT INTO project_board_columns (
-                id, project_id, name, status, role, is_default, position, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+                id, project_id, board_id, name, status, role, is_default, position, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
             params![
                 format!(
                     "col_{}_{}",
@@ -193,6 +211,7 @@ pub fn ensure_project_board_columns(
                         .unwrap_or_else(|| if idx == 0 { "default" } else { "column" })
                 ),
                 project_id,
+                board.id,
                 column.name,
                 column.role.unwrap_or("backlog"),
                 column.role,
@@ -209,15 +228,31 @@ pub fn ensure_project_board_columns(
 pub fn list_project_board_columns_sync(
     conn: &rusqlite::Connection,
     project_id: &str,
+    board_id: Option<&str>,
 ) -> Result<Vec<ProjectBoardColumn>, String> {
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT {} FROM project_board_columns WHERE project_id = ?1 ORDER BY position ASC, created_at ASC",
-            COLUMN_SELECT
-        ))
-        .map_err(|e| e.to_string())?;
+    let effective_board_id = match board_id {
+        Some(id) => Some(id.to_string()),
+        None => get_default_board_sync(conn, project_id)?.map(|b| b.id),
+    };
+    let (sql, params_vec): (String, Vec<&dyn rusqlite::ToSql>) = match &effective_board_id {
+        Some(board) => (
+            format!(
+                "SELECT {} FROM project_board_columns WHERE project_id = ?1 AND board_id = ?2 ORDER BY position ASC, created_at ASC",
+                COLUMN_SELECT
+            ),
+            vec![&project_id as &dyn rusqlite::ToSql, board as &dyn rusqlite::ToSql],
+        ),
+        None => (
+            format!(
+                "SELECT {} FROM project_board_columns WHERE project_id = ?1 ORDER BY position ASC, created_at ASC",
+                COLUMN_SELECT
+            ),
+            vec![&project_id as &dyn rusqlite::ToSql],
+        ),
+    };
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let items = stmt
-        .query_map(params![project_id], map_project_board_column)
+        .query_map(params_vec.as_slice(), map_project_board_column)
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
         .collect();
@@ -227,34 +262,72 @@ pub fn list_project_board_columns_sync(
 pub fn get_default_column_sync(
     conn: &rusqlite::Connection,
     project_id: &str,
+    board_id: Option<&str>,
 ) -> Result<Option<ProjectBoardColumn>, String> {
-    conn.query_row(
-        &format!(
-            "SELECT {} FROM project_board_columns WHERE project_id = ?1 AND is_default = 1 LIMIT 1",
-            COLUMN_SELECT
-        ),
-        params![project_id],
-        map_project_board_column,
-    )
-    .optional()
-    .map_err(|e| e.to_string())
+    let effective_board_id = match board_id {
+        Some(id) => Some(id.to_string()),
+        None => get_default_board_sync(conn, project_id)?.map(|b| b.id),
+    };
+    match effective_board_id {
+        Some(board) => conn
+            .query_row(
+                &format!(
+                    "SELECT {} FROM project_board_columns WHERE project_id = ?1 AND board_id = ?2 AND is_default = 1 LIMIT 1",
+                    COLUMN_SELECT
+                ),
+                params![project_id, board],
+                map_project_board_column,
+            )
+            .optional()
+            .map_err(|e| e.to_string()),
+        None => conn
+            .query_row(
+                &format!(
+                    "SELECT {} FROM project_board_columns WHERE project_id = ?1 AND is_default = 1 LIMIT 1",
+                    COLUMN_SELECT
+                ),
+                params![project_id],
+                map_project_board_column,
+            )
+            .optional()
+            .map_err(|e| e.to_string()),
+    }
 }
 
 pub fn get_column_by_role_sync(
     conn: &rusqlite::Connection,
     project_id: &str,
+    board_id: Option<&str>,
     role: &str,
 ) -> Result<Option<ProjectBoardColumn>, String> {
-    conn.query_row(
-        &format!(
-            "SELECT {} FROM project_board_columns WHERE project_id = ?1 AND role = ?2 ORDER BY position ASC LIMIT 1",
-            COLUMN_SELECT
-        ),
-        params![project_id, role],
-        map_project_board_column,
-    )
-    .optional()
-    .map_err(|e| e.to_string())
+    let effective_board_id = match board_id {
+        Some(id) => Some(id.to_string()),
+        None => get_default_board_sync(conn, project_id)?.map(|b| b.id),
+    };
+    match effective_board_id {
+        Some(board) => conn
+            .query_row(
+                &format!(
+                    "SELECT {} FROM project_board_columns WHERE project_id = ?1 AND board_id = ?2 AND role = ?3 ORDER BY position ASC LIMIT 1",
+                    COLUMN_SELECT
+                ),
+                params![project_id, board, role],
+                map_project_board_column,
+            )
+            .optional()
+            .map_err(|e| e.to_string()),
+        None => conn
+            .query_row(
+                &format!(
+                    "SELECT {} FROM project_board_columns WHERE project_id = ?1 AND role = ?2 ORDER BY position ASC LIMIT 1",
+                    COLUMN_SELECT
+                ),
+                params![project_id, role],
+                map_project_board_column,
+            )
+            .optional()
+            .map_err(|e| e.to_string()),
+    }
 }
 
 pub fn get_column_by_id_sync(
@@ -306,6 +379,7 @@ fn ensure_expected_revision(
 pub fn resolve_board_column_sync(
     conn: &rusqlite::Connection,
     project_id: &str,
+    board_id: Option<&str>,
     column_id: Option<&str>,
     status: Option<&str>,
 ) -> Result<ProjectBoardColumn, String> {
@@ -317,6 +391,14 @@ pub fn resolve_board_column_sync(
                 "board column '{}' does not belong to project '{}'",
                 column_id, project_id
             ));
+        }
+        if let Some(expected_board) = board_id {
+            if column.board_id != expected_board {
+                return Err(format!(
+                    "board column '{}' does not belong to board '{}'",
+                    column_id, expected_board
+                ));
+            }
         }
         if let Some(status) = status {
             validate_board_role(Some(status))?;
@@ -334,7 +416,7 @@ pub fn resolve_board_column_sync(
 
     if let Some(status) = status {
         validate_board_role(Some(status))?;
-        return get_column_by_role_sync(conn, project_id, status)?.ok_or_else(|| {
+        return get_column_by_role_sync(conn, project_id, board_id, status)?.ok_or_else(|| {
             format!(
                 "project '{}' has no board column for role '{}'",
                 project_id, status
@@ -342,11 +424,11 @@ pub fn resolve_board_column_sync(
         });
     }
 
-    if let Some(default_column) = get_default_column_sync(conn, project_id)? {
+    if let Some(default_column) = get_default_column_sync(conn, project_id, board_id)? {
         return Ok(default_column);
     }
 
-    list_project_board_columns_sync(conn, project_id)?
+    list_project_board_columns_sync(conn, project_id, board_id)?
         .into_iter()
         .next()
         .ok_or_else(|| format!("project '{}' has no board columns", project_id))
@@ -367,13 +449,17 @@ fn normalize_default_candidate(
 fn set_default_column_sync(
     conn: &rusqlite::Connection,
     project_id: &str,
+    board_id: &str,
     column_id: &str,
     now: &str,
 ) -> Result<(), String> {
     normalize_default_candidate(conn, project_id, column_id)?;
     conn.execute(
-        "UPDATE project_board_columns SET is_default = CASE WHEN id = ?1 THEN 1 ELSE 0 END, updated_at = ?2 WHERE project_id = ?3",
-        params![column_id, now, project_id],
+        "UPDATE project_board_columns
+            SET is_default = CASE WHEN id = ?1 THEN 1 ELSE 0 END,
+                updated_at = ?2
+          WHERE project_id = ?3 AND board_id = ?4",
+        params![column_id, now, project_id, board_id],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -464,12 +550,13 @@ fn append_reassigned_items_sync(
 #[tauri::command]
 pub async fn list_project_board_columns(
     project_id: String,
+    board_id: Option<String>,
     db: tauri::State<'_, DbPool>,
 ) -> Result<Vec<ProjectBoardColumn>, String> {
     let pool = db.0.clone();
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
-        list_project_board_columns_sync(&conn, &project_id)
+        list_project_board_columns_sync(&conn, &project_id, board_id.as_deref())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -493,14 +580,17 @@ pub async fn create_project_board_column(
         if payload.is_default.unwrap_or(false) && is_terminal_role(payload.role.as_deref()) {
             return Err("default column cannot use a terminal role".into());
         }
+        let board =
+            resolve_board_sync(&conn, &payload.project_id, payload.board_id.as_deref())?;
+        let board_id = board.id.clone();
         let id = Ulid::new().to_string();
         let position = match payload.position {
             Some(value) => value,
             None => {
                 let max: Option<f64> = conn
                     .query_row(
-                        "SELECT MAX(position) FROM project_board_columns WHERE project_id = ?1",
-                        params![payload.project_id],
+                        "SELECT MAX(position) FROM project_board_columns WHERE project_id = ?1 AND board_id = ?2",
+                        params![payload.project_id, board_id],
                         |row| row.get(0),
                     )
                     .optional()
@@ -511,8 +601,8 @@ pub async fn create_project_board_column(
         };
         let has_default: bool = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM project_board_columns WHERE project_id = ?1 AND is_default = 1)",
-                params![payload.project_id],
+                "SELECT EXISTS(SELECT 1 FROM project_board_columns WHERE project_id = ?1 AND board_id = ?2 AND is_default = 1)",
+                params![payload.project_id, board_id],
                 |row| row.get(0),
             )
             .map_err(|e| e.to_string())?;
@@ -522,18 +612,19 @@ pub async fn create_project_board_column(
         }
         if is_default {
             conn.execute(
-                "UPDATE project_board_columns SET is_default = 0, updated_at = ?1 WHERE project_id = ?2",
-                params![now, payload.project_id],
+                "UPDATE project_board_columns SET is_default = 0, updated_at = ?1 WHERE project_id = ?2 AND board_id = ?3",
+                params![now, payload.project_id, board_id],
             )
             .map_err(|e| e.to_string())?;
         }
         conn.execute(
             "INSERT INTO project_board_columns (
-                id, project_id, name, status, role, is_default, position, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+                id, project_id, board_id, name, status, role, is_default, position, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
             params![
                 id,
                 payload.project_id,
+                board_id,
                 payload.name.trim(),
                 payload.role.as_deref().unwrap_or("backlog"),
                 payload.role,
@@ -605,7 +696,7 @@ pub async fn update_project_board_column(
             .map_err(|e| e.to_string())?;
         }
         if payload.is_default == Some(true) {
-            set_default_column_sync(&conn, &existing.project_id, &id, &now)?;
+            set_default_column_sync(&conn, &existing.project_id, &existing.board_id, &id, &now)?;
         } else if payload.is_default == Some(false) && existing.is_default {
             return Err("choose another default column before unsetting the current default".into());
         }
@@ -642,7 +733,8 @@ pub async fn delete_project_board_column(
             &existing.project_id,
             payload.expected_revision.as_deref(),
         )?;
-        let columns = list_project_board_columns_sync(&conn, &existing.project_id)?;
+        let columns =
+            list_project_board_columns_sync(&conn, &existing.project_id, Some(&existing.board_id))?;
         if columns.len() <= 1 {
             return Err("cannot delete the last remaining board column".into());
         }
@@ -713,8 +805,8 @@ pub async fn delete_project_board_column(
         }
         if let Some(default_destination) = default_destination.as_ref() {
             tx.execute(
-                "UPDATE project_board_columns SET is_default = CASE WHEN id = ?1 THEN 1 ELSE 0 END, updated_at = ?2 WHERE project_id = ?3",
-                params![default_destination.id, now, existing.project_id],
+                "UPDATE project_board_columns SET is_default = CASE WHEN id = ?1 THEN 1 ELSE 0 END, updated_at = ?2 WHERE project_id = ?3 AND board_id = ?4",
+                params![default_destination.id, now, existing.project_id, existing.board_id],
             )
             .map_err(|e| e.to_string())?;
         }
@@ -746,7 +838,8 @@ pub async fn reorder_project_board_columns(
         tokio::task::spawn_blocking(move || -> Result<Vec<ProjectBoardColumn>, String> {
             let mut conn = pool.get().map_err(|e| e.to_string())?;
             ensure_expected_revision(&conn, &project_id, payload.expected_revision.as_deref())?;
-            let existing = list_project_board_columns_sync(&conn, &project_id)?;
+            let board = resolve_board_sync(&conn, &project_id, payload.board_id.as_deref())?;
+            let existing = list_project_board_columns_sync(&conn, &project_id, Some(&board.id))?;
             if existing.len() != payload.ordered_ids.len() {
                 return Err("reorder must include every board column exactly once".into());
             }
@@ -758,7 +851,7 @@ pub async fn reorder_project_board_columns(
             existing_ids.sort();
             ordered_ids.sort();
             if existing_ids != ordered_ids {
-                return Err("reorder payload does not match the project's board columns".into());
+                return Err("reorder payload does not match the board's columns".into());
             }
             let now = chrono::Utc::now().to_rfc3339();
             let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -770,7 +863,7 @@ pub async fn reorder_project_board_columns(
                 .map_err(|e| e.to_string())?;
             }
             tx.commit().map_err(|e| e.to_string())?;
-            list_project_board_columns_sync(&conn, &project_id)
+            list_project_board_columns_sync(&conn, &project_id, Some(&board.id))
         })
         .await
         .map_err(|e| e.to_string())??;

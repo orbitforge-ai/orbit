@@ -66,8 +66,7 @@ pub async fn get_pulse_config(
                     .ok();
 
                 if let Some((sid, config_str, sched_enabled, next, last)) = sched {
-                    let cfg: Option<RecurringConfig> =
-                        serde_json::from_str(&config_str).ok();
+                    let cfg: Option<RecurringConfig> = serde_json::from_str(&config_str).ok();
                     (Some(tid), Some(sid), sched_enabled, cfg, next, last)
                 } else {
                     (Some(tid), None, false, None, None, None)

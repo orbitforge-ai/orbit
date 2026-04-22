@@ -135,7 +135,10 @@ mod tests {
             interval_unit: "hours".to_string(),
             interval_value: 1,
             days_of_week: None,
-            time_of_day: Some(TimeOfDay { hour: 0, minute: 10 }),
+            time_of_day: Some(TimeOfDay {
+                hour: 0,
+                minute: 10,
+            }),
             timezone: "UTC".to_string(),
             missed_run_policy: "skip".to_string(),
             expression: None,

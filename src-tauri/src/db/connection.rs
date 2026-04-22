@@ -30,6 +30,8 @@ const MIGRATION_24: &str = include_str!("migrations/0024_plugin_entities.sql");
 const MIGRATION_25: &str = include_str!("migrations/0025_channel_sessions.sql");
 const MIGRATION_26: &str = include_str!("migrations/0026_reset_pulse.sql");
 const MIGRATION_27: &str = include_str!("migrations/0027_session_skill_state.sql");
+const MIGRATION_28: &str = include_str!("migrations/0028_project_boards.sql");
+const MIGRATION_29: &str = include_str!("migrations/0029_board_scoped_default_column.sql");
 
 /// Newtype wrapper — stored as Tauri managed state.
 /// r2d2::Pool is Arc-based internally: cheap to clone.
@@ -201,7 +203,110 @@ pub fn init(data_dir: PathBuf) -> Result<DbPool, Box<dyn std::error::Error>> {
         conn.execute_batch("PRAGMA user_version = 27;")?;
         info!("Applied migration 27 (session skill state)");
     }
+    if version < 28 {
+        conn.execute_batch(MIGRATION_28)?;
+        backfill_default_project_boards(&conn)?;
+        conn.execute_batch("PRAGMA user_version = 28;")?;
+        info!("Applied migration 28 (project boards)");
+    }
+    if version < 29 {
+        conn.execute_batch(MIGRATION_29)?;
+        conn.execute_batch("PRAGMA user_version = 29;")?;
+        info!("Applied migration 29 (board-scoped default column index)");
+    }
 
     info!("Database initialised at {:?}", db_path);
     Ok(DbPool(pool))
+}
+
+/// Creates one default board per project that doesn't have one yet, then
+/// re-parents every legacy `project_board_columns` / `work_items` row to
+/// that board. Runs at migration 28 apply time (and is idempotent: projects
+/// that already have a default board are skipped).
+fn backfill_default_project_boards(
+    conn: &rusqlite::Connection,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use rusqlite::params;
+    use ulid::Ulid;
+
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let mut project_stmt = conn.prepare(
+        "SELECT p.id, p.name
+           FROM projects p
+          WHERE NOT EXISTS (
+              SELECT 1 FROM project_boards b
+               WHERE b.project_id = p.id AND b.is_default = 1
+          )",
+    )?;
+    let projects: Vec<(String, String)> = project_stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(project_stmt);
+
+    for (project_id, project_name) in projects {
+        let board_id = Ulid::new().to_string();
+        let prefix = derive_default_board_prefix(conn, &project_id, &project_name)?;
+
+        conn.execute(
+            "INSERT INTO project_boards (id, project_id, name, prefix, position, is_default, created_at, updated_at)
+             VALUES (?1, ?2, 'Default', ?3, 1024.0, 1, ?4, ?4)",
+            params![board_id, project_id, prefix, now],
+        )?;
+
+        conn.execute(
+            "UPDATE project_board_columns SET board_id = ?1 WHERE project_id = ?2 AND board_id IS NULL",
+            params![board_id, project_id],
+        )?;
+
+        conn.execute(
+            "UPDATE work_items SET board_id = ?1 WHERE project_id = ?2 AND board_id IS NULL",
+            params![board_id, project_id],
+        )?;
+    }
+
+    Ok(())
+}
+
+fn derive_default_board_prefix(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    project_name: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    use rusqlite::params;
+
+    let base: String = project_name
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic())
+        .map(|c| c.to_ascii_uppercase())
+        .take(4)
+        .collect();
+    let base = if base.len() >= 2 {
+        base
+    } else {
+        "MAIN".to_string()
+    };
+
+    // Uniqueness is scoped per project, and we only create one default board
+    // per project here — so a collision can only happen if an earlier run
+    // already created a board with the same prefix. Append A, B, C, ... in
+    // that case. Bounded to 26 attempts; ULID fallback guarantees termination.
+    for suffix in std::iter::once(String::new()).chain(('A'..='Z').map(|c| c.to_string())) {
+        let candidate = format!("{}{}", base, suffix);
+        if candidate.len() > 8 {
+            continue;
+        }
+        let taken: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM project_boards WHERE project_id = ?1 AND prefix = ?2)",
+            params![project_id, candidate],
+            |row| row.get(0),
+        )?;
+        if !taken {
+            return Ok(candidate);
+        }
+    }
+    Ok(format!("B{}", &ulid::Ulid::new().to_string()[..3]))
 }

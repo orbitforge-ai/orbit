@@ -35,8 +35,9 @@ struct CachedSurfaceActions {
     actions: Vec<PluginSurfaceAction>,
 }
 
-static SURFACE_ACTION_CACHE: OnceLock<RwLock<HashMap<SurfaceActionCacheKey, CachedSurfaceActions>>> =
-    OnceLock::new();
+static SURFACE_ACTION_CACHE: OnceLock<
+    RwLock<HashMap<SurfaceActionCacheKey, CachedSurfaceActions>>,
+> = OnceLock::new();
 
 fn surface_action_cache() -> &'static RwLock<HashMap<SurfaceActionCacheKey, CachedSurfaceActions>> {
     SURFACE_ACTION_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
@@ -213,7 +214,11 @@ pub async fn list_plugin_surface_actions(
 
     let mut tasks = Vec::new();
     for (plugin_name, manifest) in manifests {
-        let tool_names: Vec<String> = manifest.tools.iter().map(|tool| tool.name.clone()).collect();
+        let tool_names: Vec<String> = manifest
+            .tools
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect();
         let extra_env = plugins::oauth::build_env_for_subprocess(&manifest);
         let matching: Vec<SurfaceActionSpec> = manifest
             .ui
@@ -658,13 +663,8 @@ async fn resolve_surface_action_spec(
     match call {
         Ok(Ok(raw)) => {
             let parsed = unwrap_mcp_text_payload(raw);
-            match normalize_surface_actions(
-                &manifest.id,
-                &plugin_name,
-                &spec,
-                parsed,
-                &tool_names,
-            ) {
+            match normalize_surface_actions(&manifest.id, &plugin_name, &spec, parsed, &tool_names)
+            {
                 Ok(actions) => {
                     if let Ok(mut cache) = surface_action_cache().write() {
                         cache.insert(

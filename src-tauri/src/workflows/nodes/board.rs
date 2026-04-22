@@ -137,6 +137,7 @@ pub(super) async fn execute_proposal_enqueue<R: tauri::Runtime>(
 
         let payload = CreateWorkItem {
             project_id: ctx.project_id.to_string(),
+            board_id: None,
             title,
             description,
             kind: Some(kind.clone()),
@@ -226,6 +227,7 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
 
             let payload = CreateWorkItem {
                 project_id: ctx.project_id.to_string(),
+                board_id: None,
                 title: title.clone(),
                 description: description.clone(),
                 kind: Some(kind.clone()),
@@ -265,7 +267,8 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
             })
         }
         WorkItemAction::List => {
-            let mut items = list_work_items_with_db(ctx.db, ctx.project_id.to_string()).await?;
+            let mut items =
+                list_work_items_with_db(ctx.db, ctx.project_id.to_string(), None).await?;
             let column_id_filter = render_optional_template(
                 ctx.node.data.get("listColumnId").and_then(|v| v.as_str()),
                 ctx.outputs,
@@ -402,24 +405,18 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                 action.as_str(),
                 ctx.outputs,
             )?;
-            let status = parse_optional_work_item_status(
-                ctx.node.data.get("status").and_then(|v| v.as_str()),
-            )?;
             let column_id = render_optional_template(
                 ctx.node.data.get("columnId").and_then(|v| v.as_str()),
                 ctx.outputs,
             );
-            if status.is_none() && column_id.is_none() {
-                return Err("board.work_item move requires data.status or data.columnId".into());
+            if column_id.is_none() {
+                return Err(
+                    "board.work_item move requires data.columnId; status-based moves are no longer supported"
+                        .into(),
+                );
             }
-            let item = move_work_item_with_db(
-                ctx.db,
-                item_id.clone(),
-                status.clone(),
-                column_id.clone(),
-                None,
-            )
-            .await?;
+            let item =
+                move_work_item_with_db(ctx.db, item_id.clone(), column_id.clone(), None).await?;
             sync_work_item_cloud(ctx.app, item.clone());
             Ok(NodeOutcome {
                 output: json!({

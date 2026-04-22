@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub struct WorkItem {
     pub id: String,
     pub project_id: String,
+    pub board_id: Option<String>,
     pub title: String,
     pub description: Option<String>,
     /// `task` | `bug` | `story` | `spike` | `chore`
@@ -36,6 +37,7 @@ pub struct WorkItem {
 #[serde(rename_all = "camelCase")]
 pub struct CreateWorkItem {
     pub project_id: String,
+    pub board_id: Option<String>,
     pub title: String,
     pub description: Option<String>,
     pub kind: Option<String>,

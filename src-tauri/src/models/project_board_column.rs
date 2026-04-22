@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct ProjectBoardColumn {
     pub id: String,
     pub project_id: String,
+    pub board_id: String,
     pub name: String,
     pub role: Option<String>,
     pub is_default: bool,
@@ -17,6 +18,7 @@ pub struct ProjectBoardColumn {
 #[serde(rename_all = "camelCase")]
 pub struct CreateProjectBoardColumn {
     pub project_id: String,
+    pub board_id: Option<String>,
     pub name: String,
     pub role: Option<String>,
     pub is_default: Option<bool>,
@@ -45,6 +47,7 @@ pub struct DeleteProjectBoardColumn {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReorderProjectBoardColumns {
+    pub board_id: Option<String>,
     pub ordered_ids: Vec<String>,
     pub expected_revision: Option<String>,
 }

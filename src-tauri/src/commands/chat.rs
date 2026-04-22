@@ -30,8 +30,7 @@ use crate::models::chat::ChatSession;
 
 const MAX_TOKENS_PER_CALL: u32 = 4096;
 const CHAT_CANCEL_POLL_INTERVAL_MS: u64 = 100;
-const SKILL_MENTION_PATTERN: &str =
-    r#"[@#]\[[^\]]+\]\(mention:skill:(?P<skill_name>[^)]+)\)"#;
+const SKILL_MENTION_PATTERN: &str = r#"[@#]\[[^\]]+\]\(mention:skill:(?P<skill_name>[^)]+)\)"#;
 
 fn can_cancel_chat_session(session_type: &str) -> bool {
     matches!(

@@ -398,9 +398,10 @@ async fn require_current_project_id(
     db: &DbPool,
     ctx: &ToolExecutionContext,
 ) -> Result<String, String> {
-    let session_id = ctx.current_session_id.as_deref().ok_or(
-        "schedule: pulse actions require an active project-scoped session",
-    )?;
+    let session_id = ctx
+        .current_session_id
+        .as_deref()
+        .ok_or("schedule: pulse actions require an active project-scoped session")?;
     session_worktree::load_session_project_id(db, session_id)
         .await?
         .ok_or_else(|| {

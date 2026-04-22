@@ -4,6 +4,7 @@ pub mod bus;
 pub mod channel_binding;
 pub mod chat;
 pub mod project;
+pub mod project_board;
 pub mod project_board_column;
 pub mod project_workflow;
 pub mod run;

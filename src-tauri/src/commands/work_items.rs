@@ -1,4 +1,6 @@
-use crate::commands::project_board_columns::resolve_board_column_sync;
+use crate::commands::project_board_columns::{
+    list_project_board_columns_sync, resolve_board_column_sync,
+};
 use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
 use crate::models::project_board_column::ProjectBoardColumn;
@@ -51,33 +53,34 @@ macro_rules! cloud_delete {
 // ── Row mappers ───────────────────────────────────────────────────────────────
 
 pub(crate) fn map_work_item(row: &rusqlite::Row) -> rusqlite::Result<WorkItem> {
-    let labels_json: String = row.get(12)?;
-    let metadata_json: String = row.get(13)?;
+    let labels_json: String = row.get(13)?;
+    let metadata_json: String = row.get(14)?;
     Ok(WorkItem {
         id: row.get(0)?,
         project_id: row.get(1)?,
-        title: row.get(2)?,
-        description: row.get(3)?,
-        kind: row.get(4)?,
-        column_id: row.get(5)?,
-        status: row.get(6)?,
-        priority: row.get(7)?,
-        assignee_agent_id: row.get(8)?,
-        created_by_agent_id: row.get(9)?,
-        parent_work_item_id: row.get(10)?,
-        position: row.get(11)?,
+        board_id: row.get(2)?,
+        title: row.get(3)?,
+        description: row.get(4)?,
+        kind: row.get(5)?,
+        column_id: row.get(6)?,
+        status: row.get(7)?,
+        priority: row.get(8)?,
+        assignee_agent_id: row.get(9)?,
+        created_by_agent_id: row.get(10)?,
+        parent_work_item_id: row.get(11)?,
+        position: row.get(12)?,
         labels: serde_json::from_str(&labels_json).unwrap_or_default(),
         metadata: serde_json::from_str(&metadata_json).unwrap_or_else(|_| serde_json::json!({})),
-        blocked_reason: row.get(14)?,
-        started_at: row.get(15)?,
-        completed_at: row.get(16)?,
-        created_at: row.get(17)?,
-        updated_at: row.get(18)?,
+        blocked_reason: row.get(15)?,
+        started_at: row.get(16)?,
+        completed_at: row.get(17)?,
+        created_at: row.get(18)?,
+        updated_at: row.get(19)?,
     })
 }
 
 const WORK_ITEM_COLUMNS: &str =
-    "id, project_id, title, description, kind, column_id, status, priority,
+    "id, project_id, board_id, title, description, kind, column_id, status, priority,
         assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
         labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at";
 
@@ -99,10 +102,11 @@ const WORK_ITEM_COMMENT_COLUMNS: &str =
 fn resolve_target_column(
     conn: &rusqlite::Connection,
     project_id: &str,
+    board_id: Option<&str>,
     column_id: Option<&str>,
     status: Option<&str>,
 ) -> Result<ProjectBoardColumn, String> {
-    resolve_board_column_sync(conn, project_id, column_id, status)
+    resolve_board_column_sync(conn, project_id, board_id, column_id, status)
 }
 
 fn resolve_create_status(column: &ProjectBoardColumn, requested_status: Option<&str>) -> String {
@@ -113,16 +117,35 @@ fn resolve_create_status(column: &ProjectBoardColumn, requested_status: Option<&
         .unwrap_or_else(|| "backlog".to_string())
 }
 
-fn resolve_move_status(
-    column: &ProjectBoardColumn,
-    requested_status: Option<&str>,
-    current_status: &str,
-) -> String {
+fn resolve_move_status(column: &ProjectBoardColumn, current_status: &str) -> String {
     column
         .role
         .clone()
-        .or_else(|| requested_status.map(str::to_string))
         .unwrap_or_else(|| current_status.to_string())
+}
+
+fn resolve_next_column(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    board_id: Option<&str>,
+    current_column_id: Option<&str>,
+) -> Result<ProjectBoardColumn, String> {
+    let current_column_id = current_column_id
+        .ok_or_else(|| "work_item: item is not currently in a board column".to_string())?;
+    let columns = list_project_board_columns_sync(conn, project_id, board_id)?;
+    let current_index = columns
+        .iter()
+        .position(|column| column.id == current_column_id)
+        .ok_or_else(|| {
+            format!(
+                "work_item: current board column '{}' was not found on this board",
+                current_column_id
+            )
+        })?;
+    columns
+        .get(current_index + 1)
+        .cloned()
+        .ok_or_else(|| "work_item: item is already in the last board column".to_string())
 }
 
 pub async fn create_work_item_with_db(
@@ -138,10 +161,12 @@ pub async fn create_work_item_with_db(
         let column = resolve_target_column(
             &conn,
             &payload.project_id,
+            payload.board_id.as_deref(),
             payload.column_id.as_deref(),
             payload.status.as_deref(),
         )?;
         let column_id = column.id.clone();
+        let board_id = column.board_id.clone();
         let status = resolve_create_status(&column, payload.status.as_deref());
         let priority = payload.priority.unwrap_or(0);
         let position = match payload.position {
@@ -172,13 +197,14 @@ pub async fn create_work_item_with_db(
 
         conn.execute(
             "INSERT INTO work_items (
-                id, project_id, title, description, kind, column_id, status, priority,
+                id, project_id, board_id, title, description, kind, column_id, status, priority,
                 assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
                 labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,NULL,NULL,NULL,?15,?15)",
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,NULL,NULL,NULL,?16,?16)",
             params![
                 id,
                 payload.project_id,
+                board_id,
                 payload.title,
                 payload.description,
                 kind,
@@ -207,22 +233,41 @@ pub async fn create_work_item_with_db(
 pub async fn list_work_items_with_db(
     db: &DbPool,
     project_id: String,
+    board_id: Option<String>,
 ) -> Result<Vec<WorkItem>, String> {
     let pool = db.0.clone();
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
-        let sql = format!(
-            "SELECT {} FROM work_items WHERE project_id = ?1
-             ORDER BY COALESCE(column_id, status), position ASC",
-            WORK_ITEM_COLUMNS
-        );
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let items = stmt
-            .query_map(params![project_id], map_work_item)
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(items)
+        match board_id {
+            Some(board_id) => {
+                let sql = format!(
+                    "SELECT {} FROM work_items WHERE project_id = ?1 AND board_id = ?2
+                     ORDER BY COALESCE(column_id, status), position ASC",
+                    WORK_ITEM_COLUMNS
+                );
+                let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+                let items = stmt
+                    .query_map(params![project_id, board_id], map_work_item)
+                    .map_err(|e| e.to_string())?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                Ok(items)
+            }
+            None => {
+                let sql = format!(
+                    "SELECT {} FROM work_items WHERE project_id = ?1
+                     ORDER BY COALESCE(column_id, status), position ASC",
+                    WORK_ITEM_COLUMNS
+                );
+                let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+                let items = stmt
+                    .query_map(params![project_id], map_work_item)
+                    .map_err(|e| e.to_string())?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                Ok(items)
+            }
+        }
     })
     .await
     .map_err(|e| e.to_string())?
@@ -282,7 +327,8 @@ pub async fn update_work_item_with_db(
             .map_err(|e| e.to_string())?;
         }
         if let Some(column_id) = payload.column_id.as_deref() {
-            let resolved_column = resolve_target_column(&conn, &project_id, Some(column_id), None)?;
+            let resolved_column =
+                resolve_target_column(&conn, &project_id, None, Some(column_id), None)?;
             conn.execute(
                 "UPDATE work_items
                     SET column_id = ?1, updated_at = ?2
@@ -351,7 +397,20 @@ pub async fn claim_work_item_with_db(
                 |row| row.get(0),
             )
             .map_err(|e| e.to_string())?;
-        let column = resolve_target_column(&conn, &project_id, None, Some("in_progress"))?;
+        let board_id: Option<String> = conn
+            .query_row(
+                "SELECT board_id FROM work_items WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let column = resolve_target_column(
+            &conn,
+            &project_id,
+            board_id.as_deref(),
+            None,
+            Some("in_progress"),
+        )?;
         let column_id = column.id;
         let status = column
             .role
@@ -381,7 +440,6 @@ pub async fn claim_work_item_with_db(
 pub async fn move_work_item_with_db(
     db: &DbPool,
     id: String,
-    status: Option<String>,
     column_id: Option<String>,
     position: Option<f64>,
 ) -> Result<WorkItem, String> {
@@ -390,24 +448,35 @@ pub async fn move_work_item_with_db(
         let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
 
-        let (current_status, current_column_id): (String, Option<String>) = conn
+        let (current_status, current_column_id, project_id, current_board_id): (
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+        ) = conn
             .query_row(
-                "SELECT status, column_id FROM work_items WHERE id = ?1",
+                "SELECT status, column_id, project_id, board_id FROM work_items WHERE id = ?1",
                 params![id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .map_err(|e| e.to_string())?;
-        let project_id: String = conn
-            .query_row(
-                "SELECT project_id FROM work_items WHERE id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        let column =
-            resolve_target_column(&conn, &project_id, column_id.as_deref(), status.as_deref())?;
+        let column = match column_id.as_deref() {
+            Some(column_id) => resolve_target_column(
+                &conn,
+                &project_id,
+                current_board_id.as_deref(),
+                Some(column_id),
+                None,
+            )?,
+            None => resolve_next_column(
+                &conn,
+                &project_id,
+                current_board_id.as_deref(),
+                current_column_id.as_deref(),
+            )?,
+        };
         let column_id = column.id.clone();
-        let status = resolve_move_status(&column, status.as_deref(), &current_status);
+        let status = resolve_move_status(&column, &current_status);
 
         if status == "blocked" {
             let reason_ok: bool = conn
@@ -504,14 +573,20 @@ pub async fn block_work_item_with_db(
     tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
-        let project_id: String = conn
+        let (project_id, board_id): (String, Option<String>) = conn
             .query_row(
-                "SELECT project_id FROM work_items WHERE id = ?1",
+                "SELECT project_id, board_id FROM work_items WHERE id = ?1",
                 params![id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(|e| e.to_string())?;
-        let column = resolve_target_column(&conn, &project_id, None, Some("blocked"))?;
+        let column = resolve_target_column(
+            &conn,
+            &project_id,
+            board_id.as_deref(),
+            None,
+            Some("blocked"),
+        )?;
         let column_id = column.id;
         let status = column.role.unwrap_or_else(|| "blocked".to_string());
         conn.execute(
@@ -534,14 +609,15 @@ pub async fn complete_work_item_with_db(db: &DbPool, id: String) -> Result<WorkI
     tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
-        let project_id: String = conn
+        let (project_id, board_id): (String, Option<String>) = conn
             .query_row(
-                "SELECT project_id FROM work_items WHERE id = ?1",
+                "SELECT project_id, board_id FROM work_items WHERE id = ?1",
                 params![id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(|e| e.to_string())?;
-        let column = resolve_target_column(&conn, &project_id, None, Some("done"))?;
+        let column =
+            resolve_target_column(&conn, &project_id, board_id.as_deref(), None, Some("done"))?;
         let column_id = column.id;
         let status = column.role.unwrap_or_else(|| "done".to_string());
         conn.execute(
@@ -572,14 +648,15 @@ pub async fn unblock_work_item_with_db(
     tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
-        let project_id: String = conn
+        let (project_id, board_id): (String, Option<String>) = conn
             .query_row(
-                "SELECT project_id FROM work_items WHERE id = ?1",
+                "SELECT project_id, board_id FROM work_items WHERE id = ?1",
                 params![id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(|e| e.to_string())?;
-        let column = resolve_target_column(&conn, &project_id, None, Some(&status))?;
+        let column =
+            resolve_target_column(&conn, &project_id, board_id.as_deref(), None, Some(&status))?;
         let column_id = column.id;
         let resolved_status = column.role.unwrap_or(status);
         conn.execute(
@@ -727,9 +804,10 @@ pub fn fetch_work_item_project(
 #[tauri::command]
 pub async fn list_work_items(
     project_id: String,
+    board_id: Option<String>,
     db: tauri::State<'_, DbPool>,
 ) -> Result<Vec<WorkItem>, String> {
-    list_work_items_with_db(db.inner(), project_id).await
+    list_work_items_with_db(db.inner(), project_id, board_id).await
 }
 
 #[tauri::command]
@@ -794,14 +872,13 @@ pub async fn claim_work_item(
 #[tauri::command]
 pub async fn move_work_item(
     id: String,
-    status: Option<String>,
     column_id: Option<String>,
     position: Option<f64>,
     db: tauri::State<'_, DbPool>,
     cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<WorkItem, String> {
     let cloud = cloud.inner().clone();
-    let item = move_work_item_with_db(db.inner(), id, status, column_id, position).await?;
+    let item = move_work_item_with_db(db.inner(), id, column_id, position).await?;
 
     cloud_upsert_work_item!(cloud, item);
     Ok(item)
@@ -810,6 +887,7 @@ pub async fn move_work_item(
 #[tauri::command]
 pub async fn reorder_work_items(
     project_id: String,
+    board_id: Option<String>,
     status: Option<String>,
     column_id: Option<String>,
     ordered_ids: Vec<String>,
@@ -819,8 +897,14 @@ pub async fn reorder_work_items(
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let mut conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
-        let resolved_column_id =
-            resolve_target_column(&conn, &project_id, column_id.as_deref(), status.as_deref())?.id;
+        let resolved_column_id = resolve_target_column(
+            &conn,
+            &project_id,
+            board_id.as_deref(),
+            column_id.as_deref(),
+            status.as_deref(),
+        )?
+        .id;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         for (idx, item_id) in ordered_ids.iter().enumerate() {
             let pos = ((idx + 1) as f64) * 1024.0;
