@@ -1,0 +1,11 @@
+{
+  "name": "com.orbit.slack",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Bundled Slack plugin for Orbit.",
+  "main": "server.js",
+  "dependencies": {
+    "@orbit/plugin-sdk": "file:../../packages/plugin-sdk-node",
+    "ws": "^8.18.0"
+  }
+}

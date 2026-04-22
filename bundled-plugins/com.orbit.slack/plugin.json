@@ -1,0 +1,195 @@
+{
+  "schemaVersion": 1,
+  "hostApiVersion": "^1.0.0",
+  "id": "com.orbit.slack",
+  "name": "Slack",
+  "version": "0.1.0",
+  "description": "Bundled Slack plugin for Orbit: Socket Mode gateway, channel subscriptions, bidirectional messaging. Bring your own Slack app (paste bot token + app-level token in the Secrets tab).",
+  "author": "Orbit",
+  "license": "MIT",
+  "icon": "assets/logo.png",
+  "runtime": {
+    "type": "mcp-stdio",
+    "command": "node",
+    "args": ["server.js"]
+  },
+  "permissions": {
+    "network": [
+      "slack.com",
+      "api.slack.com",
+      "wss-primary.slack.com",
+      "wss-backup.slack.com"
+    ]
+  },
+  "tools": [
+    {
+      "name": "set_subscriptions",
+      "description": "Replace the plugin's in-memory subscription set with the provided channel IDs. Idempotent — calling with an empty list clears all subscriptions and stops the Socket Mode connection.",
+      "riskLevel": "low",
+      "inputSchema": {
+        "type": "object",
+        "required": ["subscriptions"],
+        "properties": {
+          "subscriptions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["channelId"],
+              "properties": {
+                "channelId": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "list_channels",
+      "description": "List public and private channels the bot has access to.",
+      "riskLevel": "low",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "description": "Pagination cursor returned by a previous call."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max channels to return (default 200, max 1000)."
+          }
+        }
+      }
+    },
+    {
+      "name": "send_message",
+      "description": "Post a message to a Slack channel or DM as the connected bot.",
+      "riskLevel": "moderate",
+      "inputSchema": {
+        "type": "object",
+        "required": ["channelId", "text"],
+        "properties": {
+          "channelId": { "type": "string" },
+          "text": { "type": "string" },
+          "threadTs": {
+            "type": "string",
+            "description": "Thread parent timestamp to reply in a thread."
+          }
+        }
+      }
+    },
+    {
+      "name": "send_ephemeral",
+      "description": "Send an ephemeral message visible only to a specific user in a channel.",
+      "riskLevel": "moderate",
+      "inputSchema": {
+        "type": "object",
+        "required": ["channelId", "userId", "text"],
+        "properties": {
+          "channelId": { "type": "string" },
+          "userId": { "type": "string" },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "add_reaction",
+      "description": "React to a Slack message with an emoji (e.g. 'thumbsup', 'white_check_mark').",
+      "riskLevel": "low",
+      "inputSchema": {
+        "type": "object",
+        "required": ["channelId", "timestamp", "emoji"],
+        "properties": {
+          "channelId": { "type": "string" },
+          "timestamp": {
+            "type": "string",
+            "description": "The message ts field to react to."
+          },
+          "emoji": {
+            "type": "string",
+            "description": "Emoji name without colons, e.g. 'thumbsup'."
+          }
+        }
+      }
+    },
+    {
+      "name": "list_messages",
+      "description": "Fetch recent messages from a Slack channel.",
+      "riskLevel": "low",
+      "inputSchema": {
+        "type": "object",
+        "required": ["channelId"],
+        "properties": {
+          "channelId": { "type": "string" },
+          "limit": {
+            "type": "integer",
+            "description": "Number of messages to return (default 20, max 100)."
+          },
+          "oldest": {
+            "type": "string",
+            "description": "Fetch messages after this Unix timestamp string."
+          },
+          "latest": {
+            "type": "string",
+            "description": "Fetch messages before this Unix timestamp string."
+          }
+        }
+      }
+    }
+  ],
+  "secrets": [
+    {
+      "key": "botToken",
+      "envVar": "ORBIT_SLACK_BOT_TOKEN",
+      "displayName": "Bot Token",
+      "description": "Slack bot token from your Slack App (OAuth & Permissions → Bot User OAuth Token). Starts with xoxb-. Required for all Web API calls.",
+      "placeholder": "xoxb-..."
+    },
+    {
+      "key": "appToken",
+      "envVar": "ORBIT_SLACK_APP_TOKEN",
+      "displayName": "App-Level Token",
+      "description": "App-level token for Socket Mode (Your Slack App → Basic Information → App-Level Tokens, create one with connections:write scope). Starts with xapp-. Required for real-time message subscriptions.",
+      "placeholder": "xapp-..."
+    }
+  ],
+  "workflow": {
+    "triggers": [
+      {
+        "kind": "trigger.com_orbit_slack.message",
+        "displayName": "Slack message",
+        "subscriptionTool": "set_subscriptions",
+        "configSchema": {
+          "type": "object",
+          "required": ["channelId"],
+          "properties": {
+            "channelId": { "type": "string" }
+          }
+        }
+      }
+    ],
+    "nodes": [
+      {
+        "kind": "integration.com_orbit_slack.send_message",
+        "displayName": "Slack · Send message",
+        "tool": "send_message",
+        "fieldOptions": [
+          {
+            "field": "channelId",
+            "sourceTool": "list_channels",
+            "format": "channels"
+          }
+        ],
+        "inputSchema": {
+          "type": "object",
+          "required": ["channelId", "text"],
+          "properties": {
+            "channelId": { "type": "string" },
+            "text": { "type": "string" },
+            "threadTs": { "type": "string" }
+          }
+        }
+      }
+    ]
+  }
+}
