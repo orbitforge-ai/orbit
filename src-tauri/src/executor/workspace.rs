@@ -313,6 +313,8 @@ pub struct AgentWorkspaceConfig {
     pub temperature: f64,
     #[serde(default = "default_max_iterations")]
     pub max_iterations: u32,
+    #[serde(default = "default_true")]
+    pub enable_sandbox: bool,
     #[serde(default)]
     pub compaction_threshold: Option<f64>,
     #[serde(default)]
@@ -395,6 +397,7 @@ impl Default for AgentWorkspaceConfig {
             model: "claude-sonnet-4-6".to_string(),
             temperature: 0.7,
             max_iterations: default_max_iterations(),
+            enable_sandbox: true,
             compaction_threshold: None,
             compaction_retain_count: None,
             disabled_skills: Vec::new(),
@@ -527,6 +530,7 @@ pub fn normalize_agent_identity(identity: &AgentIdentityConfig) -> AgentIdentity
 
 pub fn normalize_agent_config(config: AgentWorkspaceConfig) -> AgentWorkspaceConfig {
     AgentWorkspaceConfig {
+        enable_sandbox: config.enable_sandbox,
         identity: normalize_agent_identity(&config.identity),
         ..config
     }
@@ -920,6 +924,7 @@ mod tests {
 
         assert_eq!(parsed.identity.preset_id, "balanced_assistant");
         assert_eq!(parsed.identity.identity_name, "Balanced Assistant");
+        assert!(parsed.enable_sandbox);
     }
 
     #[test]
@@ -933,6 +938,22 @@ mod tests {
         assert!(!json.contains("contextWindowOverride"));
         assert!(json.contains("disabledTools"));
         assert!(json.contains("defaultChannelId"));
+        assert!(json.contains("enableSandbox"));
+    }
+
+    #[test]
+    fn missing_enable_sandbox_defaults_to_true() {
+        let parsed: AgentWorkspaceConfig = serde_json::from_str(
+            r#"{
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-6",
+                "temperature": 0.7,
+                "maxIterations": 25
+            }"#,
+        )
+        .expect("config should deserialize");
+
+        assert!(parsed.enable_sandbox);
     }
 
     #[test]

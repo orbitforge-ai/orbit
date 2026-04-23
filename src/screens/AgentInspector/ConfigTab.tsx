@@ -216,6 +216,25 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
         </div>
       </section>
 
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-4 rounded-lg border border-edge bg-surface px-4 py-3">
+          <div>
+            <h4 className="text-sm font-semibold text-white">Enable Sandbox</h4>
+            <p className="text-xs text-muted mt-1">
+              Adds extra CLI and shell-command hardening for this agent. Project-scoped sessions
+              always stay inside their project workspace even when this is off.
+            </p>
+          </div>
+          <Switch.Root
+            checked={config.enableSandbox}
+            onCheckedChange={(value) => updateConfig({ enableSandbox: value })}
+            className="w-9 h-5 rounded-full bg-edge data-[state=checked]:bg-emerald-500 transition-colors outline-none shrink-0"
+          >
+            <Switch.Thumb className="block w-4 h-4 rounded-full bg-white shadow translate-x-0.5 data-[state=checked]:translate-x-[18px] transition-transform" />
+          </Switch.Root>
+        </div>
+      </section>
+
       {/* Advanced Settings — collapsed by default */}
       <CollapsibleSection
         title="Advanced Settings"

@@ -1172,7 +1172,15 @@ async fn do_llm_chat(
         system_prompt: snapshot.system_prompt,
     };
 
-    let chat_worktree = session_worktree::load_session_worktree_state(db, session_id).await?;
+    let chat_worktree = crate::executor::tools::context::sanitize_session_worktree_state(
+        db,
+        session_id,
+        agent_id,
+        chat_project_id.as_deref(),
+        session_worktree::load_session_worktree_state(db, session_id).await?,
+        cloud_client.clone(),
+    )
+    .await?;
     let tool_ctx = ToolExecutionContext::new_with_bus(
         agent_id,
         stream_id,

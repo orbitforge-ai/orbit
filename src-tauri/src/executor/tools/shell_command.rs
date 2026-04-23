@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 
 use serde_json::json;
@@ -20,6 +20,170 @@ const MAX_SHELL_COMMAND_TIMEOUT_SECS: u64 = 600;
 const MAX_SHELL_COMMAND_RESULT_LEN: usize = 50_000;
 
 pub struct ShellCommandTool;
+
+pub fn validate_command_for_workspace(workspace_root: &Path, command: &str) -> Result<(), String> {
+    let tokens = tokenize_shell_command(command);
+    let mut index = 0usize;
+
+    while index < tokens.len() {
+        let token = &tokens[index];
+        if is_shell_separator(token) {
+            index += 1;
+            continue;
+        }
+
+        if matches!(token.as_str(), "cd" | "pushd") {
+            if let Some(target) = next_semantic_token(&tokens, index + 1) {
+                validate_workspace_target(workspace_root, target)
+                    .map_err(|e| format!("shell_command: {}", e))?;
+            }
+        }
+
+        if token == "git" && tokens.get(index + 1).map(String::as_str) == Some("-C") {
+            if let Some(target) = next_semantic_token(&tokens, index + 2) {
+                validate_workspace_target(workspace_root, target)
+                    .map_err(|e| format!("shell_command: {}", e))?;
+            }
+        }
+
+        if let Some(candidate) = extract_path_candidate(token) {
+            validate_workspace_target(workspace_root, &candidate)
+                .map_err(|e| format!("shell_command: {}", e))?;
+        }
+
+        index += 1;
+    }
+
+    Ok(())
+}
+
+fn tokenize_shell_command(command: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut chars = command.chars().peekable();
+    let mut quote: Option<char> = None;
+
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some(active) if ch == active => {
+                quote = None;
+            }
+            Some(_) => current.push(ch),
+            None => match ch {
+                '\'' | '"' => quote = Some(ch),
+                '\\' => {
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                    }
+                }
+                ' ' | '\t' | '\n' => {
+                    if !current.is_empty() {
+                        tokens.push(std::mem::take(&mut current));
+                    }
+                }
+                _ => current.push(ch),
+            },
+        }
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    tokens
+}
+
+fn extract_path_candidate(token: &str) -> Option<String> {
+    if token.is_empty() {
+        return None;
+    }
+
+    let candidate = token
+        .split_once('=')
+        .map(|(_, value)| value)
+        .unwrap_or(token)
+        .trim_matches(|c| matches!(c, '"' | '\'' | '(' | ')' | ',' | ';'));
+
+    if candidate.is_empty() || is_shell_separator(candidate) {
+        return None;
+    }
+
+    let looks_like_path = candidate == ".."
+        || candidate.starts_with("../")
+        || candidate.contains("/../")
+        || candidate.ends_with("/..")
+        || candidate.starts_with('/')
+        || candidate.starts_with("~/")
+        || candidate.starts_with("$HOME/")
+        || candidate.starts_with("./")
+        || candidate.contains('/');
+
+    looks_like_path.then(|| candidate.to_string())
+}
+
+fn next_semantic_token(tokens: &[String], start: usize) -> Option<&str> {
+    tokens
+        .iter()
+        .skip(start)
+        .find(|token| !is_shell_separator(token))
+        .map(String::as_str)
+}
+
+fn is_shell_separator(token: &str) -> bool {
+    matches!(token, "&&" | "||" | "|" | ";" | "&")
+}
+
+fn validate_workspace_target(workspace_root: &Path, target: &str) -> Result<(), String> {
+    let canonical_root = canonical_workspace_root(workspace_root)?;
+
+    if target.starts_with("~/") || target.starts_with("$HOME/") {
+        return Err(format!("path escapes workspace: {}", target));
+    }
+
+    let candidate = Path::new(target);
+    if candidate.is_absolute() {
+        let canonical_target = candidate
+            .canonicalize()
+            .unwrap_or_else(|_| candidate.to_path_buf());
+        if !canonical_target.starts_with(&canonical_root) {
+            return Err(format!("path escapes workspace: {}", target));
+        }
+        return Ok(());
+    }
+
+    let mut normalized = canonical_root.clone();
+    for component in candidate.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => normalized.push(part),
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(format!("path escapes workspace: {}", target));
+                }
+                if !normalized.starts_with(&canonical_root) {
+                    return Err(format!("path escapes workspace: {}", target));
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!("path escapes workspace: {}", target));
+            }
+        }
+    }
+
+    if !normalized.starts_with(&canonical_root) {
+        return Err(format!("path escapes workspace: {}", target));
+    }
+
+    Ok(())
+}
+
+fn canonical_workspace_root(workspace_root: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(workspace_root)
+        .map_err(|e| format!("failed to create workspace: {}", e))?;
+    workspace_root
+        .canonicalize()
+        .map_err(|e| format!("failed to resolve workspace root: {}", e))
+}
 
 fn format_shell_command_result(stdout: &str, stderr: &str, exit_code: Option<i32>) -> String {
     let mut result = String::new();
@@ -217,6 +381,10 @@ impl ToolHandler for ShellCommandTool {
         std::fs::create_dir_all(&workspace_root)
             .map_err(|e| format!("failed to create workspace: {}", e))?;
 
+        if ctx.sandbox_enabled() {
+            validate_command_for_workspace(&workspace_root, command)?;
+        }
+
         if run_in_background {
             let bg_root = workspace::agent_dir(&ctx.agent_id).join("bg");
             let summary = registry
@@ -266,5 +434,57 @@ async fn handle_process_action(
             Ok((result, false))
         }
         other => Err(format!("shell_command: unknown process_action '{}'", other)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_command_for_workspace;
+    use std::fs;
+
+    fn workspace_root() -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("orbit-shell-test-{}", ulid::Ulid::new()));
+        fs::create_dir_all(root.join("src")).expect("create workspace");
+        root
+    }
+
+    #[test]
+    fn allows_relative_navigation_within_workspace() {
+        let root = workspace_root();
+        assert!(validate_command_for_workspace(&root, "cd src && cargo test").is_ok());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_parent_directory_escape() {
+        let root = workspace_root();
+        let err = validate_command_for_workspace(&root, "cd .. && cargo test").unwrap_err();
+        assert!(err.contains("path escapes workspace"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_git_c_outside_workspace() {
+        let root = workspace_root();
+        let err =
+            validate_command_for_workspace(&root, "git -C /Users/example/repo status").unwrap_err();
+        assert!(err.contains("path escapes workspace"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_relative_parent_path_arguments() {
+        let root = workspace_root();
+        let err = validate_command_for_workspace(&root, "cat ../../secret.txt").unwrap_err();
+        assert!(err.contains("path escapes workspace"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_home_directory_escape() {
+        let root = workspace_root();
+        let err = validate_command_for_workspace(&root, "cd ~/Code/repo && ls").unwrap_err();
+        assert!(err.contains("path escapes workspace"));
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -710,6 +710,7 @@ export interface AgentWorkspaceConfig {
   model: string;
   temperature: number;
   maxIterations: number;
+  enableSandbox: boolean;
   compactionThreshold?: number;
   compactionRetainCount?: number;
   disabledSkills: string[];

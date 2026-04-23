@@ -945,7 +945,18 @@ pub async fn execute_tool_with_permissions(
     let input: &serde_json::Value = owned_input.as_ref().unwrap_or(input);
 
     // 1. Classify the tool call
-    let (risk, description) = classify_tool_call(tool_name, input, permission_mode);
+    let (risk, description) = if tool_name == "shell_command" && ctx.sandbox_enabled() {
+        let command = input["command"].as_str().unwrap_or("");
+        match crate::executor::tools::shell_command::validate_command_for_workspace(
+            &ctx.workspace_root(),
+            command,
+        ) {
+            Ok(()) => classify_tool_call(tool_name, input, permission_mode),
+            Err(reason) => (RiskLevel::PromptDangerous, reason),
+        }
+    } else {
+        classify_tool_call(tool_name, input, permission_mode)
+    };
 
     // 2. Auto-allow safe operations
     if risk == RiskLevel::AutoAllow {

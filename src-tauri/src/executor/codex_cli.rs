@@ -28,6 +28,7 @@ use crate::executor::llm_provider::{
     Usage,
 };
 use crate::executor::mcp_server::McpServerHandle;
+use crate::executor::session_worktree::SessionWorktreeState;
 
 pub struct CodexCliProvider {
     mcp: Option<McpServerHandle>,
@@ -189,6 +190,35 @@ fn build_prompt(
     out
 }
 
+fn with_workspace_notice(
+    system_prompt: &str,
+    workspace_root: Option<&std::path::Path>,
+    current_worktree: Option<&SessionWorktreeState>,
+) -> String {
+    let Some(workspace_root) = workspace_root else {
+        return system_prompt.to_string();
+    };
+
+    let mut prompt = system_prompt.to_string();
+    if !prompt.is_empty() {
+        prompt.push_str("\n\n");
+    }
+    prompt.push_str("## Runtime Workspace\n");
+    prompt.push_str(&format!(
+        "- Active workspace: {}\n",
+        workspace_root.display()
+    ));
+    if let Some(worktree) = current_worktree {
+        prompt.push_str(&format!(
+            "- Managed worktree: {} ({})\n",
+            worktree.path.display(),
+            worktree.branch
+        ));
+    }
+    prompt.push_str("- Stay within this workspace when inspecting or changing code.\n");
+    prompt
+}
+
 #[async_trait]
 impl LlmProvider for CodexCliProvider {
     fn name(&self) -> &str {
@@ -206,10 +236,16 @@ impl LlmProvider for CodexCliProvider {
     ) -> Result<LlmResponse, String> {
         let binary = binary_path()?;
         let token_env_var = "ORBIT_MCP_TOKEN";
+        let mut provider_workspace_root: Option<PathBuf> = None;
+        let mut provider_worktree: Option<SessionWorktreeState> = None;
 
         let (mcp_token, codex_home) = match (&self.mcp, self.session_fn.as_ref()) {
             (Some(handle), Some(builder)) => {
                 if let Some(session) = builder() {
+                    if session.tool_ctx.sandbox_enabled() {
+                        provider_workspace_root = Some(session.tool_ctx.workspace_root());
+                        provider_worktree = session.tool_ctx.current_worktree();
+                    }
                     let token = handle.issue_token(session).await;
                     let home = build_codex_home(handle, token_env_var, &config.model)?;
                     (Some((handle.clone(), token)), Some(home))
@@ -228,7 +264,16 @@ impl LlmProvider for CodexCliProvider {
         }
 
         let (history, current) = cli_common::transcript_for_cli(messages);
-        let prompt = build_prompt(&history, &current, &config.system_prompt, tools);
+        let prompt = build_prompt(
+            &history,
+            &current,
+            &with_workspace_notice(
+                &config.system_prompt,
+                provider_workspace_root.as_deref(),
+                provider_worktree.as_ref(),
+            ),
+            tools,
+        );
 
         let mut cmd = Command::new(&binary);
         cmd.arg("exec")
@@ -239,6 +284,10 @@ impl LlmProvider for CodexCliProvider {
             .arg("--ephemeral")
             .arg("--model")
             .arg(&config.model);
+
+        if let Some(workspace_root) = &provider_workspace_root {
+            cmd.current_dir(workspace_root).env("PWD", workspace_root);
+        }
 
         if let Some(home) = &codex_home {
             cmd.env("CODEX_HOME", home);
@@ -545,6 +594,21 @@ mod tests {
     fn parse_codex_error_falls_back_to_raw() {
         let text = parse_codex_error("something broke");
         assert_eq!(text, "Codex CLI error: something broke");
+    }
+
+    #[test]
+    fn workspace_notice_appends_runtime_workspace_details() {
+        let prompt = with_workspace_notice(
+            "sys",
+            Some(std::path::Path::new("/tmp/project")),
+            Some(&SessionWorktreeState {
+                name: "wt".into(),
+                branch: "orbit/wt".into(),
+                path: PathBuf::from("/tmp/worktree"),
+            }),
+        );
+        assert!(prompt.contains("Active workspace: /tmp/project"));
+        assert!(prompt.contains("Managed worktree: /tmp/worktree (orbit/wt)"));
     }
 
     #[test]

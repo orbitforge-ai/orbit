@@ -1246,7 +1246,15 @@ pub async fn run_pulse(
     );
 
     // ── Build tool execution context ────────────────────────────────────
-    let pulse_worktree = session_worktree::load_session_worktree_state(db, &session_id).await?;
+    let pulse_worktree = crate::executor::tools::context::sanitize_session_worktree_state(
+        db,
+        &session_id,
+        agent_id,
+        pulse_project_id.as_deref(),
+        session_worktree::load_session_worktree_state(db, &session_id).await?,
+        cloud_client.clone(),
+    )
+    .await?;
     let tool_ctx = ToolExecutionContext::new_with_bus(
         agent_id,
         &stream_id,

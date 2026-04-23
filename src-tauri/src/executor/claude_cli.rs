@@ -23,6 +23,7 @@ use crate::executor::llm_provider::{
     Usage,
 };
 use crate::executor::mcp_server::{McpServerHandle, McpSession};
+use crate::executor::session_worktree::SessionWorktreeState;
 
 pub type SessionFn = std::sync::Arc<dyn Fn() -> Option<McpSession> + Send + Sync + 'static>;
 
@@ -114,6 +115,35 @@ fn serialize_input_turn(history: &str, current: &str) -> String {
     serde_json::to_string(&event).unwrap()
 }
 
+fn with_workspace_notice(
+    system_prompt: &str,
+    workspace_root: Option<&std::path::Path>,
+    current_worktree: Option<&SessionWorktreeState>,
+) -> String {
+    let Some(workspace_root) = workspace_root else {
+        return system_prompt.to_string();
+    };
+
+    let mut prompt = system_prompt.to_string();
+    if !prompt.is_empty() {
+        prompt.push_str("\n\n");
+    }
+    prompt.push_str("## Runtime Workspace\n");
+    prompt.push_str(&format!(
+        "- Active workspace: {}\n",
+        workspace_root.display()
+    ));
+    if let Some(worktree) = current_worktree {
+        prompt.push_str(&format!(
+            "- Managed worktree: {} ({})\n",
+            worktree.path.display(),
+            worktree.branch
+        ));
+    }
+    prompt.push_str("- Stay within this workspace when inspecting or changing code.\n");
+    prompt
+}
+
 #[async_trait]
 impl LlmProvider for ClaudeCliProvider {
     fn name(&self) -> &str {
@@ -130,12 +160,18 @@ impl LlmProvider for ClaudeCliProvider {
         iteration: u32,
     ) -> Result<LlmResponse, String> {
         let binary = binary_path()?;
+        let mut provider_workspace_root: Option<PathBuf> = None;
+        let mut provider_worktree: Option<SessionWorktreeState> = None;
 
         // Mint an MCP token for this call when we have an MCP server + session
         // context. Drop it deterministically when the call ends.
         let (mcp_token, mcp_config_path) = match (&self.mcp, self.session_fn.as_ref()) {
             (Some(handle), Some(builder)) => {
                 if let Some(session) = builder() {
+                    if session.tool_ctx.sandbox_enabled() {
+                        provider_workspace_root = Some(session.tool_ctx.workspace_root());
+                        provider_worktree = session.tool_ctx.current_worktree();
+                    }
                     let token = handle.issue_token(session).await;
                     let path = build_mcp_config(handle, &token)?;
                     (Some((handle.clone(), token)), Some(path))
@@ -160,8 +196,13 @@ impl LlmProvider for ClaudeCliProvider {
             .arg("--model")
             .arg(&config.model);
 
-        if !config.system_prompt.is_empty() {
-            cmd.arg("--append-system-prompt").arg(&config.system_prompt);
+        let system_prompt = with_workspace_notice(
+            &config.system_prompt,
+            provider_workspace_root.as_deref(),
+            provider_worktree.as_ref(),
+        );
+        if !system_prompt.is_empty() {
+            cmd.arg("--append-system-prompt").arg(&system_prompt);
         }
 
         cmd.arg("--disallowedTools").arg(DISALLOWED_BUILTIN_TOOLS);
@@ -176,6 +217,10 @@ impl LlmProvider for ClaudeCliProvider {
                 run_id = run_id,
                 "claude-cli: MCP bridge not wired; tool catalog will be unavailable to the model"
             );
+        }
+
+        if let Some(workspace_root) = &provider_workspace_root {
+            cmd.current_dir(workspace_root).env("PWD", workspace_root);
         }
 
         cmd.stdin(Stdio::piped())
@@ -526,6 +571,21 @@ mod tests {
         assert!(content.contains("prev"));
         assert!(content.contains("Current request:"));
         assert!(content.contains("now"));
+    }
+
+    #[test]
+    fn workspace_notice_appends_runtime_workspace_details() {
+        let prompt = with_workspace_notice(
+            "sys",
+            Some(std::path::Path::new("/tmp/project")),
+            Some(&SessionWorktreeState {
+                name: "wt".into(),
+                branch: "orbit/wt".into(),
+                path: PathBuf::from("/tmp/worktree"),
+            }),
+        );
+        assert!(prompt.contains("Active workspace: /tmp/project"));
+        assert!(prompt.contains("Managed worktree: /tmp/worktree (orbit/wt)"));
     }
 
     #[test]

@@ -82,9 +82,17 @@ pub async fn run_agent_session(
         )
     })?;
 
-    let history = load_session_messages(db, session_id).await?;
-    let worktree_state = session_worktree::load_session_worktree_state(db, session_id).await?;
     let project_id = session_worktree::load_session_project_id(db, session_id).await?;
+    let history = load_session_messages(db, session_id).await?;
+    let worktree_state = crate::executor::tools::context::sanitize_session_worktree_state(
+        db,
+        session_id,
+        agent_id,
+        project_id.as_deref(),
+        session_worktree::load_session_worktree_state(db, session_id).await?,
+        cloud_client.clone(),
+    )
+    .await?;
     if let Some(pid) = project_id.as_deref() {
         crate::commands::projects::assert_agent_in_project(db, pid, agent_id).await?;
         if let Err(e) = workspace::init_project_workspace(pid) {
