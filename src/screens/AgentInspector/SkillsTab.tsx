@@ -12,7 +12,7 @@ import {
   Eye,
   EyeOff,
 } from 'lucide-react';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { confirm } from '../../lib/dialog';
 
 import { skillsApi } from '../../api/skills';
 import { workspaceApi } from '../../api/workspace';

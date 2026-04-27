@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { confirm } from '../../../lib/dialog';
 import { workItemsApi } from '../../../api/workItems';
 import { projectsApi } from '../../../api/projects';
 import type { Agent, ProjectBoardColumn, WorkItem } from '../../../types';

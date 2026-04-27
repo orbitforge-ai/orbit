@@ -11,7 +11,7 @@ import { KIND_OPTIONS } from '../../lib/taskConstants';
 import { humanSchedule } from '../../lib/humanSchedule';
 import type { Task, Schedule, RunSummary, RecurringConfig } from '../../types';
 import { info } from '@tauri-apps/plugin-log';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { confirm } from '../../lib/dialog';
 
 export function TasksScreen() {
   const { navigate, editTask } = useUiStore();

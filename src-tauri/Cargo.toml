@@ -58,6 +58,12 @@ url = "2"
 axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio", "ws", "query"] }
 tower = { version = "0.5", default-features = false }
 tower-http = { version = "0.5", default-features = false, features = ["cors"] }
+urlencoding = "2"
+
+# Embeds the production frontend bundle for release shim deployments.
+# Empty/absent dist/ at compile time is fine — embed just contributes zero
+# files and the static route falls through.
+rust-embed = { version = "8", features = ["mime-guess"] }
 which = "6"
 
 # Cron scheduling

@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { AlertOctagon, Bot, Trash2 } from 'lucide-react';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { confirm } from '../../../lib/dialog';
 import { workItemsApi } from '../../../api/workItems';
 import type { Agent, ProjectBoardColumn, WorkItem, WorkItemKind } from '../../../types';
 import { SimpleSelect } from '../../../components/ui';

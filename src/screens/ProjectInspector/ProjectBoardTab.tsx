@@ -23,7 +23,7 @@ import {
 } from '@dnd-kit/sortable';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Select from '@radix-ui/react-select';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { confirm } from '../../lib/dialog';
 import {
   ChevronDown,
   GripVertical,

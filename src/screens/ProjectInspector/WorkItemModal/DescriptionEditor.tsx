@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Pencil } from 'lucide-react';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { confirm } from '../../../lib/dialog';
 import { RichTextEditor } from '../../../components/RichTextEditor/RichTextEditor';
 import { RichTextViewer } from '../../../components/RichTextEditor/RichTextViewer';
 import { cn } from '../../../lib/cn';

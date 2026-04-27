@@ -18,7 +18,7 @@ import {
   FilePlus,
 } from 'lucide-react';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { confirm } from '../lib/dialog';
 import { FileEntry } from '../types';
 import { getLanguageFromPath } from '../lib/fileLanguage';
 import { Input } from './ui';

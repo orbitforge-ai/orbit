@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { confirm } from '../../lib/dialog';
 import { FolderOpen, HardDrive, History, KanbanSquare, ListChecks, MessageSquare, Pencil, Plus, Trash2, Users, Workflow } from 'lucide-react';
 import { projectsApi } from '../../api/projects';
 import { Project, ProjectSummary } from '../../types';

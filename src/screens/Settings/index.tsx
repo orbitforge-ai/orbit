@@ -11,7 +11,7 @@ import {
   X,
 } from 'lucide-react';
 import { Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SimpleSelect } from '../../components/ui';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { confirm } from '../../lib/dialog';
 import { llmApi, ProviderStatus } from '../../api/llm';
 import { useApiKeyStatus, useInvalidateApiKeys } from '../../hooks/useApiKeyStatus';
 import {

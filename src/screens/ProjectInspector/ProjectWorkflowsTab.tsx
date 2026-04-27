@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { confirm } from '../../lib/dialog';
 import { Pencil, Plus, Trash2, Workflow as WorkflowIcon } from 'lucide-react';
 import { projectWorkflowsApi } from '../../api/projectWorkflows';
 import { ProjectWorkflow } from '../../types';

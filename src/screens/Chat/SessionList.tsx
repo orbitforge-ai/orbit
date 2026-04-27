@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { chatApi } from '../../api/chat';
 import { ChatSession } from '../../types';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { confirm } from '../../lib/dialog';
 import { useUiStore } from '../../store/uiStore';
 import { usePermissionStore } from '../../store/permissionStore';
 

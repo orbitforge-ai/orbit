@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { confirm } from '../../../lib/dialog';
 import { Bot, Pencil, Trash2, User } from 'lucide-react';
 import { workItemsApi } from '../../../api/workItems';
 import type { Agent, WorkItemComment } from '../../../types';
