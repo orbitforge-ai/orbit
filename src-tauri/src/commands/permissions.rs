@@ -59,3 +59,40 @@ pub async fn delete_permission_rule(
         .map_err(|e| e.to_string())??;
     Ok(())
 }
+
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::executor::permissions::PermissionRegistry;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RespondArgs { request_id: String, response: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SaveRuleArgs { #[serde(default)] agent_id: Option<String>, rule: PermissionRule }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DeleteRuleArgs { #[serde(default)] agent_id: Option<String>, rule_id: String }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("respond_to_permission", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: RespondArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            respond_to_permission(a.request_id, a.response, app.state::<PermissionRegistry>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("save_permission_rule", |_ctx, args| async move {
+            let a: SaveRuleArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            save_permission_rule(a.agent_id, a.rule).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("delete_permission_rule", |_ctx, args| async move {
+            let a: DeleteRuleArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            delete_permission_rule(a.agent_id, a.rule_id).await?;
+            Ok(serde_json::Value::Null)
+        });
+    }
+}
+
+pub use http::register as register_http;

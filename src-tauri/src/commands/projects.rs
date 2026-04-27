@@ -556,19 +556,178 @@ pub async fn rename_project_workspace_entry(
 }
 
 #[derive(serde::Deserialize)]
-struct GetProjectArgs {
+#[serde(rename_all = "camelCase")]
+struct IdArgs {
     id: String,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateProjectArgs {
+    payload: crate::models::project::CreateProject,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateProjectArgs {
+    id: String,
+    payload: crate::models::project::UpdateProject,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectIdArgs {
+    project_id: String,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentIdArgs {
+    agent_id: String,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddAgentToProjectArgs {
+    project_id: String,
+    agent_id: String,
+    #[serde(default)]
+    is_default: bool,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoveAgentFromProjectArgs {
+    project_id: String,
+    agent_id: String,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectPathArgs {
+    project_id: String,
+    #[serde(default)]
+    path: Option<String>,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectFileArgs {
+    project_id: String,
+    path: String,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WriteProjectFileArgs {
+    project_id: String,
+    path: String,
+    content: String,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenameProjectEntryArgs {
+    project_id: String,
+    from: String,
+    to: String,
 }
 
 pub fn register_http(reg: &mut crate::shim::registry::Registry) {
+    use tauri::Manager;
+
     reg.register("list_projects", |ctx, _args| async move {
         let result = list_projects_impl(&ctx.db).await?;
         serde_json::to_value(result).map_err(|e| e.to_string())
     });
     reg.register("get_project", |ctx, args| async move {
-        let GetProjectArgs { id } =
-            serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let IdArgs { id } = serde_json::from_value(args).map_err(|e| e.to_string())?;
         let result = get_project_impl(id, &ctx.db).await?;
         serde_json::to_value(result).map_err(|e| e.to_string())
+    });
+    reg.register("create_project", |ctx, args| async move {
+        let app = ctx.app()?;
+        let a: CreateProjectArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let r = create_project(a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+        serde_json::to_value(r).map_err(|e| e.to_string())
+    });
+    reg.register("update_project", |ctx, args| async move {
+        let app = ctx.app()?;
+        let a: UpdateProjectArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let r = update_project(a.id, a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+        serde_json::to_value(r).map_err(|e| e.to_string())
+    });
+    reg.register("delete_project", |ctx, args| async move {
+        let app = ctx.app()?;
+        let IdArgs { id } = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        delete_project(id, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+        Ok(serde_json::Value::Null)
+    });
+    reg.register("list_project_agents", |ctx, args| async move {
+        let app = ctx.app()?;
+        let ProjectIdArgs { project_id } = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let r = list_project_agents(project_id, app.state::<DbPool>()).await?;
+        serde_json::to_value(r).map_err(|e| e.to_string())
+    });
+    reg.register("list_project_agents_with_meta", |ctx, args| async move {
+        let app = ctx.app()?;
+        let ProjectIdArgs { project_id } = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let r = list_project_agents_with_meta(project_id, app.state::<DbPool>()).await?;
+        serde_json::to_value(r).map_err(|e| e.to_string())
+    });
+    reg.register("list_agent_projects", |ctx, args| async move {
+        let app = ctx.app()?;
+        let AgentIdArgs { agent_id } = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let r = list_agent_projects(agent_id, app.state::<DbPool>()).await?;
+        serde_json::to_value(r).map_err(|e| e.to_string())
+    });
+    reg.register("add_agent_to_project", |ctx, args| async move {
+        let app = ctx.app()?;
+        let a: AddAgentToProjectArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let r = add_agent_to_project(
+            a.project_id,
+            a.agent_id,
+            a.is_default,
+            app.state::<DbPool>(),
+            app.state::<CloudClientState>(),
+        )
+        .await?;
+        serde_json::to_value(r).map_err(|e| e.to_string())
+    });
+    reg.register("remove_agent_from_project", |ctx, args| async move {
+        let app = ctx.app()?;
+        let a: RemoveAgentFromProjectArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        remove_agent_from_project(
+            a.project_id,
+            a.agent_id,
+            app.state::<DbPool>(),
+            app.state::<CloudClientState>(),
+        )
+        .await?;
+        Ok(serde_json::Value::Null)
+    });
+    reg.register("get_project_workspace_path", |_ctx, args| async move {
+        let ProjectIdArgs { project_id } = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        Ok(serde_json::Value::String(get_project_workspace_path(project_id)))
+    });
+    reg.register("list_project_workspace_files", |_ctx, args| async move {
+        let a: ProjectPathArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let r = list_project_workspace_files(a.project_id, a.path).await?;
+        serde_json::to_value(r).map_err(|e| e.to_string())
+    });
+    reg.register("read_project_workspace_file", |_ctx, args| async move {
+        let a: ProjectFileArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let r = read_project_workspace_file(a.project_id, a.path).await?;
+        serde_json::to_value(r).map_err(|e| e.to_string())
+    });
+    reg.register("write_project_workspace_file", |_ctx, args| async move {
+        let a: WriteProjectFileArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        write_project_workspace_file(a.project_id, a.path, a.content).await?;
+        Ok(serde_json::Value::Null)
+    });
+    reg.register("delete_project_workspace_file", |_ctx, args| async move {
+        let a: ProjectFileArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        delete_project_workspace_file(a.project_id, a.path).await?;
+        Ok(serde_json::Value::Null)
+    });
+    reg.register("create_project_workspace_dir", |_ctx, args| async move {
+        let a: ProjectFileArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        create_project_workspace_dir(a.project_id, a.path).await?;
+        Ok(serde_json::Value::Null)
+    });
+    reg.register("rename_project_workspace_entry", |_ctx, args| async move {
+        let a: RenameProjectEntryArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        rename_project_workspace_entry(a.project_id, a.from, a.to).await?;
+        Ok(serde_json::Value::Null)
     });
 }

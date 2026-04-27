@@ -113,3 +113,46 @@ pub struct PluginSummary {
     pub id: String,
     pub name: String,
 }
+
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AgentIdArgs { agent_id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SetBindingsArgs { agent_id: String, bindings: Vec<ChannelBinding> }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PluginChannelsArgs { plugin_id: String, #[serde(default)] guild_id: Option<String> }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("list_agent_listen_bindings", |_ctx, args| async move {
+            let a: AgentIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = list_agent_listen_bindings(a.agent_id).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("set_agent_listen_bindings", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: SetBindingsArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            set_agent_listen_bindings(app.clone(), a.agent_id, a.bindings, app.state::<DbPool>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("plugin_list_channels", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: PluginChannelsArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = plugin_list_channels(app.clone(), a.plugin_id, a.guild_id).await?;
+            Ok(r)
+        });
+        reg.register("list_trigger_capable_plugins", |ctx, _args| async move {
+            let app = ctx.app()?;
+            let r = list_trigger_capable_plugins(app.clone());
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+    }
+}
+
+pub use http::register as register_http;

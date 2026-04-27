@@ -309,3 +309,70 @@ pub async fn delete_bus_subscription(
     }
     Ok(())
 }
+
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::db::cloud::CloudClientState;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize, Default)]
+    #[serde(default, rename_all = "camelCase")]
+    struct ListMessagesArgs { agent_id: Option<String>, limit: Option<i64>, offset: Option<i64> }
+    #[derive(serde::Deserialize, Default)]
+    #[serde(default, rename_all = "camelCase")]
+    struct ThreadArgs { agent_id: String, limit: Option<i64>, offset: Option<i64> }
+    #[derive(serde::Deserialize, Default)]
+    #[serde(default, rename_all = "camelCase")]
+    struct ListSubsArgs { agent_id: Option<String> }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CreateSubArgs { payload: CreateBusSubscription }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ToggleSubArgs { id: String, enabled: bool }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct IdArgs { id: String }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("list_bus_messages", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ListMessagesArgs = if args.is_null() { Default::default() } else { serde_json::from_value(args).map_err(|e| e.to_string())? };
+            let r = list_bus_messages(a.agent_id, a.limit, a.offset, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("get_bus_thread", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ThreadArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_bus_thread(a.agent_id, a.limit, a.offset, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("list_bus_subscriptions", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ListSubsArgs = if args.is_null() { Default::default() } else { serde_json::from_value(args).map_err(|e| e.to_string())? };
+            let r = list_bus_subscriptions(a.agent_id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("create_bus_subscription", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: CreateSubArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = create_bus_subscription(a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("toggle_bus_subscription", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ToggleSubArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            toggle_bus_subscription(a.id, a.enabled, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("delete_bus_subscription", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            delete_bus_subscription(a.id, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+    }
+}
+
+pub use http::register as register_http;

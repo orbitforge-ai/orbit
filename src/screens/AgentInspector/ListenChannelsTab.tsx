@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Switch from '@radix-ui/react-switch';
 import { Hash, Plus, Radio, RefreshCw, Trash2, X } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '../../api/transport';
 import { ChannelBinding } from '../../types';
 import { Input, SimpleSelect } from '../../components/ui';
 

@@ -90,3 +90,67 @@ pub async fn get_memory_health(
 ) -> Result<bool, String> {
     Ok(memory_state.is_some())
 }
+
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::auth::AuthState;
+    use crate::commands::users::ActiveUser;
+    use crate::memory_service::MemoryServiceState;
+
+    #[derive(serde::Deserialize, Default)]
+    #[serde(default, rename_all = "camelCase")]
+    struct SearchArgs { query: String, memory_type: Option<String>, limit: Option<u32> }
+    #[derive(serde::Deserialize, Default)]
+    #[serde(default, rename_all = "camelCase")]
+    struct ListArgs { memory_type: Option<String>, limit: Option<u32>, offset: Option<u32> }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AddArgs { text: String, memory_type: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DeleteArgs { memory_id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UpdateArgs { memory_id: String, text: String }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("search_memories", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: SearchArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = search_memories(a.query, a.memory_type, a.limit, app.state::<Option<MemoryServiceState>>(), app.state::<ActiveUser>(), app.state::<AuthState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("list_memories", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ListArgs = if args.is_null() { Default::default() } else { serde_json::from_value(args).map_err(|e| e.to_string())? };
+            let r = list_memories(a.memory_type, a.limit, a.offset, app.state::<Option<MemoryServiceState>>(), app.state::<ActiveUser>(), app.state::<AuthState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("add_memory", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: AddArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = add_memory(a.text, a.memory_type, app.state::<Option<MemoryServiceState>>(), app.state::<ActiveUser>(), app.state::<AuthState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("delete_memory", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: DeleteArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            delete_memory(a.memory_id, app.state::<Option<MemoryServiceState>>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("update_memory", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: UpdateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = update_memory(a.memory_id, a.text, app.state::<Option<MemoryServiceState>>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("get_memory_health", |ctx, _args| async move {
+            let app = ctx.app()?;
+            let r = get_memory_health(app.state::<Option<MemoryServiceState>>()).await?;
+            Ok(serde_json::Value::Bool(r))
+        });
+    }
+}
+
+pub use http::register as register_http;

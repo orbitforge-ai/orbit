@@ -69,3 +69,57 @@ pub async fn cancel_workflow_run(
         .await
         .map_err(|e| e.to_string())?
 }
+
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StartArgs { workflow_id: String, #[serde(default)] trigger_data: Option<Value> }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ListArgs { workflow_id: String, #[serde(default)] limit: Option<i64> }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ListProjectArgs { project_id: String, #[serde(default)] limit: Option<i64> }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RunIdArgs { run_id: String }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("start_workflow_run", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: StartArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = start_workflow_run(a.workflow_id, a.trigger_data, app.state::<DbPool>(), app.clone()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("list_workflow_runs", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ListArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = list_workflow_runs(a.workflow_id, a.limit, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("list_project_workflow_runs", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ListProjectArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = list_project_workflow_runs(a.project_id, a.limit, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("get_workflow_run", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: RunIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_workflow_run(a.run_id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("cancel_workflow_run", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: RunIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            cancel_workflow_run(a.run_id, app.state::<DbPool>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+    }
+}
+
+pub use http::register as register_http;

@@ -116,3 +116,44 @@ pub async fn set_active_user(
     *guard = user_id;
     Ok(())
 }
+
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::db::cloud::CloudClientState;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CreateArgs { name: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SetActiveArgs { user_id: String }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("list_users", |ctx, _args| async move {
+            let app = ctx.app()?;
+            let r = list_users(app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("create_user", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: CreateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = create_user(a.name, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("get_active_user", |ctx, _args| async move {
+            let app = ctx.app()?;
+            let r = get_active_user(app.state::<ActiveUser>()).await?;
+            Ok(serde_json::Value::String(r))
+        });
+        reg.register("set_active_user", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: SetActiveArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            set_active_user(a.user_id, app.state::<ActiveUser>(), app.state::<DbPool>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+    }
+}
+
+pub use http::register as register_http;

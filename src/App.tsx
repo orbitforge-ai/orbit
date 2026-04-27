@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
-import { listen } from '@tauri-apps/api/event';
+import { listen } from './api/transport';
 import { Sidebar } from './components/Sidebar';
 import { useUiStore } from './store/uiStore';
 import { useAuthStore } from './store/authStore';

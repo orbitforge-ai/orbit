@@ -462,9 +462,62 @@ pub async fn trigger_task(
     .map_err(|e| e.to_string())?
 }
 
-pub fn register_http(reg: &mut crate::shim::registry::Registry) {
-    reg.register("list_tasks", |ctx, _args| async move {
-        let result = list_tasks_impl(&ctx.db).await?;
-        serde_json::to_value(result).map_err(|e| e.to_string())
-    });
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::db::cloud::CloudClientState;
+    use crate::db::DbPool;
+    use crate::executor::engine::ExecutorTx;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct IdArgs { id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CreateArgs { payload: CreateTask }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UpdateArgs { id: String, payload: UpdateTask }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct TriggerArgs { task_id: String }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("list_tasks", |ctx, _args| async move {
+            let result = list_tasks_impl(&ctx.db).await?;
+            serde_json::to_value(result).map_err(|e| e.to_string())
+        });
+        reg.register("get_task", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_task(a.id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("create_task", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: CreateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = create_task(a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("update_task", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: UpdateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = update_task(a.id, a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("delete_task", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            delete_task(a.id, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("trigger_task", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: TriggerArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = trigger_task(a.task_id, app.state::<DbPool>(), app.state::<ExecutorTx>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+    }
 }
+
+pub use http::register as register_http;

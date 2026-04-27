@@ -259,3 +259,39 @@ pub async fn update_pulse(
     .await
     .map_err(|e| e.to_string())?
 }
+
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct GetArgs { agent_id: String, project_id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UpdateArgs {
+        agent_id: String,
+        project_id: String,
+        content: String,
+        schedule_config: RecurringConfig,
+        enabled: bool,
+    }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("get_pulse_config", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: GetArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_pulse_config(a.agent_id, a.project_id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("update_pulse", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: UpdateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = update_pulse(a.agent_id, a.project_id, a.content, a.schedule_config, a.enabled, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+    }
+}
+
+pub use http::register as register_http;

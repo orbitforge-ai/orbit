@@ -1,4 +1,4 @@
-import { listen } from '@tauri-apps/api/event';
+import { listen } from '../api/transport';
 import { PermissionRequestPayload, PermissionCancelledPayload } from '../types';
 
 export function onPermissionRequest(handler: (payload: PermissionRequestPayload) => void) {

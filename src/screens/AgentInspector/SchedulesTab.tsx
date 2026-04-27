@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trash2 } from 'lucide-react';
 import * as Switch from '@radix-ui/react-switch';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '../../api/transport';
 import { schedulesApi } from '../../api/schedules';
 import { humanSchedule } from '../../lib/humanSchedule';
 import { RecurringConfig, Schedule, Task } from '../../types';

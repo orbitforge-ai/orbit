@@ -10,7 +10,7 @@ import {
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '../../api/transport';
 import { agentsApi } from '../../api/agents';
 import { runsApi } from '../../api/runs';
 import { useLiveRunStore } from '../../store/liveRunStore';

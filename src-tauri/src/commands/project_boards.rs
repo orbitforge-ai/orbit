@@ -337,3 +337,63 @@ pub async fn delete_project_board(
     .await
     .map_err(|e| e.to_string())?
 }
+
+mod http {
+    use tauri::Manager;
+
+    use super::*;
+    use crate::db::cloud::CloudClientState;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ProjectIdArgs {
+        project_id: String,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CreateArgs {
+        payload: CreateProjectBoard,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UpdateArgs {
+        id: String,
+        payload: UpdateProjectBoard,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DeleteArgs {
+        id: String,
+        payload: DeleteProjectBoard,
+    }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("list_project_boards", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ProjectIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = list_project_boards(a.project_id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("create_project_board", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: CreateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = create_project_board(a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("update_project_board", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: UpdateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = update_project_board(a.id, a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("delete_project_board", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: DeleteArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            delete_project_board(a.id, a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+    }
+}
+
+pub use http::register as register_http;

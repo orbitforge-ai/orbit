@@ -127,3 +127,24 @@ pub async fn list_work_item_events(
     .await
     .map_err(|e| e.to_string())?
 }
+
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args { work_item_id: String }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("list_work_item_events", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: Args = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = list_work_item_events(a.work_item_id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+    }
+}
+
+pub use http::register as register_http;

@@ -49,6 +49,15 @@ pub struct AppContext {
 }
 
 impl AppContext {
+    /// Borrow the Tauri AppHandle. Adapters use this to extract `State<T>`
+    /// from the live runtime; returns an error in cloud-mode (Phase 5+) where
+    /// no handle is available.
+    pub fn app(&self) -> Result<&tauri::AppHandle, String> {
+        self.tauri
+            .as_ref()
+            .ok_or_else(|| "tauri runtime unavailable".to_string())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         db: DbPool,

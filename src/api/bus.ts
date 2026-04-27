@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from './transport';
 import { BusMessage, BusSubscription, CreateBusSubscription, PaginatedBusThread } from '../types';
 
 export const busApi = {

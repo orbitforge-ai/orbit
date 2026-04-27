@@ -487,9 +487,55 @@ pub async fn cancel_run(run_id: String, db: tauri::State<'_, DbPool>) -> Result<
     .map_err(|e| e.to_string())?
 }
 
-pub fn register_http(reg: &mut crate::shim::registry::Registry) {
-    reg.register("list_agents", |ctx, _args| async move {
-        let result = list_agents_impl(&ctx.db).await?;
-        serde_json::to_value(result).map_err(|e| e.to_string())
-    });
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::db::cloud::CloudClientState;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct IdArgs { id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CreateArgs { payload: CreateAgent }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UpdateArgs { id: String, payload: UpdateAgent }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CancelArgs { run_id: String }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("list_agents", |ctx, _args| async move {
+            let result = list_agents_impl(&ctx.db).await?;
+            serde_json::to_value(result).map_err(|e| e.to_string())
+        });
+        reg.register("create_agent", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: CreateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = create_agent(app.clone(), a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("update_agent", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: UpdateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = update_agent(app.clone(), a.id, a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("delete_agent", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            delete_agent(app.clone(), a.id, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("cancel_run", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: CancelArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            cancel_run(a.run_id, app.state::<DbPool>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+    }
 }
+
+pub use http::register as register_http;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { listen } from '@tauri-apps/api/event';
+import { listen } from '../../api/transport';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import {

@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from './transport';
 import { CreateSchedule, RecurringConfig, Schedule } from '../types';
 
 export const schedulesApi = {

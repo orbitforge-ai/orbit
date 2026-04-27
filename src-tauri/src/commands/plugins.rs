@@ -942,3 +942,194 @@ fn require_dev_mode() -> Result<(), String> {
     }
     Ok(())
 }
+
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PluginIdArgs { plugin_id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CallToolArgs { plugin_id: String, tool_name: String, #[serde(default)] args: Option<Value> }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SurfaceListArgs { surface: SurfaceActionSurface, #[serde(default)] path: Option<String> }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RunSurfaceArgs {
+        plugin_id: String, tool_name: String,
+        #[serde(default)] args: Option<Value>,
+        surface: SurfaceActionSurface, target: SurfaceActionTarget,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PathArgs { path: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StagingIdArgs { staging_id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct EnabledArgs { plugin_id: String, enabled: bool }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct OAuthConfigArgs { plugin_id: String, provider_id: String, client_id: String, #[serde(default)] client_secret: Option<String> }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct OAuthProviderArgs { plugin_id: String, provider_id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SecretSetArgs { plugin_id: String, key: String, value: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SecretDelArgs { plugin_id: String, key: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RuntimeLogArgs { plugin_id: String, #[serde(default)] tail_lines: Option<u32> }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct EntityListArgs {
+        plugin_id: String,
+        entity_type: String,
+        #[serde(default)] project_id: Option<String>,
+        #[serde(default)] limit: Option<i64>,
+        #[serde(default)] offset: Option<i64>,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct EntityIdArgs { id: String }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("list_plugins", |ctx, _args| async move {
+            let app = ctx.app()?;
+            let r = list_plugins(app.state::<Arc<PluginManager>>());
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("get_plugin_manifest", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: PluginIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_plugin_manifest(a.plugin_id, app.state::<Arc<PluginManager>>());
+            Ok(match r { Some(v) => serde_json::to_value(v).map_err(|e| e.to_string())?, None => Value::Null })
+        });
+        reg.register("plugin_call_tool", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: CallToolArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            plugin_call_tool(a.plugin_id, a.tool_name, a.args, app.clone(), app.state::<Arc<PluginManager>>()).await
+        });
+        reg.register("list_plugin_surface_actions", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: SurfaceListArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = list_plugin_surface_actions(a.surface, a.path, app.state::<Arc<PluginManager>>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("run_plugin_surface_action", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: RunSurfaceArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            run_plugin_surface_action(a.plugin_id, a.tool_name, a.args, a.surface, a.target, app.state::<Arc<PluginManager>>()).await
+        });
+        reg.register("stage_plugin_install", |_ctx, args| async move {
+            let a: PathArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = stage_plugin_install(a.path)?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("confirm_plugin_install", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: StagingIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = confirm_plugin_install(a.staging_id, app.clone(), app.state::<Arc<PluginManager>>())?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("cancel_plugin_install", |_ctx, args| async move {
+            let a: StagingIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            cancel_plugin_install(a.staging_id)?;
+            Ok(Value::Null)
+        });
+        reg.register("install_plugin_from_directory", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: PathArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = install_plugin_from_directory(a.path, app.clone(), app.state::<Arc<PluginManager>>())?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("set_plugin_enabled", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: EnabledArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            set_plugin_enabled(a.plugin_id, a.enabled, app.clone(), app.state::<Arc<PluginManager>>())?;
+            Ok(Value::Null)
+        });
+        reg.register("reload_plugin", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: PluginIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            reload_plugin(a.plugin_id, app.clone(), app.state::<DbPool>(), app.state::<Arc<PluginManager>>()).await?;
+            Ok(Value::Null)
+        });
+        reg.register("reload_all_plugins", |ctx, _args| async move {
+            let app = ctx.app()?;
+            reload_all_plugins(app.clone(), app.state::<DbPool>(), app.state::<Arc<PluginManager>>()).await?;
+            Ok(Value::Null)
+        });
+        reg.register("uninstall_plugin", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: PluginIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            uninstall_plugin(a.plugin_id, app.clone(), app.state::<Arc<PluginManager>>())?;
+            Ok(Value::Null)
+        });
+        reg.register("set_plugin_oauth_config", |_ctx, args| async move {
+            let a: OAuthConfigArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            set_plugin_oauth_config(a.plugin_id, a.provider_id, a.client_id, a.client_secret)?;
+            Ok(Value::Null)
+        });
+        reg.register("start_plugin_oauth", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: OAuthProviderArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            start_plugin_oauth(a.plugin_id, a.provider_id, app.clone(), app.state::<Arc<PluginManager>>()).await?;
+            Ok(Value::Null)
+        });
+        reg.register("disconnect_plugin_oauth", |_ctx, args| async move {
+            let a: OAuthProviderArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            disconnect_plugin_oauth(a.plugin_id, a.provider_id)?;
+            Ok(Value::Null)
+        });
+        reg.register("get_plugin_runtime_log", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: RuntimeLogArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            Ok(Value::String(get_plugin_runtime_log(a.plugin_id, a.tail_lines, app.state::<Arc<PluginManager>>())))
+        });
+        reg.register("list_plugin_entities", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: EntityListArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = list_plugin_entities(a.plugin_id, a.entity_type, a.project_id, a.limit, a.offset, app.state::<DbPool>())?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("get_plugin_entity", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: EntityIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_plugin_entity(a.id, app.state::<DbPool>())?;
+            Ok(match r { Some(v) => serde_json::to_value(v).map_err(|e| e.to_string())?, None => Value::Null })
+        });
+        reg.register("list_plugin_oauth_status", |ctx, _args| async move {
+            let app = ctx.app()?;
+            let r = list_plugin_oauth_status(app.state::<Arc<PluginManager>>());
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("set_plugin_secret", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: SecretSetArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            set_plugin_secret(a.plugin_id, a.key, a.value, app.clone(), app.state::<DbPool>(), app.state::<Arc<PluginManager>>()).await?;
+            Ok(Value::Null)
+        });
+        reg.register("delete_plugin_secret", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: SecretDelArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            delete_plugin_secret(a.plugin_id, a.key, app.clone(), app.state::<DbPool>(), app.state::<Arc<PluginManager>>()).await?;
+            Ok(Value::Null)
+        });
+        reg.register("list_plugin_secret_status", |ctx, _args| async move {
+            let app = ctx.app()?;
+            let r = list_plugin_secret_status(app.state::<Arc<PluginManager>>());
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+    }
+}
+
+pub use http::register as register_http;

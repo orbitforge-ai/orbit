@@ -22,7 +22,7 @@ import {
 } from '../../constants/providers';
 import { TOOL_CATEGORIES, TOOL_LABEL_BY_ID } from '../../constants/tools';
 import { useSettingsStore } from '../../store/settingsStore';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '../../api/transport';
 import {
   AgentDefaults,
   ChannelConfig,

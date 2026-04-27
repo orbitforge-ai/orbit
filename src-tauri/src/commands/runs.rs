@@ -268,32 +268,70 @@ pub async fn read_run_log(run_id: String, db: tauri::State<'_, DbPool>) -> Resul
         .map_err(|e| format!("cannot read log file: {}", e))
 }
 
-#[derive(serde::Deserialize, Default)]
-#[serde(default)]
-struct ListRunsArgs {
-    limit: Option<i64>,
-    offset: Option<i64>,
-    task_id: Option<String>,
-    state_filter: Option<String>,
-    project_id: Option<String>,
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize, Default)]
+    #[serde(default, rename_all = "camelCase")]
+    struct ListRunsArgs {
+        limit: Option<i64>,
+        offset: Option<i64>,
+        task_id: Option<String>,
+        state_filter: Option<String>,
+        project_id: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct IdArgs { id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RunIdArgs { run_id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ParentArgs { parent_run_id: String }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("list_runs", |ctx, args| async move {
+            let a: ListRunsArgs = if args.is_null() {
+                ListRunsArgs::default()
+            } else {
+                serde_json::from_value(args).map_err(|e| e.to_string())?
+            };
+            let result = list_runs_impl(a.limit, a.offset, a.task_id, a.state_filter, a.project_id, &ctx.db).await?;
+            serde_json::to_value(result).map_err(|e| e.to_string())
+        });
+        reg.register("get_run", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_run(a.id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("get_active_runs", |ctx, _args| async move {
+            let app = ctx.app()?;
+            let r = get_active_runs(app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("read_run_log", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: RunIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = read_run_log(a.run_id, app.state::<DbPool>()).await?;
+            Ok(serde_json::Value::String(r))
+        });
+        reg.register("get_agent_conversation", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: RunIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_agent_conversation(a.run_id, app.state::<DbPool>()).await?;
+            Ok(r.unwrap_or(serde_json::Value::Null))
+        });
+        reg.register("list_sub_agent_runs", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ParentArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = list_sub_agent_runs(a.parent_run_id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+    }
 }
 
-pub fn register_http(reg: &mut crate::shim::registry::Registry) {
-    reg.register("list_runs", |ctx, args| async move {
-        let a: ListRunsArgs = if args.is_null() {
-            ListRunsArgs::default()
-        } else {
-            serde_json::from_value(args).map_err(|e| e.to_string())?
-        };
-        let result = list_runs_impl(
-            a.limit,
-            a.offset,
-            a.task_id,
-            a.state_filter,
-            a.project_id,
-            &ctx.db,
-        )
-        .await?;
-        serde_json::to_value(result).map_err(|e| e.to_string())
-    });
-}
+pub use http::register as register_http;

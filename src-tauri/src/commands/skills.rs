@@ -67,3 +67,49 @@ pub async fn delete_skill(
     .await
     .map_err(|e| e.to_string())?
 }
+
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AgentIdArgs { agent_id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct GetContentArgs { agent_id: String, skill_name: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CreateArgs { agent_id: String, name: String, description: String, body: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DeleteArgs { agent_id: String, skill_name: String }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("list_skills", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: AgentIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = list_skills(a.agent_id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("get_skill_content", |_ctx, args| async move {
+            let a: GetContentArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_skill_content(a.agent_id, a.skill_name).await?;
+            Ok(serde_json::Value::String(r))
+        });
+        reg.register("create_skill", |_ctx, args| async move {
+            let a: CreateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            create_skill(a.agent_id, a.name, a.description, a.body).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("delete_skill", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: DeleteArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            delete_skill(a.agent_id, a.skill_name, app.state::<DbPool>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+    }
+}
+
+pub use http::register as register_http;

@@ -63,5 +63,23 @@ pub fn build() -> Registry {
     crate::commands::agents::register_http(&mut reg);
     crate::commands::runs::register_http(&mut reg);
     crate::commands::chat::register_http(&mut reg);
+    crate::commands::project_workflows::register_http(&mut reg);
+    crate::commands::workflow_runs::register_http(&mut reg);
+    crate::commands::project_boards::register_http(&mut reg);
+    crate::commands::project_board_columns::register_http(&mut reg);
+    crate::commands::work_items::register_http(&mut reg);
+    crate::commands::work_item_events::register_http(&mut reg);
+    crate::commands::schedules::register_http(&mut reg);
+    crate::commands::pulse::register_http(&mut reg);
+    crate::commands::workspace::register_http(&mut reg);
+    crate::commands::llm::register_http(&mut reg);
+    crate::commands::bus::register_http(&mut reg);
+    crate::commands::skills::register_http(&mut reg);
+    crate::commands::permissions::register_http(&mut reg);
+    crate::commands::global_settings::register_http(&mut reg);
+    crate::commands::users::register_http(&mut reg);
+    crate::commands::memory::register_http(&mut reg);
+    crate::commands::plugins::register_http(&mut reg);
+    crate::commands::triggers::register_http(&mut reg);
     reg
 }

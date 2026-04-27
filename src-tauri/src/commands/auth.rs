@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use tauri::Manager;
+
 use crate::auth::{self, AuthMode, AuthSession, AuthState};
 use crate::db::cloud::{CloudClientState, SupabaseClient};
 use crate::db::DbPool;
@@ -396,9 +398,57 @@ pub async fn force_cloud_sync(
     client.pull_all_data_with_counts(&pool).await
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginArgs {
+    email: String,
+    password: String,
+}
+
 pub fn register_http(reg: &mut crate::shim::registry::Registry) {
     reg.register("get_auth_state", |ctx, _args| async move {
         let dto = get_auth_state_impl(&ctx.auth).await?;
         serde_json::to_value(dto).map_err(|e| e.to_string())
+    });
+    reg.register("set_offline_mode", |ctx, _args| async move {
+        let app = ctx.app()?;
+        set_offline_mode(app.state::<AuthState>()).await?;
+        Ok(serde_json::Value::Null)
+    });
+    reg.register("login", |ctx, args| async move {
+        let app = ctx.app()?;
+        let a: LoginArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let dto = login(
+            a.email,
+            a.password,
+            app.state::<AuthState>(),
+            app.state::<CloudClientState>(),
+            app.state::<DbPool>(),
+        )
+        .await?;
+        serde_json::to_value(dto).map_err(|e| e.to_string())
+    });
+    reg.register("register", |ctx, args| async move {
+        let app = ctx.app()?;
+        let a: LoginArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let dto = register(
+            a.email,
+            a.password,
+            app.state::<AuthState>(),
+            app.state::<CloudClientState>(),
+            app.state::<DbPool>(),
+        )
+        .await?;
+        serde_json::to_value(dto).map_err(|e| e.to_string())
+    });
+    reg.register("logout", |ctx, _args| async move {
+        let app = ctx.app()?;
+        logout(app.state::<AuthState>(), app.state::<CloudClientState>()).await?;
+        Ok(serde_json::Value::Null)
+    });
+    reg.register("force_cloud_sync", |ctx, _args| async move {
+        let app = ctx.app()?;
+        let result = force_cloud_sync(app.state::<CloudClientState>(), app.state::<DbPool>()).await?;
+        serde_json::to_value(result).map_err(|e| e.to_string())
     });
 }

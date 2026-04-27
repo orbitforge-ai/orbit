@@ -1220,3 +1220,140 @@ pub async fn delete_work_item_comment(
     cloud_delete!(cloud, "work_item_comments", id);
     Ok(())
 }
+
+mod http {
+    use tauri::Manager;
+
+    use super::*;
+    use crate::db::cloud::CloudClientState;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ListArgs { project_id: String, #[serde(default)] board_id: Option<String> }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct IdArgs { id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CreateArgs { payload: CreateWorkItem }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UpdateArgs { id: String, payload: UpdateWorkItem }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ClaimArgs { id: String, agent_id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct MoveArgs { id: String, #[serde(default)] column_id: Option<String>, #[serde(default)] position: Option<f64> }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ReorderArgs {
+        project_id: String,
+        #[serde(default)] board_id: Option<String>,
+        #[serde(default)] status: Option<String>,
+        #[serde(default)] column_id: Option<String>,
+        ordered_ids: Vec<String>,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct BlockArgs { id: String, reason: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct WorkItemIdArgs { work_item_id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CreateCommentArgs { work_item_id: String, body: String, author: CommentAuthor }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UpdateCommentArgs { id: String, body: String }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("list_work_items", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ListArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = list_work_items(a.project_id, a.board_id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("get_work_item", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_work_item(a.id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("create_work_item", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: CreateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = create_work_item(a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("update_work_item", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: UpdateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = update_work_item(a.id, a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("delete_work_item", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            delete_work_item(a.id, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("claim_work_item", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ClaimArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = claim_work_item(a.id, a.agent_id, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("move_work_item", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: MoveArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = move_work_item(a.id, a.column_id, a.position, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("reorder_work_items", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ReorderArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            reorder_work_items(a.project_id, a.board_id, a.status, a.column_id, a.ordered_ids, app.state::<DbPool>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("block_work_item", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: BlockArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = block_work_item(a.id, a.reason, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("complete_work_item", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = complete_work_item(a.id, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("list_work_item_comments", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: WorkItemIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = list_work_item_comments(a.work_item_id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("create_work_item_comment", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: CreateCommentArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = create_work_item_comment(a.work_item_id, a.body, a.author, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("update_work_item_comment", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: UpdateCommentArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = update_work_item_comment(a.id, a.body, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("delete_work_item_comment", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            delete_work_item_comment(a.id, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+    }
+}
+
+pub use http::register as register_http;

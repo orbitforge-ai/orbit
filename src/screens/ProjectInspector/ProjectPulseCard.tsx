@@ -51,9 +51,17 @@ export function ProjectPulseCard({ agent, projectId, onOpen }: ProjectPulseCardP
     : 'Not configured';
 
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
-      className="group flex flex-col gap-2 p-3 rounded-lg border border-edge bg-panel hover:border-accent hover:bg-accent/5 transition-colors text-left"
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className="group flex flex-col gap-2 p-3 rounded-lg border border-edge bg-panel hover:border-accent hover:bg-accent/5 transition-colors text-left cursor-pointer"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
@@ -99,6 +107,6 @@ export function ProjectPulseCard({ agent, projectId, onOpen }: ProjectPulseCardP
           Next: {new Date(pulseConfig.nextRunAt).toLocaleString()}
         </p>
       )}
-    </button>
+    </div>
   );
 }

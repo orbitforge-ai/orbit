@@ -985,6 +985,105 @@ pub async fn set_project_workflow_enabled(
     set_project_workflow_enabled_with_db(db.inner(), cloud.get(), &id, enabled).await
 }
 
+mod http {
+    use tauri::Manager;
+
+    use super::*;
+    use crate::db::cloud::CloudClientState;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ProjectIdArgs {
+        project_id: String,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct IdArgs {
+        id: String,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CreateArgs {
+        payload: CreateProjectWorkflow,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UpdateArgs {
+        id: String,
+        payload: UpdateProjectWorkflow,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct EnabledArgs {
+        id: String,
+        enabled: bool,
+    }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("list_project_workflows", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ProjectIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = list_project_workflows(a.project_id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("get_project_workflow", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_project_workflow(a.id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("create_project_workflow", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: CreateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = create_project_workflow(
+                a.payload,
+                app.state::<DbPool>(),
+                app.state::<CloudClientState>(),
+            )
+            .await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("update_project_workflow", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: UpdateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = update_project_workflow(
+                a.id,
+                a.payload,
+                app.state::<DbPool>(),
+                app.state::<CloudClientState>(),
+            )
+            .await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("delete_project_workflow", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            delete_project_workflow(
+                a.id,
+                app.state::<DbPool>(),
+                app.state::<CloudClientState>(),
+            )
+            .await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("set_project_workflow_enabled", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: EnabledArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = set_project_workflow_enabled(
+                a.id,
+                a.enabled,
+                app.state::<DbPool>(),
+                app.state::<CloudClientState>(),
+            )
+            .await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+    }
+}
+
+pub use http::register as register_http;
+
 #[cfg(test)]
 mod tests {
     use super::{validate_graph, workflow_node_default_data, workflow_runtime_warnings};

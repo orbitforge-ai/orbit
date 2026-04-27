@@ -873,3 +873,77 @@ pub async fn reorder_project_board_columns(
     }
     Ok(columns)
 }
+
+mod http {
+    use tauri::Manager;
+
+    use super::*;
+    use crate::db::cloud::CloudClientState;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ListArgs {
+        project_id: String,
+        #[serde(default)]
+        board_id: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CreateArgs {
+        payload: CreateProjectBoardColumn,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UpdateArgs {
+        id: String,
+        payload: UpdateProjectBoardColumn,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DeleteArgs {
+        id: String,
+        payload: DeleteProjectBoardColumn,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ReorderArgs {
+        project_id: String,
+        payload: ReorderProjectBoardColumns,
+    }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("list_project_board_columns", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ListArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = list_project_board_columns(a.project_id, a.board_id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("create_project_board_column", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: CreateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = create_project_board_column(a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("update_project_board_column", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: UpdateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = update_project_board_column(a.id, a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("delete_project_board_column", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: DeleteArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            delete_project_board_column(a.id, a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("reorder_project_board_columns", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ReorderArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = reorder_project_board_columns(a.project_id, a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+    }
+}
+
+pub use http::register as register_http;

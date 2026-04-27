@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { listen } from '@tauri-apps/api/event';
+import { listen } from '../../api/transport';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { ChevronRight, Loader2, MoreHorizontal, X } from 'lucide-react';
 import {

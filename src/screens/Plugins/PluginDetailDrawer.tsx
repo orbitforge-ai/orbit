@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { listen } from '@tauri-apps/api/event';
+import { listen } from '../../api/transport';
 import { X, Link, ScrollText, Database, Info, CheckCircle2, Key } from 'lucide-react';
 import { pluginsApi, PluginManifest, PluginOAuthStatus, PluginSecretStatus } from '../../api/plugins';
 import { PluginLogo } from './PluginLogo';

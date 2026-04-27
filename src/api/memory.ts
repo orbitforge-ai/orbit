@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from './transport';
 import { MemoryEntry, MemoryType } from '../types';
 
 export const memoryApi = {

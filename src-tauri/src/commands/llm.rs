@@ -203,3 +203,53 @@ pub async fn trigger_agent_loop(
 
     Ok(run_id)
 }
+
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::db::cloud::CloudClientState;
+    use crate::db::DbPool;
+    use crate::executor::engine::ExecutorTx;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SetKeyArgs { provider: String, key: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ProviderArgs { provider: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct TriggerLoopArgs { agent_id: String, goal: String }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("set_api_key", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: SetKeyArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            set_api_key(a.provider, a.key, app.state::<CloudClientState>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("has_api_key", |_ctx, args| async move {
+            let a: ProviderArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = has_api_key(a.provider).await?;
+            Ok(serde_json::Value::Bool(r))
+        });
+        reg.register("delete_api_key", |_ctx, args| async move {
+            let a: ProviderArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            delete_api_key(a.provider).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("get_provider_status", |_ctx, args| async move {
+            let a: ProviderArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_provider_status(a.provider).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("trigger_agent_loop", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: TriggerLoopArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = trigger_agent_loop(a.agent_id, a.goal, app.state::<DbPool>(), app.state::<ExecutorTx>()).await?;
+            Ok(serde_json::Value::String(r))
+        });
+    }
+}
+
+pub use http::register as register_http;

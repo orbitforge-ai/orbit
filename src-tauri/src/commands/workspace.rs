@@ -192,3 +192,97 @@ pub async fn list_agent_role_ids() -> Result<std::collections::HashMap<String, S
     .await
     .map_err(|e| e.to_string())?
 }
+
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::db::cloud::CloudClientState;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AgentIdArgs { agent_id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ListArgs { agent_id: String, #[serde(default)] path: Option<String> }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PathArgs { agent_id: String, path: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct WriteArgs { agent_id: String, path: String, content: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RenameArgs { agent_id: String, from: String, to: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UpdateConfigArgs { agent_id: String, config: AgentWorkspaceConfig }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UpdatePromptArgs { agent_id: String, content: String }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("get_workspace_path", |_ctx, args| async move {
+            let a: AgentIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            Ok(serde_json::Value::String(get_workspace_path(a.agent_id)))
+        });
+        reg.register("init_agent_workspace", |_ctx, args| async move {
+            let a: AgentIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            init_agent_workspace(a.agent_id).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("list_workspace_files", |_ctx, args| async move {
+            let a: ListArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = list_workspace_files(a.agent_id, a.path).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("read_workspace_file", |_ctx, args| async move {
+            let a: PathArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = read_workspace_file(a.agent_id, a.path).await?;
+            Ok(serde_json::Value::String(r))
+        });
+        reg.register("write_workspace_file", |_ctx, args| async move {
+            let a: WriteArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            write_workspace_file(a.agent_id, a.path, a.content).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("delete_workspace_file", |_ctx, args| async move {
+            let a: PathArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            delete_workspace_file(a.agent_id, a.path).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("create_workspace_dir", |_ctx, args| async move {
+            let a: PathArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            create_workspace_dir(a.agent_id, a.path).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("rename_workspace_entry", |_ctx, args| async move {
+            let a: RenameArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            rename_workspace_entry(a.agent_id, a.from, a.to).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("get_agent_config", |_ctx, args| async move {
+            let a: AgentIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_agent_config(a.agent_id).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("update_agent_config", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: UpdateConfigArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            update_agent_config(app.clone(), a.agent_id, a.config, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("update_system_prompt", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: UpdatePromptArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            update_system_prompt(a.agent_id, a.content, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("list_agent_role_ids", |_ctx, _args| async move {
+            let r = list_agent_role_ids().await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+    }
+}
+
+pub use http::register as register_http;

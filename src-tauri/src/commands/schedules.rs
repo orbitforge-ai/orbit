@@ -245,3 +245,74 @@ pub fn preview_next_runs(config: serde_json::Value, n: usize) -> Result<Vec<Stri
         serde_json::from_value(config).map_err(|e| format!("invalid config: {}", e))?;
     Ok(next_n_runs(&cfg, n))
 }
+
+mod http {
+    use tauri::Manager;
+    use super::*;
+    use crate::db::cloud::CloudClientState;
+    use crate::db::DbPool;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct TaskIdArgs { task_id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct WorkflowIdArgs { workflow_id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CreateArgs { payload: CreateSchedule }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ToggleArgs { id: String, enabled: bool }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct IdArgs { id: String }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PreviewArgs { config: serde_json::Value, n: usize }
+
+    pub fn register(reg: &mut crate::shim::registry::Registry) {
+        reg.register("list_schedules", |ctx, _args| async move {
+            let app = ctx.app()?;
+            let r = list_schedules(app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("get_schedules_for_task", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: TaskIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_schedules_for_task(a.task_id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("get_schedules_for_workflow", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: WorkflowIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_schedules_for_workflow(a.workflow_id, app.state::<DbPool>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("create_schedule", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: CreateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = create_schedule(a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("toggle_schedule", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: ToggleArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            toggle_schedule(a.id, a.enabled, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("delete_schedule", |ctx, args| async move {
+            let app = ctx.app()?;
+            let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            delete_schedule(a.id, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("preview_next_runs", |_ctx, args| async move {
+            let a: PreviewArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = preview_next_runs(a.config, a.n)?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+    }
+}
+
+pub use http::register as register_http;
