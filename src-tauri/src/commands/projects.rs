@@ -52,8 +52,7 @@ fn map_project_summary(row: &rusqlite::Row) -> rusqlite::Result<ProjectSummary> 
     })
 }
 
-#[tauri::command]
-pub async fn list_projects(db: tauri::State<'_, DbPool>) -> Result<Vec<ProjectSummary>, String> {
+pub async fn list_projects_impl(db: &DbPool) -> Result<Vec<ProjectSummary>, String> {
     let pool = db.0.clone();
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
@@ -82,7 +81,11 @@ pub async fn list_projects(db: tauri::State<'_, DbPool>) -> Result<Vec<ProjectSu
 }
 
 #[tauri::command]
-pub async fn get_project(id: String, db: tauri::State<'_, DbPool>) -> Result<Project, String> {
+pub async fn list_projects(db: tauri::State<'_, DbPool>) -> Result<Vec<ProjectSummary>, String> {
+    list_projects_impl(db.inner()).await
+}
+
+pub async fn get_project_impl(id: String, db: &DbPool) -> Result<Project, String> {
     let pool = db.0.clone();
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
@@ -95,6 +98,11 @@ pub async fn get_project(id: String, db: tauri::State<'_, DbPool>) -> Result<Pro
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_project(id: String, db: tauri::State<'_, DbPool>) -> Result<Project, String> {
+    get_project_impl(id, db.inner()).await
 }
 
 #[tauri::command]
@@ -545,4 +553,22 @@ pub async fn rename_project_workspace_entry(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[derive(serde::Deserialize)]
+struct GetProjectArgs {
+    id: String,
+}
+
+pub fn register_http(reg: &mut crate::shim::registry::Registry) {
+    reg.register("list_projects", |ctx, _args| async move {
+        let result = list_projects_impl(&ctx.db).await?;
+        serde_json::to_value(result).map_err(|e| e.to_string())
+    });
+    reg.register("get_project", |ctx, args| async move {
+        let GetProjectArgs { id } =
+            serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let result = get_project_impl(id, &ctx.db).await?;
+        serde_json::to_value(result).map_err(|e| e.to_string())
+    });
 }

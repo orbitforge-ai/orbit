@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:browser": "VITE_TRANSPORT_MODE=http vite --port 1430 --strictPort",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "clean": "cd src-tauri && cargo clean && cd -",

@@ -176,6 +176,7 @@ pub fn emit_log_chunk(app: &tauri::AppHandle, run_id: &str, lines: Vec<(String, 
     if let Err(e) = app.emit("run:log_chunk", &payload) {
         warn!("failed to emit run:log_chunk: {}", e);
     }
+    crate::shim::ws::broadcast("run:log_chunk", &payload);
 }
 
 pub fn emit_run_state_changed(
@@ -193,6 +194,7 @@ pub fn emit_run_state_changed(
     if let Err(e) = app.emit("run:state_changed", &payload) {
         warn!("failed to emit run:state_changed: {}", e);
     }
+    crate::shim::ws::broadcast("run:state_changed", &payload);
 }
 
 pub fn emit_agent_llm_chunk(app: &tauri::AppHandle, run_id: &str, delta: &str, iteration: u32) {
@@ -205,6 +207,7 @@ pub fn emit_agent_llm_chunk(app: &tauri::AppHandle, run_id: &str, delta: &str, i
     if let Err(e) = app.emit("agent:llm_chunk", &payload) {
         warn!("failed to emit agent:llm_chunk: {}", e);
     }
+    crate::shim::ws::broadcast("agent:llm_chunk", &payload);
 }
 
 pub fn emit_agent_iteration(
@@ -228,6 +231,7 @@ pub fn emit_agent_iteration(
     if let Err(e) = app.emit("agent:iteration", &payload) {
         warn!("failed to emit agent:iteration: {}", e);
     }
+    crate::shim::ws::broadcast("agent:iteration", &payload);
 }
 
 pub fn emit_agent_content_block(
@@ -247,6 +251,7 @@ pub fn emit_agent_content_block(
     if let Err(e) = app.emit("agent:content_block", &payload) {
         warn!("failed to emit agent:content_block: {}", e);
     }
+    crate::shim::ws::broadcast("agent:content_block", &payload);
 }
 
 pub fn emit_agent_tool_result(
@@ -268,6 +273,7 @@ pub fn emit_agent_tool_result(
     if let Err(e) = app.emit("agent:tool_result", &payload) {
         warn!("failed to emit agent:tool_result: {}", e);
     }
+    crate::shim::ws::broadcast("agent:tool_result", &payload);
 }
 
 pub fn emit_chat_context_update(
@@ -293,6 +299,7 @@ pub fn emit_chat_context_update(
     if let Err(e) = app.emit("chat:context_update", &payload) {
         warn!("failed to emit chat:context_update: {}", e);
     }
+    crate::shim::ws::broadcast("chat:context_update", &payload);
 }
 
 pub fn emit_sub_agents_spawned(
@@ -310,6 +317,7 @@ pub fn emit_sub_agents_spawned(
     if let Err(e) = app.emit("agent:sub_agents_spawned", &payload) {
         warn!("failed to emit agent:sub_agents_spawned: {}", e);
     }
+    crate::shim::ws::broadcast("agent:sub_agents_spawned", &payload);
 }
 
 pub fn emit_bus_message_sent(
@@ -335,6 +343,7 @@ pub fn emit_bus_message_sent(
     if let Err(e) = app.emit("bus:message_sent", &event_payload) {
         warn!("failed to emit bus:message_sent: {}", e);
     }
+    crate::shim::ws::broadcast("bus:message_sent", &event_payload);
 }
 
 pub fn emit_user_question(
@@ -362,6 +371,7 @@ pub fn emit_user_question(
     if let Err(e) = app.emit("user:question", &payload) {
         warn!("failed to emit user:question: {}", e);
     }
+    crate::shim::ws::broadcast("user:question", &payload);
 }
 
 // ─── Permission events ─────────────────────────────────────────────────────
@@ -417,6 +427,7 @@ pub fn emit_permission_request(
     if let Err(e) = app.emit("permission:request", &payload) {
         warn!("failed to emit permission:request: {}", e);
     }
+    crate::shim::ws::broadcast("permission:request", &payload);
 }
 
 pub fn emit_permission_cancelled(app: &tauri::AppHandle, request_id: &str, run_id: &str) {
@@ -428,6 +439,7 @@ pub fn emit_permission_cancelled(app: &tauri::AppHandle, request_id: &str, run_i
     if let Err(e) = app.emit("permission:cancelled", &payload) {
         warn!("failed to emit permission:cancelled: {}", e);
     }
+    crate::shim::ws::broadcast("permission:cancelled", &payload);
 }
 
 pub fn emit_agent_created(
@@ -435,9 +447,11 @@ pub fn emit_agent_created(
     agent: crate::models::agent::Agent,
     role_id: Option<String>,
 ) {
-    if let Err(e) = app.emit("agent:created", AgentCreatedPayload { agent, role_id }) {
+    let payload = AgentCreatedPayload { agent, role_id };
+    if let Err(e) = app.emit("agent:created", &payload) {
         warn!("failed to emit agent:created: {}", e);
     }
+    crate::shim::ws::broadcast("agent:created", &payload);
 }
 
 pub fn emit_agent_updated(
@@ -445,26 +459,24 @@ pub fn emit_agent_updated(
     agent: crate::models::agent::Agent,
     previous_agent_id: Option<String>,
 ) {
-    if let Err(e) = app.emit(
-        "agent:updated",
-        AgentUpdatedPayload {
-            agent,
-            previous_agent_id,
-        },
-    ) {
+    let payload = AgentUpdatedPayload {
+        agent,
+        previous_agent_id,
+    };
+    if let Err(e) = app.emit("agent:updated", &payload) {
         warn!("failed to emit agent:updated: {}", e);
     }
+    crate::shim::ws::broadcast("agent:updated", &payload);
 }
 
 pub fn emit_agent_deleted(app: &tauri::AppHandle, agent_id: &str) {
-    if let Err(e) = app.emit(
-        "agent:deleted",
-        AgentDeletedPayload {
-            agent_id: agent_id.to_string(),
-        },
-    ) {
+    let payload = AgentDeletedPayload {
+        agent_id: agent_id.to_string(),
+    };
+    if let Err(e) = app.emit("agent:deleted", &payload) {
         warn!("failed to emit agent:deleted: {}", e);
     }
+    crate::shim::ws::broadcast("agent:deleted", &payload);
 }
 
 // ─── Compaction status events ──────────────────────────────────────────────
@@ -498,18 +510,18 @@ pub fn emit_compaction_status_with_reason(
     if let Err(e) = app.emit("compaction:status", &payload) {
         warn!("failed to emit compaction:status: {}", e);
     }
+    crate::shim::ws::broadcast("compaction:status", &payload);
 }
 
 pub fn emit_agent_config_changed(app: &tauri::AppHandle, agent_id: &str, role_id: Option<String>) {
-    if let Err(e) = app.emit(
-        "agent:config_changed",
-        AgentConfigChangedPayload {
-            agent_id: agent_id.to_string(),
-            role_id,
-        },
-    ) {
+    let payload = AgentConfigChangedPayload {
+        agent_id: agent_id.to_string(),
+        role_id,
+    };
+    if let Err(e) = app.emit("agent:config_changed", &payload) {
         warn!("failed to emit agent:config_changed: {}", e);
     }
+    crate::shim::ws::broadcast("agent:config_changed", &payload);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -540,4 +552,5 @@ pub fn emit_message_reaction(
     if let Err(e) = app.emit("message:reaction", &payload) {
         warn!("failed to emit message:reaction: {}", e);
     }
+    crate::shim::ws::broadcast("message:reaction", &payload);
 }

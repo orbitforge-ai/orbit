@@ -1,3 +1,4 @@
+mod app_context;
 mod auth;
 mod commands;
 mod db;
@@ -8,6 +9,7 @@ mod memory_service;
 mod models;
 pub mod plugins;
 mod scheduler;
+mod shim;
 mod triggers;
 mod workflows;
 
@@ -194,7 +196,52 @@ pub fn run() {
 
             plugin_manager.start_core_api_servers(db_pool.clone());
             plugins::oauth::spawn_loopback_listener(app.handle().clone(), plugin_manager.clone());
-            app.manage(plugin_manager);
+            app.manage(plugin_manager.clone());
+
+            // Transport-agnostic bundle of shared state. The HTTP/WS shim
+            // (Phase 1+) and, eventually, a standalone cloud server use this
+            // instead of `tauri::State<T>` extractors. Fields are cloned views
+            // of the same managed state registered above.
+            let app_ctx = app_context::AppContext::new(
+                db_pool.clone(),
+                app.state::<AuthState>().inner().clone(),
+                app.state::<CloudClientState>().inner().clone(),
+                app.state::<ActiveUser>().inner().clone(),
+                app.state::<ExecutorTx>().inner().clone(),
+                app.state::<AgentSemaphores>().inner().clone(),
+                app.state::<SessionExecutionRegistry>().inner().clone(),
+                app.state::<PermissionRegistry>().inner().clone(),
+                app.state::<UserQuestionRegistry>().inner().clone(),
+                app.state::<BgProcessRegistry>().inner().clone(),
+                app.state::<executor::mcp_server::McpServerHandle>().inner().clone(),
+                plugin_manager,
+                app.state::<Option<memory_service::MemoryServiceState>>().inner().clone(),
+                Some(app.handle().clone()),
+            );
+            let app_ctx_arc = std::sync::Arc::new(app_ctx.clone());
+            app.manage(app_ctx);
+
+            // Spawn the HTTP+WS shim. Lets a browser tab connect to this
+            // running Tauri process for dev, and is the same architecture
+            // the future cloud server will run. Binds loopback-only with a
+            // per-process bearer token at ~/.orbit/dev_token. Failure to
+            // bind is logged but does not block Tauri startup.
+            {
+                let ctx = app_ctx_arc.clone();
+                let dev_token_path = data_dir().join("dev_token");
+                tauri::async_runtime::spawn(async move {
+                    match shim::auth::BindMode::loopback_with_file(dev_token_path) {
+                        Ok(mode) => {
+                            let registry = shim::registry::build();
+                            match shim::start(ctx, registry, mode, 8765).await {
+                                Ok(addr) => tracing::info!("shim bound on {}", addr),
+                                Err(e) => tracing::warn!("shim failed to bind: {}", e),
+                            }
+                        }
+                        Err(e) => tracing::warn!("shim token init failed: {}", e),
+                    }
+                });
+            }
 
             // Push the desired subscription set to every trigger-capable
             // plugin. Runs in the background so startup is not blocked by

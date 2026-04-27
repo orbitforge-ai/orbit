@@ -32,8 +32,7 @@ macro_rules! cloud_delete {
     };
 }
 
-#[tauri::command]
-pub async fn list_tasks(db: tauri::State<'_, DbPool>) -> Result<Vec<Task>, String> {
+pub async fn list_tasks_impl(db: &DbPool) -> Result<Vec<Task>, String> {
     let pool = db.0.clone();
     tokio::task::spawn_blocking(move || {
         let conn = pool.get().map_err(|e| e.to_string())?;
@@ -76,6 +75,11 @@ pub async fn list_tasks(db: tauri::State<'_, DbPool>) -> Result<Vec<Task>, Strin
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_tasks(db: tauri::State<'_, DbPool>) -> Result<Vec<Task>, String> {
+    list_tasks_impl(db.inner()).await
 }
 
 #[tauri::command]
@@ -456,4 +460,11 @@ pub async fn trigger_task(
       Ok(run_id)
     }).await
     .map_err(|e| e.to_string())?
+}
+
+pub fn register_http(reg: &mut crate::shim::registry::Registry) {
+    reg.register("list_tasks", |ctx, _args| async move {
+        let result = list_tasks_impl(&ctx.db).await?;
+        serde_json::to_value(result).map_err(|e| e.to_string())
+    });
 }

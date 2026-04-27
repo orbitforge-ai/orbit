@@ -1,14 +1,13 @@
 use crate::db::DbPool;
 use crate::models::run::{Run, RunSummary};
 
-#[tauri::command]
-pub async fn list_runs(
+pub async fn list_runs_impl(
     limit: Option<i64>,
     offset: Option<i64>,
     task_id: Option<String>,
     state_filter: Option<String>,
     project_id: Option<String>,
-    db: tauri::State<'_, DbPool>,
+    db: &DbPool,
 ) -> Result<Vec<RunSummary>, String> {
     let pool = db.0.clone();
     let limit = limit.unwrap_or(100);
@@ -73,6 +72,18 @@ pub async fn list_runs(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_runs(
+    limit: Option<i64>,
+    offset: Option<i64>,
+    task_id: Option<String>,
+    state_filter: Option<String>,
+    project_id: Option<String>,
+    db: tauri::State<'_, DbPool>,
+) -> Result<Vec<RunSummary>, String> {
+    list_runs_impl(limit, offset, task_id, state_filter, project_id, db.inner()).await
 }
 
 fn map_row_to_run_summary(row: &rusqlite::Row) -> rusqlite::Result<RunSummary> {
@@ -255,4 +266,34 @@ pub async fn read_run_log(run_id: String, db: tauri::State<'_, DbPool>) -> Resul
     tokio::fs::read_to_string(&log_path)
         .await
         .map_err(|e| format!("cannot read log file: {}", e))
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct ListRunsArgs {
+    limit: Option<i64>,
+    offset: Option<i64>,
+    task_id: Option<String>,
+    state_filter: Option<String>,
+    project_id: Option<String>,
+}
+
+pub fn register_http(reg: &mut crate::shim::registry::Registry) {
+    reg.register("list_runs", |ctx, args| async move {
+        let a: ListRunsArgs = if args.is_null() {
+            ListRunsArgs::default()
+        } else {
+            serde_json::from_value(args).map_err(|e| e.to_string())?
+        };
+        let result = list_runs_impl(
+            a.limit,
+            a.offset,
+            a.task_id,
+            a.state_filter,
+            a.project_id,
+            &ctx.db,
+        )
+        .await?;
+        serde_json::to_value(result).map_err(|e| e.to_string())
+    });
 }

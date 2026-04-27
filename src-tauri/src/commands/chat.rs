@@ -165,13 +165,12 @@ fn activate_skill_mentions_for_session(
 
 // ─── Session CRUD ───────────────────────────────────────────────────────────
 
-#[tauri::command]
-pub async fn list_chat_sessions(
+pub async fn list_chat_sessions_impl(
     agent_id: String,
     include_archived: Option<bool>,
     session_types: Option<Vec<String>>,
     project_id: Option<String>,
-    db: tauri::State<'_, DbPool>,
+    db: &DbPool,
 ) -> Result<Vec<ChatSession>, String> {
     let pool = db.0.clone();
     let show_archived = include_archived.unwrap_or(false);
@@ -250,6 +249,17 @@ pub async fn list_chat_sessions(
       Ok(sessions)
     }).await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_chat_sessions(
+    agent_id: String,
+    include_archived: Option<bool>,
+    session_types: Option<Vec<String>>,
+    project_id: Option<String>,
+    db: tauri::State<'_, DbPool>,
+) -> Result<Vec<ChatSession>, String> {
+    list_chat_sessions_impl(agent_id, include_archived, session_types, project_id, db.inner()).await
 }
 
 #[tauri::command]
@@ -1594,10 +1604,9 @@ pub struct ChatSessionMeta {
     pub project_name: Option<String>,
 }
 
-#[tauri::command]
-pub async fn get_chat_session_meta(
+pub async fn get_chat_session_meta_impl(
     session_id: String,
-    db: tauri::State<'_, DbPool>,
+    db: &DbPool,
 ) -> Result<ChatSessionMeta, String> {
     let pool = db.0.clone();
     tokio::task::spawn_blocking(move || {
@@ -1622,6 +1631,14 @@ pub async fn get_chat_session_meta(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_chat_session_meta(
+    session_id: String,
+    db: tauri::State<'_, DbPool>,
+) -> Result<ChatSessionMeta, String> {
+    get_chat_session_meta_impl(session_id, db.inner()).await
 }
 
 #[tauri::command]
@@ -1883,6 +1900,44 @@ pub async fn get_message_reactions(
 pub struct SendChatMessageResponse {
     pub stream_id: String,
     pub user_message_id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ListChatSessionsArgs {
+    agent_id: String,
+    #[serde(default)]
+    include_archived: Option<bool>,
+    #[serde(default)]
+    session_types: Option<Vec<String>>,
+    #[serde(default)]
+    project_id: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct GetChatSessionMetaArgs {
+    session_id: String,
+}
+
+pub fn register_http(reg: &mut crate::shim::registry::Registry) {
+    reg.register("list_chat_sessions", |ctx, args| async move {
+        let a: ListChatSessionsArgs =
+            serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let result = list_chat_sessions_impl(
+            a.agent_id,
+            a.include_archived,
+            a.session_types,
+            a.project_id,
+            &ctx.db,
+        )
+        .await?;
+        serde_json::to_value(result).map_err(|e| e.to_string())
+    });
+    reg.register("get_chat_session_meta", |ctx, args| async move {
+        let a: GetChatSessionMetaArgs =
+            serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let result = get_chat_session_meta_impl(a.session_id, &ctx.db).await?;
+        serde_json::to_value(result).map_err(|e| e.to_string())
+    });
 }
 
 #[cfg(test)]

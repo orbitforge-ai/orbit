@@ -54,8 +54,9 @@ pub enum AuthStateDto {
 // ---------------------------------------------------------------------------
 // get_auth_state — called on app start to determine which screen to show
 // ---------------------------------------------------------------------------
-#[tauri::command]
-pub async fn get_auth_state(auth: tauri::State<'_, AuthState>) -> Result<AuthStateDto, String> {
+/// Transport-agnostic impl. Shared by the Tauri command below and the HTTP
+/// adapter in `register_http`.
+pub async fn get_auth_state_impl(auth: &AuthState) -> Result<AuthStateDto, String> {
     let mode = auth.get().await;
     let dto = match mode {
         AuthMode::Unset => AuthStateDto::Unset,
@@ -65,6 +66,11 @@ pub async fn get_auth_state(auth: tauri::State<'_, AuthState>) -> Result<AuthSta
         },
     };
     Ok(dto)
+}
+
+#[tauri::command]
+pub async fn get_auth_state(auth: tauri::State<'_, AuthState>) -> Result<AuthStateDto, String> {
+    get_auth_state_impl(auth.inner()).await
 }
 
 // ---------------------------------------------------------------------------
@@ -388,4 +394,11 @@ pub async fn force_cloud_sync(
         .ok_or_else(|| "Not signed in to cloud".to_string())?;
     let pool = db.0.clone();
     client.pull_all_data_with_counts(&pool).await
+}
+
+pub fn register_http(reg: &mut crate::shim::registry::Registry) {
+    reg.register("get_auth_state", |ctx, _args| async move {
+        let dto = get_auth_state_impl(&ctx.auth).await?;
+        serde_json::to_value(dto).map_err(|e| e.to_string())
+    });
 }
