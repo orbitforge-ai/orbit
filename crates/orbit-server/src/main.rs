@@ -2,17 +2,33 @@
 //!
 //! Boots the same `orbit-engine` crate that the Tauri desktop app uses, but
 //! without a Tauri runtime. Reads config from environment variables, opens a
-//! SQLite (or, later, Postgres) data layer, spins up the executor +
-//! scheduler + plugin manager, and exposes everything over the existing
-//! HTTP+WS shim.
+//! SQLite (or, later, Postgres) data layer, constructs an `AppContext` with
+//! `tauri: None`, and exposes everything over the existing HTTP+WS shim.
 //!
-//! Status: **skeleton**. The full bootstrap path is blocked on lifting
-//! `tauri::AppHandle` from the engine signature behind a runtime-host trait
-//! (tracked as Phase A.7 in `plans/quirky-jingling-candy.md`). Until that
-//! lands, this binary exists only to claim the workspace slot and validate
-//! that `orbit-engine` builds without the `desktop` feature.
+//! Status: **partial**. The shim and DB-only command paths (e.g.
+//! `list_projects`) work end-to-end. Command paths that still go through
+//! `ctx.app()?.state::<T>()` will return an error in headless mode until
+//! their adapters are migrated to use `AppContext` fields directly (Phase
+//! A.7 sweep).
+
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use orbit_engine::app_context::AppContext;
+use orbit_engine::auth::{AuthMode, AuthState};
+use orbit_engine::commands::users::ActiveUser;
+use orbit_engine::db::cloud::CloudClientState;
+use orbit_engine::db::connection::init as init_db;
+use orbit_engine::executor::bg_processes::BgProcessRegistry;
+use orbit_engine::executor::engine::{
+    AgentSemaphores, ExecutorTx, SessionExecutionRegistry, UserQuestionRegistry,
+};
+use orbit_engine::executor::mcp_server;
+use orbit_engine::executor::permissions::PermissionRegistry;
+use orbit_engine::plugins::PluginManager;
+use orbit_engine::shim;
+use tokio::sync::mpsc;
 
 fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
@@ -21,28 +37,102 @@ fn init_tracing() {
     fmt().with_env_filter(filter).with_target(false).init();
 }
 
+fn data_dir_from_env() -> Result<PathBuf> {
+    if let Ok(dir) = std::env::var("ORBIT_DATA_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+    if let Ok(dir) = std::env::var("WORKSPACE_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+    let home = std::env::var("HOME").context("HOME, WORKSPACE_DIR, or ORBIT_DATA_DIR must be set")?;
+    Ok(PathBuf::from(home).join(".orbit"))
+}
+
+fn bind_port_from_env() -> u16 {
+    std::env::var("BIND_PORT")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(8765)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
-    tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
-        "orbit-server starting (skeleton — engine bootstrap blocked on Phase A.7 AppHandle refactor)"
+    let version = env!("CARGO_PKG_VERSION");
+    let data_dir = data_dir_from_env()?;
+    let port = bind_port_from_env();
+
+    tracing::info!(version, data_dir = %data_dir.display(), port, "orbit-server starting");
+
+    // ── DB ──────────────────────────────────────────────────────────────────
+    let db_pool = init_db(data_dir.clone())
+        .map_err(|e| anyhow::anyhow!("init_db failed: {e}"))?;
+
+    // ── Stub managed-state values ──────────────────────────────────────────
+    // The headless server has no Tauri runtime, so command adapters that read
+    // state via `ctx.app()?.state::<T>()` will fail. Adapters migrated to use
+    // `AppContext` fields directly use these stubs.
+    let auth_state = AuthState::new(AuthMode::Unset);
+    let cloud_state = CloudClientState::empty();
+    let active_user = ActiveUser::new("default_user".to_string());
+
+    // Executor channel — receiver is parked; the headless server doesn't run
+    // the executor loop yet (blocked on Phase A.7 AppHandle decoupling for the
+    // ExecutorEngine constructor itself).
+    let (executor_tx_inner, _executor_rx) =
+        mpsc::unbounded_channel::<orbit_engine::executor::engine::RunRequest>();
+    let executor_tx = ExecutorTx(executor_tx_inner);
+
+    let agent_semaphores = AgentSemaphores::new();
+    let session_registry = SessionExecutionRegistry::new();
+    let permission_registry = PermissionRegistry::new();
+    let user_question_registry = UserQuestionRegistry::new();
+    let bg_process_registry = BgProcessRegistry::new();
+
+    // Embedded MCP bridge — needs no AppHandle.
+    let mcp_handle = mcp_server::start()
+        .await
+        .map_err(|e| anyhow::anyhow!("mcp bridge start failed: {e}"))?;
+
+    let plugin_manager = Arc::new(PluginManager::init(db_pool.clone()));
+
+    // ── AppContext ──────────────────────────────────────────────────────────
+    let ctx = AppContext::new(
+        db_pool,
+        auth_state,
+        cloud_state,
+        active_user,
+        executor_tx,
+        agent_semaphores,
+        session_registry,
+        permission_registry,
+        user_question_registry,
+        bg_process_registry,
+        mcp_handle,
+        plugin_manager,
+        None, // memory: Option<MemoryServiceState>
+        None, // tauri: Option<AppHandle>
     );
+    let ctx = Arc::new(ctx);
 
-    // Surface a few env vars now so misconfiguration is visible early once
-    // the bootstrap lands. None of these are read yet.
-    let _database_url = std::env::var("DATABASE_URL").ok();
-    let _bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8765".to_string());
-    let _workspace_dir = std::env::var("WORKSPACE_DIR")
-        .ok()
-        .or_else(|| std::env::var("HOME").ok().map(|h| format!("{h}/.orbit")))
-        .context("WORKSPACE_DIR or HOME must be set")?;
+    // ── Shim ────────────────────────────────────────────────────────────────
+    let dev_token_path = data_dir.join("dev_token");
+    let mode = shim::auth::BindMode::loopback_with_file(dev_token_path)
+        .map_err(|e| anyhow::anyhow!("shim token init failed: {e}"))?;
+    let registry = shim::registry::build();
 
+    let addr = shim::start(ctx, registry, mode, port)
+        .await
+        .map_err(|e| anyhow::anyhow!("shim failed to bind: {e}"))?;
+
+    tracing::info!(%addr, "orbit-server bound");
     tracing::warn!(
-        "engine bootstrap not implemented yet — exiting cleanly. \
-         Track progress on Phase A.7 (AppHandle decoupling) before adding \
-         the actual ExecutorEngine / SchedulerEngine / PluginManager wire-up."
+        "executor + scheduler not running yet — command paths that need them \
+         (run_task, agent execution, schedule firing) will fail. \
+         Track Phase A.7 for the AppHandle decoupling that unblocks engine boot."
     );
 
+    // Block forever — the shim is running on background tasks.
+    futures::future::pending::<()>().await;
     Ok(())
 }
