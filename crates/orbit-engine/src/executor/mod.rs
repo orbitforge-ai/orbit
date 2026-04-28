@@ -3,9 +3,16 @@ pub mod agent_tools;
 pub mod anthropic;
 pub mod bg_processes;
 pub mod channels;
+// CLI providers (claude-cli, codex-cli) shell out to user-installed binaries
+// on the local machine. Cloud-mode dropped them per the cloud-mode plan; only
+// builds with the `desktop` feature compile them in.
+#[cfg(feature = "desktop")]
 pub mod claude_cli;
+#[cfg(feature = "desktop")]
 pub mod cli_common;
+#[cfg(feature = "desktop")]
 pub mod cli_launcher;
+#[cfg(feature = "desktop")]
 pub mod codex_cli;
 pub mod compaction;
 pub mod context;

@@ -3,6 +3,7 @@ use ulid::Ulid;
 
 use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
+#[cfg(feature = "desktop")]
 use crate::executor::cli_common;
 use crate::executor::engine::{ExecutorTx, RunRequest};
 use crate::executor::keychain;
@@ -64,27 +65,42 @@ pub struct ProviderStatus {
 pub async fn get_provider_status(provider: String) -> Result<ProviderStatus, String> {
     tokio::task::spawn_blocking(move || {
         if is_cli_provider(&provider) {
-            let binary = match provider.as_str() {
-                "claude-cli" => "claude",
-                "codex-cli" => "codex",
-                _ => return Err(format!("unknown CLI provider: {}", provider)),
-            };
-            match cli_common::resolve_cli(binary) {
-                Some(path) => Ok(ProviderStatus {
-                    kind: "cli",
-                    ready: true,
-                    binary_path: Some(path.display().to_string()),
-                    message: None,
-                }),
-                None => Ok(ProviderStatus {
+            #[cfg(feature = "desktop")]
+            {
+                let binary = match provider.as_str() {
+                    "claude-cli" => "claude",
+                    "codex-cli" => "codex",
+                    _ => return Err(format!("unknown CLI provider: {}", provider)),
+                };
+                return match cli_common::resolve_cli(binary) {
+                    Some(path) => Ok(ProviderStatus {
+                        kind: "cli",
+                        ready: true,
+                        binary_path: Some(path.display().to_string()),
+                        message: None,
+                    }),
+                    None => Ok(ProviderStatus {
+                        kind: "cli",
+                        ready: false,
+                        binary_path: None,
+                        message: Some(format!(
+                            "`{}` binary not found on PATH. Install and authenticate it before selecting this provider.",
+                            binary
+                        )),
+                    }),
+                };
+            }
+            #[cfg(not(feature = "desktop"))]
+            {
+                Ok(ProviderStatus {
                     kind: "cli",
                     ready: false,
                     binary_path: None,
-                    message: Some(format!(
-                        "`{}` binary not found on PATH. Install and authenticate it before selecting this provider.",
-                        binary
-                    )),
-                }),
+                    message: Some(
+                        "CLI providers are desktop-only and unavailable in cloud mode."
+                            .to_string(),
+                    ),
+                })
             }
         } else {
             Ok(ProviderStatus {

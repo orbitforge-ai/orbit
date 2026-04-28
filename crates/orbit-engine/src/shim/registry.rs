@@ -81,6 +81,7 @@ pub fn build() -> Registry {
     crate::commands::memory::register_http(&mut reg);
     crate::commands::plugins::register_http(&mut reg);
     crate::commands::triggers::register_http(&mut reg);
+    #[cfg(feature = "desktop")]
     crate::commands::terminals::register_http(&mut reg);
     reg
 }

@@ -7,9 +7,13 @@ use tracing::warn;
 use crate::db::DbPool;
 use crate::executor::agent_tools::ToolExecutionContext;
 use crate::executor::anthropic::AnthropicProvider;
+#[cfg(feature = "desktop")]
 use crate::executor::claude_cli::{ClaudeCliProvider, SessionFn};
+#[cfg(feature = "desktop")]
 use crate::executor::codex_cli::CodexCliProvider;
-use crate::executor::mcp_server::{McpServerHandle, McpSession};
+use crate::executor::mcp_server::McpServerHandle;
+#[cfg(feature = "desktop")]
+use crate::executor::mcp_server::McpSession;
 use crate::executor::minimax::MiniMaxProvider;
 use crate::executor::permissions::PermissionRegistry;
 
@@ -407,8 +411,14 @@ pub fn create_provider(
         // call sites that need the Orbit tool catalog exposed to the CLI should
         // use `create_provider_with_mcp` (or construct the CLI provider
         // directly) so they can attach an MCP handle + session factory.
+        #[cfg(feature = "desktop")]
         "claude-cli" => Ok(Box::new(ClaudeCliProvider::new(None))),
+        #[cfg(feature = "desktop")]
         "codex-cli" => Ok(Box::new(CodexCliProvider::new(None))),
+        #[cfg(not(feature = "desktop"))]
+        "claude-cli" | "codex-cli" => {
+            Err("CLI providers are desktop-only and unavailable in cloud builds".to_string())
+        }
         other => Err(format!("unsupported LLM provider: {}", other)),
     }
 }
@@ -427,6 +437,7 @@ pub struct AgentMcpWiring {
     pub db: DbPool,
 }
 
+#[cfg(feature = "desktop")]
 impl AgentMcpWiring {
     fn into_session_fn(self) -> (McpServerHandle, SessionFn) {
         let handle = self.handle.clone();
@@ -458,6 +469,7 @@ pub fn create_provider_with_mcp(
     match provider_name {
         "anthropic" => Ok(Box::new(AnthropicProvider::new(api_key))),
         "minimax" => Ok(Box::new(MiniMaxProvider::new(api_key))),
+        #[cfg(feature = "desktop")]
         "claude-cli" => {
             let provider = match wiring {
                 Some(w) => {
@@ -468,6 +480,7 @@ pub fn create_provider_with_mcp(
             };
             Ok(Box::new(provider))
         }
+        #[cfg(feature = "desktop")]
         "codex-cli" => {
             let provider = match wiring {
                 Some(w) => {
@@ -477,6 +490,11 @@ pub fn create_provider_with_mcp(
                 None => CodexCliProvider::new(None),
             };
             Ok(Box::new(provider))
+        }
+        #[cfg(not(feature = "desktop"))]
+        "claude-cli" | "codex-cli" => {
+            let _ = wiring;
+            Err("CLI providers are desktop-only and unavailable in cloud builds".to_string())
         }
         other => Err(format!("unsupported LLM provider: {}", other)),
     }

@@ -157,6 +157,13 @@ impl PluginManager {
         });
     }
 
+    /// Install the trigger dispatcher on the per-plugin core-api server before
+    /// `start_core_api_servers` accepts connections. The host (Tauri app or
+    /// standalone server) constructs the dispatcher and hands it in here.
+    pub fn set_core_api_dispatcher(&self, dispatcher: Arc<crate::triggers::dispatcher::Dispatcher>) {
+        self.core_api.set_dispatcher(dispatcher);
+    }
+
     /// Hook the runtime log ring to Tauri events so the Plugin detail drawer's
     /// Live Log tab can stream stderr in real time.
     pub fn attach_log_emitter<R: Runtime>(&self, app: &AppHandle<R>) {

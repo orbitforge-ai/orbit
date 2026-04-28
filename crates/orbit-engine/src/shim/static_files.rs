@@ -1,7 +1,8 @@
 //! Serves the production frontend bundle from inside the Rust binary.
 //!
-//! At compile time `rust-embed` walks `../dist/` (relative to `src-tauri/`)
-//! and bakes every file into the binary. In dev the user runs the Vite dev
+//! At compile time `rust-embed` walks `../../dist/` (relative to
+//! `crates/orbit-engine/`, i.e. the workspace-root `dist/`) and bakes every
+//! file into the binary. In dev the user runs the Vite dev
 //! server on a separate port, so the `dist/` directory is normally absent or
 //! stale — the embed simply contributes zero files and these handlers return
 //! 404. In release (`pnpm build && cargo build --release`) it serves the
@@ -15,7 +16,7 @@ use axum::{
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
-#[folder = "../dist/"]
+#[folder = "../../dist/"]
 struct Asset;
 
 /// Serve a static file. Path is taken from `uri.path()`; empty paths get

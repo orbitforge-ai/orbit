@@ -16,6 +16,9 @@ pub mod runs;
 pub mod schedules;
 pub mod skills;
 pub mod tasks;
+// Embedded terminal (PTY) is a desktop-only feature: it exposes shell access
+// to the user's local machine and depends on cli_launcher (also desktop-only).
+#[cfg(feature = "desktop")]
 pub mod terminals;
 pub mod triggers;
 pub mod users;

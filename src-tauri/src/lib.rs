@@ -1,17 +1,22 @@
-mod app_context;
-mod auth;
-mod commands;
-mod db;
-mod error;
-mod events;
-mod executor;
-mod memory_service;
-mod models;
-pub mod plugins;
-mod scheduler;
-mod shim;
-mod triggers;
-mod workflows;
+// Engine modules now live in the `orbit-engine` crate. Re-export them at
+// `crate::*` so existing `use crate::executor::…` paths inside command
+// handlers and the Tauri builder continue to resolve without a sweeping
+// rename.
+pub use orbit_engine::app_context;
+pub use orbit_engine::auth;
+pub use orbit_engine::commands;
+pub use orbit_engine::db;
+pub use orbit_engine::error;
+pub use orbit_engine::events;
+pub use orbit_engine::executor;
+pub use orbit_engine::memory_service;
+pub use orbit_engine::models;
+pub use orbit_engine::plugins;
+pub use orbit_engine::scheduler;
+pub use orbit_engine::shim;
+pub use orbit_engine::triggers;
+pub use orbit_engine::workflows;
+pub use orbit_engine::{data_dir, plugins_dir, RuntimeAppHandleState};
 
 use std::path::PathBuf;
 use tauri::menu::{Menu, MenuItem};
@@ -37,20 +42,8 @@ use tracing::info;
 use triggers::bindings::ProductionBindings;
 use triggers::dispatcher::Dispatcher;
 
-#[derive(Clone)]
-pub struct RuntimeAppHandleState(pub tauri::AppHandle);
-
-pub fn data_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".orbit")
-}
-
 fn log_dir() -> PathBuf {
     data_dir().join("logs")
-}
-
-pub fn plugins_dir() -> PathBuf {
-    plugins::plugins_dir()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -195,7 +188,7 @@ pub fn run() {
             // the core-api sockets start accepting connections.
             let dispatch_bindings = ProductionBindings::new(db_pool.clone(), app.handle().clone());
             let dispatcher = Arc::new(Dispatcher::new(dispatch_bindings));
-            plugin_manager.core_api.set_dispatcher(dispatcher);
+            plugin_manager.set_core_api_dispatcher(dispatcher);
 
             plugin_manager.start_core_api_servers(db_pool.clone());
             plugins::oauth::spawn_loopback_listener(app.handle().clone(), plugin_manager.clone());
