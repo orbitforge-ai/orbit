@@ -66,6 +66,10 @@ urlencoding = "2"
 rust-embed = { version = "8", features = ["mime-guess"] }
 which = "6"
 
+# Cross-platform pseudoterminal for the embedded terminal (TUI) — lets Orbit
+# run interactive CLIs (claude, codex, gemini, $SHELL) inside a chat panel.
+portable-pty = "0.8"
+
 # Cron scheduling
 cron = "0.12"
 

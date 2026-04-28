@@ -534,6 +534,50 @@ pub struct MessageReactionPayload {
     pub timestamp: String,
 }
 
+// ─── Terminal (PTY) events ─────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalChunkPayload {
+    pub terminal_id: String,
+    /// Base64-encoded raw bytes from the PTY master fd. Frontend decodes
+    /// before handing to xterm.js so control sequences survive transport.
+    pub data: String,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalExitPayload {
+    pub terminal_id: String,
+    pub code: i32,
+    pub timestamp: String,
+}
+
+pub fn emit_terminal_chunk(app: &tauri::AppHandle, terminal_id: &str, data: &str) {
+    let payload = TerminalChunkPayload {
+        terminal_id: terminal_id.to_string(),
+        data: data.to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    if let Err(e) = app.emit("terminal:output_chunk", &payload) {
+        warn!("failed to emit terminal:output_chunk: {}", e);
+    }
+    crate::shim::ws::broadcast("terminal:output_chunk", &payload);
+}
+
+pub fn emit_terminal_exit(app: &tauri::AppHandle, terminal_id: &str, code: i32) {
+    let payload = TerminalExitPayload {
+        terminal_id: terminal_id.to_string(),
+        code,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    if let Err(e) = app.emit("terminal:exit", &payload) {
+        warn!("failed to emit terminal:exit: {}", e);
+    }
+    crate::shim::ws::broadcast("terminal:exit", &payload);
+}
+
 pub fn emit_message_reaction(
     app: &tauri::AppHandle,
     session_id: &str,

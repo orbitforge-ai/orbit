@@ -28,6 +28,7 @@ import { Plugins } from './screens/Plugins';
 import { Settings } from './screens/Settings';
 import { AuthScreen } from './screens/Auth';
 import { BootScreen } from './components/BootScreen';
+import { BottomBar } from './components/BottomBar';
 import { ToastContainer } from './components/Toast';
 
 const queryClient = new QueryClient({
@@ -169,13 +170,16 @@ function AppContent() {
   )[screen] ?? <Dashboard />;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div className="flex h-screen flex-col overflow-hidden bg-background">
       <ChatStreamBridge />
-      <Sidebar />
-      <main className="relative flex-1 overflow-hidden">
-        {content}
-        {settingsOpen ? <Settings onClose={closeSettings} /> : null}
-      </main>
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <Sidebar />
+        <main className="relative flex-1 overflow-hidden">
+          {content}
+          {settingsOpen ? <Settings onClose={closeSettings} /> : null}
+        </main>
+      </div>
+      <BottomBar />
       <ToastContainer />
     </div>
   );

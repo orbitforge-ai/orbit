@@ -28,6 +28,7 @@ use executor::engine::{
 };
 use executor::mcp_server as mcp_bridge;
 use executor::permissions::PermissionRegistry;
+use executor::pty_session::PtyRegistry;
 use plugins::PluginManager;
 use scheduler::SchedulerEngine;
 use std::sync::Arc;
@@ -140,6 +141,7 @@ pub fn run() {
             let permission_registry = PermissionRegistry::new();
             let user_question_registry = UserQuestionRegistry::new();
             let bg_process_registry = BgProcessRegistry::new();
+            let pty_registry = PtyRegistry::new();
 
             // Initialise memory client from build-time API key (instant — no subprocess)
             let memory_state: Option<memory_service::MemoryServiceState> =
@@ -176,6 +178,7 @@ pub fn run() {
             app.manage(memory_state);
             app.manage(ActiveUser::new("default_user".to_string()));
             app.manage(mcp_handle);
+            app.manage(pty_registry);
 
             // Plugin subsystem — loads ~/.orbit/plugins/registry.json and
             // every installed plugin's manifest. Subprocesses are lazy.
@@ -497,6 +500,11 @@ pub fn run() {
             commands::triggers::set_agent_listen_bindings,
             commands::triggers::plugin_list_channels,
             commands::triggers::list_trigger_capable_plugins,
+            // Terminal (PTY)
+            commands::terminals::open_terminal,
+            commands::terminals::write_terminal,
+            commands::terminals::resize_terminal,
+            commands::terminals::close_terminal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
