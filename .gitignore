@@ -32,3 +32,4 @@ plans
 .env
 
 supabase/.temp
+target
