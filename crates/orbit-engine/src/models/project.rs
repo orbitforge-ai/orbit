@@ -47,3 +47,12 @@ pub struct ProjectAgent {
     pub is_default: bool,
     pub added_at: String,
 }
+
+/// Agent + per-project membership flag (`is_default`). Used by the project
+/// detail view to render the "default agent" star next to the right row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectAgentWithMeta {
+    pub agent: crate::models::agent::Agent,
+    pub is_default: bool,
+}

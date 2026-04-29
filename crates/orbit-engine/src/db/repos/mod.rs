@@ -27,7 +27,9 @@ use crate::models::chat::{
     ChatMessageRows, ChatSession, ChatSessionMeta, ChatSessionTokenUsage, MessageReactionRow,
     SessionExecutionStatus,
 };
-use crate::models::project::{CreateProject, Project, ProjectSummary, UpdateProject};
+use crate::models::project::{
+    CreateProject, Project, ProjectAgent, ProjectAgentWithMeta, ProjectSummary, UpdateProject,
+};
 use crate::models::project_board::ProjectBoard;
 use crate::models::project_board_column::ProjectBoardColumn;
 use crate::models::project_workflow::ProjectWorkflow;
@@ -88,6 +90,31 @@ pub trait ProjectRepo: Send + Sync {
     async fn create_basic(&self, payload: CreateProject) -> Result<Project, String>;
     async fn update(&self, id: &str, payload: UpdateProject) -> Result<Project, String>;
     async fn delete(&self, id: &str) -> Result<(), String>;
+
+    // ── Membership reads (project_agents join table) ────────────────────────
+    /// Agents that belong to a project, in creation order.
+    async fn list_agents(&self, project_id: &str) -> Result<Vec<Agent>, String>;
+    /// Same as `list_agents` but each row carries the `is_default` flag from
+    /// the membership row, so the UI can highlight the per-project default.
+    async fn list_agents_with_meta(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ProjectAgentWithMeta>, String>;
+    /// All projects an agent is a member of, in `added_at` order.
+    async fn list_for_agent(&self, agent_id: &str) -> Result<Vec<Project>, String>;
+
+    /// Inserts (or updates) the membership row. `INSERT OR REPLACE` semantics
+    /// so toggling the default flag for an existing member is a single call.
+    async fn add_agent(
+        &self,
+        project_id: &str,
+        agent_id: &str,
+        is_default: bool,
+    ) -> Result<ProjectAgent, String>;
+    /// Removes the membership row and clears any work-item assignments held
+    /// by this agent in this project. Cards stay in their column — a new
+    /// claimant is needed for work to continue.
+    async fn remove_agent(&self, project_id: &str, agent_id: &str) -> Result<(), String>;
 }
 
 #[async_trait]
@@ -140,6 +167,10 @@ pub trait RunRepo: Send + Sync {
     async fn agent_conversation(&self, run_id: &str) -> Result<Option<serde_json::Value>, String>;
     /// Returns the on-disk log file path for a run, if any.
     async fn log_path(&self, run_id: &str) -> Result<Option<String>, String>;
+    /// Marks an in-flight run as cancelled and stamps `finished_at`. No-op if
+    /// the run has already terminated. The actual process kill is handled by
+    /// the executor — this just persists the state transition.
+    async fn cancel(&self, run_id: &str) -> Result<(), String>;
 }
 
 /// Project board columns (kanban lanes inside a board). Read-only at the

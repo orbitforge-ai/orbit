@@ -198,119 +198,32 @@ pub async fn assert_agent_in_project(
 #[tauri::command]
 pub async fn list_project_agents(
     project_id: String,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<Vec<Agent>, String> {
-    let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT a.id, a.name, a.description, a.state, a.max_concurrent_runs,
-                        a.heartbeat_at, a.created_at, a.updated_at
-                 FROM agents a
-                 JOIN project_agents pa ON pa.agent_id = a.id
-                 WHERE pa.project_id = ?1
-                 ORDER BY a.created_at ASC",
-            )
-            .map_err(|e| e.to_string())?;
-        let agents = stmt
-            .query_map(rusqlite::params![project_id], |row| {
-                Ok(Agent {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    description: row.get(2)?,
-                    state: row.get(3)?,
-                    max_concurrent_runs: row.get(4)?,
-                    heartbeat_at: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                })
-            })
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(agents)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    app.repos.projects().list_agents(&project_id).await
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProjectAgentWithMeta {
-    pub agent: Agent,
-    pub is_default: bool,
-}
+// `ProjectAgentWithMeta` is defined in `models/project.rs` so the repo trait
+// can return it. Re-imported below for in-module use.
+use crate::models::project::ProjectAgentWithMeta;
 
 #[tauri::command]
 pub async fn list_project_agents_with_meta(
     project_id: String,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<Vec<ProjectAgentWithMeta>, String> {
-    let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT a.id, a.name, a.description, a.state, a.max_concurrent_runs,
-                        a.heartbeat_at, a.created_at, a.updated_at, pa.is_default
-                 FROM agents a
-                 JOIN project_agents pa ON pa.agent_id = a.id
-                 WHERE pa.project_id = ?1
-                 ORDER BY pa.is_default DESC, a.created_at ASC",
-            )
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(rusqlite::params![project_id], |row| {
-                Ok(ProjectAgentWithMeta {
-                    agent: Agent {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        description: row.get(2)?,
-                        state: row.get(3)?,
-                        max_concurrent_runs: row.get(4)?,
-                        heartbeat_at: row.get(5)?,
-                        created_at: row.get(6)?,
-                        updated_at: row.get(7)?,
-                    },
-                    is_default: row.get::<_, bool>(8)?,
-                })
-            })
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    app.repos
+        .projects()
+        .list_agents_with_meta(&project_id)
+        .await
 }
 
 #[tauri::command]
 pub async fn list_agent_projects(
     agent_id: String,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<Vec<Project>, String> {
-    let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT p.id, p.name, p.description, p.created_at, p.updated_at
-                 FROM projects p
-                 JOIN project_agents pa ON pa.project_id = p.id
-                 WHERE pa.agent_id = ?1
-                 ORDER BY pa.added_at ASC",
-            )
-            .map_err(|e| e.to_string())?;
-        let projects = stmt
-            .query_map(rusqlite::params![agent_id], map_project)
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(projects)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    app.repos.projects().list_for_agent(&agent_id).await
 }
 
 #[tauri::command]
@@ -318,29 +231,16 @@ pub async fn add_agent_to_project(
     project_id: String,
     agent_id: String,
     is_default: bool,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
     cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<ProjectAgent, String> {
-    let pool = db.0.clone();
-    let pa = tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-        conn.execute(
-            "INSERT OR REPLACE INTO project_agents (project_id, agent_id, is_default, added_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![project_id, agent_id, is_default as i64, now],
-        )
-        .map_err(|e| e.to_string())?;
-        Ok::<ProjectAgent, String>(ProjectAgent {
-            project_id,
-            agent_id,
-            is_default,
-            added_at: now,
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
+    let cloud = cloud.inner().clone();
+    let pa = app
+        .repos
+        .projects()
+        .add_agent(&project_id, &agent_id, is_default)
+        .await?;
+    // Cloud mirror is fire-and-forget — UI shouldn't wait on it.
     if let Some(client) = cloud.get() {
         let pa_clone = pa.clone();
         tokio::spawn(async move {
@@ -356,40 +256,22 @@ pub async fn add_agent_to_project(
 pub async fn remove_agent_from_project(
     project_id: String,
     agent_id: String,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
     cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
-    let pool = db.0.clone();
-    let pid = project_id.clone();
-    let aid = agent_id.clone();
-    tokio::task::spawn_blocking(move || {
-        let mut conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        tx.execute(
-            "DELETE FROM project_agents WHERE project_id = ?1 AND agent_id = ?2",
-            rusqlite::params![project_id, agent_id],
-        )
-        .map_err(|e| e.to_string())?;
-        // Clear any work item assignments held by this agent in this project.
-        // Cards stay in their current column (no auto-move); a new claimant
-        // is needed for work to continue. See plan §3 "Unassign side effect".
-        tx.execute(
-            "UPDATE work_items
-                SET assignee_agent_id = NULL, updated_at = ?1
-              WHERE project_id = ?2 AND assignee_agent_id = ?3",
-            rusqlite::params![now, project_id, agent_id],
-        )
-        .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok::<(), String>(())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
+    let cloud = cloud.inner().clone();
+    let pid_for_cloud = project_id.clone();
+    let aid_for_cloud = agent_id.clone();
+    app.repos
+        .projects()
+        .remove_agent(&project_id, &agent_id)
+        .await?;
     if let Some(client) = cloud.get() {
         tokio::spawn(async move {
-            if let Err(e) = client.delete_project_agent(&pid, &aid).await {
+            if let Err(e) = client
+                .delete_project_agent(&pid_for_cloud, &aid_for_cloud)
+                .await
+            {
                 tracing::warn!("cloud delete project_agent: {}", e);
             }
         });
@@ -578,46 +460,54 @@ pub fn register_http(reg: &mut crate::shim::registry::Registry) {
         Ok(serde_json::Value::Null)
     });
     reg.register("list_project_agents", |ctx, args| async move {
-        let app = ctx.app()?;
         let ProjectIdArgs { project_id } = serde_json::from_value(args).map_err(|e| e.to_string())?;
-        let r = list_project_agents(project_id, app.state::<DbPool>()).await?;
+        let r = ctx.repos.projects().list_agents(&project_id).await?;
         serde_json::to_value(r).map_err(|e| e.to_string())
     });
     reg.register("list_project_agents_with_meta", |ctx, args| async move {
-        let app = ctx.app()?;
         let ProjectIdArgs { project_id } = serde_json::from_value(args).map_err(|e| e.to_string())?;
-        let r = list_project_agents_with_meta(project_id, app.state::<DbPool>()).await?;
+        let r = ctx.repos.projects().list_agents_with_meta(&project_id).await?;
         serde_json::to_value(r).map_err(|e| e.to_string())
     });
     reg.register("list_agent_projects", |ctx, args| async move {
-        let app = ctx.app()?;
         let AgentIdArgs { agent_id } = serde_json::from_value(args).map_err(|e| e.to_string())?;
-        let r = list_agent_projects(agent_id, app.state::<DbPool>()).await?;
+        let r = ctx.repos.projects().list_for_agent(&agent_id).await?;
         serde_json::to_value(r).map_err(|e| e.to_string())
     });
     reg.register("add_agent_to_project", |ctx, args| async move {
-        let app = ctx.app()?;
         let a: AddAgentToProjectArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-        let r = add_agent_to_project(
-            a.project_id,
-            a.agent_id,
-            a.is_default,
-            app.state::<DbPool>(),
-            app.state::<CloudClientState>(),
-        )
-        .await?;
-        serde_json::to_value(r).map_err(|e| e.to_string())
+        let cloud = ctx.cloud.clone();
+        let pa = ctx
+            .repos
+            .projects()
+            .add_agent(&a.project_id, &a.agent_id, a.is_default)
+            .await?;
+        if let Some(client) = cloud.get() {
+            let pa_clone = pa.clone();
+            tokio::spawn(async move {
+                if let Err(e) = client.upsert_project_agent(&pa_clone).await {
+                    tracing::warn!("cloud upsert project_agent: {}", e);
+                }
+            });
+        }
+        serde_json::to_value(pa).map_err(|e| e.to_string())
     });
     reg.register("remove_agent_from_project", |ctx, args| async move {
-        let app = ctx.app()?;
         let a: RemoveAgentFromProjectArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-        remove_agent_from_project(
-            a.project_id,
-            a.agent_id,
-            app.state::<DbPool>(),
-            app.state::<CloudClientState>(),
-        )
-        .await?;
+        let cloud = ctx.cloud.clone();
+        let pid = a.project_id.clone();
+        let aid = a.agent_id.clone();
+        ctx.repos
+            .projects()
+            .remove_agent(&a.project_id, &a.agent_id)
+            .await?;
+        if let Some(client) = cloud.get() {
+            tokio::spawn(async move {
+                if let Err(e) = client.delete_project_agent(&pid, &aid).await {
+                    tracing::warn!("cloud delete project_agent: {}", e);
+                }
+            });
+        }
         Ok(serde_json::Value::Null)
     });
     reg.register("get_project_workspace_path", |_ctx, args| async move {

@@ -193,43 +193,11 @@ fn rename_agent_references(
     rename_agent_workflow_references(tx, old_agent_id, new_agent_id, now)
 }
 
-pub async fn list_agents_impl(db: &DbPool) -> Result<Vec<Agent>, String> {
-    let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, name, description, state, max_concurrent_runs, heartbeat_at, created_at, updated_at
-                 FROM agents ORDER BY created_at ASC",
-            )
-            .map_err(|e| e.to_string())?;
-
-        let agents = stmt
-            .query_map([], |row| {
-                Ok(Agent {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    description: row.get(2)?,
-                    state: row.get(3)?,
-                    max_concurrent_runs: row.get(4)?,
-                    heartbeat_at: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                })
-            })
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        Ok(agents)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
 #[tauri::command]
-pub async fn list_agents(db: tauri::State<'_, DbPool>) -> Result<Vec<Agent>, String> {
-    list_agents_impl(db.inner()).await
+pub async fn list_agents(
+    app: tauri::State<'_, crate::app_context::AppContext>,
+) -> Result<Vec<Agent>, String> {
+    app.repos.agents().list().await
 }
 
 #[tauri::command]
@@ -442,49 +410,27 @@ pub async fn update_agent(
 
 #[tauri::command]
 pub async fn delete_agent(
-    app: tauri::AppHandle,
+    tauri_app: tauri::AppHandle,
     id: String,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, crate::app_context::AppContext>,
     cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
     if id == "default" {
         return Err("cannot delete the default agent".to_string());
     }
     let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
-    let id_clone = id.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.execute(
-            "DELETE FROM agents WHERE id = ?1",
-            rusqlite::params![id_clone],
-        )
-        .map_err(|e| e.to_string())?;
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    emit_agent_deleted(&app, &id);
+    app.repos.agents().delete(&id).await?;
+    emit_agent_deleted(&tauri_app, &id);
     cloud_delete!(cloud, "agents", id);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn cancel_run(run_id: String, db: tauri::State<'_, DbPool>) -> Result<(), String> {
-    let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE runs SET state = 'cancelled', finished_at = ?1 WHERE id = ?2 AND state IN ('pending', 'queued', 'running')",
-            rusqlite::params![now, run_id],
-        )
-        .map_err(|e| e.to_string())?;
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub async fn cancel_run(
+    run_id: String,
+    app: tauri::State<'_, crate::app_context::AppContext>,
+) -> Result<(), String> {
+    app.repos.runs().cancel(&run_id).await
 }
 
 mod http {
@@ -538,9 +484,8 @@ mod http {
             Ok(serde_json::Value::Null)
         });
         reg.register("cancel_run", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: CancelArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            cancel_run(a.run_id, app.state::<DbPool>()).await?;
+            ctx.repos.runs().cancel(&a.run_id).await?;
             Ok(serde_json::Value::Null)
         });
     }

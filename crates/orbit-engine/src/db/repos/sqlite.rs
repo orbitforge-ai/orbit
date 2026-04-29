@@ -26,7 +26,9 @@ use crate::models::chat::{
     ChatMessageRow, ChatMessageRows, ChatSession, ChatSessionMeta, ChatSessionTokenUsage,
     MessageReactionRow, SessionExecutionStatus,
 };
-use crate::models::project::{CreateProject, Project, ProjectSummary, UpdateProject};
+use crate::models::project::{
+    CreateProject, Project, ProjectAgent, ProjectAgentWithMeta, ProjectSummary, UpdateProject,
+};
 use crate::models::project_board::{
     CreateProjectBoard, DeleteProjectBoard, ProjectBoard, UpdateProjectBoard,
 };
@@ -672,6 +674,139 @@ impl ProjectRepo for SqliteRepos {
         })
         .await
     }
+
+    async fn list_agents(&self, project_id: &str) -> Result<Vec<Agent>, String> {
+        let project_id = project_id.to_string();
+        self.with_conn(move |conn| {
+            // Same column projection the agent repo uses, joined through the
+            // project_agents membership table.
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {AGENT_COLUMNS} FROM agents a \
+                     JOIN project_agents pa ON pa.agent_id = a.id \
+                     WHERE pa.project_id = ?1 \
+                     ORDER BY a.created_at ASC"
+                ))
+                .err_str()?;
+            let rows: Vec<Agent> = stmt
+                .query_map(params![project_id], map_agent_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn list_agents_with_meta(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ProjectAgentWithMeta>, String> {
+        let project_id = project_id.to_string();
+        self.with_conn(move |conn| {
+            // Default agents float to the top so the project header row in
+            // the UI is always the per-project default.
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {AGENT_COLUMNS}, pa.is_default FROM agents a \
+                     JOIN project_agents pa ON pa.agent_id = a.id \
+                     WHERE pa.project_id = ?1 \
+                     ORDER BY pa.is_default DESC, a.created_at ASC"
+                ))
+                .err_str()?;
+            let rows: Vec<ProjectAgentWithMeta> = stmt
+                .query_map(params![project_id], |row| {
+                    Ok(ProjectAgentWithMeta {
+                        agent: map_agent_row(row)?,
+                        // is_default is one column past the standard agent
+                        // mapper's last index — keep this in sync if AGENT_COLUMNS grows.
+                        is_default: row.get::<_, bool>(8)?,
+                    })
+                })
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn list_for_agent(&self, agent_id: &str) -> Result<Vec<Project>, String> {
+        let agent_id = agent_id.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT p.id, p.name, p.description, p.created_at, p.updated_at \
+                     FROM projects p \
+                     JOIN project_agents pa ON pa.project_id = p.id \
+                     WHERE pa.agent_id = ?1 \
+                     ORDER BY pa.added_at ASC",
+                )
+                .err_str()?;
+            let rows: Vec<Project> = stmt
+                .query_map(params![agent_id], map_project_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn add_agent(
+        &self,
+        project_id: &str,
+        agent_id: &str,
+        is_default: bool,
+    ) -> Result<ProjectAgent, String> {
+        let project_id = project_id.to_string();
+        let agent_id = agent_id.to_string();
+        self.with_conn(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            // INSERT OR REPLACE so flipping the default flag on an existing
+            // membership row is a single statement.
+            conn.execute(
+                "INSERT OR REPLACE INTO project_agents (project_id, agent_id, is_default, added_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![project_id, agent_id, is_default as i64, now],
+            )
+            .err_str()?;
+            Ok(ProjectAgent {
+                project_id,
+                agent_id,
+                is_default,
+                added_at: now,
+            })
+        })
+        .await
+    }
+
+    async fn remove_agent(&self, project_id: &str, agent_id: &str) -> Result<(), String> {
+        let project_id = project_id.to_string();
+        let agent_id = agent_id.to_string();
+        self.with_conn_mut(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let tx = conn.transaction().err_str()?;
+            tx.execute(
+                "DELETE FROM project_agents WHERE project_id = ?1 AND agent_id = ?2",
+                params![project_id, agent_id],
+            )
+            .err_str()?;
+            // Clear any work item assignments held by this agent in this project.
+            // Cards stay in their column (no auto-move); a new claimant is
+            // needed for work to continue.
+            tx.execute(
+                "UPDATE work_items \
+                    SET assignee_agent_id = NULL, updated_at = ?1 \
+                  WHERE project_id = ?2 AND assignee_agent_id = ?3",
+                params![now, project_id, agent_id],
+            )
+            .err_str()?;
+            tx.commit().err_str()?;
+            Ok(())
+        })
+        .await
+    }
 }
 
 // ── Schedules ───────────────────────────────────────────────────────────────
@@ -1108,6 +1243,23 @@ impl RunRepo for SqliteRepos {
             .optional()
             .map(|opt| opt.flatten())
             .err_str()
+        })
+        .await
+    }
+
+    async fn cancel(&self, run_id: &str) -> Result<(), String> {
+        let run_id = run_id.to_string();
+        self.with_conn(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            // Guard with state IN (...) so we don't clobber a run that
+            // already finished — the cancel is a no-op in that case.
+            conn.execute(
+                "UPDATE runs SET state = 'cancelled', finished_at = ?1 \
+                 WHERE id = ?2 AND state IN ('pending', 'queued', 'running')",
+                params![now, run_id],
+            )
+            .err_str()?;
+            Ok(())
         })
         .await
     }
