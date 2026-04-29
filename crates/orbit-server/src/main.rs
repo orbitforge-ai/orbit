@@ -20,7 +20,10 @@ use orbit_engine::auth::{AuthMode, AuthState};
 use orbit_engine::commands::users::ActiveUser;
 use orbit_engine::db::cloud::CloudClientState;
 use orbit_engine::db::connection::init as init_db;
-use orbit_engine::db::repos::{sqlite::SqliteRepos, Repos};
+use orbit_engine::db::postgres::{
+    apply_migrations as apply_postgres_migrations, owner_pool, tenant_pool,
+};
+use orbit_engine::db::repos::{postgres::PgRepos, sqlite::SqliteRepos, Repos};
 use orbit_engine::executor::bg_processes::BgProcessRegistry;
 use orbit_engine::executor::engine::{
     AgentSemaphores, ExecutorEngine, ExecutorTx, SessionExecutionRegistry, UserQuestionRegistry,
@@ -57,6 +60,30 @@ fn bind_port_from_env() -> u16 {
         .ok()
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(8765)
+}
+
+fn postgres_database_url() -> Option<String> {
+    std::env::var("DATABASE_URL")
+        .ok()
+        .filter(|url| url.starts_with("postgres://") || url.starts_with("postgresql://"))
+}
+
+fn tenant_id_from_env() -> String {
+    std::env::var("ORBIT_TENANT_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "local".to_string())
+}
+
+fn postgres_migrations_enabled() -> bool {
+    matches!(
+        std::env::var("ORBIT_APPLY_POSTGRES_MIGRATIONS").as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    )
+}
+
+fn postgres_migrations_url(default_url: &str) -> String {
+    std::env::var("ORBIT_POSTGRES_MIGRATIONS_URL").unwrap_or_else(|_| default_url.to_string())
 }
 
 #[tokio::main]
@@ -97,10 +124,28 @@ async fn main() -> Result<()> {
 
     let plugin_manager = Arc::new(PluginManager::init(db_pool.clone()));
 
-    // Repository facade. Sqlite-backed during the migration; once Phase C
-    // lands the Postgres impl this becomes a runtime decision based on
-    // `DATABASE_URL`.
-    let repos: Arc<dyn Repos> = Arc::new(SqliteRepos::new(db_pool.clone()));
+    // Repository facade. The legacy SQLite pool stays alive because executor,
+    // scheduler, and plugin internals still have direct DbPool call sites.
+    let repos: Arc<dyn Repos> = if let Some(database_url) = postgres_database_url() {
+        let tenant_id = tenant_id_from_env();
+        tracing::info!(tenant_id, "DATABASE_URL is Postgres; using PgRepos");
+        let pg_pool = tenant_pool(&database_url, tenant_id.clone())
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to initialize tenant-bound Postgres pool: {e}"))?;
+        if postgres_migrations_enabled() {
+            tracing::info!("applying Postgres schema/RLS migrations");
+            let migration_url = postgres_migrations_url(&database_url);
+            let migration_pool = owner_pool(&migration_url).await.map_err(|e| {
+                anyhow::anyhow!("failed to initialize Postgres migration pool: {e}")
+            })?;
+            apply_postgres_migrations(&migration_pool)
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to apply Postgres migrations: {e}"))?;
+        }
+        Arc::new(PgRepos::with_tenant(pg_pool, tenant_id))
+    } else {
+        Arc::new(SqliteRepos::new(db_pool.clone()))
+    };
 
     // ── AppContext ──────────────────────────────────────────────────────────
     let ctx = AppContext::new(

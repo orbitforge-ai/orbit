@@ -1,3 +1,4 @@
+use orbit_engine::db::postgres::{apply_migrations, tenant_pool};
 use orbit_engine::db::repos::postgres::PgRepos;
 use orbit_engine::db::repos::{ChatSessionListFilter, Repos};
 use orbit_engine::models::agent::CreateAgent;
@@ -21,6 +22,12 @@ async fn pg_repos_scope_command_surface_by_tenant() -> Result<(), String> {
         .connect(&url)
         .await
         .map_err(|err| err.to_string())?;
+    if matches!(
+        std::env::var("ORBIT_TEST_POSTGRES_APPLY_MIGRATIONS").as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    ) {
+        apply_migrations(&pool).await?;
+    }
 
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let tenant_a = format!("b5_rls_a_{suffix}");
@@ -28,8 +35,10 @@ async fn pg_repos_scope_command_surface_by_tenant() -> Result<(), String> {
     cleanup_tenant(&pool, &tenant_a).await;
     cleanup_tenant(&pool, &tenant_b).await;
 
-    let a = PgRepos::with_tenant(pool.clone(), tenant_a.clone());
-    let b = PgRepos::with_tenant(pool.clone(), tenant_b.clone());
+    let pool_a = tenant_pool(&url, tenant_a.clone()).await?;
+    let pool_b = tenant_pool(&url, tenant_b.clone()).await?;
+    let a = PgRepos::with_tenant(pool_a, tenant_a.clone());
+    let b = PgRepos::with_tenant(pool_b, tenant_b.clone());
 
     let agent_a = a
         .agents()
@@ -352,7 +361,7 @@ async fn cleanup_tenant(pool: &PgPool, tenant_id: &str) {
         "bus_messages",
         "bus_subscriptions",
         "active_session_skills",
-        "chat_message_reactions",
+        "message_reactions",
         "chat_messages",
         "chat_sessions",
         "project_agents",

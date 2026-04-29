@@ -93,10 +93,9 @@ Per-file remaining `DbPool` references (lower = closer to fully migrated). Read-
 - `[done]` `PgRepos` implements the existing repo trait surface against `sqlx::PgPool`; all queries bind `RepoCtx.tenant_id`. Lives at `crates/orbit-engine/src/db/repos/postgres.rs`.
 - `[done]` RLS regression harness added at `crates/orbit-engine/tests/pg_repos_rls.rs`; run with `ORBIT_TEST_POSTGRES_URL=... cargo test -p orbit-engine --test pg_repos_rls -- --ignored`.
 - `[done]` B.5 verification sweep: `cargo fmt --check`, `git diff --check`, `cargo test -p orbit-engine --test pg_repos_rls --no-run`, `cargo check --workspace`, and `cargo build -p orbit-server` pass with the same pre-existing warnings listed in prior B.4 verification.
-
-Follow-on after B.5:
-
-- `[next]` Online-migration story for shared multi-tenant Postgres now that `PgRepos` boots.
+- `[done]` Phase C schema/runtime slice: consolidated Postgres migration lives under `crates/orbit-engine/src/db/migrations/postgres/`, creates the current tenant-bearing schema, forces RLS on every table, and grants the default-deny `application_role`.
+- `[done]` `orbit_server` selects `PgRepos` when `DATABASE_URL` is Postgres, binds a tenant-scoped pool from `ORBIT_TENANT_ID`, and can apply Postgres migrations with `ORBIT_APPLY_POSTGRES_MIGRATIONS=1`.
+- `[done]` Online migration story, PgBouncer/session-pool requirement, migration test harness command, and EXPLAIN baseline list are documented in `docs/ops/postgres-phase-c.md`.
 
 ### B.6 Sqlx swap on the SQLite path
 
