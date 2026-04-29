@@ -8,6 +8,7 @@
 
 use async_trait::async_trait;
 use rusqlite::{params, OptionalExtension};
+use std::collections::HashSet;
 use ulid::Ulid;
 
 use crate::db::repos::{
@@ -33,7 +34,10 @@ use crate::models::project_board::{
     CreateProjectBoard, DeleteProjectBoard, ProjectBoard, UpdateProjectBoard,
 };
 use crate::models::project_board_column::ProjectBoardColumn;
-use crate::models::project_workflow::ProjectWorkflow;
+use crate::models::project_workflow::{
+    CreateProjectWorkflow, ProjectWorkflow, RuleNode, UpdateProjectWorkflow, WorkflowEdge,
+    WorkflowGraph, KNOWN_NODE_TYPES, RULE_OPERATORS,
+};
 use crate::models::run::{Run, RunSummary};
 use crate::models::schedule::{CreateSchedule, RecurringConfig, Schedule};
 use crate::models::task::{CreateTask, Task, UpdateTask};
@@ -2343,9 +2347,8 @@ impl WorkItemRepo for SqliteRepos {
 
 // ── Project workflows ───────────────────────────────────────────────────────
 //
-// Read-only at the trait surface. Writes (create / update / delete /
-// set-enabled) go through `*_with_db` helpers because they involve graph
-// normalisation, trigger reconciliation, and a transactional graph swap.
+// The write surface owns graph normalization, trigger reconciliation, and the
+// transactional graph swap so command/tool call sites do not need `DbPool`.
 
 const PROJECT_WORKFLOW_COLUMNS: &str = "id, project_id, name, description, enabled, graph,
         trigger_kind, trigger_config, version, created_at, updated_at";
@@ -2368,6 +2371,393 @@ fn map_project_workflow_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
     })
+}
+
+fn validate_project_workflow_graph(graph: &WorkflowGraph) -> Result<(), String> {
+    let node_ids: HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
+    if node_ids.len() != graph.nodes.len() {
+        return Err("workflow: duplicate node ids".into());
+    }
+
+    let mut reference_keys = HashSet::new();
+    for node in &graph.nodes {
+        if !KNOWN_NODE_TYPES.contains(&node.node_type.as_str()) {
+            return Err(format!(
+                "workflow: unknown node type '{}' on node '{}'",
+                node.node_type, node.id
+            ));
+        }
+        if let Some(reference_key) = node
+            .data
+            .get("referenceKey")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if !is_valid_workflow_reference_key(reference_key) {
+                return Err(format!(
+                    "workflow: node '{}' has invalid referenceKey '{}'; use kebab-case letters, numbers, and hyphens",
+                    node.id, reference_key
+                ));
+            }
+            if !reference_keys.insert(reference_key.to_string()) {
+                return Err(format!(
+                    "workflow: duplicate referenceKey '{}' found; each node reference name must be unique",
+                    reference_key
+                ));
+            }
+        }
+        if node.node_type == "logic.if" {
+            if let Some(rule_value) = node.data.get("rule") {
+                let parsed: Result<RuleNode, _> = serde_json::from_value(rule_value.clone());
+                match parsed {
+                    Ok(rule) => validate_project_workflow_rule(&rule)?,
+                    Err(e) => {
+                        return Err(format!(
+                            "workflow: logic.if node '{}' has malformed rule: {}",
+                            node.id, e
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    let mut incoming: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut logic_if_handles: std::collections::HashMap<&str, HashSet<String>> =
+        std::collections::HashMap::new();
+    let logic_if_ids: HashSet<&str> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == "logic.if")
+        .map(|n| n.id.as_str())
+        .collect();
+
+    for edge in &graph.edges {
+        if !node_ids.contains(edge.source.as_str()) {
+            return Err(format!(
+                "workflow: edge '{}' references unknown source node '{}'",
+                edge.id, edge.source
+            ));
+        }
+        if !node_ids.contains(edge.target.as_str()) {
+            return Err(format!(
+                "workflow: edge '{}' references unknown target node '{}'",
+                edge.id, edge.target
+            ));
+        }
+        *incoming.entry(edge.target.as_str()).or_insert(0) += 1;
+        if logic_if_ids.contains(edge.source.as_str()) {
+            let handle = edge.source_handle.clone().unwrap_or_default();
+            if handle != "true" && handle != "false" {
+                return Err(format!(
+                    "workflow: logic.if node '{}' has outgoing edge '{}' with invalid handle '{}', expected 'true' or 'false'",
+                    edge.source, edge.id, handle
+                ));
+            }
+            let inserted = logic_if_handles
+                .entry(edge.source.as_str())
+                .or_default()
+                .insert(handle.clone());
+            if !inserted {
+                return Err(format!(
+                    "workflow: logic.if node '{}' has multiple outgoing '{}' edges; each branch may only connect once",
+                    edge.source, handle
+                ));
+            }
+        }
+    }
+
+    for (target, count) in &incoming {
+        if *count > 1 {
+            return Err(format!(
+                "workflow: node '{}' has {} incoming edges; fan-in / join nodes are not supported",
+                target, count
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn is_valid_workflow_reference_key(value: &str) -> bool {
+    if value == "trigger" || value == "__aliases" || value.starts_with('-') || value.ends_with('-')
+    {
+        return false;
+    }
+    let mut saw_alnum = false;
+    for ch in value.chars() {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+            saw_alnum = true;
+            continue;
+        }
+        if ch != '-' {
+            return false;
+        }
+    }
+    saw_alnum
+}
+
+fn validate_project_workflow_rule(rule: &RuleNode) -> Result<(), String> {
+    match rule {
+        RuleNode::Group(group) => {
+            if group.combinator != "and" && group.combinator != "or" {
+                return Err(format!(
+                    "workflow: unknown rule combinator '{}'",
+                    group.combinator
+                ));
+            }
+            for child in &group.rules {
+                validate_project_workflow_rule(child)?;
+            }
+            Ok(())
+        }
+        RuleNode::Leaf(leaf) => {
+            if !RULE_OPERATORS.contains(&leaf.operator.as_str()) {
+                return Err(format!(
+                    "workflow: unknown rule operator '{}'",
+                    leaf.operator
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn derive_project_workflow_trigger(
+    graph: &WorkflowGraph,
+    fallback_kind: Option<&str>,
+    fallback_config: Option<&serde_json::Value>,
+) -> (String, serde_json::Value) {
+    if let Some(node) = graph
+        .nodes
+        .iter()
+        .find(|node| node.node_type == "trigger.schedule")
+    {
+        return ("schedule".to_string(), node.data.clone());
+    }
+    if graph
+        .nodes
+        .iter()
+        .any(|node| node.node_type == "trigger.manual")
+    {
+        return ("manual".to_string(), serde_json::json!({}));
+    }
+    (
+        fallback_kind.unwrap_or("manual").to_string(),
+        fallback_config
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
+    )
+}
+
+fn normalize_project_workflow_data_object(
+    value: &serde_json::Value,
+) -> serde_json::Map<String, serde_json::Value> {
+    match value {
+        serde_json::Value::Object(map) => map.clone(),
+        _ => serde_json::Map::new(),
+    }
+}
+
+fn slugify_project_workflow_reference_key(value: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in value.trim().to_lowercase().chars() {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+            out.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+fn normalize_project_workflow_reference_key(value: Option<&str>) -> Option<String> {
+    let normalized = slugify_project_workflow_reference_key(value.unwrap_or_default());
+    if normalized.is_empty() || normalized == "trigger" || normalized == "__aliases" {
+        return None;
+    }
+    Some(normalized)
+}
+
+fn project_workflow_node_label(node_type: &str) -> String {
+    match node_type {
+        "trigger.manual" => "Run now".to_string(),
+        "trigger.schedule" => "Schedule".to_string(),
+        "agent.run" => "Run agent".to_string(),
+        "logic.if" => "If / branch".to_string(),
+        "code.bash.run" => "Code Bash".to_string(),
+        "code.script.run" => "Code JS/TS".to_string(),
+        "board.work_item.create" => "Board Work item".to_string(),
+        "board.proposal.enqueue" => "Board Proposal queue".to_string(),
+        "integration.feed.fetch" => "Feed fetch".to_string(),
+        "integration.com_orbit_discord.send_message" => "Discord Send message".to_string(),
+        "integration.gmail.read" => "Gmail Read".to_string(),
+        "integration.gmail.send" => "Gmail Send".to_string(),
+        "integration.slack.send" => "Slack Send".to_string(),
+        "integration.http.request" => "HTTP request".to_string(),
+        other => other.replace('.', " "),
+    }
+}
+
+fn project_workflow_reference_base(node_type: &str, preferred: Option<&str>) -> String {
+    normalize_project_workflow_reference_key(preferred).unwrap_or_else(|| {
+        slugify_project_workflow_reference_key(&project_workflow_node_label(node_type))
+    })
+}
+
+fn is_generated_project_workflow_reference_key(node_type: &str, value: &str) -> bool {
+    let base = project_workflow_reference_base(node_type, None);
+    value == base
+        || value
+            .strip_prefix(&(base + "-"))
+            .map(|suffix| suffix.chars().all(|ch| ch.is_ascii_digit()))
+            .unwrap_or(false)
+}
+
+fn project_workflow_node_has_linked_outputs(
+    node_id: &str,
+    node_type: &str,
+    edges: &[WorkflowEdge],
+) -> bool {
+    node_type.starts_with("trigger.") || edges.iter().any(|edge| edge.source == node_id)
+}
+
+fn normalize_project_workflow_graph_for_storage(graph: &WorkflowGraph) -> WorkflowGraph {
+    let mut normalized = graph.clone();
+    let mut used = HashSet::from(["trigger".to_string(), "__aliases".to_string()]);
+
+    for node in &normalized.nodes {
+        if !project_workflow_node_has_linked_outputs(&node.id, &node.node_type, &normalized.edges) {
+            continue;
+        }
+        let data = normalize_project_workflow_data_object(&node.data);
+        let Some(existing) = data.get("referenceKey").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(existing) = normalize_project_workflow_reference_key(Some(existing)) else {
+            continue;
+        };
+        if !is_generated_project_workflow_reference_key(&node.node_type, &existing) {
+            used.insert(existing);
+        }
+    }
+
+    for node in &mut normalized.nodes {
+        let mut data = normalize_project_workflow_data_object(&node.data);
+        let existing = data
+            .get("referenceKey")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| normalize_project_workflow_reference_key(Some(value)));
+
+        if !project_workflow_node_has_linked_outputs(&node.id, &node.node_type, &normalized.edges) {
+            node.data = serde_json::Value::Object(data);
+            continue;
+        }
+
+        if let Some(existing) = existing {
+            if !is_generated_project_workflow_reference_key(&node.node_type, &existing) {
+                data.insert(
+                    "referenceKey".to_string(),
+                    serde_json::Value::String(existing),
+                );
+                node.data = serde_json::Value::Object(data);
+                continue;
+            }
+        }
+
+        let base = project_workflow_reference_base(&node.node_type, None);
+        let mut suffix = 1usize;
+        let mut candidate = format!("{}-{}", base, suffix);
+        while used.contains(&candidate) {
+            suffix += 1;
+            candidate = format!("{}-{}", base, suffix);
+        }
+        used.insert(candidate.clone());
+        data.insert(
+            "referenceKey".to_string(),
+            serde_json::Value::String(candidate),
+        );
+        node.data = serde_json::Value::Object(data);
+    }
+
+    normalized
+}
+
+fn prepare_project_workflow_for_write(
+    graph: &WorkflowGraph,
+    fallback_kind: Option<&str>,
+    fallback_config: Option<&serde_json::Value>,
+) -> Result<(WorkflowGraph, String, serde_json::Value), String> {
+    let graph = normalize_project_workflow_graph_for_storage(graph);
+    validate_project_workflow_graph(&graph)?;
+    let (trigger_kind, trigger_config) =
+        derive_project_workflow_trigger(&graph, fallback_kind, fallback_config);
+    Ok((graph, trigger_kind, trigger_config))
+}
+
+fn structured_project_workflow_error(code: &str, message: String) -> String {
+    serde_json::json!({
+        "code": code,
+        "message": message,
+    })
+    .to_string()
+}
+
+fn ensure_project_workflow_can_enable_or_run(
+    graph: &WorkflowGraph,
+    action: &str,
+) -> Result<(), String> {
+    if graph
+        .nodes
+        .iter()
+        .any(|node| node.node_type.starts_with("trigger."))
+    {
+        return Ok(());
+    }
+    Err(structured_project_workflow_error(
+        "workflow_missing_trigger",
+        format!("workflow cannot {} without a trigger node", action),
+    ))
+}
+
+fn sync_project_workflow_schedule(
+    conn: &rusqlite::Connection,
+    workflow_id: &str,
+    enabled: bool,
+    trigger_kind: &str,
+    trigger_config: &serde_json::Value,
+    now: &str,
+) -> Result<(), String> {
+    let schedule_id = format!("workflow-schedule-{}", workflow_id);
+    if !enabled || trigger_kind != "schedule" {
+        conn.execute(
+            "DELETE FROM schedules WHERE workflow_id = ?1",
+            params![workflow_id],
+        )
+        .err_str()?;
+        return Ok(());
+    }
+
+    let config: RecurringConfig = serde_json::from_value(trigger_config.clone())
+        .map_err(|e| format!("workflow schedule config is invalid: {}", e))?;
+    let next_run_at = next_n_runs(&config, 1).into_iter().next();
+    let config_json = serde_json::to_string(trigger_config).err_str()?;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO schedules (
+            id, task_id, workflow_id, target_kind, kind, config, enabled,
+            next_run_at, last_run_at, created_at, updated_at
+         ) VALUES (?1, NULL, ?2, 'workflow', 'recurring', ?3, 1, ?4, NULL,
+                   COALESCE((SELECT created_at FROM schedules WHERE id = ?1), ?5), ?5)",
+        params![schedule_id, workflow_id, config_json, next_run_at, now],
+    )
+    .err_str()?;
+
+    Ok(())
 }
 
 #[async_trait]
@@ -2400,6 +2790,222 @@ impl ProjectWorkflowRepo for SqliteRepos {
                 map_project_workflow_row,
             )
             .err_str()
+        })
+        .await
+    }
+
+    async fn create(&self, payload: CreateProjectWorkflow) -> Result<ProjectWorkflow, String> {
+        self.with_conn_mut(move |conn| {
+            let graph = payload.graph.unwrap_or_default();
+            let (graph, trigger_kind, trigger_config) = prepare_project_workflow_for_write(
+                &graph,
+                payload.trigger_kind.as_deref(),
+                payload.trigger_config.as_ref(),
+            )?;
+
+            let tx = conn.transaction().err_str()?;
+            let id = Ulid::new().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+            let graph_json = serde_json::to_string(&graph).err_str()?;
+            let trigger_config_json = serde_json::to_string(&trigger_config).err_str()?;
+
+            tx.execute(
+                "INSERT INTO project_workflows (
+                    id, project_id, name, description, enabled, graph,
+                    trigger_kind, trigger_config, version, created_at, updated_at
+                 ) VALUES (?1,?2,?3,?4,0,?5,?6,?7,1,?8,?8)",
+                params![
+                    &id,
+                    &payload.project_id,
+                    &payload.name,
+                    &payload.description,
+                    graph_json,
+                    &trigger_kind,
+                    trigger_config_json,
+                    &now,
+                ],
+            )
+            .err_str()?;
+
+            sync_project_workflow_schedule(&tx, &id, false, &trigger_kind, &trigger_config, &now)?;
+
+            let item = tx
+                .query_row(
+                    &format!(
+                        "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1"
+                    ),
+                    params![&id],
+                    map_project_workflow_row,
+                )
+                .err_str()?;
+            tx.commit().err_str()?;
+            Ok(item)
+        })
+        .await
+    }
+
+    async fn update(
+        &self,
+        id: &str,
+        payload: UpdateProjectWorkflow,
+    ) -> Result<ProjectWorkflow, String> {
+        let id = id.to_string();
+        self.with_conn_mut(move |conn| {
+            let tx = conn.transaction().err_str()?;
+            let now = chrono::Utc::now().to_rfc3339();
+
+            let current = tx
+                .query_row(
+                    &format!(
+                        "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1"
+                    ),
+                    params![&id],
+                    map_project_workflow_row,
+                )
+                .err_str()?;
+
+            if let Some(name) = &payload.name {
+                if name.trim().is_empty() {
+                    return Err("workflow: name must be non-empty".into());
+                }
+                tx.execute(
+                    "UPDATE project_workflows SET name = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![name, &now, &id],
+                )
+                .err_str()?;
+            }
+            if let Some(description) = &payload.description {
+                tx.execute(
+                    "UPDATE project_workflows SET description = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![description, &now, &id],
+                )
+                .err_str()?;
+            }
+
+            let normalized_graph = if let Some(graph) = &payload.graph {
+                let (graph, _, _) = prepare_project_workflow_for_write(
+                    graph,
+                    payload
+                        .trigger_kind
+                        .as_deref()
+                        .or(Some(current.trigger_kind.as_str())),
+                    payload.trigger_config.as_ref().or(Some(&current.trigger_config)),
+                )?;
+                let json = serde_json::to_string(&graph).err_str()?;
+                tx.execute(
+                    "UPDATE project_workflows
+                        SET graph = ?1, version = version + 1, updated_at = ?2
+                      WHERE id = ?3",
+                    params![json, &now, &id],
+                )
+                .err_str()?;
+                Some(graph)
+            } else {
+                None
+            };
+
+            let graph_for_trigger = normalized_graph.as_ref().unwrap_or(&current.graph);
+            let (trigger_kind, trigger_config) = derive_project_workflow_trigger(
+                graph_for_trigger,
+                payload
+                    .trigger_kind
+                    .as_deref()
+                    .or(Some(current.trigger_kind.as_str())),
+                payload.trigger_config.as_ref().or(Some(&current.trigger_config)),
+            );
+            let trigger_config_json = serde_json::to_string(&trigger_config).err_str()?;
+            tx.execute(
+                "UPDATE project_workflows SET trigger_kind = ?1, trigger_config = ?2, updated_at = ?3 WHERE id = ?4",
+                params![&trigger_kind, trigger_config_json, &now, &id],
+            )
+            .err_str()?;
+            sync_project_workflow_schedule(
+                &tx,
+                &current.id,
+                current.enabled,
+                &trigger_kind,
+                &trigger_config,
+                &now,
+            )?;
+
+            let item = tx
+                .query_row(
+                    &format!(
+                        "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1"
+                    ),
+                    params![&id],
+                    map_project_workflow_row,
+                )
+                .err_str()?;
+            tx.commit().err_str()?;
+            Ok(item)
+        })
+        .await
+    }
+
+    async fn delete(&self, id: &str) -> Result<(), String> {
+        let workflow_id = id.to_string();
+        self.with_conn_mut(move |conn| {
+            let tx = conn.transaction().err_str()?;
+            tx.execute(
+                "DELETE FROM schedules WHERE workflow_id = ?1",
+                params![&workflow_id],
+            )
+            .err_str()?;
+            tx.execute(
+                "DELETE FROM project_workflows WHERE id = ?1",
+                params![&workflow_id],
+            )
+            .err_str()?;
+            tx.commit().err_str()?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn set_enabled(&self, id: &str, enabled: bool) -> Result<ProjectWorkflow, String> {
+        let id = id.to_string();
+        self.with_conn_mut(move |conn| {
+            let tx = conn.transaction().err_str()?;
+            let current = tx
+                .query_row(
+                    &format!(
+                        "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1"
+                    ),
+                    params![&id],
+                    map_project_workflow_row,
+                )
+                .err_str()?;
+            if enabled {
+                ensure_project_workflow_can_enable_or_run(&current.graph, "enable")?;
+            }
+
+            let now = chrono::Utc::now().to_rfc3339();
+            let flag: i64 = if enabled { 1 } else { 0 };
+            tx.execute(
+                "UPDATE project_workflows SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
+                params![flag, &now, &id],
+            )
+            .err_str()?;
+            sync_project_workflow_schedule(
+                &tx,
+                &current.id,
+                enabled,
+                &current.trigger_kind,
+                &current.trigger_config,
+                &now,
+            )?;
+            let item = tx
+                .query_row(
+                    &format!(
+                        "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1"
+                    ),
+                    params![&id],
+                    map_project_workflow_row,
+                )
+                .err_str()?;
+            tx.commit().err_str()?;
+            Ok(item)
         })
         .await
     }

@@ -1,18 +1,13 @@
 use crate::app_context::AppContext;
 use crate::db::cloud::SupabaseClient;
-use crate::db::DbPool;
 use crate::models::project_workflow::{
     CreateProjectWorkflow, ProjectWorkflow, RuleNode, UpdateProjectWorkflow, WorkflowEdge,
     WorkflowGraph, WorkflowNode, KNOWN_NODE_TYPES, RULE_OPERATORS,
 };
-use crate::models::schedule::RecurringConfig;
-use crate::scheduler::converter::next_n_runs;
 use crate::workflows::nodes::node_type_has_executor;
-use rusqlite::params;
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use ulid::Ulid;
 
 // ── Cloud helper ──────────────────────────────────────────────────────────────
 
@@ -42,31 +37,6 @@ macro_rules! cloud_delete {
             });
         }
     };
-}
-
-// ── Row mapper ────────────────────────────────────────────────────────────────
-
-const COLUMNS: &str = "id, project_id, name, description, enabled, graph,
-        trigger_kind, trigger_config, version, created_at, updated_at";
-
-pub(crate) fn map_workflow(row: &rusqlite::Row) -> rusqlite::Result<ProjectWorkflow> {
-    let enabled: i64 = row.get(4)?;
-    let graph_json: String = row.get(5)?;
-    let trigger_config_json: String = row.get(7)?;
-    Ok(ProjectWorkflow {
-        id: row.get(0)?,
-        project_id: row.get(1)?,
-        name: row.get(2)?,
-        description: row.get(3)?,
-        enabled: enabled != 0,
-        graph: serde_json::from_str(&graph_json).unwrap_or_default(),
-        trigger_kind: row.get(6)?,
-        trigger_config: serde_json::from_str(&trigger_config_json)
-            .unwrap_or_else(|_| serde_json::json!({})),
-        version: row.get(8)?,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
-    })
 }
 
 // ── Validation ────────────────────────────────────────────────────────────────
@@ -231,69 +201,6 @@ fn validate_rule(rule: &RuleNode) -> Result<(), String> {
             Ok(())
         }
     }
-}
-
-fn derive_trigger_from_graph(
-    graph: &WorkflowGraph,
-    fallback_kind: Option<&str>,
-    fallback_config: Option<&serde_json::Value>,
-) -> (String, serde_json::Value) {
-    if let Some(node) = graph
-        .nodes
-        .iter()
-        .find(|node| node.node_type == "trigger.schedule")
-    {
-        return ("schedule".to_string(), node.data.clone());
-    }
-    if graph
-        .nodes
-        .iter()
-        .any(|node| node.node_type == "trigger.manual")
-    {
-        return ("manual".to_string(), serde_json::json!({}));
-    }
-    (
-        fallback_kind.unwrap_or("manual").to_string(),
-        fallback_config
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({})),
-    )
-}
-
-fn sync_workflow_schedule(
-    conn: &rusqlite::Connection,
-    workflow_id: &str,
-    enabled: bool,
-    trigger_kind: &str,
-    trigger_config: &serde_json::Value,
-    now: &str,
-) -> Result<(), String> {
-    let schedule_id = format!("workflow-schedule-{}", workflow_id);
-    if !enabled || trigger_kind != "schedule" {
-        conn.execute(
-            "DELETE FROM schedules WHERE workflow_id = ?1",
-            params![workflow_id],
-        )
-        .map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-
-    let config: RecurringConfig = serde_json::from_value(trigger_config.clone())
-        .map_err(|e| format!("workflow schedule config is invalid: {}", e))?;
-    let next_run_at = next_n_runs(&config, 1).into_iter().next();
-    let config_json = serde_json::to_string(trigger_config).map_err(|e| e.to_string())?;
-
-    conn.execute(
-        "INSERT OR REPLACE INTO schedules (
-            id, task_id, workflow_id, target_kind, kind, config, enabled,
-            next_run_at, last_run_at, created_at, updated_at
-         ) VALUES (?1, NULL, ?2, 'workflow', 'recurring', ?3, 1, ?4, NULL,
-                   COALESCE((SELECT created_at FROM schedules WHERE id = ?1), ?5), ?5)",
-        params![schedule_id, workflow_id, config_json, next_run_at, now],
-    )
-    .map_err(|e| e.to_string())?;
-
-    Ok(())
 }
 
 pub fn workflow_has_trigger_node(graph: &WorkflowGraph) -> bool {
@@ -565,37 +472,10 @@ pub fn normalize_graph_for_storage(graph: &WorkflowGraph) -> WorkflowGraph {
     normalized
 }
 
-fn prepare_graph_for_write(
-    graph: &WorkflowGraph,
-    fallback_kind: Option<&str>,
-    fallback_config: Option<&Value>,
-) -> Result<(WorkflowGraph, String, Value), String> {
-    let normalized = normalize_graph_for_storage(graph);
-    validate_graph(&normalized)?;
-    let (trigger_kind, trigger_config) =
-        derive_trigger_from_graph(&normalized, fallback_kind, fallback_config);
-    Ok((normalized, trigger_kind, trigger_config))
-}
-
-fn structured_workflow_error(code: &str, message: String) -> String {
-    json!({
-        "code": code,
-        "message": message,
-    })
-    .to_string()
-}
-
-fn ensure_workflow_can_enable_or_run(graph: &WorkflowGraph, action: &str) -> Result<(), String> {
-    if workflow_has_trigger_node(graph) {
-        return Ok(());
-    }
-    Err(structured_workflow_error(
-        "workflow_missing_trigger",
-        format!("workflow cannot {} without a trigger node", action),
-    ))
-}
-
-fn spawn_cloud_upsert_workflow(cloud: Option<Arc<SupabaseClient>>, workflow: &ProjectWorkflow) {
+pub(crate) fn spawn_cloud_upsert_workflow(
+    cloud: Option<Arc<SupabaseClient>>,
+    workflow: &ProjectWorkflow,
+) {
     if let Some(client) = cloud {
         let workflow = workflow.clone();
         tokio::spawn(async move {
@@ -606,7 +486,7 @@ fn spawn_cloud_upsert_workflow(cloud: Option<Arc<SupabaseClient>>, workflow: &Pr
     }
 }
 
-fn spawn_cloud_delete_workflow(cloud: Option<Arc<SupabaseClient>>, workflow_id: &str) {
+pub(crate) fn spawn_cloud_delete_workflow(cloud: Option<Arc<SupabaseClient>>, workflow_id: &str) {
     if let Some(client) = cloud {
         let workflow_id = workflow_id.to_string();
         tokio::spawn(async move {
@@ -615,319 +495,6 @@ fn spawn_cloud_delete_workflow(cloud: Option<Arc<SupabaseClient>>, workflow_id: 
             }
         });
     }
-}
-
-pub async fn list_project_workflows_with_db(
-    db: &DbPool,
-    project_id: &str,
-    limit: Option<i64>,
-) -> Result<Vec<ProjectWorkflow>, String> {
-    let pool = db.0.clone();
-    let project_id = project_id.to_string();
-    let limit = limit.unwrap_or(100).clamp(1, 200);
-    tokio::task::spawn_blocking(move || -> Result<Vec<ProjectWorkflow>, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let sql = format!(
-            "SELECT {} FROM project_workflows WHERE project_id = ?1 ORDER BY name ASC LIMIT ?2",
-            COLUMNS
-        );
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(params![project_id, limit], map_workflow)
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-pub async fn get_project_workflow_with_db(
-    db: &DbPool,
-    id: &str,
-) -> Result<ProjectWorkflow, String> {
-    let pool = db.0.clone();
-    let id = id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<ProjectWorkflow, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let sql = format!("SELECT {} FROM project_workflows WHERE id = ?1", COLUMNS);
-        conn.query_row(&sql, params![id], map_workflow)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-pub async fn lookup_workflow_project_id_with_db(
-    db: &DbPool,
-    workflow_id: &str,
-) -> Result<String, String> {
-    let pool = db.0.clone();
-    let workflow_id = workflow_id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<String, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT project_id FROM project_workflows WHERE id = ?1",
-            params![workflow_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| format!("workflow: not found ({})", e))
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-pub async fn lookup_run_scope_with_db(
-    db: &DbPool,
-    run_id: &str,
-) -> Result<(String, String), String> {
-    let pool = db.0.clone();
-    let run_id = run_id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT wr.workflow_id, pw.project_id
-             FROM workflow_runs wr
-             INNER JOIN project_workflows pw ON pw.id = wr.workflow_id
-             WHERE wr.id = ?1",
-            params![run_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(|e| format!("workflow run not found ({})", e))
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-pub async fn create_project_workflow_with_db(
-    db: &DbPool,
-    cloud: Option<Arc<SupabaseClient>>,
-    payload: CreateProjectWorkflow,
-) -> Result<ProjectWorkflow, String> {
-    let pool = db.0.clone();
-    let item = tokio::task::spawn_blocking(move || -> Result<ProjectWorkflow, String> {
-        let mut conn = pool.get().map_err(|e| e.to_string())?;
-        let graph = payload.graph.unwrap_or_default();
-        let (graph, trigger_kind, trigger_config) = prepare_graph_for_write(
-            &graph,
-            payload.trigger_kind.as_deref(),
-            payload.trigger_config.as_ref(),
-        )?;
-
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let id = Ulid::new().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
-        let graph_json = serde_json::to_string(&graph).map_err(|e| e.to_string())?;
-        let trigger_config_json =
-            serde_json::to_string(&trigger_config).map_err(|e| e.to_string())?;
-
-        tx.execute(
-            "INSERT INTO project_workflows (
-                id, project_id, name, description, enabled, graph,
-                trigger_kind, trigger_config, version, created_at, updated_at
-             ) VALUES (?1,?2,?3,?4,0,?5,?6,?7,1,?8,?8)",
-            params![
-                id,
-                payload.project_id,
-                payload.name,
-                payload.description,
-                graph_json,
-                trigger_kind,
-                trigger_config_json,
-                now,
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-
-        sync_workflow_schedule(&tx, &id, false, &trigger_kind, &trigger_config, &now)?;
-
-        let sql = format!("SELECT {} FROM project_workflows WHERE id = ?1", COLUMNS);
-        let item = tx
-            .query_row(&sql, params![id], map_workflow)
-            .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(item)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    spawn_cloud_upsert_workflow(cloud, &item);
-    Ok(item)
-}
-
-pub async fn update_project_workflow_with_db(
-    db: &DbPool,
-    cloud: Option<Arc<SupabaseClient>>,
-    id: &str,
-    payload: UpdateProjectWorkflow,
-) -> Result<ProjectWorkflow, String> {
-    let pool = db.0.clone();
-    let id = id.to_string();
-    let item = tokio::task::spawn_blocking(move || -> Result<ProjectWorkflow, String> {
-        let mut conn = pool.get().map_err(|e| e.to_string())?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-
-        let current = tx
-            .query_row(
-                &format!("SELECT {} FROM project_workflows WHERE id = ?1", COLUMNS),
-                params![id],
-                map_workflow,
-            )
-            .map_err(|e| e.to_string())?;
-
-        if let Some(name) = &payload.name {
-            if name.trim().is_empty() {
-                return Err("workflow: name must be non-empty".into());
-            }
-            tx.execute(
-                "UPDATE project_workflows SET name = ?1, updated_at = ?2 WHERE id = ?3",
-                params![name, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if let Some(description) = &payload.description {
-            tx.execute(
-                "UPDATE project_workflows SET description = ?1, updated_at = ?2 WHERE id = ?3",
-                params![description, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-
-        let normalized_graph = if let Some(graph) = &payload.graph {
-            let (graph, _, _) = prepare_graph_for_write(
-                graph,
-                payload.trigger_kind.as_deref().or(Some(current.trigger_kind.as_str())),
-                payload.trigger_config.as_ref().or(Some(&current.trigger_config)),
-            )?;
-            let json = serde_json::to_string(&graph).map_err(|e| e.to_string())?;
-            tx.execute(
-                "UPDATE project_workflows
-                    SET graph = ?1, version = version + 1, updated_at = ?2
-                  WHERE id = ?3",
-                params![json, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-            Some(graph)
-        } else {
-            None
-        };
-
-        let graph_for_trigger = normalized_graph.as_ref().unwrap_or(&current.graph);
-        let (trigger_kind, trigger_config) = derive_trigger_from_graph(
-            graph_for_trigger,
-            payload.trigger_kind.as_deref().or(Some(current.trigger_kind.as_str())),
-            payload.trigger_config.as_ref().or(Some(&current.trigger_config)),
-        );
-        let trigger_config_json =
-            serde_json::to_string(&trigger_config).map_err(|e| e.to_string())?;
-        tx.execute(
-            "UPDATE project_workflows SET trigger_kind = ?1, trigger_config = ?2, updated_at = ?3 WHERE id = ?4",
-            params![trigger_kind, trigger_config_json, now, id],
-        )
-        .map_err(|e| e.to_string())?;
-        sync_workflow_schedule(&tx, &current.id, current.enabled, &trigger_kind, &trigger_config, &now)?;
-
-        let item = tx
-            .query_row(
-                &format!("SELECT {} FROM project_workflows WHERE id = ?1", COLUMNS),
-                params![id],
-                map_workflow,
-            )
-            .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(item)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    spawn_cloud_upsert_workflow(cloud, &item);
-    Ok(item)
-}
-
-pub async fn delete_project_workflow_with_db(
-    db: &DbPool,
-    cloud: Option<Arc<SupabaseClient>>,
-    id: &str,
-) -> Result<(), String> {
-    let pool = db.0.clone();
-    let workflow_id = id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let mut conn = pool.get().map_err(|e| e.to_string())?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        tx.execute(
-            "DELETE FROM schedules WHERE workflow_id = ?1",
-            params![workflow_id.clone()],
-        )
-        .map_err(|e| e.to_string())?;
-        tx.execute(
-            "DELETE FROM project_workflows WHERE id = ?1",
-            params![workflow_id],
-        )
-        .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    spawn_cloud_delete_workflow(cloud, id);
-    Ok(())
-}
-
-pub async fn set_project_workflow_enabled_with_db(
-    db: &DbPool,
-    cloud: Option<Arc<SupabaseClient>>,
-    id: &str,
-    enabled: bool,
-) -> Result<ProjectWorkflow, String> {
-    let pool = db.0.clone();
-    let id = id.to_string();
-    let item = tokio::task::spawn_blocking(move || -> Result<ProjectWorkflow, String> {
-        let mut conn = pool.get().map_err(|e| e.to_string())?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let current = tx
-            .query_row(
-                &format!("SELECT {} FROM project_workflows WHERE id = ?1", COLUMNS),
-                params![id],
-                map_workflow,
-            )
-            .map_err(|e| e.to_string())?;
-        if enabled {
-            ensure_workflow_can_enable_or_run(&current.graph, "enable")?;
-        }
-
-        let now = chrono::Utc::now().to_rfc3339();
-        let flag: i64 = if enabled { 1 } else { 0 };
-        tx.execute(
-            "UPDATE project_workflows SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
-            params![flag, now, id],
-        )
-        .map_err(|e| e.to_string())?;
-        sync_workflow_schedule(
-            &tx,
-            &current.id,
-            enabled,
-            &current.trigger_kind,
-            &current.trigger_config,
-            &now,
-        )?;
-        let item = tx
-            .query_row(
-                &format!("SELECT {} FROM project_workflows WHERE id = ?1", COLUMNS),
-                params![id],
-                map_workflow,
-            )
-            .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(item)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    spawn_cloud_upsert_workflow(cloud, &item);
-    Ok(item)
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
@@ -960,7 +527,9 @@ async fn create_project_workflow_inner(
     payload: CreateProjectWorkflow,
     app: &AppContext,
 ) -> Result<ProjectWorkflow, String> {
-    create_project_workflow_with_db(&app.db, app.cloud.get(), payload).await
+    let workflow = app.repos.project_workflows().create(payload).await?;
+    spawn_cloud_upsert_workflow(app.cloud.get(), &workflow);
+    Ok(workflow)
 }
 
 #[tauri::command]
@@ -977,7 +546,9 @@ async fn update_project_workflow_inner(
     payload: UpdateProjectWorkflow,
     app: &AppContext,
 ) -> Result<ProjectWorkflow, String> {
-    update_project_workflow_with_db(&app.db, app.cloud.get(), &id, payload).await
+    let workflow = app.repos.project_workflows().update(&id, payload).await?;
+    spawn_cloud_upsert_workflow(app.cloud.get(), &workflow);
+    Ok(workflow)
 }
 
 #[tauri::command]
@@ -989,7 +560,9 @@ pub async fn delete_project_workflow(
 }
 
 async fn delete_project_workflow_inner(id: String, app: &AppContext) -> Result<(), String> {
-    delete_project_workflow_with_db(&app.db, app.cloud.get(), &id).await
+    app.repos.project_workflows().delete(&id).await?;
+    spawn_cloud_delete_workflow(app.cloud.get(), &id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1006,7 +579,13 @@ async fn set_project_workflow_enabled_inner(
     enabled: bool,
     app: &AppContext,
 ) -> Result<ProjectWorkflow, String> {
-    set_project_workflow_enabled_with_db(&app.db, app.cloud.get(), &id, enabled).await
+    let workflow = app
+        .repos
+        .project_workflows()
+        .set_enabled(&id, enabled)
+        .await?;
+    spawn_cloud_upsert_workflow(app.cloud.get(), &workflow);
+    Ok(workflow)
 }
 
 mod http {

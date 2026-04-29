@@ -32,7 +32,9 @@ use crate::models::project::{
 };
 use crate::models::project_board::ProjectBoard;
 use crate::models::project_board_column::ProjectBoardColumn;
-use crate::models::project_workflow::ProjectWorkflow;
+use crate::models::project_workflow::{
+    CreateProjectWorkflow, ProjectWorkflow, UpdateProjectWorkflow,
+};
 use crate::models::run::{Run, RunSummary};
 use crate::models::schedule::{CreateSchedule, Schedule};
 use crate::models::task::{CreateTask, Task, UpdateTask};
@@ -194,13 +196,18 @@ pub trait ProjectBoardColumnRepo: Send + Sync {
 }
 
 /// Project workflows (the visual graph editor's workflow definitions).
-/// Read-only at the trait surface — write paths involve graph normalization,
-/// trigger reconciliation, and a transactional graph swap; they stay as
-/// `*_with_db` helpers in `commands/project_workflows.rs` for now.
 #[async_trait]
 pub trait ProjectWorkflowRepo: Send + Sync {
     async fn list(&self, project_id: &str, limit: i64) -> Result<Vec<ProjectWorkflow>, String>;
     async fn get(&self, id: &str) -> Result<ProjectWorkflow, String>;
+    async fn create(&self, payload: CreateProjectWorkflow) -> Result<ProjectWorkflow, String>;
+    async fn update(
+        &self,
+        id: &str,
+        payload: UpdateProjectWorkflow,
+    ) -> Result<ProjectWorkflow, String>;
+    async fn delete(&self, id: &str) -> Result<(), String>;
+    async fn set_enabled(&self, id: &str, enabled: bool) -> Result<ProjectWorkflow, String>;
     /// Project-id of the project that owns the given workflow.
     async fn lookup_project_id(&self, workflow_id: &str) -> Result<String, String>;
     /// Joined `(workflow_id, project_id)` for a `workflow_runs` row — the

@@ -72,7 +72,7 @@ Per-file remaining `DbPool` references (lower = closer to fully migrated). Read-
 | `auth.rs` | 0 | `[done]` | Auth commands/adapters use `AppContext` auth/cloud/db state directly. |
 | `project_board_columns.rs` | 0 | `[done]` | Revision-checked CRUD uses `AppContext` db/cloud; transaction helpers remain local. |
 | `plugins.rs` | 0 | `[done]` | Entity DB reads + reload/secret reconciliation use `AppContext`; install/OAuth lifecycle still requires Tauri host. |
-| `project_workflows.rs` | 9 | `[wip]` | Executor `ToolExecutionContext` now carries repos; workflow tool read/scope paths use repos. Next: move workflow write helpers behind `ProjectWorkflowRepo`. |
+| `project_workflows.rs` | 0 | `[done]` | Workflow CRUD/enable and tool read/scope paths use `ProjectWorkflowRepo`; cloud sync remains command/tool-side. |
 | `chat.rs` | 28 | `[blocked]` | Streaming session executor + worktree lifecycle still require a broader runtime/tool boundary, not just AppContext state extraction. |
 | `work_items.rs` | 36 | `[blocked]` | `ToolExecutionContext` now carries repos; unblock by adding transaction-aware repo methods and switching executor tool write helpers off `*_with_db`. |
 

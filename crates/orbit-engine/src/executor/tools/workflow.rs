@@ -2,12 +2,10 @@ use serde_json::{json, Map, Value};
 use ulid::Ulid;
 
 use crate::commands::project_workflows::{
-    create_project_workflow_with_db, delete_project_workflow_with_db,
-    generate_reference_key_for_new_node, normalize_graph_for_storage,
-    set_project_workflow_enabled_with_db, update_project_workflow_with_db,
-    workflow_has_trigger_node, workflow_node_default_data, workflow_runtime_warnings,
+    generate_reference_key_for_new_node, normalize_graph_for_storage, spawn_cloud_delete_workflow,
+    spawn_cloud_upsert_workflow, workflow_has_trigger_node, workflow_node_default_data,
+    workflow_runtime_warnings,
 };
-use crate::db::DbPool;
 use crate::executor::llm_provider::ToolDefinition;
 use crate::models::project_workflow::{
     CreateProjectWorkflow, NodePosition, UpdateProjectWorkflow, WorkflowEdge, WorkflowGraph,
@@ -123,19 +121,18 @@ impl ToolHandler for WorkflowTool {
                     .filter(|value| !value.is_null())
                     .map(parse_graph)
                     .transpose()?;
-                let workflow = create_project_workflow_with_db(
-                    db,
-                    ctx.cloud_client.clone(),
-                    CreateProjectWorkflow {
+                let workflow = repos
+                    .project_workflows()
+                    .create(CreateProjectWorkflow {
                         project_id,
                         name,
                         description,
                         trigger_kind: None,
                         trigger_config: None,
                         graph,
-                    },
-                )
-                .await?;
+                    })
+                    .await?;
+                spawn_cloud_upsert_workflow(ctx.cloud_client.clone(), &workflow);
                 let warnings = workflow_runtime_warnings(&workflow.graph);
                 envelope("created", warnings, json!({ "workflow": workflow }))?
             }
@@ -143,30 +140,31 @@ impl ToolHandler for WorkflowTool {
                 let workflow_id = required_str(input, "workflow_id", "update")?;
                 let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
                 enforce_project_scope(ctx, &project_id).await?;
-                let workflow = update_project_workflow_with_db(
-                    db,
-                    ctx.cloud_client.clone(),
-                    workflow_id,
-                    UpdateProjectWorkflow {
-                        name: input
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                        description: match input.get("description") {
-                            Some(value) if value.is_null() => Some(None),
-                            Some(value) => {
-                                Some(Some(value.as_str().map(str::to_string).ok_or(
-                                    "workflow: update description must be a string or null",
-                                )?))
-                            }
-                            None => None,
+                let workflow = repos
+                    .project_workflows()
+                    .update(
+                        workflow_id,
+                        UpdateProjectWorkflow {
+                            name: input
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            description: match input.get("description") {
+                                Some(value) if value.is_null() => Some(None),
+                                Some(value) => {
+                                    Some(Some(value.as_str().map(str::to_string).ok_or(
+                                        "workflow: update description must be a string or null",
+                                    )?))
+                                }
+                                None => None,
+                            },
+                            trigger_kind: None,
+                            trigger_config: None,
+                            graph: None,
                         },
-                        trigger_kind: None,
-                        trigger_config: None,
-                        graph: None,
-                    },
-                )
-                .await?;
+                    )
+                    .await?;
+                spawn_cloud_upsert_workflow(ctx.cloud_client.clone(), &workflow);
                 let warnings = workflow_runtime_warnings(&workflow.graph);
                 envelope("updated", warnings, json!({ "workflow": workflow }))?
             }
@@ -174,7 +172,8 @@ impl ToolHandler for WorkflowTool {
                 let workflow_id = required_str(input, "workflow_id", "delete")?;
                 let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
                 enforce_project_scope(ctx, &project_id).await?;
-                delete_project_workflow_with_db(db, ctx.cloud_client.clone(), workflow_id).await?;
+                repos.project_workflows().delete(workflow_id).await?;
+                spawn_cloud_delete_workflow(ctx.cloud_client.clone(), workflow_id);
                 envelope(
                     "deleted",
                     Vec::new(),
@@ -191,13 +190,11 @@ impl ToolHandler for WorkflowTool {
                     .ok_or("workflow: set_enabled requires 'enabled'")?;
                 let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
                 enforce_project_scope(ctx, &project_id).await?;
-                let workflow = set_project_workflow_enabled_with_db(
-                    db,
-                    ctx.cloud_client.clone(),
-                    workflow_id,
-                    enabled,
-                )
-                .await?;
+                let workflow = repos
+                    .project_workflows()
+                    .set_enabled(workflow_id, enabled)
+                    .await?;
+                spawn_cloud_upsert_workflow(ctx.cloud_client.clone(), &workflow);
                 let warnings = workflow_runtime_warnings(&workflow.graph);
                 envelope(
                     if enabled { "enabled" } else { "disabled" },
@@ -209,23 +206,24 @@ impl ToolHandler for WorkflowTool {
                 let workflow_id = required_str(input, "workflow_id", "replace_graph")?;
                 let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
                 enforce_project_scope(ctx, &project_id).await?;
-                let workflow = update_project_workflow_with_db(
-                    db,
-                    ctx.cloud_client.clone(),
-                    workflow_id,
-                    UpdateProjectWorkflow {
-                        name: None,
-                        description: None,
-                        trigger_kind: None,
-                        trigger_config: None,
-                        graph: Some(parse_graph(
-                            input
-                                .get("graph")
-                                .ok_or("workflow: replace_graph requires 'graph'")?,
-                        )?),
-                    },
-                )
-                .await?;
+                let workflow = repos
+                    .project_workflows()
+                    .update(
+                        workflow_id,
+                        UpdateProjectWorkflow {
+                            name: None,
+                            description: None,
+                            trigger_kind: None,
+                            trigger_config: None,
+                            graph: Some(parse_graph(
+                                input
+                                    .get("graph")
+                                    .ok_or("workflow: replace_graph requires 'graph'")?,
+                            )?),
+                        },
+                    )
+                    .await?;
+                spawn_cloud_upsert_workflow(ctx.cloud_client.clone(), &workflow);
                 let warnings = workflow_runtime_warnings(&workflow.graph);
                 envelope("graph_replaced", warnings, json!({ "workflow": workflow }))?
             }
@@ -274,7 +272,7 @@ impl ToolHandler for WorkflowTool {
                 };
                 let created_node_id = node.id.clone();
                 workflow.graph.nodes.push(node);
-                let workflow = persist_graph(db, ctx, workflow_id, workflow.graph).await?;
+                let workflow = persist_graph(ctx, workflow_id, workflow.graph).await?;
                 let warnings = workflow_runtime_warnings(&workflow.graph);
                 envelope(
                     "node_added",
@@ -304,7 +302,7 @@ impl ToolHandler for WorkflowTool {
                     .find(|node| node.id == node_id)
                     .ok_or_else(|| format!("workflow: node '{}' not found", node_id))?;
                 node.position = position;
-                let workflow = persist_graph(db, ctx, workflow_id, workflow.graph).await?;
+                let workflow = persist_graph(ctx, workflow_id, workflow.graph).await?;
                 let warnings = workflow_runtime_warnings(&workflow.graph);
                 envelope("node_moved", warnings, json!({ "workflow": workflow }))?
             }
@@ -331,7 +329,7 @@ impl ToolHandler for WorkflowTool {
                 merge_patch(&mut data, patch);
                 ensure_object(&data, "workflow: patched node data must be an object")?;
                 node.data = data;
-                let workflow = persist_graph(db, ctx, workflow_id, workflow.graph).await?;
+                let workflow = persist_graph(ctx, workflow_id, workflow.graph).await?;
                 let warnings = workflow_runtime_warnings(&workflow.graph);
                 envelope("node_updated", warnings, json!({ "workflow": workflow }))?
             }
@@ -353,7 +351,7 @@ impl ToolHandler for WorkflowTool {
                     .find(|node| node.id == node_id)
                     .ok_or_else(|| format!("workflow: node '{}' not found", node_id))?;
                 node.data = data;
-                let workflow = persist_graph(db, ctx, workflow_id, workflow.graph).await?;
+                let workflow = persist_graph(ctx, workflow_id, workflow.graph).await?;
                 let warnings = workflow_runtime_warnings(&workflow.graph);
                 envelope("node_replaced", warnings, json!({ "workflow": workflow }))?
             }
@@ -372,7 +370,7 @@ impl ToolHandler for WorkflowTool {
                     .graph
                     .edges
                     .retain(|edge| edge.source != node_id && edge.target != node_id);
-                let workflow = persist_graph(db, ctx, workflow_id, workflow.graph).await?;
+                let workflow = persist_graph(ctx, workflow_id, workflow.graph).await?;
                 let warnings = workflow_runtime_warnings(&workflow.graph);
                 envelope(
                     "node_deleted",
@@ -431,7 +429,7 @@ impl ToolHandler for WorkflowTool {
                 };
                 let created_edge_id = edge.id.clone();
                 workflow.graph.edges.push(edge);
-                let workflow = persist_graph(db, ctx, workflow_id, workflow.graph).await?;
+                let workflow = persist_graph(ctx, workflow_id, workflow.graph).await?;
                 let warnings = workflow_runtime_warnings(&workflow.graph);
                 envelope(
                     "edge_connected",
@@ -453,7 +451,7 @@ impl ToolHandler for WorkflowTool {
                 if workflow.graph.edges.len() == before {
                     return Err(format!("workflow: edge '{}' not found", edge_id));
                 }
-                let workflow = persist_graph(db, ctx, workflow_id, workflow.graph).await?;
+                let workflow = persist_graph(ctx, workflow_id, workflow.graph).await?;
                 let warnings = workflow_runtime_warnings(&workflow.graph);
                 envelope(
                     "edge_deleted",
@@ -644,24 +642,29 @@ fn parse_graph(value: &Value) -> Result<WorkflowGraph, String> {
 }
 
 async fn persist_graph(
-    db: &DbPool,
     ctx: &ToolExecutionContext,
     workflow_id: &str,
     graph: WorkflowGraph,
 ) -> Result<crate::models::project_workflow::ProjectWorkflow, String> {
-    update_project_workflow_with_db(
-        db,
-        ctx.cloud_client.clone(),
-        workflow_id,
-        UpdateProjectWorkflow {
-            name: None,
-            description: None,
-            trigger_kind: None,
-            trigger_config: None,
-            graph: Some(normalize_graph_for_storage(&graph)),
-        },
-    )
-    .await
+    let repos = ctx
+        .repos
+        .as_ref()
+        .ok_or("workflow: no repositories available")?;
+    let workflow = repos
+        .project_workflows()
+        .update(
+            workflow_id,
+            UpdateProjectWorkflow {
+                name: None,
+                description: None,
+                trigger_kind: None,
+                trigger_config: None,
+                graph: Some(normalize_graph_for_storage(&graph)),
+            },
+        )
+        .await?;
+    spawn_cloud_upsert_workflow(ctx.cloud_client.clone(), &workflow);
+    Ok(workflow)
 }
 
 fn envelope(status: &str, warnings: Vec<String>, payload: Value) -> Result<String, String> {
