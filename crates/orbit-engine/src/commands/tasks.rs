@@ -1,8 +1,7 @@
 use ulid::Ulid;
 
 use crate::app_context::AppContext;
-use crate::db::DbPool;
-use crate::executor::engine::{ExecutorTx, RunRequest};
+use crate::executor::engine::RunRequest;
 use crate::executor::workspace;
 use crate::models::task::{CreateTask, Task, UpdateTask};
 
@@ -43,10 +42,7 @@ pub async fn list_tasks(app: tauri::State<'_, AppContext>) -> Result<Vec<Task>, 
 }
 
 #[tauri::command]
-pub async fn get_task(
-    id: String,
-    app: tauri::State<'_, AppContext>,
-) -> Result<Task, String> {
+pub async fn get_task(id: String, app: tauri::State<'_, AppContext>) -> Result<Task, String> {
     app.repos
         .tasks()
         .get(&id)
@@ -78,10 +74,7 @@ pub async fn update_task(
 }
 
 #[tauri::command]
-pub async fn delete_task(
-    id: String,
-    app: tauri::State<'_, AppContext>,
-) -> Result<(), String> {
+pub async fn delete_task(id: String, app: tauri::State<'_, AppContext>) -> Result<(), String> {
     let cloud = app.cloud.clone();
     app.repos.tasks().delete(&id).await?;
     cloud_delete!(cloud, "tasks", id);
@@ -91,11 +84,14 @@ pub async fn delete_task(
 #[tauri::command]
 pub async fn trigger_task(
     task_id: String,
-    db: tauri::State<'_, DbPool>,
-    executor_tx: tauri::State<'_, ExecutorTx>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<String, String> {
-    let pool = db.0.clone();
-    let tx = executor_tx.0.clone();
+    trigger_task_inner(task_id, &app).await
+}
+
+async fn trigger_task_inner(task_id: String, app: &AppContext) -> Result<String, String> {
+    let pool = app.db.0.clone();
+    let tx = app.executor_tx.0.clone();
 
     tokio::task
     ::spawn_blocking(move || {
@@ -188,23 +184,29 @@ pub async fn trigger_task(
 }
 
 mod http {
-    use tauri::Manager;
     use super::*;
-    use crate::db::DbPool;
-    use crate::executor::engine::ExecutorTx;
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct IdArgs { id: String }
+    struct IdArgs {
+        id: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct CreateArgs { payload: CreateTask }
+    struct CreateArgs {
+        payload: CreateTask,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct UpdateArgs { id: String, payload: UpdateTask }
+    struct UpdateArgs {
+        id: String,
+        payload: UpdateTask,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct TriggerArgs { task_id: String }
+    struct TriggerArgs {
+        task_id: String,
+    }
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         // CRUD goes through `ctx.repos.tasks()` — works in headless mode
@@ -244,13 +246,11 @@ mod http {
             cloud_delete!(cloud, "tasks", a.id);
             Ok(serde_json::Value::Null)
         });
-        // trigger_task is not yet on the repo — it inserts into `runs` and
-        // sends to the executor channel. Stays on the legacy DbPool path
-        // until RunRepo is added (Phase B.5).
+        // trigger_task inserts into `runs` and sends to the executor channel,
+        // so it still goes through the coordinator path rather than TaskRepo.
         reg.register("trigger_task", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: TriggerArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = trigger_task(a.task_id, app.state::<DbPool>(), app.state::<ExecutorTx>()).await?;
+            let r = trigger_task_inner(a.task_id, &ctx).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
     }

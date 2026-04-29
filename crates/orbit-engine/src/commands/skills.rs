@@ -1,13 +1,17 @@
-use crate::db::connection::DbPool;
+use crate::app_context::AppContext;
 use crate::executor::skills::{self, SkillInfo};
 use crate::executor::workspace;
 
 #[tauri::command]
 pub async fn list_skills(
     agent_id: String,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<Vec<SkillInfo>, String> {
-    let db = db.inner().clone();
+    list_skills_inner(agent_id, &app).await
+}
+
+async fn list_skills_inner(agent_id: String, app: &AppContext) -> Result<Vec<SkillInfo>, String> {
+    let db = app.db.clone();
     tokio::task::spawn_blocking(move || {
         let ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
         skills::clear_disabled_skill_state_for_agent(&db, &agent_id, &ws_config.disabled_skills)?;
@@ -57,9 +61,17 @@ pub async fn create_skill(
 pub async fn delete_skill(
     agent_id: String,
     skill_name: String,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<(), String> {
-    let db = db.inner().clone();
+    delete_skill_inner(agent_id, skill_name, &app).await
+}
+
+async fn delete_skill_inner(
+    agent_id: String,
+    skill_name: String,
+    app: &AppContext,
+) -> Result<(), String> {
+    let db = app.db.clone();
     tokio::task::spawn_blocking(move || {
         skills::delete_skill(&agent_id, &skill_name)?;
         skills::clear_skill_state_for_agent_sessions(&db, &agent_id, &skill_name)
@@ -69,28 +81,38 @@ pub async fn delete_skill(
 }
 
 mod http {
-    use tauri::Manager;
     use super::*;
-    use crate::db::DbPool;
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct AgentIdArgs { agent_id: String }
+    struct AgentIdArgs {
+        agent_id: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct GetContentArgs { agent_id: String, skill_name: String }
+    struct GetContentArgs {
+        agent_id: String,
+        skill_name: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct CreateArgs { agent_id: String, name: String, description: String, body: String }
+    struct CreateArgs {
+        agent_id: String,
+        name: String,
+        description: String,
+        body: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct DeleteArgs { agent_id: String, skill_name: String }
+    struct DeleteArgs {
+        agent_id: String,
+        skill_name: String,
+    }
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("list_skills", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: AgentIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = list_skills(a.agent_id, app.state::<DbPool>()).await?;
+            let r = list_skills_inner(a.agent_id, &ctx).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("get_skill_content", |_ctx, args| async move {
@@ -104,9 +126,8 @@ mod http {
             Ok(serde_json::Value::Null)
         });
         reg.register("delete_skill", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: DeleteArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            delete_skill(a.agent_id, a.skill_name, app.state::<DbPool>()).await?;
+            delete_skill_inner(a.agent_id, a.skill_name, &ctx).await?;
             Ok(serde_json::Value::Null)
         });
     }

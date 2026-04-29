@@ -8,21 +8,18 @@
 use serde_json::Value;
 
 use crate::app_context::AppContext;
-use crate::db::DbPool;
 use crate::models::workflow_run::{WorkflowRun, WorkflowRunSummary, WorkflowRunWithSteps};
-use crate::runtime_host::tauri_host;
 use crate::workflows::WorkflowOrchestrator;
 
 #[tauri::command]
 pub async fn start_workflow_run(
     workflow_id: String,
     trigger_data: Option<Value>,
-    db: tauri::State<'_, DbPool>,
-    app: tauri::AppHandle,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<WorkflowRun, String> {
     // Orchestrator-side: starting a run also boots the per-run state machine,
     // which the repo trait deliberately stays out of.
-    let orchestrator = WorkflowOrchestrator::new(db.inner().clone(), tauri_host(app));
+    let orchestrator = WorkflowOrchestrator::new(app.db.clone(), app.runtime.clone());
     orchestrator
         .start_run(workflow_id, "manual", trigger_data.unwrap_or(Value::Null))
         .await

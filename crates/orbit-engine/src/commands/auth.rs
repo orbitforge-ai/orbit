@@ -1,11 +1,9 @@
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use tauri::Manager;
-
+use crate::app_context::AppContext;
 use crate::auth::{self, AuthMode, AuthSession, AuthState};
-use crate::db::cloud::{CloudClientState, SupabaseClient};
-use crate::db::DbPool;
+use crate::db::cloud::SupabaseClient;
 use crate::executor::keychain;
 use std::sync::Arc;
 
@@ -71,15 +69,19 @@ pub async fn get_auth_state_impl(auth: &AuthState) -> Result<AuthStateDto, Strin
 }
 
 #[tauri::command]
-pub async fn get_auth_state(auth: tauri::State<'_, AuthState>) -> Result<AuthStateDto, String> {
-    get_auth_state_impl(auth.inner()).await
+pub async fn get_auth_state(app: tauri::State<'_, AppContext>) -> Result<AuthStateDto, String> {
+    get_auth_state_impl(&app.auth).await
 }
 
 // ---------------------------------------------------------------------------
 // set_offline_mode — user chose "Continue offline" on the auth screen
 // ---------------------------------------------------------------------------
 #[tauri::command]
-pub async fn set_offline_mode(auth: tauri::State<'_, AuthState>) -> Result<(), String> {
+pub async fn set_offline_mode(app: tauri::State<'_, AppContext>) -> Result<(), String> {
+    set_offline_mode_inner(&app.auth).await
+}
+
+async fn set_offline_mode_inner(auth: &AuthState) -> Result<(), String> {
     auth.set(AuthMode::Offline).await;
     let data_dir = crate::data_dir();
     auth::persist_auth_state(&data_dir, &AuthMode::Offline);
@@ -94,10 +96,19 @@ pub async fn set_offline_mode(auth: tauri::State<'_, AuthState>) -> Result<(), S
 pub async fn login(
     email: String,
     password: String,
-    auth: tauri::State<'_, AuthState>,
-    cloud_state: tauri::State<'_, CloudClientState>,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<AuthStateDto, String> {
+    login_inner(email, password, &app).await
+}
+
+async fn login_inner(
+    email: String,
+    password: String,
+    app: &AppContext,
+) -> Result<AuthStateDto, String> {
+    let auth = &app.auth;
+    let cloud_state = &app.cloud;
+    let db = &app.db;
     let (supabase_url, anon_key) = auth::supabase_credentials()?;
 
     let http = reqwest::Client::new();
@@ -190,10 +201,19 @@ pub async fn login(
 pub async fn register(
     email: String,
     password: String,
-    auth: tauri::State<'_, AuthState>,
-    cloud_state: tauri::State<'_, CloudClientState>,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<AuthStateDto, String> {
+    register_inner(email, password, &app).await
+}
+
+async fn register_inner(
+    email: String,
+    password: String,
+    app: &AppContext,
+) -> Result<AuthStateDto, String> {
+    let auth = &app.auth;
+    let cloud_state = &app.cloud;
+    let db = &app.db;
     let (supabase_url, anon_key) = auth::supabase_credentials()?;
 
     let http = reqwest::Client::new();
@@ -281,10 +301,13 @@ pub async fn register(
 // logout — clear session, return to auth screen
 // ---------------------------------------------------------------------------
 #[tauri::command]
-pub async fn logout(
-    auth: tauri::State<'_, AuthState>,
-    cloud_state: tauri::State<'_, CloudClientState>,
-) -> Result<(), String> {
+pub async fn logout(app: tauri::State<'_, AppContext>) -> Result<(), String> {
+    logout_inner(&app).await
+}
+
+async fn logout_inner(app: &AppContext) -> Result<(), String> {
+    let auth = &app.auth;
+    let cloud_state = &app.cloud;
     // Best-effort: call Supabase signout endpoint
     if let AuthMode::Cloud(session) = auth.get().await {
         if let Ok((supabase_url, anon_key)) = auth::supabase_credentials() {
@@ -388,13 +411,19 @@ async fn sync_api_keys_from_vault(
 // ---------------------------------------------------------------------------
 #[tauri::command]
 pub async fn force_cloud_sync(
-    cloud: tauri::State<'_, CloudClientState>,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<std::collections::HashMap<String, usize>, String> {
-    let client = cloud
+    force_cloud_sync_inner(&app).await
+}
+
+async fn force_cloud_sync_inner(
+    app: &AppContext,
+) -> Result<std::collections::HashMap<String, usize>, String> {
+    let client = app
+        .cloud
         .get()
         .ok_or_else(|| "Not signed in to cloud".to_string())?;
-    let pool = db.0.clone();
+    let pool = app.db.0.clone();
     client.pull_all_data_with_counts(&pool).await
 }
 
@@ -411,44 +440,25 @@ pub fn register_http(reg: &mut crate::shim::registry::Registry) {
         serde_json::to_value(dto).map_err(|e| e.to_string())
     });
     reg.register("set_offline_mode", |ctx, _args| async move {
-        let app = ctx.app()?;
-        set_offline_mode(app.state::<AuthState>()).await?;
+        set_offline_mode_inner(&ctx.auth).await?;
         Ok(serde_json::Value::Null)
     });
     reg.register("login", |ctx, args| async move {
-        let app = ctx.app()?;
         let a: LoginArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-        let dto = login(
-            a.email,
-            a.password,
-            app.state::<AuthState>(),
-            app.state::<CloudClientState>(),
-            app.state::<DbPool>(),
-        )
-        .await?;
+        let dto = login_inner(a.email, a.password, &ctx).await?;
         serde_json::to_value(dto).map_err(|e| e.to_string())
     });
     reg.register("register", |ctx, args| async move {
-        let app = ctx.app()?;
         let a: LoginArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-        let dto = register(
-            a.email,
-            a.password,
-            app.state::<AuthState>(),
-            app.state::<CloudClientState>(),
-            app.state::<DbPool>(),
-        )
-        .await?;
+        let dto = register_inner(a.email, a.password, &ctx).await?;
         serde_json::to_value(dto).map_err(|e| e.to_string())
     });
     reg.register("logout", |ctx, _args| async move {
-        let app = ctx.app()?;
-        logout(app.state::<AuthState>(), app.state::<CloudClientState>()).await?;
+        logout_inner(&ctx).await?;
         Ok(serde_json::Value::Null)
     });
     reg.register("force_cloud_sync", |ctx, _args| async move {
-        let app = ctx.app()?;
-        let result = force_cloud_sync(app.state::<CloudClientState>(), app.state::<DbPool>()).await?;
+        let result = force_cloud_sync_inner(&ctx).await?;
         serde_json::to_value(result).map_err(|e| e.to_string())
     });
 }

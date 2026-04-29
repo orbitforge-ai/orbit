@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 use ulid::Ulid;
 
-use crate::db::DbPool;
+use crate::app_context::AppContext;
 use crate::executor::workspace;
 use crate::models::schedule::RecurringConfig;
 use crate::scheduler::converter::{next_n_runs, to_cron};
@@ -25,9 +25,17 @@ pub struct PulseConfig {
 pub async fn get_pulse_config(
     agent_id: String,
     project_id: String,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<PulseConfig, String> {
-    let pool = db.0.clone();
+    get_pulse_config_inner(agent_id, project_id, &app).await
+}
+
+async fn get_pulse_config_inner(
+    agent_id: String,
+    project_id: String,
+    app: &AppContext,
+) -> Result<PulseConfig, String> {
+    let pool = app.db.0.clone();
     let aid = agent_id.clone();
     let pid = project_id.clone();
 
@@ -107,9 +115,28 @@ pub async fn update_pulse(
     content: String,
     schedule_config: RecurringConfig,
     enabled: bool,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<PulseConfig, String> {
-    let pool = db.0.clone();
+    update_pulse_inner(
+        agent_id,
+        project_id,
+        content,
+        schedule_config,
+        enabled,
+        &app,
+    )
+    .await
+}
+
+async fn update_pulse_inner(
+    agent_id: String,
+    project_id: String,
+    content: String,
+    schedule_config: RecurringConfig,
+    enabled: bool,
+    app: &AppContext,
+) -> Result<PulseConfig, String> {
+    let pool = app.db.0.clone();
     let aid = agent_id.clone();
     let pid = project_id.clone();
 
@@ -261,13 +288,14 @@ pub async fn update_pulse(
 }
 
 mod http {
-    use tauri::Manager;
     use super::*;
-    use crate::db::DbPool;
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct GetArgs { agent_id: String, project_id: String }
+    struct GetArgs {
+        agent_id: String,
+        project_id: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct UpdateArgs {
@@ -280,15 +308,21 @@ mod http {
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("get_pulse_config", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: GetArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = get_pulse_config(a.agent_id, a.project_id, app.state::<DbPool>()).await?;
+            let r = get_pulse_config_inner(a.agent_id, a.project_id, &ctx).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("update_pulse", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: UpdateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = update_pulse(a.agent_id, a.project_id, a.content, a.schedule_config, a.enabled, app.state::<DbPool>()).await?;
+            let r = update_pulse_inner(
+                a.agent_id,
+                a.project_id,
+                a.content,
+                a.schedule_config,
+                a.enabled,
+                &ctx,
+            )
+            .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
     }

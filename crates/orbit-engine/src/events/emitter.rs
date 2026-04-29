@@ -585,6 +585,18 @@ pub fn emit_agent_config_changed(app: &tauri::AppHandle, agent_id: &str, role_id
     crate::shim::ws::broadcast("agent:config_changed", &payload);
 }
 
+pub fn emit_agent_config_changed_to_host(
+    host: &dyn RuntimeHost,
+    agent_id: &str,
+    role_id: Option<String>,
+) {
+    let payload = AgentConfigChangedPayload {
+        agent_id: agent_id.to_string(),
+        role_id,
+    };
+    emit_serialized(host, "agent:config_changed", &payload);
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageReactionPayload {

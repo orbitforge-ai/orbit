@@ -8,7 +8,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 
-use crate::db::DbPool;
+use crate::app_context::AppContext;
 use crate::executor::cli_launcher::{self, CliKind, TerminalContext};
 use crate::executor::pty_session::{PtyRegistry, PtySession};
 use crate::executor::workspace as exec_workspace;
@@ -34,13 +34,13 @@ pub struct OpenTerminalResponse {
 #[tauri::command]
 pub async fn open_terminal(
     args: OpenTerminalArgs,
-    db: State<'_, DbPool>,
+    app: State<'_, AppContext>,
     registry: State<'_, PtyRegistry>,
-    app: tauri::AppHandle,
+    tauri_app: tauri::AppHandle,
 ) -> Result<OpenTerminalResponse, String> {
     let (cwd, system_prompt) = match &args.session_id {
         Some(sid) => {
-            let agent_id = lookup_agent_id(sid, &db).await?;
+            let agent_id = lookup_agent_id(sid, &app).await?;
             let cwd = exec_workspace::agent_workspace_dir(&agent_id);
             if !cwd.exists() {
                 if let Err(e) = std::fs::create_dir_all(&cwd) {
@@ -48,9 +48,8 @@ pub async fn open_terminal(
                 }
             }
             // Missing system_prompt.md is fine — just skip injection.
-            let prompt =
-                exec_workspace::read_workspace_file(&agent_id, "system_prompt.md")
-                    .unwrap_or_default();
+            let prompt = exec_workspace::read_workspace_file(&agent_id, "system_prompt.md")
+                .unwrap_or_default();
             (cwd, prompt)
         }
         None => {
@@ -71,7 +70,7 @@ pub async fn open_terminal(
 
     let spec = cli_launcher::build_pty_spec(&args.kind, ctx)?;
     let terminal_id = format!("term-{}", ulid::Ulid::new());
-    let session = PtySession::spawn(terminal_id.clone(), spec, app, Vec::new())?;
+    let session = PtySession::spawn(terminal_id.clone(), spec, tauri_app, Vec::new())?;
 
     registry.insert(terminal_id.clone(), session).await;
 
@@ -131,20 +130,13 @@ pub async fn close_terminal(
     Ok(())
 }
 
-async fn lookup_agent_id(session_id: &str, db: &DbPool) -> Result<String, String> {
-    let pool = db.0.clone();
-    let session_id = session_id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<String, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT agent_id FROM chat_sessions WHERE id = ?1",
-            rusqlite::params![session_id],
-            |row| row.get::<_, String>(0),
-        )
+async fn lookup_agent_id(session_id: &str, app: &AppContext) -> Result<String, String> {
+    app.repos
+        .chat()
+        .session_meta(session_id)
+        .await
+        .map(|meta| meta.agent_id)
         .map_err(|e| format!("chat session not found: {}", e))
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 // ─── HTTP shim registration ─────────────────────────────────────────────────
@@ -155,7 +147,7 @@ pub fn register_http(reg: &mut crate::shim::registry::Registry) {
         let a: OpenTerminalArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
         let resp = open_terminal(
             a,
-            app.state::<DbPool>(),
+            app.state::<AppContext>(),
             app.state::<PtyRegistry>(),
             app.clone(),
         )

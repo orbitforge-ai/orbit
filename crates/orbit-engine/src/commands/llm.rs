@@ -1,11 +1,10 @@
 use serde::Serialize;
 use ulid::Ulid;
 
-use crate::db::cloud::CloudClientState;
-use crate::db::DbPool;
+use crate::app_context::AppContext;
 #[cfg(feature = "desktop")]
 use crate::executor::cli_common;
-use crate::executor::engine::{ExecutorTx, RunRequest};
+use crate::executor::engine::RunRequest;
 use crate::executor::keychain;
 use crate::executor::llm_provider::is_cli_provider;
 use crate::models::task::Task;
@@ -14,9 +13,13 @@ use crate::models::task::Task;
 pub async fn set_api_key(
     provider: String,
     key: String,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<(), String> {
-    let cloud = cloud.inner().clone();
+    set_api_key_inner(provider, key, &app).await
+}
+
+async fn set_api_key_inner(provider: String, key: String, app: &AppContext) -> Result<(), String> {
+    let cloud = app.cloud.clone();
     let prov = provider.clone();
     let k = key.clone();
     tokio::task::spawn_blocking(move || keychain::store_api_key(&prov, &k))
@@ -121,11 +124,18 @@ pub async fn get_provider_status(provider: String) -> Result<ProviderStatus, Str
 pub async fn trigger_agent_loop(
     agent_id: String,
     goal: String,
-    db: tauri::State<'_, DbPool>,
-    executor_tx: tauri::State<'_, ExecutorTx>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<String, String> {
-    let pool = db.0.clone();
-    let tx = executor_tx.0.clone();
+    trigger_agent_loop_inner(agent_id, goal, &app).await
+}
+
+async fn trigger_agent_loop_inner(
+    agent_id: String,
+    goal: String,
+    app: &AppContext,
+) -> Result<String, String> {
+    let pool = app.db.0.clone();
+    let tx = app.executor_tx.0.clone();
 
     let (task, run_id, _log_path) = tokio::task
     ::spawn_blocking(
@@ -221,27 +231,30 @@ pub async fn trigger_agent_loop(
 }
 
 mod http {
-    use tauri::Manager;
     use super::*;
-    use crate::db::cloud::CloudClientState;
-    use crate::db::DbPool;
-    use crate::executor::engine::ExecutorTx;
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct SetKeyArgs { provider: String, key: String }
+    struct SetKeyArgs {
+        provider: String,
+        key: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct ProviderArgs { provider: String }
+    struct ProviderArgs {
+        provider: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct TriggerLoopArgs { agent_id: String, goal: String }
+    struct TriggerLoopArgs {
+        agent_id: String,
+        goal: String,
+    }
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("set_api_key", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: SetKeyArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            set_api_key(a.provider, a.key, app.state::<CloudClientState>()).await?;
+            set_api_key_inner(a.provider, a.key, &ctx).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("has_api_key", |_ctx, args| async move {
@@ -260,9 +273,8 @@ mod http {
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("trigger_agent_loop", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: TriggerLoopArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = trigger_agent_loop(a.agent_id, a.goal, app.state::<DbPool>(), app.state::<ExecutorTx>()).await?;
+            let r = trigger_agent_loop_inner(a.agent_id, a.goal, &ctx).await?;
             Ok(serde_json::Value::String(r))
         });
     }

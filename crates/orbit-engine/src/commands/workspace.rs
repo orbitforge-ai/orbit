@@ -1,6 +1,6 @@
+use crate::app_context::AppContext;
 use crate::db::cloud::CloudClientState;
-use crate::db::DbPool;
-use crate::events::emitter::emit_agent_config_changed;
+use crate::events::emitter::emit_agent_config_changed_to_host;
 use crate::executor::workspace::{self, AgentWorkspaceConfig, FileEntry};
 
 /// Serialize model_config, persist to SQLite, and fire a cloud PATCH (fire-and-forget).
@@ -121,16 +121,22 @@ pub async fn get_agent_config(agent_id: String) -> Result<AgentWorkspaceConfig, 
 
 #[tauri::command]
 pub async fn update_agent_config(
-    app: tauri::AppHandle,
     agent_id: String,
     config: AgentWorkspaceConfig,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
+) -> Result<(), String> {
+    update_agent_config_inner(agent_id, config, &app).await
+}
+
+async fn update_agent_config_inner(
+    agent_id: String,
+    config: AgentWorkspaceConfig,
+    app: &AppContext,
 ) -> Result<(), String> {
     let role_id = config.role_id.clone();
     let agent_id_emit = agent_id.clone();
-    let pool = db.0.clone();
-    let cloud = cloud.inner().clone();
+    let pool = app.db.0.clone();
+    let cloud = app.cloud.clone();
 
     let agent_id_clone = agent_id.clone();
     tokio::task::spawn_blocking(move || workspace::save_agent_config(&agent_id_clone, &config))
@@ -139,7 +145,7 @@ pub async fn update_agent_config(
 
     sync_model_config_to_cloud(&agent_id, pool, cloud).await?;
 
-    emit_agent_config_changed(&app, &agent_id_emit, role_id);
+    emit_agent_config_changed_to_host(app.runtime.as_ref(), &agent_id_emit, role_id);
     Ok(())
 }
 
@@ -148,11 +154,18 @@ pub async fn update_agent_config(
 pub async fn update_system_prompt(
     agent_id: String,
     content: String,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<(), String> {
-    let pool = db.0.clone();
-    let cloud = cloud.inner().clone();
+    update_system_prompt_inner(agent_id, content, &app).await
+}
+
+async fn update_system_prompt_inner(
+    agent_id: String,
+    content: String,
+    app: &AppContext,
+) -> Result<(), String> {
+    let pool = app.db.0.clone();
+    let cloud = app.cloud.clone();
 
     let agent_id_clone = agent_id.clone();
     let content_clone = content.clone();
@@ -194,32 +207,52 @@ pub async fn list_agent_role_ids() -> Result<std::collections::HashMap<String, S
 }
 
 mod http {
-    use tauri::Manager;
     use super::*;
-    use crate::db::cloud::CloudClientState;
-    use crate::db::DbPool;
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct AgentIdArgs { agent_id: String }
+    struct AgentIdArgs {
+        agent_id: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct ListArgs { agent_id: String, #[serde(default)] path: Option<String> }
+    struct ListArgs {
+        agent_id: String,
+        #[serde(default)]
+        path: Option<String>,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct PathArgs { agent_id: String, path: String }
+    struct PathArgs {
+        agent_id: String,
+        path: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct WriteArgs { agent_id: String, path: String, content: String }
+    struct WriteArgs {
+        agent_id: String,
+        path: String,
+        content: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct RenameArgs { agent_id: String, from: String, to: String }
+    struct RenameArgs {
+        agent_id: String,
+        from: String,
+        to: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct UpdateConfigArgs { agent_id: String, config: AgentWorkspaceConfig }
+    struct UpdateConfigArgs {
+        agent_id: String,
+        config: AgentWorkspaceConfig,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct UpdatePromptArgs { agent_id: String, content: String }
+    struct UpdatePromptArgs {
+        agent_id: String,
+        content: String,
+    }
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("get_workspace_path", |_ctx, args| async move {
@@ -267,15 +300,13 @@ mod http {
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("update_agent_config", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: UpdateConfigArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            update_agent_config(app.clone(), a.agent_id, a.config, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            update_agent_config_inner(a.agent_id, a.config, &ctx).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("update_system_prompt", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: UpdatePromptArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            update_system_prompt(a.agent_id, a.content, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            update_system_prompt_inner(a.agent_id, a.content, &ctx).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("list_agent_role_ids", |_ctx, _args| async move {

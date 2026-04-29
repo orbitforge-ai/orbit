@@ -32,6 +32,13 @@ struct Subscription {
 /// Compute and apply desired subscriptions across every installed plugin.
 pub async fn reconcile_all(app: &AppHandle, db: &DbPool) {
     let manager = plugins::from_state(app);
+    reconcile_all_for_manager(&manager, db).await;
+}
+
+/// Compute and apply desired subscriptions using an already-owned plugin
+/// manager. This keeps command/shim paths from needing a live Tauri handle
+/// just to reconcile trigger subscriptions.
+pub async fn reconcile_all_for_manager(manager: &Arc<PluginManager>, db: &DbPool) {
     let desired = compute_desired(db);
 
     let mut plugin_ids: BTreeSet<String> = desired.keys().cloned().collect();
@@ -46,7 +53,7 @@ pub async fn reconcile_all(app: &AppHandle, db: &DbPool) {
 
     for plugin_id in plugin_ids {
         let subs = desired.get(&plugin_id).cloned().unwrap_or_default();
-        if let Err(e) = apply_for_plugin(&manager, &plugin_id, &subs).await {
+        if let Err(e) = apply_for_plugin(manager, &plugin_id, &subs).await {
             warn!(plugin_id = %plugin_id, error = %e, "reconcile: apply failed");
         }
     }
@@ -58,9 +65,18 @@ pub async fn reconcile_all(app: &AppHandle, db: &DbPool) {
 #[allow(dead_code)]
 pub async fn reconcile_plugin(app: &AppHandle, db: &DbPool, plugin_id: &str) {
     let manager = plugins::from_state(app);
+    reconcile_plugin_for_manager(&manager, db, plugin_id).await;
+}
+
+#[allow(dead_code)]
+pub async fn reconcile_plugin_for_manager(
+    manager: &Arc<PluginManager>,
+    db: &DbPool,
+    plugin_id: &str,
+) {
     let desired = compute_desired(db);
     let subs = desired.get(plugin_id).cloned().unwrap_or_default();
-    if let Err(e) = apply_for_plugin(&manager, plugin_id, &subs).await {
+    if let Err(e) = apply_for_plugin(manager, plugin_id, &subs).await {
         warn!(plugin_id, error = %e, "reconcile: apply failed");
     }
 }

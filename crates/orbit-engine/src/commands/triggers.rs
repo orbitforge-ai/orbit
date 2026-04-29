@@ -3,10 +3,10 @@
 
 use serde_json::{json, Value};
 
-use crate::db::DbPool;
+use crate::app_context::AppContext;
 use crate::executor::workspace;
 use crate::models::channel_binding::ChannelBinding;
-use crate::plugins;
+use crate::plugins::oauth;
 use crate::triggers::subscriptions;
 
 #[tauri::command]
@@ -17,18 +17,26 @@ pub async fn list_agent_listen_bindings(agent_id: String) -> Result<Vec<ChannelB
 
 #[tauri::command]
 pub async fn set_agent_listen_bindings(
-    app: tauri::AppHandle,
+    app: tauri::State<'_, AppContext>,
     agent_id: String,
     bindings: Vec<ChannelBinding>,
-    db: tauri::State<'_, DbPool>,
+) -> Result<(), String> {
+    set_agent_listen_bindings_inner(&app, agent_id, bindings).await
+}
+
+async fn set_agent_listen_bindings_inner(
+    app: &AppContext,
+    agent_id: String,
+    bindings: Vec<ChannelBinding>,
 ) -> Result<(), String> {
     let mut cfg = workspace::load_agent_config(&agent_id).map_err(|e| e.to_string())?;
     cfg.listen_bindings = bindings;
     workspace::save_agent_config(&agent_id, &cfg).map_err(|e| e.to_string())?;
 
-    let db = db.inner().clone();
+    let manager = app.plugins.clone();
+    let db = app.db.clone();
     tauri::async_runtime::spawn(async move {
-        subscriptions::reconcile_all(&app, &db).await;
+        subscriptions::reconcile_all_for_manager(&manager, &db).await;
     });
     Ok(())
 }
@@ -37,11 +45,19 @@ pub async fn set_agent_listen_bindings(
 /// returned. UI code is expected to render what it understands.
 #[tauri::command]
 pub async fn plugin_list_channels(
-    app: tauri::AppHandle,
+    app: tauri::State<'_, AppContext>,
     plugin_id: String,
     guild_id: Option<String>,
 ) -> Result<Value, String> {
-    let manager = plugins::from_state(&app);
+    plugin_list_channels_inner(&app, plugin_id, guild_id).await
+}
+
+async fn plugin_list_channels_inner(
+    app: &AppContext,
+    plugin_id: String,
+    guild_id: Option<String>,
+) -> Result<Value, String> {
+    let manager = &app.plugins;
     let manifest = manager
         .manifest(&plugin_id)
         .ok_or_else(|| format!("plugin '{}' not installed", plugin_id))?;
@@ -58,7 +74,7 @@ pub async fn plugin_list_channels(
         Some(g) => json!({ "guildId": g }),
         None => json!({}),
     };
-    let extra_env = plugins::oauth::build_env_for_subprocess(&manifest);
+    let extra_env = oauth::build_env_for_subprocess(&manifest);
     let raw = manager
         .runtime
         .call_tool(&manifest, "list_channels", &args, &extra_env)
@@ -89,8 +105,12 @@ fn unwrap_mcp_text_payload(raw: Value) -> Value {
 /// (i.e. has a workflow trigger with `subscription_tool`). Used by the UI to
 /// populate the "Bind a channel" provider picker.
 #[tauri::command]
-pub fn list_trigger_capable_plugins(app: tauri::AppHandle) -> Vec<PluginSummary> {
-    let manager = plugins::from_state(&app);
+pub fn list_trigger_capable_plugins(app: tauri::State<'_, AppContext>) -> Vec<PluginSummary> {
+    list_trigger_capable_plugins_inner(&app)
+}
+
+fn list_trigger_capable_plugins_inner(app: &AppContext) -> Vec<PluginSummary> {
+    let manager = &app.plugins;
     manager
         .manifests()
         .into_iter()
@@ -115,19 +135,26 @@ pub struct PluginSummary {
 }
 
 mod http {
-    use tauri::Manager;
     use super::*;
-    use crate::db::DbPool;
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct AgentIdArgs { agent_id: String }
+    struct AgentIdArgs {
+        agent_id: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct SetBindingsArgs { agent_id: String, bindings: Vec<ChannelBinding> }
+    struct SetBindingsArgs {
+        agent_id: String,
+        bindings: Vec<ChannelBinding>,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct PluginChannelsArgs { plugin_id: String, #[serde(default)] guild_id: Option<String> }
+    struct PluginChannelsArgs {
+        plugin_id: String,
+        #[serde(default)]
+        guild_id: Option<String>,
+    }
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("list_agent_listen_bindings", |_ctx, args| async move {
@@ -136,20 +163,17 @@ mod http {
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("set_agent_listen_bindings", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: SetBindingsArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            set_agent_listen_bindings(app.clone(), a.agent_id, a.bindings, app.state::<DbPool>()).await?;
+            set_agent_listen_bindings_inner(&ctx, a.agent_id, a.bindings).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("plugin_list_channels", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: PluginChannelsArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = plugin_list_channels(app.clone(), a.plugin_id, a.guild_id).await?;
+            let r = plugin_list_channels_inner(&ctx, a.plugin_id, a.guild_id).await?;
             Ok(r)
         });
         reg.register("list_trigger_capable_plugins", |ctx, _args| async move {
-            let app = ctx.app()?;
-            let r = list_trigger_capable_plugins(app.clone());
+            let r = list_trigger_capable_plugins_inner(&ctx);
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
     }

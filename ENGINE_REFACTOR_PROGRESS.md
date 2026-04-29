@@ -12,7 +12,7 @@ This is a living index of what's done in Phase B so work can be split across age
 - `[done]` merged on this branch (`feat/extract-engine`)
 - `[wip]` someone is actively working on it (claim by editing this file)
 - `[next]` ready to pick up; preconditions met
-- `[blocked]` waiting on another slice; note which one
+- `[blocked]` waiting on another slice; note which one. Recheck if still blocked if next in line.
 - `[deferred]` intentionally postponed (rationale inline)
 
 ---
@@ -51,7 +51,7 @@ Status: `[done]` for read paths and the write paths listed below. The trait itse
   - `BusSubscriptionRepo::create`, `set_enabled`, `delete`
   - `ProjectBoardRepo::create`, `update`, `delete` (cross-table re-parenting)
   - `WorkflowRunRepo::cancel`
-- `[deferred]` Coordinator-style writes that span aggregates inside one tx: `pulse`, `llm`, `auth`, `workspace` commands. Keep on `DbPool` until executor decoupling lands (A.7).
+- `[next]` Coordinator-style writes that span aggregates or filesystem/cloud side effects can now migrate command signatures/adapters to `AppContext`. Keep the actual repo extraction scoped per command.
 
 ### B.3 Command migrations (`crates/orbit-engine/src/commands/*.rs`)
 
@@ -59,22 +59,22 @@ Per-file remaining `DbPool` references (lower = closer to fully migrated). Read-
 
 | File | DbPool refs | Status | Notes / next slice |
 |---|---|---|---|
-| `workflow_runs.rs` | 3 | `[next]` | Smallest surface; finish first. |
-| `terminals.rs` | 4 | `[next]` | PTY lifecycle, light DB use. |
-| `triggers.rs` | 4 | `[next]` | Cross-aggregate; coordinate with `triggers/dispatcher.rs`. |
-| `llm.rs` | 4 | `[blocked]` | Coordinator command — defer until A.7. |
-| `tasks.rs` | 5 | `[next]` | Mostly write paths; trait methods exist. |
+| `workflow_runs.rs` | 0 | `[done]` | Tauri + shim start paths use `AppContext` runtime/db; read/cancel paths use repo. |
+| `terminals.rs` | 0 | `[done]` | Session agent lookup uses `ChatRepo::session_meta`; PTY lifecycle still uses Tauri registry. |
+| `triggers.rs` | 0 | `[done]` | Commands use `AppContext`; subscription reconcile can reuse `PluginManager` without Tauri state extraction. |
+| `llm.rs` | 0 | `[done]` | API-key sync and agent-loop trigger paths use `AppContext` cloud/db/executor coordinator. |
+| `tasks.rs` | 0 | `[done]` | CRUD uses `TaskRepo`; manual trigger path uses `AppContext` db/executor coordinator. |
 | `projects.rs` | 5 | `[next]` | `create_project` retains workspace-init side effects. |
 | `agents.rs` | 6 | `[next]` | `create_agent` / `update_agent` slug-rename → propose `AgentRepo::rename_with_references`. |
-| `pulse.rs` | 6 | `[blocked]` | Coordinator — defer. |
-| `skills.rs` | 6 | `[next]` | Simple write paths. |
-| `workspace.rs` | 6 | `[blocked]` | Coordinator — defer. |
-| `auth.rs` | 7 | `[blocked]` | Coordinator — defer. |
+| `pulse.rs` | 0 | `[done]` | Pulse config read/update use `AppContext` db while keeping workspace + task/schedule/session coordinator logic. |
+| `skills.rs` | 0 | `[done]` | Skill list/delete cleanup paths use `AppContext` db; file-backed create/read unchanged. |
+| `workspace.rs` | 0 | `[done]` | Workspace config/prompt writes use `AppContext`; `agent:config_changed` emits through `RuntimeHost`. |
+| `auth.rs` | 0 | `[done]` | Auth commands/adapters use `AppContext` auth/cloud/db state directly. |
 | `project_board_columns.rs` | 10 | `[next]` | Revision-checked CRUD; design `ProjectBoardColumnRepo` write methods first. |
 | `plugins.rs` | 14 | `[next]` | Add `PluginRepo` trait surface (not yet defined). |
 | `project_workflows.rs` | 18 | `[next]` | Graph normalization + transactional swap; design carefully. |
-| `chat.rs` | 28 | `[blocked]` | Streaming executor + worktree lifecycle entanglement; defer until executor decoupling. |
-| `work_items.rs` | 36 | `[blocked]` | Called from agent tools as `*_with_db`; defer until executor decoupling. |
+| `chat.rs` | 28 | `[blocked]` | Streaming session executor + worktree lifecycle still require a broader runtime/tool boundary, not just AppContext state extraction. |
+| `work_items.rs` | 36 | `[blocked]` | Write helpers are called from executor tools as `*_with_db`; unblock by threading repos/cloud through tool context or adding transaction-aware repo methods. |
 
 ### B.4 `tenant_id` column
 
