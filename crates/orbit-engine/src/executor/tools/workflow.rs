@@ -475,8 +475,9 @@ impl ToolHandler for WorkflowTool {
                 }
                 let warnings = workflow_runtime_warnings(&workflow.graph);
                 let trigger_data = input.get("trigger_data").cloned().unwrap_or(Value::Null);
-                let run = WorkflowOrchestrator::new(
+                let run = WorkflowOrchestrator::new_with_repos(
                     db.clone(),
+                    repos.clone(),
                     crate::runtime_host::tauri_host(app.clone()),
                 )
                 .start_run(workflow_id.to_string(), "manual", trigger_data)

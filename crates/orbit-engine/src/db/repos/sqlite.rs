@@ -11,6 +11,10 @@ use rusqlite::{params, OptionalExtension};
 use std::collections::HashSet;
 use ulid::Ulid;
 
+use crate::commands::project_board_columns::{
+    list_project_board_columns_sync, resolve_board_column_sync,
+};
+use crate::commands::work_item_events::{event_kind, insert_event, Actor};
 use crate::db::repos::{
     AgentRepo, BusMessageRepo, BusSubscriptionRepo, ChatRepo, ChatSessionListFilter,
     ProjectBoardColumnRepo, ProjectBoardRepo, ProjectRepo, ProjectWorkflowRepo, Repos,
@@ -42,8 +46,8 @@ use crate::models::run::{Run, RunSummary};
 use crate::models::schedule::{CreateSchedule, RecurringConfig, Schedule};
 use crate::models::task::{CreateTask, Task, UpdateTask};
 use crate::models::user::User;
-use crate::models::work_item::WorkItem;
-use crate::models::work_item_comment::WorkItemComment;
+use crate::models::work_item::{CreateWorkItem, UpdateWorkItem, WorkItem};
+use crate::models::work_item_comment::{CommentAuthor, WorkItemComment};
 use crate::models::work_item_event::WorkItemEvent;
 use crate::models::workflow_run::{WorkflowRun, WorkflowRunSummary, WorkflowRunWithSteps};
 use crate::scheduler::converter::{next_n_runs, to_cron};
@@ -2112,6 +2116,159 @@ impl ChatRepo for SqliteRepos {
         .await
     }
 
+    async fn create_session(
+        &self,
+        agent_id: String,
+        title: Option<String>,
+        session_type: Option<String>,
+        project_id: Option<String>,
+    ) -> Result<ChatSession, String> {
+        self.with_conn(move |conn| {
+            let id = Ulid::new().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+            let title = title.unwrap_or_else(|| "New Chat".to_string());
+            let session_type = session_type.unwrap_or_else(|| "user_chat".to_string());
+
+            conn.execute(
+                "INSERT INTO chat_sessions (
+                    id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
+                    chain_depth, execution_state, finish_summary, terminal_error, project_id, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, 0, ?4, NULL, NULL, 0, NULL, NULL, NULL, ?5, ?6, ?6)",
+                params![&id, &agent_id, &title, &session_type, &project_id, &now],
+            )
+            .err_str()?;
+
+            Ok(ChatSession {
+                id,
+                agent_id,
+                title,
+                archived: false,
+                session_type,
+                parent_session_id: None,
+                source_bus_message_id: None,
+                chain_depth: 0,
+                execution_state: None,
+                finish_summary: None,
+                terminal_error: None,
+                source_agent_id: None,
+                source_agent_name: None,
+                source_session_id: None,
+                source_session_title: None,
+                created_at: now.clone(),
+                updated_at: now,
+                project_id,
+                worktree_name: None,
+                worktree_branch: None,
+                worktree_path: None,
+            })
+        })
+        .await
+    }
+
+    async fn rename_session(&self, session_id: &str, title: String) -> Result<String, String> {
+        let session_id = session_id.to_string();
+        self.with_conn(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "UPDATE chat_sessions SET title = ?1, updated_at = ?2 WHERE id = ?3",
+                params![title, &now, session_id],
+            )
+            .err_str()?;
+            Ok(now)
+        })
+        .await
+    }
+
+    async fn archive_session(&self, session_id: &str) -> Result<String, String> {
+        let session_id = session_id.to_string();
+        self.with_conn(move |conn| {
+            let active_execution: Option<String> = conn
+                .query_row(
+                    "SELECT execution_state FROM chat_sessions WHERE id = ?1",
+                    params![&session_id],
+                    |row| row.get(0),
+                )
+                .ok();
+            if matches!(
+                active_execution.as_deref(),
+                Some("queued") | Some("running")
+            ) {
+                return Err("cannot archive an active agent session".to_string());
+            }
+
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "UPDATE chat_sessions SET archived = 1, updated_at = ?1 WHERE id = ?2",
+                params![&now, &session_id],
+            )
+            .err_str()?;
+            conn.execute(
+                "UPDATE chat_sessions SET archived = 1, updated_at = ?1 WHERE parent_session_id = ?2",
+                params![&now, &session_id],
+            )
+            .err_str()?;
+            conn.execute(
+                "UPDATE chat_sessions SET archived = 1, updated_at = ?1 \
+                 WHERE id IN (SELECT bm.to_session_id FROM bus_messages bm WHERE bm.from_session_id = ?2 AND bm.to_session_id IS NOT NULL)",
+                params![&now, &session_id],
+            )
+            .err_str()?;
+            Ok(now)
+        })
+        .await
+    }
+
+    async fn unarchive_session(&self, session_id: &str) -> Result<String, String> {
+        let session_id = session_id.to_string();
+        self.with_conn(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "UPDATE chat_sessions SET archived = 0, updated_at = ?1 WHERE id = ?2",
+                params![&now, &session_id],
+            )
+            .err_str()?;
+            conn.execute(
+                "UPDATE chat_sessions SET archived = 0, updated_at = ?1 WHERE parent_session_id = ?2",
+                params![&now, &session_id],
+            )
+            .err_str()?;
+            conn.execute(
+                "UPDATE chat_sessions SET archived = 0, updated_at = ?1 \
+                 WHERE id IN (SELECT bm.to_session_id FROM bus_messages bm WHERE bm.from_session_id = ?2 AND bm.to_session_id IS NOT NULL)",
+                params![&now, &session_id],
+            )
+            .err_str()?;
+            Ok(now)
+        })
+        .await
+    }
+
+    async fn delete_session(&self, session_id: &str) -> Result<(), String> {
+        let session_id = session_id.to_string();
+        self.with_conn(move |conn| {
+            let active_execution: Option<String> = conn
+                .query_row(
+                    "SELECT execution_state FROM chat_sessions WHERE id = ?1",
+                    params![&session_id],
+                    |row| row.get(0),
+                )
+                .ok();
+            if matches!(
+                active_execution.as_deref(),
+                Some("queued") | Some("running")
+            ) {
+                return Err("cannot delete an active agent session".to_string());
+            }
+            conn.execute(
+                "DELETE FROM chat_sessions WHERE id = ?1",
+                params![session_id],
+            )
+            .err_str()?;
+            Ok(())
+        })
+        .await
+    }
+
     async fn session_meta(&self, session_id: &str) -> Result<ChatSessionMeta, String> {
         let session_id = session_id.to_string();
         self.with_conn(move |conn| {
@@ -2271,6 +2428,58 @@ fn map_work_item_comment_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkIt
     })
 }
 
+fn resolve_work_item_target_column(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    board_id: Option<&str>,
+    column_id: Option<&str>,
+    status: Option<&str>,
+) -> Result<ProjectBoardColumn, String> {
+    resolve_board_column_sync(conn, project_id, board_id, column_id, status)
+}
+
+fn resolve_work_item_create_status(
+    column: &ProjectBoardColumn,
+    requested_status: Option<&str>,
+) -> String {
+    column
+        .role
+        .clone()
+        .or_else(|| requested_status.map(str::to_string))
+        .unwrap_or_else(|| "backlog".to_string())
+}
+
+fn resolve_work_item_move_status(column: &ProjectBoardColumn, current_status: &str) -> String {
+    column
+        .role
+        .clone()
+        .unwrap_or_else(|| current_status.to_string())
+}
+
+fn resolve_work_item_next_column(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    board_id: Option<&str>,
+    current_column_id: Option<&str>,
+) -> Result<ProjectBoardColumn, String> {
+    let current_column_id = current_column_id
+        .ok_or_else(|| "work_item: item is not currently in a board column".to_string())?;
+    let columns = list_project_board_columns_sync(conn, project_id, board_id)?;
+    let current_index = columns
+        .iter()
+        .position(|column| column.id == current_column_id)
+        .ok_or_else(|| {
+            format!(
+                "work_item: current board column '{}' was not found on this board",
+                current_column_id
+            )
+        })?;
+    columns
+        .get(current_index + 1)
+        .cloned()
+        .ok_or_else(|| "work_item: item is already in the last board column".to_string())
+}
+
 #[async_trait]
 impl WorkItemRepo for SqliteRepos {
     async fn list(
@@ -2326,6 +2535,667 @@ impl WorkItemRepo for SqliteRepos {
         .await
     }
 
+    async fn lookup_project_id(&self, id: &str) -> Result<String, String> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            conn.query_row(
+                "SELECT project_id FROM work_items WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .err_str()?
+            .ok_or_else(|| format!("work item '{}' not found", id))
+        })
+        .await
+    }
+
+    async fn create(&self, payload: CreateWorkItem) -> Result<WorkItem, String> {
+        self.with_conn(move |conn| {
+            let id = Ulid::new().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+            let kind = payload.kind.unwrap_or_else(|| "task".to_string());
+            let column = resolve_work_item_target_column(
+                conn,
+                &payload.project_id,
+                payload.board_id.as_deref(),
+                payload.column_id.as_deref(),
+                payload.status.as_deref(),
+            )?;
+            let column_id = column.id.clone();
+            let board_id = column.board_id.clone();
+            let status = resolve_work_item_create_status(&column, payload.status.as_deref());
+            let priority = payload.priority.unwrap_or(0);
+            let position = match payload.position {
+                Some(p) => p,
+                None => {
+                    let max: Option<f64> = conn
+                        .query_row(
+                            "SELECT MAX(position) FROM work_items WHERE project_id = ?1 AND column_id = ?2",
+                            params![&payload.project_id, &column_id],
+                            |row| row.get(0),
+                        )
+                        .optional()
+                        .err_str()?
+                        .flatten();
+                    max.unwrap_or(0.0) + 1024.0
+                }
+            };
+            let labels_json = serde_json::to_string(&payload.labels.unwrap_or_default()).err_str()?;
+            let metadata_json = serde_json::to_string(
+                &payload.metadata.unwrap_or_else(|| serde_json::json!({})),
+            )
+            .err_str()?;
+
+            if status == "blocked" {
+                return Err("work_item: cannot create a card with status='blocked' without a reason; create first then block".into());
+            }
+
+            conn.execute(
+                "INSERT INTO work_items (
+                    id, project_id, board_id, title, description, kind, column_id, status, priority,
+                    assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
+                    labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,NULL,NULL,NULL,?16,?16)",
+                params![
+                    &id,
+                    &payload.project_id,
+                    &board_id,
+                    &payload.title,
+                    &payload.description,
+                    &kind,
+                    &column_id,
+                    &status,
+                    priority,
+                    &payload.assignee_agent_id,
+                    &payload.created_by_agent_id,
+                    &payload.parent_work_item_id,
+                    position,
+                    labels_json,
+                    metadata_json,
+                    &now,
+                ],
+            )
+            .err_str()?;
+
+            insert_event(
+                conn,
+                &id,
+                Actor::System,
+                event_kind::CREATED,
+                serde_json::json!({
+                    "title": payload.title,
+                    "kind": kind,
+                    "status": status,
+                    "priority": priority,
+                    "columnId": column_id,
+                }),
+            )?;
+
+            conn.query_row(
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
+                params![&id],
+                map_work_item_repo_row,
+            )
+            .err_str()
+        })
+        .await
+    }
+
+    async fn update(&self, id: &str, payload: UpdateWorkItem) -> Result<WorkItem, String> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let before: WorkItem = conn
+                .query_row(
+                    &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
+                    params![&id],
+                    map_work_item_repo_row,
+                )
+                .err_str()?;
+            let project_id = before.project_id.clone();
+
+            if let Some(title) = &payload.title {
+                if title.trim().is_empty() {
+                    return Err("work_item: title must be non-empty".into());
+                }
+                if title != &before.title {
+                    conn.execute(
+                        "UPDATE work_items SET title = ?1, updated_at = ?2 WHERE id = ?3",
+                        params![title, &now, &id],
+                    )
+                    .err_str()?;
+                    insert_event(
+                        conn,
+                        &id,
+                        Actor::System,
+                        event_kind::TITLE_CHANGED,
+                        serde_json::json!({ "from": before.title, "to": title }),
+                    )?;
+                }
+            }
+            if let Some(description) = &payload.description {
+                let before_desc = before.description.clone().unwrap_or_default();
+                if description != &before_desc {
+                    conn.execute(
+                        "UPDATE work_items SET description = ?1, updated_at = ?2 WHERE id = ?3",
+                        params![description, &now, &id],
+                    )
+                    .err_str()?;
+                    insert_event(
+                        conn,
+                        &id,
+                        Actor::System,
+                        event_kind::DESCRIPTION_CHANGED,
+                        serde_json::json!({}),
+                    )?;
+                }
+            }
+            if let Some(kind) = &payload.kind {
+                if kind != &before.kind {
+                    conn.execute(
+                        "UPDATE work_items SET kind = ?1, updated_at = ?2 WHERE id = ?3",
+                        params![kind, &now, &id],
+                    )
+                    .err_str()?;
+                    insert_event(
+                        conn,
+                        &id,
+                        Actor::System,
+                        event_kind::KIND_CHANGED,
+                        serde_json::json!({ "from": before.kind, "to": kind }),
+                    )?;
+                }
+            }
+            if let Some(column_id) = payload.column_id.as_deref() {
+                let resolved_column = resolve_work_item_target_column(
+                    conn,
+                    &project_id,
+                    None,
+                    Some(column_id),
+                    None,
+                )?;
+                if Some(resolved_column.id.as_str()) != before.column_id.as_deref() {
+                    conn.execute(
+                        "UPDATE work_items SET column_id = ?1, updated_at = ?2 WHERE id = ?3",
+                        params![&resolved_column.id, &now, &id],
+                    )
+                    .err_str()?;
+                    insert_event(
+                        conn,
+                        &id,
+                        Actor::System,
+                        event_kind::COLUMN_CHANGED,
+                        serde_json::json!({
+                            "fromColumnId": before.column_id,
+                            "toColumnId": resolved_column.id,
+                            "toColumnName": resolved_column.name,
+                        }),
+                    )?;
+                }
+            }
+            if let Some(priority) = payload.priority {
+                if priority != before.priority {
+                    conn.execute(
+                        "UPDATE work_items SET priority = ?1, updated_at = ?2 WHERE id = ?3",
+                        params![priority, &now, &id],
+                    )
+                    .err_str()?;
+                    insert_event(
+                        conn,
+                        &id,
+                        Actor::System,
+                        event_kind::PRIORITY_CHANGED,
+                        serde_json::json!({ "from": before.priority, "to": priority }),
+                    )?;
+                }
+            }
+            if let Some(labels) = &payload.labels {
+                if labels != &before.labels {
+                    let labels_json = serde_json::to_string(labels).err_str()?;
+                    conn.execute(
+                        "UPDATE work_items SET labels = ?1, updated_at = ?2 WHERE id = ?3",
+                        params![labels_json, &now, &id],
+                    )
+                    .err_str()?;
+                    insert_event(
+                        conn,
+                        &id,
+                        Actor::System,
+                        event_kind::LABELS_CHANGED,
+                        serde_json::json!({ "from": before.labels, "to": labels }),
+                    )?;
+                }
+            }
+            if let Some(metadata) = &payload.metadata {
+                let metadata_json = serde_json::to_string(metadata).err_str()?;
+                conn.execute(
+                    "UPDATE work_items SET metadata = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![metadata_json, &now, &id],
+                )
+                .err_str()?;
+            }
+
+            conn.query_row(
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
+                params![&id],
+                map_work_item_repo_row,
+            )
+            .err_str()
+        })
+        .await
+    }
+
+    async fn delete(&self, id: &str) -> Result<(), String> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            conn.execute("DELETE FROM work_items WHERE id = ?1", params![id])
+                .err_str()?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn claim(&self, id: &str, agent_id: &str) -> Result<WorkItem, String> {
+        let id = id.to_string();
+        let agent_id = agent_id.to_string();
+        self.with_conn(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let before: WorkItem = conn
+                .query_row(
+                    &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
+                    params![&id],
+                    map_work_item_repo_row,
+                )
+                .err_str()?;
+            let column = resolve_work_item_target_column(
+                conn,
+                &before.project_id,
+                before.board_id.as_deref(),
+                None,
+                Some("in_progress"),
+            )?;
+            let column_id = column.id.clone();
+            let status = column
+                .role
+                .clone()
+                .unwrap_or_else(|| "in_progress".to_string());
+            conn.execute(
+                "UPDATE work_items
+                    SET assignee_agent_id = ?1,
+                        column_id = ?2,
+                        status = ?3,
+                        blocked_reason = NULL,
+                        started_at = COALESCE(started_at, ?4),
+                        updated_at = ?4
+                  WHERE id = ?5",
+                params![&agent_id, &column_id, &status, &now, &id],
+            )
+            .err_str()?;
+
+            if before.assignee_agent_id.as_deref() != Some(agent_id.as_str()) {
+                insert_event(
+                    conn,
+                    &id,
+                    Actor::System,
+                    event_kind::ASSIGNEE_CHANGED,
+                    serde_json::json!({
+                        "fromAgentId": before.assignee_agent_id,
+                        "toAgentId": agent_id,
+                    }),
+                )?;
+            }
+            if before.column_id.as_deref() != Some(column_id.as_str()) {
+                insert_event(
+                    conn,
+                    &id,
+                    Actor::System,
+                    event_kind::COLUMN_CHANGED,
+                    serde_json::json!({
+                        "fromColumnId": before.column_id,
+                        "toColumnId": column_id,
+                        "toColumnName": column.name,
+                        "reason": "claim",
+                    }),
+                )?;
+            }
+
+            conn.query_row(
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
+                params![&id],
+                map_work_item_repo_row,
+            )
+            .err_str()
+        })
+        .await
+    }
+
+    async fn move_item(
+        &self,
+        id: &str,
+        column_id: Option<String>,
+        position: Option<f64>,
+    ) -> Result<WorkItem, String> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let before: WorkItem = conn
+                .query_row(
+                    &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
+                    params![&id],
+                    map_work_item_repo_row,
+                )
+                .err_str()?;
+            let column = match column_id.as_deref() {
+                Some(column_id) => resolve_work_item_target_column(
+                    conn,
+                    &before.project_id,
+                    before.board_id.as_deref(),
+                    Some(column_id),
+                    None,
+                )?,
+                None => resolve_work_item_next_column(
+                    conn,
+                    &before.project_id,
+                    before.board_id.as_deref(),
+                    before.column_id.as_deref(),
+                )?,
+            };
+            let column_id = column.id.clone();
+            let status = resolve_work_item_move_status(&column, &before.status);
+
+            if status == "blocked" {
+                let reason_ok: bool = conn
+                    .query_row(
+                        "SELECT blocked_reason IS NOT NULL AND length(blocked_reason) > 0
+                           FROM work_items WHERE id = ?1",
+                        params![&id],
+                        |row| row.get(0),
+                    )
+                    .err_str()?;
+                if !reason_ok {
+                    return Err(
+                        "work_item: moving to 'blocked' requires a non-empty blocked_reason; use block() first"
+                            .into(),
+                    );
+                }
+            }
+
+            let position = match position {
+                Some(p) => p,
+                None => {
+                    if before.status == status
+                        && before.column_id.as_deref() == Some(column_id.as_str())
+                    {
+                        before.position
+                    } else {
+                        let max: Option<f64> = conn
+                            .query_row(
+                                "SELECT MAX(position) FROM work_items WHERE project_id = ?1 AND column_id = ?2",
+                                params![&before.project_id, &column_id],
+                                |row| row.get(0),
+                            )
+                            .optional()
+                            .err_str()?
+                            .flatten();
+                        max.unwrap_or(0.0) + 1024.0
+                    }
+                }
+            };
+
+            let started_at_expr = if before.status != "in_progress" && status == "in_progress" {
+                "COALESCE(started_at, ?4)"
+            } else {
+                "started_at"
+            };
+            let completed_at_expr = if status == "done" || status == "cancelled" {
+                "?4"
+            } else {
+                "completed_at"
+            };
+            let blocked_reason_expr = if before.status == "blocked" && status != "blocked" {
+                "NULL"
+            } else {
+                "blocked_reason"
+            };
+
+            let sql = format!(
+                "UPDATE work_items
+                    SET column_id = ?1,
+                        status = ?2,
+                        position = ?3,
+                        started_at = {},
+                        completed_at = {},
+                        blocked_reason = {},
+                        updated_at = ?5
+                  WHERE id = ?4",
+                started_at_expr, completed_at_expr, blocked_reason_expr
+            );
+            conn.execute(&sql, params![&column_id, &status, position, &id, &now])
+                .err_str()?;
+
+            if before.column_id.as_deref() != Some(column_id.as_str()) {
+                insert_event(
+                    conn,
+                    &id,
+                    Actor::System,
+                    event_kind::COLUMN_CHANGED,
+                    serde_json::json!({
+                        "fromColumnId": before.column_id,
+                        "fromStatus": before.status,
+                        "toColumnId": column_id,
+                        "toColumnName": column.name,
+                        "toStatus": status,
+                    }),
+                )?;
+            }
+            if status == "done" && before.status != "done" {
+                insert_event(
+                    conn,
+                    &id,
+                    Actor::System,
+                    event_kind::COMPLETED,
+                    serde_json::json!({ "via": "move" }),
+                )?;
+            }
+            if before.status == "blocked" && status != "blocked" {
+                insert_event(
+                    conn,
+                    &id,
+                    Actor::System,
+                    event_kind::UNBLOCKED,
+                    serde_json::json!({ "via": "move" }),
+                )?;
+            }
+
+            conn.query_row(
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
+                params![&id],
+                map_work_item_repo_row,
+            )
+            .err_str()
+        })
+        .await
+    }
+
+    async fn reorder(
+        &self,
+        project_id: &str,
+        board_id: Option<String>,
+        status: Option<String>,
+        column_id: Option<String>,
+        ordered_ids: Vec<String>,
+    ) -> Result<(), String> {
+        let project_id = project_id.to_string();
+        self.with_conn_mut(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let resolved_column_id = resolve_work_item_target_column(
+                conn,
+                &project_id,
+                board_id.as_deref(),
+                column_id.as_deref(),
+                status.as_deref(),
+            )?
+            .id;
+            let tx = conn.transaction().err_str()?;
+            for (idx, item_id) in ordered_ids.iter().enumerate() {
+                let pos = ((idx + 1) as f64) * 1024.0;
+                tx.execute(
+                    "UPDATE work_items
+                        SET position = ?1, updated_at = ?2
+                      WHERE id = ?3 AND project_id = ?4 AND column_id = ?5",
+                    params![pos, &now, item_id, &project_id, &resolved_column_id],
+                )
+                .err_str()?;
+            }
+            tx.commit().err_str()?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn block(&self, id: &str, reason: String) -> Result<WorkItem, String> {
+        if reason.trim().is_empty() {
+            return Err("work_item: blocked_reason must be non-empty".into());
+        }
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let (project_id, board_id): (String, Option<String>) = conn
+                .query_row(
+                    "SELECT project_id, board_id FROM work_items WHERE id = ?1",
+                    params![&id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .err_str()?;
+            let column = resolve_work_item_target_column(
+                conn,
+                &project_id,
+                board_id.as_deref(),
+                None,
+                Some("blocked"),
+            )?;
+            let column_id = column.id;
+            let status = column.role.unwrap_or_else(|| "blocked".to_string());
+            conn.execute(
+                "UPDATE work_items
+                    SET column_id = ?1, status = ?2, blocked_reason = ?3, updated_at = ?4
+                  WHERE id = ?5",
+                params![&column_id, &status, &reason, &now, &id],
+            )
+            .err_str()?;
+            insert_event(
+                conn,
+                &id,
+                Actor::System,
+                event_kind::BLOCKED,
+                serde_json::json!({ "reason": reason }),
+            )?;
+            conn.query_row(
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
+                params![&id],
+                map_work_item_repo_row,
+            )
+            .err_str()
+        })
+        .await
+    }
+
+    async fn unblock(&self, id: &str, status: String) -> Result<WorkItem, String> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let (project_id, board_id): (String, Option<String>) = conn
+                .query_row(
+                    "SELECT project_id, board_id FROM work_items WHERE id = ?1",
+                    params![&id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .err_str()?;
+            let column = resolve_work_item_target_column(
+                conn,
+                &project_id,
+                board_id.as_deref(),
+                None,
+                Some(&status),
+            )?;
+            let column_id = column.id;
+            let resolved_status = column.role.unwrap_or(status);
+            conn.execute(
+                "UPDATE work_items
+                    SET column_id = ?1,
+                        status = ?2,
+                        blocked_reason = NULL,
+                        updated_at = ?3
+                  WHERE id = ?4",
+                params![&column_id, &resolved_status, &now, &id],
+            )
+            .err_str()?;
+            insert_event(
+                conn,
+                &id,
+                Actor::System,
+                event_kind::UNBLOCKED,
+                serde_json::json!({ "toStatus": resolved_status }),
+            )?;
+            conn.query_row(
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
+                params![&id],
+                map_work_item_repo_row,
+            )
+            .err_str()
+        })
+        .await
+    }
+
+    async fn complete(&self, id: &str) -> Result<WorkItem, String> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let (project_id, board_id): (String, Option<String>) = conn
+                .query_row(
+                    "SELECT project_id, board_id FROM work_items WHERE id = ?1",
+                    params![&id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .err_str()?;
+            let column = resolve_work_item_target_column(
+                conn,
+                &project_id,
+                board_id.as_deref(),
+                None,
+                Some("done"),
+            )?;
+            let column_id = column.id;
+            let status = column.role.unwrap_or_else(|| "done".to_string());
+            conn.execute(
+                "UPDATE work_items
+                    SET column_id = ?1,
+                        status = ?2,
+                        completed_at = ?3,
+                        blocked_reason = NULL,
+                        updated_at = ?3
+                  WHERE id = ?4",
+                params![&column_id, &status, &now, &id],
+            )
+            .err_str()?;
+            insert_event(
+                conn,
+                &id,
+                Actor::System,
+                event_kind::COMPLETED,
+                serde_json::json!({ "via": "complete" }),
+            )?;
+            conn.query_row(
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
+                params![&id],
+                map_work_item_repo_row,
+            )
+            .err_str()
+        })
+        .await
+    }
+
     async fn list_comments(&self, work_item_id: &str) -> Result<Vec<WorkItemComment>, String> {
         let work_item_id = work_item_id.to_string();
         self.with_conn(move |conn| {
@@ -2340,6 +3210,124 @@ impl WorkItemRepo for SqliteRepos {
                 .filter_map(|r| r.ok())
                 .collect();
             Ok(rows)
+        })
+        .await
+    }
+
+    async fn create_comment(
+        &self,
+        work_item_id: &str,
+        body: String,
+        author: CommentAuthor,
+    ) -> Result<WorkItemComment, String> {
+        if body.trim().is_empty() {
+            return Err("work_item_comment: body must be non-empty".into());
+        }
+        let work_item_id = work_item_id.to_string();
+        self.with_conn(move |conn| {
+            let id = Ulid::new().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+            let (author_kind, author_agent_id) = match author {
+                CommentAuthor::User => ("user", None),
+                CommentAuthor::Agent { agent_id } => ("agent", Some(agent_id)),
+            };
+            conn.execute(
+                "INSERT INTO work_item_comments (
+                    id, work_item_id, author_kind, author_agent_id, body, created_at, updated_at
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?6)",
+                params![
+                    &id,
+                    &work_item_id,
+                    author_kind,
+                    &author_agent_id,
+                    &body,
+                    &now
+                ],
+            )
+            .err_str()?;
+            let actor = match author_kind {
+                "agent" => match author_agent_id.as_deref() {
+                    Some(aid) => Actor::Agent { agent_id: aid },
+                    None => Actor::System,
+                },
+                "user" => Actor::User,
+                _ => Actor::System,
+            };
+            insert_event(
+                conn,
+                &work_item_id,
+                actor,
+                event_kind::COMMENT_ADDED,
+                serde_json::json!({ "commentId": id }),
+            )?;
+            conn.query_row(
+                &format!(
+                    "SELECT {WORK_ITEM_COMMENT_REPO_COLUMNS} FROM work_item_comments WHERE id = ?1"
+                ),
+                params![&id],
+                map_work_item_comment_row,
+            )
+            .err_str()
+        })
+        .await
+    }
+
+    async fn update_comment(&self, id: &str, body: String) -> Result<WorkItemComment, String> {
+        if body.trim().is_empty() {
+            return Err("work_item_comment: body must be non-empty".into());
+        }
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "UPDATE work_item_comments SET body = ?1, updated_at = ?2 WHERE id = ?3",
+                params![&body, &now, &id],
+            )
+            .err_str()?;
+            let comment: WorkItemComment = conn
+                .query_row(
+                    &format!(
+                        "SELECT {WORK_ITEM_COMMENT_REPO_COLUMNS} FROM work_item_comments WHERE id = ?1"
+                    ),
+                    params![&id],
+                    map_work_item_comment_row,
+                )
+                .err_str()?;
+            insert_event(
+                conn,
+                &comment.work_item_id,
+                Actor::System,
+                event_kind::COMMENT_EDITED,
+                serde_json::json!({ "commentId": comment.id }),
+            )?;
+            Ok(comment)
+        })
+        .await
+    }
+
+    async fn delete_comment(&self, id: &str) -> Result<(), String> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            let work_item_id: Option<String> = conn
+                .query_row(
+                    "SELECT work_item_id FROM work_item_comments WHERE id = ?1",
+                    params![&id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .err_str()?;
+            conn.execute("DELETE FROM work_item_comments WHERE id = ?1", params![&id])
+                .err_str()?;
+            if let Some(wid) = work_item_id {
+                insert_event(
+                    conn,
+                    &wid,
+                    Actor::System,
+                    event_kind::COMMENT_DELETED,
+                    serde_json::json!({ "commentId": id }),
+                )?;
+            }
+            Ok(())
         })
         .await
     }

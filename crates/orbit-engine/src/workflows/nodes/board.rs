@@ -1,12 +1,6 @@
 use serde_json::{json, Value};
 use tauri::Manager;
 
-use crate::commands::work_items::{
-    block_work_item_with_db, claim_work_item_with_db, complete_work_item_with_db,
-    create_work_item_comment_with_db, create_work_item_with_db, delete_work_item_with_db,
-    get_work_item_with_db, list_work_item_comments_with_db, list_work_items_with_db,
-    move_work_item_with_db, update_work_item_with_db,
-};
 use crate::db::cloud::CloudClientState;
 use crate::models::work_item::{CreateWorkItem, UpdateWorkItem};
 use crate::models::work_item_comment::{CommentAuthor, WorkItemComment};
@@ -158,7 +152,7 @@ pub(super) async fn execute_proposal_enqueue(
                 "fitScore": fit_score,
             })),
         };
-        let item = create_work_item_with_db(ctx.db, payload).await?;
+        let item = ctx.repos.work_items().create(payload).await?;
         if let Some(app) = ctx.app_handle() {
             sync_work_item_cloud(&app, item.clone());
         }
@@ -248,7 +242,7 @@ pub(super) async fn execute_work_item(
                 })),
             };
 
-            let item = create_work_item_with_db(ctx.db, payload).await?;
+            let item = ctx.repos.work_items().create(payload).await?;
             if let Some(app) = ctx.app_handle() {
                 sync_work_item_cloud(&app, item.clone());
             }
@@ -271,8 +265,7 @@ pub(super) async fn execute_work_item(
             })
         }
         WorkItemAction::List => {
-            let mut items =
-                list_work_items_with_db(ctx.db, ctx.project_id.to_string(), None).await?;
+            let mut items = ctx.repos.work_items().list(ctx.project_id, None).await?;
             let column_id_filter = render_optional_template(
                 ctx.node.data.get("listColumnId").and_then(|v| v.as_str()),
                 ctx.outputs,
@@ -342,7 +335,7 @@ pub(super) async fn execute_work_item(
                 action.as_str(),
                 ctx.outputs,
             )?;
-            let item = get_work_item_with_db(ctx.db, item_id.clone()).await?;
+            let item = ctx.repos.work_items().get(&item_id).await?;
             Ok(NodeOutcome {
                 output: json!({
                     "action": action.as_str(),
@@ -366,32 +359,34 @@ pub(super) async fn execute_work_item(
                 ctx.node.data.get("labelsText").and_then(|v| v.as_str()),
                 ctx.outputs,
             );
-            let item = update_work_item_with_db(
-                ctx.db,
-                item_id.clone(),
-                UpdateWorkItem {
-                    title: render_optional_template(
-                        ctx.node.data.get("titleTemplate").and_then(|v| v.as_str()),
-                        ctx.outputs,
-                    ),
-                    description: render_optional_template(
-                        ctx.node
-                            .data
-                            .get("descriptionTemplate")
-                            .and_then(|v| v.as_str()),
-                        ctx.outputs,
-                    ),
-                    kind,
-                    column_id: render_optional_template(
-                        ctx.node.data.get("columnId").and_then(|v| v.as_str()),
-                        ctx.outputs,
-                    ),
-                    priority,
-                    labels,
-                    metadata: None,
-                },
-            )
-            .await?;
+            let item = ctx
+                .repos
+                .work_items()
+                .update(
+                    &item_id,
+                    UpdateWorkItem {
+                        title: render_optional_template(
+                            ctx.node.data.get("titleTemplate").and_then(|v| v.as_str()),
+                            ctx.outputs,
+                        ),
+                        description: render_optional_template(
+                            ctx.node
+                                .data
+                                .get("descriptionTemplate")
+                                .and_then(|v| v.as_str()),
+                            ctx.outputs,
+                        ),
+                        kind,
+                        column_id: render_optional_template(
+                            ctx.node.data.get("columnId").and_then(|v| v.as_str()),
+                            ctx.outputs,
+                        ),
+                        priority,
+                        labels,
+                        metadata: None,
+                    },
+                )
+                .await?;
             if let Some(app) = ctx.app_handle() {
                 sync_work_item_cloud(&app, item.clone());
             }
@@ -421,8 +416,11 @@ pub(super) async fn execute_work_item(
                         .into(),
                 );
             }
-            let item =
-                move_work_item_with_db(ctx.db, item_id.clone(), column_id.clone(), None).await?;
+            let item = ctx
+                .repos
+                .work_items()
+                .move_item(&item_id, column_id.clone(), None)
+                .await?;
             if let Some(app) = ctx.app_handle() {
                 sync_work_item_cloud(&app, item.clone());
             }
@@ -450,7 +448,11 @@ pub(super) async fn execute_work_item(
                 action.as_str(),
                 ctx.outputs,
             )?;
-            let item = block_work_item_with_db(ctx.db, item_id.clone(), reason.clone()).await?;
+            let item = ctx
+                .repos
+                .work_items()
+                .block(&item_id, reason.clone())
+                .await?;
             if let Some(app) = ctx.app_handle() {
                 sync_work_item_cloud(&app, item.clone());
             }
@@ -471,7 +473,7 @@ pub(super) async fn execute_work_item(
                 action.as_str(),
                 ctx.outputs,
             )?;
-            let item = complete_work_item_with_db(ctx.db, item_id.clone()).await?;
+            let item = ctx.repos.work_items().complete(&item_id).await?;
             if let Some(app) = ctx.app_handle() {
                 sync_work_item_cloud(&app, item.clone());
             }
@@ -507,9 +509,11 @@ pub(super) async fn execute_work_item(
                 Some(agent_id) => CommentAuthor::Agent { agent_id },
                 None => CommentAuthor::User,
             };
-            let comment =
-                create_work_item_comment_with_db(ctx.db, item_id.clone(), body.clone(), author)
-                    .await?;
+            let comment = ctx
+                .repos
+                .work_items()
+                .create_comment(&item_id, body.clone(), author)
+                .await?;
             if let Some(app) = ctx.app_handle() {
                 sync_work_item_comment_cloud(&app, comment.clone());
             }
@@ -530,7 +534,7 @@ pub(super) async fn execute_work_item(
                 action.as_str(),
                 ctx.outputs,
             )?;
-            let comments = list_work_item_comments_with_db(ctx.db, item_id.clone()).await?;
+            let comments = ctx.repos.work_items().list_comments(&item_id).await?;
             Ok(NodeOutcome {
                 output: json!({
                     "action": action.as_str(),
@@ -548,7 +552,7 @@ pub(super) async fn execute_work_item(
                 action.as_str(),
                 ctx.outputs,
             )?;
-            delete_work_item_with_db(ctx.db, item_id.clone()).await?;
+            ctx.repos.work_items().delete(&item_id).await?;
             if let Some(app) = ctx.app_handle() {
                 delete_work_item_cloud(&app, item_id.clone());
             }
@@ -574,7 +578,7 @@ pub(super) async fn execute_work_item(
                 action.as_str(),
                 ctx.outputs,
             )?;
-            let item = claim_work_item_with_db(ctx.db, item_id.clone(), agent_id.clone()).await?;
+            let item = ctx.repos.work_items().claim(&item_id, &agent_id).await?;
             if let Some(app) = ctx.app_handle() {
                 sync_work_item_cloud(&app, item.clone());
             }

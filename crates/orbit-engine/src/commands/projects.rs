@@ -1,6 +1,5 @@
 use crate::app_context::AppContext;
 use crate::commands::project_board_columns::ensure_project_board_columns;
-use crate::db::DbPool;
 use crate::executor::workspace;
 use crate::models::agent::Agent;
 use crate::models::project::{CreateProject, Project, ProjectAgent, ProjectSummary, UpdateProject};
@@ -171,24 +170,6 @@ pub fn assert_agent_in_project_sync(
         ));
     }
     Ok(())
-}
-
-/// Async membership check — for use from async call sites that don't already
-/// hold a DB connection (e.g. before spawning the agent session loop).
-pub async fn assert_agent_in_project(
-    db: &DbPool,
-    project_id: &str,
-    agent_id: &str,
-) -> Result<(), String> {
-    let pool = db.0.clone();
-    let project_id = project_id.to_string();
-    let agent_id = agent_id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        assert_agent_in_project_sync(&conn, &project_id, &agent_id)
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

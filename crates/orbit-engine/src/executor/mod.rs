@@ -28,6 +28,7 @@ pub mod migration;
 pub mod minimax;
 pub mod permissions;
 pub mod process;
+pub mod project_scope;
 pub mod pty_session;
 pub mod session_agent;
 pub mod session_worktree;

@@ -39,8 +39,8 @@ use crate::models::run::{Run, RunSummary};
 use crate::models::schedule::{CreateSchedule, Schedule};
 use crate::models::task::{CreateTask, Task, UpdateTask};
 use crate::models::user::User;
-use crate::models::work_item::WorkItem;
-use crate::models::work_item_comment::WorkItemComment;
+use crate::models::work_item::{CreateWorkItem, UpdateWorkItem, WorkItem};
+use crate::models::work_item_comment::{CommentAuthor, WorkItemComment};
 use crate::models::work_item_event::WorkItemEvent;
 use crate::models::workflow_run::WorkflowRun;
 
@@ -215,11 +215,8 @@ pub trait ProjectWorkflowRepo: Send + Sync {
     async fn lookup_run_scope(&self, run_id: &str) -> Result<(String, String), String>;
 }
 
-/// Work items aggregate (kanban cards). Read-only at the trait surface
-/// because the write paths are entangled with `work_item_events` insertion
-/// across tables and are also called from agent tools as
-/// `*_with_db` helpers in `commands/work_items.rs`. Once the executor
-/// switches to the trait surface, mutations land here too.
+/// Work items aggregate (kanban cards). Mutations append activity-feed events
+/// transactionally with the card/comment changes.
 #[async_trait]
 pub trait WorkItemRepo: Send + Sync {
     async fn list(
@@ -228,7 +225,37 @@ pub trait WorkItemRepo: Send + Sync {
         board_id: Option<String>,
     ) -> Result<Vec<WorkItem>, String>;
     async fn get(&self, id: &str) -> Result<WorkItem, String>;
+    async fn lookup_project_id(&self, id: &str) -> Result<String, String>;
+    async fn create(&self, payload: CreateWorkItem) -> Result<WorkItem, String>;
+    async fn update(&self, id: &str, payload: UpdateWorkItem) -> Result<WorkItem, String>;
+    async fn delete(&self, id: &str) -> Result<(), String>;
+    async fn claim(&self, id: &str, agent_id: &str) -> Result<WorkItem, String>;
+    async fn move_item(
+        &self,
+        id: &str,
+        column_id: Option<String>,
+        position: Option<f64>,
+    ) -> Result<WorkItem, String>;
+    async fn reorder(
+        &self,
+        project_id: &str,
+        board_id: Option<String>,
+        status: Option<String>,
+        column_id: Option<String>,
+        ordered_ids: Vec<String>,
+    ) -> Result<(), String>;
+    async fn block(&self, id: &str, reason: String) -> Result<WorkItem, String>;
+    async fn unblock(&self, id: &str, status: String) -> Result<WorkItem, String>;
+    async fn complete(&self, id: &str) -> Result<WorkItem, String>;
     async fn list_comments(&self, work_item_id: &str) -> Result<Vec<WorkItemComment>, String>;
+    async fn create_comment(
+        &self,
+        work_item_id: &str,
+        body: String,
+        author: CommentAuthor,
+    ) -> Result<WorkItemComment, String>;
+    async fn update_comment(&self, id: &str, body: String) -> Result<WorkItemComment, String>;
+    async fn delete_comment(&self, id: &str) -> Result<(), String>;
 }
 
 /// Work item events. List is the only command-surface call; appending events
@@ -272,10 +299,8 @@ pub struct ChatSessionListFilter {
     pub project_id: Option<String>,
 }
 
-/// Chat aggregate. Read-only at the repo trait surface — write paths live in
-/// `commands/chat.rs` because they're entangled with the streaming executor,
-/// session-execution registry, and worktree lifecycle. Once that machinery
-/// has its own boundary, mutations land here too.
+/// Chat aggregate. Basic session CRUD lives here; streaming/cancellation
+/// writes stay in `commands/chat.rs` until the executor boundary is separated.
 #[async_trait]
 pub trait ChatRepo: Send + Sync {
     async fn list_sessions(
@@ -292,6 +317,20 @@ pub trait ChatRepo: Send + Sync {
         limit: i64,
         offset: i64,
     ) -> Result<ChatMessageRows, String>;
+
+    async fn create_session(
+        &self,
+        agent_id: String,
+        title: Option<String>,
+        session_type: Option<String>,
+        project_id: Option<String>,
+    ) -> Result<ChatSession, String>;
+    /// Returns the `updated_at` timestamp used for the write so callers can
+    /// mirror it to cloud sync.
+    async fn rename_session(&self, session_id: &str, title: String) -> Result<String, String>;
+    async fn archive_session(&self, session_id: &str) -> Result<String, String>;
+    async fn unarchive_session(&self, session_id: &str) -> Result<String, String>;
+    async fn delete_session(&self, session_id: &str) -> Result<(), String>;
 
     async fn session_meta(&self, session_id: &str) -> Result<ChatSessionMeta, String>;
     async fn session_execution(&self, session_id: &str) -> Result<SessionExecutionStatus, String>;

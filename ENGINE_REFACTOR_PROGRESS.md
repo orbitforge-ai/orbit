@@ -51,6 +51,8 @@ Status: `[done]` for read paths and the write paths listed below. The trait itse
   - `BusSubscriptionRepo::create`, `set_enabled`, `delete`
   - `ProjectBoardRepo::create`, `update`, `delete` (cross-table re-parenting)
   - `WorkflowRunRepo::cancel`
+  - `ChatRepo::create_session`, `rename_session`, `archive_session`, `unarchive_session`, `delete_session`
+  - `WorkItemRepo::create`, `update`, `delete`, `claim`, `move_item`, `reorder`, `block`, `unblock`, `complete`, comment CRUD
 - `[next]` Coordinator-style writes that span aggregates or filesystem/cloud side effects can now migrate command signatures/adapters to `AppContext`. Keep the actual repo extraction scoped per command.
 
 ### B.3 Command migrations (`crates/orbit-engine/src/commands/*.rs`)
@@ -64,7 +66,7 @@ Per-file remaining `DbPool` references (lower = closer to fully migrated). Read-
 | `triggers.rs` | 0 | `[done]` | Commands use `AppContext`; subscription reconcile can reuse `PluginManager` without Tauri state extraction. |
 | `llm.rs` | 0 | `[done]` | API-key sync and agent-loop trigger paths use `AppContext` cloud/db/executor coordinator. |
 | `tasks.rs` | 0 | `[done]` | CRUD uses `TaskRepo`; manual trigger path uses `AppContext` db/executor coordinator. |
-| `projects.rs` | 2 | `[blocked]` | Commands use `AppContext`; `ProjectRepo::agent_in_project` exists, but remaining `DbPool` helper is still used by chat/session/agent-loop paths. |
+| `projects.rs` | 0 | `[done]` | Commands use `AppContext`; async project membership checks moved to executor-side `ProjectRepo` helper. |
 | `agents.rs` | 0 | `[done]` | Create/update/delete use `AppContext`; agent events emit through `RuntimeHost`; slug-rename coordinator remains local. |
 | `pulse.rs` | 0 | `[done]` | Pulse config read/update use `AppContext` db while keeping workspace + task/schedule/session coordinator logic. |
 | `skills.rs` | 0 | `[done]` | Skill list/delete cleanup paths use `AppContext` db; file-backed create/read unchanged. |
@@ -73,8 +75,8 @@ Per-file remaining `DbPool` references (lower = closer to fully migrated). Read-
 | `project_board_columns.rs` | 0 | `[done]` | Revision-checked CRUD uses `AppContext` db/cloud; transaction helpers remain local. |
 | `plugins.rs` | 0 | `[done]` | Entity DB reads + reload/secret reconciliation use `AppContext`; install/OAuth lifecycle still requires Tauri host. |
 | `project_workflows.rs` | 0 | `[done]` | Workflow CRUD/enable and tool read/scope paths use `ProjectWorkflowRepo`; cloud sync remains command/tool-side. |
-| `chat.rs` | 28 | `[blocked]` | Streaming session executor + worktree lifecycle still require a broader runtime/tool boundary, not just AppContext state extraction. |
-| `work_items.rs` | 36 | `[blocked]` | `ToolExecutionContext` now carries repos; unblock by adding transaction-aware repo methods and switching executor tool write helpers off `*_with_db`. |
+| `chat.rs` | 18 | `[blocked]` | Session CRUD now uses `ChatRepo`; remaining `DbPool` paths are streaming send/cancel/compact plus executor/worktree lifecycle helpers. |
+| `work_items.rs` | 0 | `[done]` | Commands, HTTP shim, executor tool, and workflow board node use `WorkItemRepo`; legacy `*_with_db` helpers removed. |
 
 ### B.4 `tenant_id` column
 

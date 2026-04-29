@@ -19,7 +19,11 @@ pub async fn start_workflow_run(
 ) -> Result<WorkflowRun, String> {
     // Orchestrator-side: starting a run also boots the per-run state machine,
     // which the repo trait deliberately stays out of.
-    let orchestrator = WorkflowOrchestrator::new(app.db.clone(), app.runtime.clone());
+    let orchestrator = WorkflowOrchestrator::new_with_repos(
+        app.db.clone(),
+        app.repos.clone(),
+        app.runtime.clone(),
+    );
     orchestrator
         .start_run(workflow_id, "manual", trigger_data.unwrap_or(Value::Null))
         .await
@@ -100,13 +104,17 @@ mod http {
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("start_workflow_run", |ctx, args| async move {
             let a: StartArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = WorkflowOrchestrator::new(ctx.db.clone(), ctx.runtime.clone())
-                .start_run(
-                    a.workflow_id,
-                    "manual",
-                    a.trigger_data.unwrap_or(Value::Null),
-                )
-                .await?;
+            let r = WorkflowOrchestrator::new_with_repos(
+                ctx.db.clone(),
+                ctx.repos.clone(),
+                ctx.runtime.clone(),
+            )
+            .start_run(
+                a.workflow_id,
+                "manual",
+                a.trigger_data.unwrap_or(Value::Null),
+            )
+            .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("list_workflow_runs", |ctx, args| async move {

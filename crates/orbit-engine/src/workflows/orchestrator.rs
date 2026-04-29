@@ -11,6 +11,7 @@
 //!   recovery, parallel branches, and async wait states are out of scope.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::Utc;
 use serde_json::{json, Value};
@@ -18,6 +19,7 @@ use tracing::{info, warn};
 use ulid::Ulid;
 
 use crate::commands::project_workflows::workflow_has_trigger_node;
+use crate::db::repos::{sqlite::SqliteRepos, Repos};
 use crate::db::DbPool;
 use crate::models::project_workflow::{WorkflowEdge, WorkflowGraph, WorkflowNode};
 use crate::models::workflow_run::{WorkflowRun, WorkflowRunStep};
@@ -31,12 +33,18 @@ const MAX_STEPS: usize = 100;
 #[derive(Clone)]
 pub struct WorkflowOrchestrator {
     db: DbPool,
+    repos: Arc<dyn Repos>,
     host: RuntimeHostHandle,
 }
 
 impl WorkflowOrchestrator {
     pub fn new(db: DbPool, host: RuntimeHostHandle) -> Self {
-        Self { db, host }
+        let repos: Arc<dyn Repos> = Arc::new(SqliteRepos::new(db.clone()));
+        Self { db, repos, host }
+    }
+
+    pub fn new_with_repos(db: DbPool, repos: Arc<dyn Repos>, host: RuntimeHostHandle) -> Self {
+        Self { db, repos, host }
     }
 
     /// Persist a `queued` `workflow_runs` row, then spawn the actual execution
@@ -66,6 +74,7 @@ impl WorkflowOrchestrator {
 
         let this = WorkflowOrchestrator {
             db: self.db.clone(),
+            repos: self.repos.clone(),
             host: self.host.clone(),
         };
         let run_clone = run.clone();
@@ -238,6 +247,7 @@ impl WorkflowOrchestrator {
 
         let result = nodes::execute(NodeExecutionContext {
             db: &self.db,
+            repos: self.repos.as_ref(),
             host: self.host.as_ref(),
             run_id,
             workflow_id,

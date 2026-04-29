@@ -8,12 +8,14 @@ mod plugin;
 
 use serde_json::Value;
 
+use crate::db::repos::Repos;
 use crate::db::DbPool;
 use crate::models::project_workflow::WorkflowNode;
 use crate::runtime_host::RuntimeHost;
 
 pub(crate) struct NodeExecutionContext<'a> {
     pub db: &'a DbPool,
+    pub repos: &'a dyn Repos,
     pub host: &'a dyn RuntimeHost,
     pub run_id: &'a str,
     pub workflow_id: &'a str,

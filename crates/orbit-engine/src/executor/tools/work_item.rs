@@ -3,17 +3,10 @@
 //! `assert_agent_in_project`. Distinct from the session-local `task` tool.
 
 use serde_json::{json, Value};
-use ulid::Ulid;
 
-use crate::commands::work_items::{
-    assert_agent_in_project, block_work_item_with_db, claim_work_item_with_db,
-    complete_work_item_with_db, create_work_item_with_db, delete_work_item_with_db,
-    fetch_work_item_project, move_work_item_with_db, unblock_work_item_with_db,
-    update_work_item_with_db, WorkItemError,
-};
-use crate::db::DbPool;
 use crate::executor::llm_provider::ToolDefinition;
 use crate::models::work_item::{CreateWorkItem, UpdateWorkItem, WorkItem};
+use crate::models::work_item_comment::CommentAuthor;
 use crate::models::work_item_comment::WorkItemComment;
 
 use super::{context::ToolExecutionContext, ToolHandler};
@@ -70,7 +63,10 @@ impl ToolHandler for WorkItemTool {
         _app: &tauri::AppHandle,
         _run_id: &str,
     ) -> Result<(String, bool), String> {
-        let db = ctx.db.as_ref().ok_or("work_item: no database available")?;
+        let repos = ctx
+            .repos
+            .as_ref()
+            .ok_or("work_item: no repositories available")?;
         let action = input["action"]
             .as_str()
             .ok_or("work_item: missing 'action' field")?;
@@ -78,7 +74,7 @@ impl ToolHandler for WorkItemTool {
         match action {
             "list" => {
                 let project_id = resolve_project_id(ctx, input, None).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let status = input["status"].as_str().map(String::from);
                 let column_id = input["column_id"].as_str().map(String::from);
                 let kind = input["kind"].as_str().map(String::from);
@@ -90,7 +86,7 @@ impl ToolHandler for WorkItemTool {
                 });
                 let limit = input["limit"].as_i64();
                 let items = list_work_items(
-                    db,
+                    ctx,
                     &project_id,
                     status,
                     column_id,
@@ -105,16 +101,16 @@ impl ToolHandler for WorkItemTool {
             }
             "get" => {
                 let id = required_str(input, "id", "get")?;
-                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
-                let item = get_work_item(db, id).await?;
+                let project_id = resolve_project_for_item(ctx, input, id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
+                let item = repos.work_items().get(id).await?;
                 let result = serde_json::to_string_pretty(&item)
                     .map_err(|e| format!("work_item: serialize: {}", e))?;
                 Ok((result, false))
             }
             "create" => {
                 let project_id = resolve_project_id(ctx, input, None).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let title = required_str(input, "title", "create")?;
                 let description = optional_trimmed(input.get("description"));
                 let kind = input["kind"].as_str().unwrap_or("task").to_string();
@@ -123,28 +119,33 @@ impl ToolHandler for WorkItemTool {
                 let labels = parse_labels(input.get("labels"))?;
                 let status = input["status"].as_str().map(String::from);
                 let column_id = input["column_id"].as_str().map(String::from);
-                let item = create_work_item(
-                    db,
-                    &project_id,
-                    title,
-                    description,
-                    kind,
-                    column_id,
-                    status,
-                    priority,
-                    parent_id,
-                    labels,
-                    Some(ctx.agent_id.clone()),
-                )
-                .await?;
+                let item = repos
+                    .work_items()
+                    .create(CreateWorkItem {
+                        project_id,
+                        board_id: None,
+                        title: title.to_string(),
+                        description,
+                        kind: Some(kind),
+                        column_id,
+                        status,
+                        priority: Some(priority),
+                        assignee_agent_id: None,
+                        created_by_agent_id: Some(ctx.agent_id.clone()),
+                        parent_work_item_id: parent_id,
+                        position: None,
+                        labels: Some(labels),
+                        metadata: None,
+                    })
+                    .await?;
                 spawn_cloud_upsert(ctx, &item);
                 let result = mutation_result("created", &item)?;
                 Ok((result, false))
             }
             "update" => {
                 let id = required_str(input, "id", "update")?;
-                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                let project_id = resolve_project_for_item(ctx, input, id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let title = optional_trimmed(input.get("title"));
                 let description = optional_trimmed(input.get("description"));
                 let kind = input["kind"].as_str().map(String::from);
@@ -153,17 +154,30 @@ impl ToolHandler for WorkItemTool {
                     Some(v) if !v.is_null() => Some(parse_labels(Some(v))?),
                     _ => None,
                 };
-                let item =
-                    update_work_item(db, id, title, description, kind, priority, labels).await?;
+                let item = repos
+                    .work_items()
+                    .update(
+                        id,
+                        UpdateWorkItem {
+                            title,
+                            description,
+                            kind,
+                            column_id: None,
+                            priority,
+                            labels,
+                            metadata: None,
+                        },
+                    )
+                    .await?;
                 spawn_cloud_upsert(ctx, &item);
                 let result = mutation_result("updated", &item)?;
                 Ok((result, false))
             }
             "delete" => {
                 let id = required_str(input, "id", "delete")?;
-                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
-                delete_work_item(db, id).await?;
+                let project_id = resolve_project_for_item(ctx, input, id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
+                repos.work_items().delete(id).await?;
                 spawn_cloud_delete(ctx, id);
                 let result = serde_json::to_string_pretty(&json!({
                     "status": "deleted",
@@ -175,24 +189,24 @@ impl ToolHandler for WorkItemTool {
             }
             "claim" => {
                 let id = required_str(input, "id", "claim")?;
-                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
-                let item = claim_work_item(db, id, &ctx.agent_id).await?;
+                let project_id = resolve_project_for_item(ctx, input, id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
+                let item = repos.work_items().claim(id, &ctx.agent_id).await?;
                 spawn_cloud_upsert(ctx, &item);
                 let result = mutation_result("claimed", &item)?;
                 Ok((result, false))
             }
             "move" => {
                 let id = required_str(input, "id", "move")?;
-                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                let project_id = resolve_project_for_item(ctx, input, id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 if input.get("status").is_some_and(|value| !value.is_null()) {
                     return Err(
                         "work_item: move no longer accepts 'status'; pass 'column_id' or omit it to advance to the next column".into(),
                     );
                 }
                 let column_id = input["column_id"].as_str().map(str::to_string);
-                let item = move_work_item(db, id, column_id).await?;
+                let item = repos.work_items().move_item(id, column_id, None).await?;
                 spawn_cloud_upsert(ctx, &item);
                 let result = mutation_result("moved", &item)?;
                 Ok((result, false))
@@ -203,17 +217,17 @@ impl ToolHandler for WorkItemTool {
                 if reason.trim().is_empty() {
                     return Err("work_item: block requires a non-empty 'reason'".into());
                 }
-                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
-                let item = block_work_item(db, id, reason).await?;
+                let project_id = resolve_project_for_item(ctx, input, id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
+                let item = repos.work_items().block(id, reason).await?;
                 spawn_cloud_upsert(ctx, &item);
                 let result = mutation_result("blocked", &item)?;
                 Ok((result, false))
             }
             "unblock" => {
                 let id = required_str(input, "id", "unblock")?;
-                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                let project_id = resolve_project_for_item(ctx, input, id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let new_status = input["new_status"].as_str().unwrap_or("todo").to_string();
                 if !matches!(
                     new_status.as_str(),
@@ -221,16 +235,16 @@ impl ToolHandler for WorkItemTool {
                 ) {
                     return Err("work_item: unblock new_status must be one of backlog/todo/in_progress/review".into());
                 }
-                let item = unblock_work_item(db, id, new_status).await?;
+                let item = repos.work_items().unblock(id, new_status).await?;
                 spawn_cloud_upsert(ctx, &item);
                 let result = mutation_result("unblocked", &item)?;
                 Ok((result, false))
             }
             "complete" => {
                 let id = required_str(input, "id", "complete")?;
-                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
-                let item = complete_work_item(db, id).await?;
+                let project_id = resolve_project_for_item(ctx, input, id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
+                let item = repos.work_items().complete(id).await?;
                 spawn_cloud_upsert(ctx, &item);
                 let result = mutation_result("completed", &item)?;
                 Ok((result, false))
@@ -241,9 +255,18 @@ impl ToolHandler for WorkItemTool {
                 if body.trim().is_empty() {
                     return Err("work_item: comment requires a non-empty 'body'".into());
                 }
-                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
-                let comment = create_comment(db, id, &ctx.agent_id, body).await?;
+                let project_id = resolve_project_for_item(ctx, input, id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
+                let comment = repos
+                    .work_items()
+                    .create_comment(
+                        id,
+                        body,
+                        CommentAuthor::Agent {
+                            agent_id: ctx.agent_id.clone(),
+                        },
+                    )
+                    .await?;
                 spawn_cloud_upsert_comment(ctx, &comment);
                 let result = serde_json::to_string_pretty(&json!({
                     "status": "commented",
@@ -254,9 +277,9 @@ impl ToolHandler for WorkItemTool {
             }
             "list_comments" => {
                 let id = required_str(input, "id", "list_comments")?;
-                let project_id = resolve_project_for_item(db, &ctx.agent_id, input, id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
-                let comments = list_comments(db, id).await?;
+                let project_id = resolve_project_for_item(ctx, input, id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
+                let comments = repos.work_items().list_comments(id).await?;
                 let result = serde_json::to_string_pretty(&comments)
                     .map_err(|e| format!("work_item: serialize: {}", e))?;
                 Ok((result, false))
@@ -318,23 +341,6 @@ fn mutation_result(status: &str, item: &WorkItem) -> Result<String, String> {
     .map_err(|e| format!("work_item: serialize: {}", e))
 }
 
-fn map_error(err: WorkItemError) -> String {
-    match err {
-        WorkItemError::AgentNotInProject { project_id } => {
-            // Structured error the LLM can react to: call list_projects or ask
-            // the user instead of looping.
-            serde_json::json!({
-                "code": "agent_not_in_project",
-                "project_id": project_id,
-                "message": format!("agent is not a member of project '{}'", project_id),
-            })
-            .to_string()
-        }
-        WorkItemError::NotFound(msg) => msg,
-        WorkItemError::Other(msg) => msg,
-    }
-}
-
 async fn resolve_project_id(
     ctx: &ToolExecutionContext,
     input: &Value,
@@ -354,21 +360,11 @@ async fn resolve_project_id(
             "work_item: no project_id provided and no current session to infer from".into(),
         );
     };
-    let db = ctx.db.as_ref().ok_or("work_item: no database available")?;
-    let pool = db.0.clone();
-    let session_id = session_id.to_string();
-    let project_id: Option<String> =
-        tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
-            conn.query_row(
-                "SELECT project_id FROM chat_sessions WHERE id = ?1",
-                rusqlite::params![session_id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .map_err(|e| e.to_string())
-        })
-        .await
-        .map_err(|e| e.to_string())??;
+    let repos = ctx
+        .repos
+        .as_ref()
+        .ok_or("work_item: no repositories available")?;
+    let project_id = repos.chat().session_meta(session_id).await?.project_id;
     project_id.ok_or_else(|| {
         "work_item: no project_id provided and current session is not scoped to a project"
             .to_string()
@@ -379,8 +375,7 @@ async fn resolve_project_id(
 /// the agent doesn't have to pass `project_id` explicitly when referencing a
 /// known work item. Still runs `assert_agent_in_project` afterward.
 async fn resolve_project_for_item(
-    db: &DbPool,
-    _agent_id: &str,
+    ctx: &ToolExecutionContext,
     input: &Value,
     id: &str,
 ) -> Result<String, String> {
@@ -389,30 +384,31 @@ async fn resolve_project_for_item(
             return Ok(p.to_string());
         }
     }
-    let pool = db.0.clone();
-    let id = id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<String, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        fetch_work_item_project(&conn, &id).map_err(map_error)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let repos = ctx
+        .repos
+        .as_ref()
+        .ok_or("work_item: no repositories available")?;
+    repos.work_items().lookup_project_id(id).await
 }
 
-async fn enforce_project_scope(
-    db: &DbPool,
-    agent_id: &str,
-    project_id: &str,
-) -> Result<(), String> {
-    let pool = db.0.clone();
-    let agent_id = agent_id.to_string();
-    let project_id = project_id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        assert_agent_in_project(&conn, &agent_id, &project_id).map_err(map_error)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+async fn enforce_project_scope(ctx: &ToolExecutionContext, project_id: &str) -> Result<(), String> {
+    let repos = ctx
+        .repos
+        .as_ref()
+        .ok_or("work_item: no repositories available")?;
+    let in_project = repos
+        .projects()
+        .agent_in_project(project_id, &ctx.agent_id)
+        .await?;
+    if !in_project {
+        return Err(serde_json::json!({
+            "code": "agent_not_in_project",
+            "project_id": project_id,
+            "message": format!("agent is not a member of project '{}'", project_id),
+        })
+        .to_string());
+    }
+    Ok(())
 }
 
 fn spawn_cloud_upsert(ctx: &ToolExecutionContext, item: &WorkItem) {
@@ -448,18 +444,8 @@ fn spawn_cloud_delete(ctx: &ToolExecutionContext, id: &str) {
     }
 }
 
-// ── DB operations (async wrappers that reuse the command helpers) ────────────
-
-const WORK_ITEM_COLUMNS: &str =
-    "id, project_id, title, description, kind, column_id, status, priority,
-        assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
-        labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at";
-
-const WORK_ITEM_COMMENT_COLUMNS: &str =
-    "id, work_item_id, author_kind, author_agent_id, body, created_at, updated_at";
-
 async fn list_work_items(
-    db: &DbPool,
+    ctx: &ToolExecutionContext,
     project_id: &str,
     status: Option<String>,
     column_id: Option<String>,
@@ -467,235 +453,31 @@ async fn list_work_items(
     assignee: Option<AssigneeFilter>,
     limit: Option<i64>,
 ) -> Result<Vec<WorkItem>, String> {
-    let pool = db.0.clone();
-    let project_id = project_id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<Vec<WorkItem>, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let mut sql = format!(
-            "SELECT {} FROM work_items WHERE project_id = ?",
-            WORK_ITEM_COLUMNS
-        );
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(project_id.clone())];
-        if let Some(column_id) = column_id {
-            sql.push_str(" AND column_id = ?");
-            params.push(Box::new(column_id));
+    let repos = ctx
+        .repos
+        .as_ref()
+        .ok_or("work_item: no repositories available")?;
+    let mut items = repos.work_items().list(project_id, None).await?;
+    if let Some(column_id) = column_id {
+        items.retain(|item| item.column_id.as_deref() == Some(column_id.as_str()));
+    }
+    if let Some(status) = status {
+        items.retain(|item| item.status == status);
+    }
+    if let Some(kind) = kind {
+        items.retain(|item| item.kind == kind);
+    }
+    match assignee {
+        Some(AssigneeFilter::Agent(agent_id)) => {
+            items.retain(|item| item.assignee_agent_id.as_deref() == Some(agent_id.as_str()));
         }
-        if let Some(s) = status {
-            sql.push_str(" AND status = ?");
-            params.push(Box::new(s));
+        Some(AssigneeFilter::Unassigned) => {
+            items.retain(|item| item.assignee_agent_id.is_none());
         }
-        if let Some(k) = kind {
-            sql.push_str(" AND kind = ?");
-            params.push(Box::new(k));
-        }
-        match assignee {
-            Some(AssigneeFilter::Agent(a)) => {
-                sql.push_str(" AND assignee_agent_id = ?");
-                params.push(Box::new(a));
-            }
-            Some(AssigneeFilter::Unassigned) => {
-                sql.push_str(" AND assignee_agent_id IS NULL");
-            }
-            None => {}
-        }
-        sql.push_str(" ORDER BY COALESCE(column_id, status), position ASC");
-        if let Some(l) = limit {
-            sql.push_str(" LIMIT ?");
-            params.push(Box::new(l));
-        }
-        let params_ref: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let items = stmt
-            .query_map(
-                rusqlite::params_from_iter(params_ref.iter()),
-                crate::commands::work_items::map_work_item,
-            )
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(items)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-async fn get_work_item(db: &DbPool, id: &str) -> Result<WorkItem, String> {
-    let pool = db.0.clone();
-    let id = id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<WorkItem, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let sql = format!("SELECT {} FROM work_items WHERE id = ?1", WORK_ITEM_COLUMNS);
-        conn.query_row(
-            &sql,
-            rusqlite::params![id],
-            crate::commands::work_items::map_work_item,
-        )
-        .map_err(|e| format!("work_item: not found ({})", e))
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-async fn delete_work_item(db: &DbPool, id: &str) -> Result<(), String> {
-    delete_work_item_with_db(db, id.to_string()).await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn create_work_item(
-    db: &DbPool,
-    project_id: &str,
-    title: &str,
-    description: Option<String>,
-    kind: String,
-    column_id: Option<String>,
-    status: Option<String>,
-    priority: i64,
-    parent_id: Option<String>,
-    labels: Vec<String>,
-    created_by_agent_id: Option<String>,
-) -> Result<WorkItem, String> {
-    let project_id = project_id.to_string();
-    let title = title.to_string();
-    create_work_item_with_db(
-        db,
-        CreateWorkItem {
-            project_id,
-            board_id: None,
-            title,
-            description,
-            kind: Some(kind),
-            column_id,
-            status,
-            priority: Some(priority),
-            assignee_agent_id: None,
-            created_by_agent_id,
-            parent_work_item_id: parent_id,
-            position: None,
-            labels: Some(labels),
-            metadata: None,
-        },
-    )
-    .await
-}
-
-async fn update_work_item(
-    db: &DbPool,
-    id: &str,
-    title: Option<String>,
-    description: Option<String>,
-    kind: Option<String>,
-    priority: Option<i64>,
-    labels: Option<Vec<String>>,
-) -> Result<WorkItem, String> {
-    let id = id.to_string();
-    update_work_item_with_db(
-        db,
-        id,
-        UpdateWorkItem {
-            title,
-            description,
-            kind,
-            column_id: None,
-            priority,
-            labels,
-            metadata: None,
-        },
-    )
-    .await
-}
-
-async fn claim_work_item(db: &DbPool, id: &str, agent_id: &str) -> Result<WorkItem, String> {
-    claim_work_item_with_db(db, id.to_string(), agent_id.to_string()).await
-}
-
-async fn move_work_item(
-    db: &DbPool,
-    id: &str,
-    column_id: Option<String>,
-) -> Result<WorkItem, String> {
-    move_work_item_with_db(db, id.to_string(), column_id, None).await
-}
-
-async fn block_work_item(db: &DbPool, id: &str, reason: String) -> Result<WorkItem, String> {
-    block_work_item_with_db(db, id.to_string(), reason).await
-}
-
-async fn unblock_work_item(db: &DbPool, id: &str, new_status: String) -> Result<WorkItem, String> {
-    unblock_work_item_with_db(db, id.to_string(), new_status).await
-}
-
-async fn complete_work_item(db: &DbPool, id: &str) -> Result<WorkItem, String> {
-    complete_work_item_with_db(db, id.to_string()).await
-}
-
-async fn create_comment(
-    db: &DbPool,
-    work_item_id: &str,
-    agent_id: &str,
-    body: String,
-) -> Result<WorkItemComment, String> {
-    let pool = db.0.clone();
-    let work_item_id = work_item_id.to_string();
-    let agent_id = agent_id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<WorkItemComment, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let id = Ulid::new().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
-        conn.execute(
-            "INSERT INTO work_item_comments (
-                id, work_item_id, author_kind, author_agent_id, body, created_at, updated_at
-             ) VALUES (?1,?2,'agent',?3,?4,?5,?5)",
-            rusqlite::params![id, work_item_id, agent_id, body, now],
-        )
-        .map_err(|e| e.to_string())?;
-        let sql = format!(
-            "SELECT {} FROM work_item_comments WHERE id = ?1",
-            WORK_ITEM_COMMENT_COLUMNS
-        );
-        conn.query_row(&sql, rusqlite::params![id], |row| {
-            Ok(WorkItemComment {
-                id: row.get(0)?,
-                work_item_id: row.get(1)?,
-                author_kind: row.get(2)?,
-                author_agent_id: row.get(3)?,
-                body: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
-            })
-        })
-        .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-async fn list_comments(db: &DbPool, work_item_id: &str) -> Result<Vec<WorkItemComment>, String> {
-    let pool = db.0.clone();
-    let work_item_id = work_item_id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<Vec<WorkItemComment>, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let sql = format!(
-            "SELECT {} FROM work_item_comments WHERE work_item_id = ?1 ORDER BY created_at ASC",
-            WORK_ITEM_COMMENT_COLUMNS
-        );
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let comments = stmt
-            .query_map(rusqlite::params![work_item_id], |row| {
-                Ok(WorkItemComment {
-                    id: row.get(0)?,
-                    work_item_id: row.get(1)?,
-                    author_kind: row.get(2)?,
-                    author_agent_id: row.get(3)?,
-                    body: row.get(4)?,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
-                })
-            })
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(comments)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+        None => {}
+    }
+    if let Some(limit) = limit.and_then(|value| usize::try_from(value.max(0)).ok()) {
+        items.truncate(limit);
+    }
+    Ok(items)
 }

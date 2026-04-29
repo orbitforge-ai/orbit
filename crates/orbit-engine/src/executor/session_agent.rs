@@ -94,7 +94,7 @@ pub async fn run_agent_session(
     )
     .await?;
     if let Some(pid) = project_id.as_deref() {
-        crate::commands::projects::assert_agent_in_project(db, pid, agent_id).await?;
+        crate::executor::project_scope::assert_agent_in_project(db, pid, agent_id).await?;
         if let Err(e) = workspace::init_project_workspace(pid) {
             warn!(project_id = pid, "failed to init project workspace: {}", e);
         }
