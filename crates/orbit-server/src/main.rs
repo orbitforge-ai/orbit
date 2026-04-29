@@ -20,6 +20,7 @@ use orbit_engine::auth::{AuthMode, AuthState};
 use orbit_engine::commands::users::ActiveUser;
 use orbit_engine::db::cloud::CloudClientState;
 use orbit_engine::db::connection::init as init_db;
+use orbit_engine::db::repos::{sqlite::SqliteRepos, Repos};
 use orbit_engine::executor::bg_processes::BgProcessRegistry;
 use orbit_engine::executor::engine::{
     AgentSemaphores, ExecutorTx, SessionExecutionRegistry, UserQuestionRegistry,
@@ -96,9 +97,15 @@ async fn main() -> Result<()> {
 
     let plugin_manager = Arc::new(PluginManager::init(db_pool.clone()));
 
+    // Repository facade. Sqlite-backed during the migration; once Phase C
+    // lands the Postgres impl this becomes a runtime decision based on
+    // `DATABASE_URL`.
+    let repos: Arc<dyn Repos> = Arc::new(SqliteRepos::new(db_pool.clone()));
+
     // ── AppContext ──────────────────────────────────────────────────────────
     let ctx = AppContext::new(
         db_pool,
+        repos,
         auth_state,
         cloud_state,
         active_user,

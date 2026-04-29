@@ -17,6 +17,7 @@ use std::sync::Arc;
 use crate::auth::AuthState;
 use crate::commands::users::ActiveUser;
 use crate::db::cloud::CloudClientState;
+use crate::db::repos::Repos;
 use crate::db::DbPool;
 use crate::executor::bg_processes::BgProcessRegistry;
 use crate::executor::engine::{
@@ -31,7 +32,15 @@ use crate::plugins::PluginManager;
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct AppContext {
+    /// Direct pool access. Phase B is migrating call sites onto `repos`;
+    /// `db` stays for the duration of the migration so unmigrated commands
+    /// keep working. Removed once nothing references it.
     pub db: DbPool,
+    /// Aggregate-scoped trait facade over the data layer. Backed by either
+    /// `db::repos::sqlite::SqliteRepos` (rusqlite, single-tenant or
+    /// per-tenant SQLite) or, in Phase C, `db::repos::postgres::PgRepos`
+    /// (sqlx, shared multi-tenant runtime).
+    pub repos: Arc<dyn Repos>,
     pub auth: AuthState,
     pub cloud: CloudClientState,
     pub active_user: ActiveUser,
@@ -61,6 +70,7 @@ impl AppContext {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         db: DbPool,
+        repos: Arc<dyn Repos>,
         auth: AuthState,
         cloud: CloudClientState,
         active_user: ActiveUser,
@@ -77,6 +87,7 @@ impl AppContext {
     ) -> Self {
         Self {
             db,
+            repos,
             auth,
             cloud,
             active_user,

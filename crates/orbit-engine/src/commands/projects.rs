@@ -1,3 +1,4 @@
+use crate::app_context::AppContext;
 use crate::commands::project_board_columns::ensure_project_board_columns;
 use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
@@ -41,68 +42,23 @@ fn map_project(row: &rusqlite::Row) -> rusqlite::Result<Project> {
     })
 }
 
-fn map_project_summary(row: &rusqlite::Row) -> rusqlite::Result<ProjectSummary> {
-    Ok(ProjectSummary {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        description: row.get(2)?,
-        created_at: row.get(3)?,
-        updated_at: row.get(4)?,
-        agent_count: row.get(5)?,
-    })
-}
-
-pub async fn list_projects_impl(db: &DbPool) -> Result<Vec<ProjectSummary>, String> {
-    let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT p.id, p.name, p.description, p.created_at, p.updated_at,
-                        COALESCE(pa.agent_count, 0) AS agent_count
-                 FROM projects p
-                 LEFT JOIN (
-                     SELECT project_id, COUNT(*) AS agent_count
-                     FROM project_agents
-                     GROUP BY project_id
-                 ) pa ON pa.project_id = p.id
-                 ORDER BY p.created_at ASC",
-            )
-            .map_err(|e| e.to_string())?;
-        let projects = stmt
-            .query_map([], map_project_summary)
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(projects)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+#[tauri::command]
+pub async fn list_projects(
+    app: tauri::State<'_, AppContext>,
+) -> Result<Vec<ProjectSummary>, String> {
+    app.repos.projects().list().await
 }
 
 #[tauri::command]
-pub async fn list_projects(db: tauri::State<'_, DbPool>) -> Result<Vec<ProjectSummary>, String> {
-    list_projects_impl(db.inner()).await
-}
-
-pub async fn get_project_impl(id: String, db: &DbPool) -> Result<Project, String> {
-    let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?1",
-            rusqlite::params![id],
-            map_project,
-        )
-        .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-pub async fn get_project(id: String, db: tauri::State<'_, DbPool>) -> Result<Project, String> {
-    get_project_impl(id, db.inner()).await
+pub async fn get_project(
+    id: String,
+    app: tauri::State<'_, AppContext>,
+) -> Result<Project, String> {
+    app.repos
+        .projects()
+        .get(&id)
+        .await?
+        .ok_or_else(|| format!("project not found: {id}"))
 }
 
 #[tauri::command]
@@ -177,38 +133,10 @@ pub async fn create_project(
 pub async fn update_project(
     id: String,
     payload: UpdateProject,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<Project, String> {
-    let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
-    let project: Project = tokio::task::spawn_blocking(move || -> Result<Project, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-        if let Some(name) = &payload.name {
-            conn.execute(
-                "UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![name, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if let Some(desc) = &payload.description {
-            conn.execute(
-                "UPDATE projects SET description = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![desc, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        conn.query_row(
-            "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?1",
-            rusqlite::params![id],
-            map_project,
-        )
-        .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
+    let cloud = app.cloud.clone();
+    let project = app.repos.projects().update(&id, payload).await?;
     cloud_upsert_project!(cloud, project);
     Ok(project)
 }
@@ -216,24 +144,10 @@ pub async fn update_project(
 #[tauri::command]
 pub async fn delete_project(
     id: String,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<(), String> {
-    let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
-    let id_clone = id.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.execute(
-            "DELETE FROM projects WHERE id = ?1",
-            rusqlite::params![id_clone],
-        )
-        .map_err(|e| e.to_string())?;
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
+    let cloud = app.cloud.clone();
+    app.repos.projects().delete(&id).await?;
     cloud_delete!(cloud, "projects", id);
     Ok(())
 }
@@ -627,14 +541,22 @@ pub fn register_http(reg: &mut crate::shim::registry::Registry) {
     use tauri::Manager;
 
     reg.register("list_projects", |ctx, _args| async move {
-        let result = list_projects_impl(&ctx.db).await?;
+        let result = ctx.repos.projects().list().await?;
         serde_json::to_value(result).map_err(|e| e.to_string())
     });
     reg.register("get_project", |ctx, args| async move {
         let IdArgs { id } = serde_json::from_value(args).map_err(|e| e.to_string())?;
-        let result = get_project_impl(id, &ctx.db).await?;
+        let result = ctx
+            .repos
+            .projects()
+            .get(&id)
+            .await?
+            .ok_or_else(|| format!("project not found: {id}"))?;
         serde_json::to_value(result).map_err(|e| e.to_string())
     });
+    // create_project still has board scaffolding + workspace init side
+    // effects, so it stays on the legacy DbPool path until those are
+    // factored into their own repo methods.
     reg.register("create_project", |ctx, args| async move {
         let app = ctx.app()?;
         let a: CreateProjectArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
@@ -642,15 +564,17 @@ pub fn register_http(reg: &mut crate::shim::registry::Registry) {
         serde_json::to_value(r).map_err(|e| e.to_string())
     });
     reg.register("update_project", |ctx, args| async move {
-        let app = ctx.app()?;
         let a: UpdateProjectArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-        let r = update_project(a.id, a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
-        serde_json::to_value(r).map_err(|e| e.to_string())
+        let cloud = ctx.cloud.clone();
+        let project = ctx.repos.projects().update(&a.id, a.payload).await?;
+        cloud_upsert_project!(cloud, project);
+        serde_json::to_value(project).map_err(|e| e.to_string())
     });
     reg.register("delete_project", |ctx, args| async move {
-        let app = ctx.app()?;
         let IdArgs { id } = serde_json::from_value(args).map_err(|e| e.to_string())?;
-        delete_project(id, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+        let cloud = ctx.cloud.clone();
+        ctx.repos.projects().delete(&id).await?;
+        cloud_delete!(cloud, "projects", id);
         Ok(serde_json::Value::Null)
     });
     reg.register("list_project_agents", |ctx, args| async move {

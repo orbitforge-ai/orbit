@@ -508,7 +508,7 @@ mod http {
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("list_agents", |ctx, _args| async move {
-            let result = list_agents_impl(&ctx.db).await?;
+            let result = ctx.repos.agents().list().await?;
             serde_json::to_value(result).map_err(|e| e.to_string())
         });
         reg.register("create_agent", |ctx, args| async move {
@@ -524,9 +524,17 @@ mod http {
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("delete_agent", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            delete_agent(app.clone(), a.id, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            if a.id == "default" {
+                return Err("cannot delete the default agent".to_string());
+            }
+            let cloud = ctx.cloud.clone();
+            ctx.repos.agents().delete(&a.id).await?;
+            // Best-effort: if a Tauri runtime is attached, emit the UI event.
+            if let Ok(app) = ctx.app() {
+                emit_agent_deleted(app, &a.id);
+            }
+            cloud_delete!(cloud, "agents", a.id);
             Ok(serde_json::Value::Null)
         });
         reg.register("cancel_run", |ctx, args| async move {

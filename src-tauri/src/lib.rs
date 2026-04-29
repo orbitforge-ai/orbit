@@ -198,8 +198,11 @@ pub fn run() {
             // (Phase 1+) and, eventually, a standalone cloud server use this
             // instead of `tauri::State<T>` extractors. Fields are cloned views
             // of the same managed state registered above.
+            let repos: Arc<dyn db::repos::Repos> =
+                Arc::new(db::repos::sqlite::SqliteRepos::new(db_pool.clone()));
             let app_ctx = app_context::AppContext::new(
                 db_pool.clone(),
+                repos,
                 app.state::<AuthState>().inner().clone(),
                 app.state::<CloudClientState>().inner().clone(),
                 app.state::<ActiveUser>().inner().clone(),
