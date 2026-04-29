@@ -1,4 +1,5 @@
-use crate::db::cloud::{CloudClientState, SupabaseClient};
+use crate::app_context::AppContext;
+use crate::db::cloud::SupabaseClient;
 use crate::db::DbPool;
 use crate::models::project_workflow::{
     CreateProjectWorkflow, ProjectWorkflow, RuleNode, UpdateProjectWorkflow, WorkflowEdge,
@@ -934,7 +935,7 @@ pub async fn set_project_workflow_enabled_with_db(
 #[tauri::command]
 pub async fn list_project_workflows(
     project_id: String,
-    app: tauri::State<'_, crate::app_context::AppContext>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<Vec<ProjectWorkflow>, String> {
     app.repos.project_workflows().list(&project_id, 100).await
 }
@@ -942,7 +943,7 @@ pub async fn list_project_workflows(
 #[tauri::command]
 pub async fn get_project_workflow(
     id: String,
-    app: tauri::State<'_, crate::app_context::AppContext>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<ProjectWorkflow, String> {
     app.repos.project_workflows().get(&id).await
 }
@@ -950,47 +951,66 @@ pub async fn get_project_workflow(
 #[tauri::command]
 pub async fn create_project_workflow(
     payload: CreateProjectWorkflow,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<ProjectWorkflow, String> {
-    create_project_workflow_with_db(db.inner(), cloud.get(), payload).await
+    create_project_workflow_inner(payload, &app).await
+}
+
+async fn create_project_workflow_inner(
+    payload: CreateProjectWorkflow,
+    app: &AppContext,
+) -> Result<ProjectWorkflow, String> {
+    create_project_workflow_with_db(&app.db, app.cloud.get(), payload).await
 }
 
 #[tauri::command]
 pub async fn update_project_workflow(
     id: String,
     payload: UpdateProjectWorkflow,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<ProjectWorkflow, String> {
-    update_project_workflow_with_db(db.inner(), cloud.get(), &id, payload).await
+    update_project_workflow_inner(id, payload, &app).await
+}
+
+async fn update_project_workflow_inner(
+    id: String,
+    payload: UpdateProjectWorkflow,
+    app: &AppContext,
+) -> Result<ProjectWorkflow, String> {
+    update_project_workflow_with_db(&app.db, app.cloud.get(), &id, payload).await
 }
 
 #[tauri::command]
 pub async fn delete_project_workflow(
     id: String,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<(), String> {
-    delete_project_workflow_with_db(db.inner(), cloud.get(), &id).await
+    delete_project_workflow_inner(id, &app).await
+}
+
+async fn delete_project_workflow_inner(id: String, app: &AppContext) -> Result<(), String> {
+    delete_project_workflow_with_db(&app.db, app.cloud.get(), &id).await
 }
 
 #[tauri::command]
 pub async fn set_project_workflow_enabled(
     id: String,
     enabled: bool,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<ProjectWorkflow, String> {
-    set_project_workflow_enabled_with_db(db.inner(), cloud.get(), &id, enabled).await
+    set_project_workflow_enabled_inner(id, enabled, &app).await
+}
+
+async fn set_project_workflow_enabled_inner(
+    id: String,
+    enabled: bool,
+    app: &AppContext,
+) -> Result<ProjectWorkflow, String> {
+    set_project_workflow_enabled_with_db(&app.db, app.cloud.get(), &id, enabled).await
 }
 
 mod http {
-    use tauri::Manager;
-
     use super::*;
-    use crate::db::cloud::CloudClientState;
-    use crate::db::DbPool;
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -1023,7 +1043,11 @@ mod http {
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("list_project_workflows", |ctx, args| async move {
             let a: ProjectIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = ctx.repos.project_workflows().list(&a.project_id, 100).await?;
+            let r = ctx
+                .repos
+                .project_workflows()
+                .list(&a.project_id, 100)
+                .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("get_project_workflow", |ctx, args| async move {
@@ -1032,49 +1056,23 @@ mod http {
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("create_project_workflow", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: CreateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = create_project_workflow(
-                a.payload,
-                app.state::<DbPool>(),
-                app.state::<CloudClientState>(),
-            )
-            .await?;
+            let r = create_project_workflow_inner(a.payload, &ctx).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("update_project_workflow", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: UpdateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = update_project_workflow(
-                a.id,
-                a.payload,
-                app.state::<DbPool>(),
-                app.state::<CloudClientState>(),
-            )
-            .await?;
+            let r = update_project_workflow_inner(a.id, a.payload, &ctx).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("delete_project_workflow", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            delete_project_workflow(
-                a.id,
-                app.state::<DbPool>(),
-                app.state::<CloudClientState>(),
-            )
-            .await?;
+            delete_project_workflow_inner(a.id, &ctx).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("set_project_workflow_enabled", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: EnabledArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = set_project_workflow_enabled(
-                a.id,
-                a.enabled,
-                app.state::<DbPool>(),
-                app.state::<CloudClientState>(),
-            )
-            .await?;
+            let r = set_project_workflow_enabled_inner(a.id, a.enabled, &ctx).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
     }

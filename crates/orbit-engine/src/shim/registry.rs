@@ -16,8 +16,7 @@ use crate::app_context::AppContext;
 
 pub type AdapterFuture = Pin<Box<dyn Future<Output = Result<Value, String>> + Send>>;
 
-pub type Adapter =
-    Arc<dyn Fn(Arc<AppContext>, Value) -> AdapterFuture + Send + Sync + 'static>;
+pub type Adapter = Arc<dyn Fn(Arc<AppContext>, Value) -> AdapterFuture + Send + Sync + 'static>;
 
 #[derive(Default, Clone)]
 pub struct Registry {

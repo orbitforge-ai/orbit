@@ -3,13 +3,10 @@ use ulid::Ulid;
 
 use crate::commands::project_workflows::{
     create_project_workflow_with_db, delete_project_workflow_with_db,
-    generate_reference_key_for_new_node, get_project_workflow_with_db,
-    list_project_workflows_with_db, lookup_run_scope_with_db, lookup_workflow_project_id_with_db,
-    normalize_graph_for_storage, set_project_workflow_enabled_with_db,
-    update_project_workflow_with_db, workflow_has_trigger_node, workflow_node_default_data,
-    workflow_runtime_warnings,
+    generate_reference_key_for_new_node, normalize_graph_for_storage,
+    set_project_workflow_enabled_with_db, update_project_workflow_with_db,
+    workflow_has_trigger_node, workflow_node_default_data, workflow_runtime_warnings,
 };
-use crate::commands::projects::assert_agent_in_project_sync;
 use crate::db::DbPool;
 use crate::executor::llm_provider::ToolDefinition;
 use crate::models::project_workflow::{
@@ -82,6 +79,10 @@ impl ToolHandler for WorkflowTool {
         _run_id: &str,
     ) -> Result<(String, bool), String> {
         let db = ctx.db.as_ref().ok_or("workflow: no database available")?;
+        let repos = ctx
+            .repos
+            .as_ref()
+            .ok_or("workflow: no repositories available")?;
         let action = input["action"]
             .as_str()
             .ok_or("workflow: missing 'action' field")?;
@@ -89,10 +90,9 @@ impl ToolHandler for WorkflowTool {
         let response = match action {
             "list" => {
                 let project_id = resolve_project_id(ctx, input, None).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let limit = parse_limit(input.get("limit"));
-                let workflows =
-                    list_project_workflows_with_db(db, &project_id, Some(limit)).await?;
+                let workflows = repos.project_workflows().list(&project_id, limit).await?;
                 let items: Vec<Value> = workflows
                     .into_iter()
                     .map(|workflow| {
@@ -107,15 +107,15 @@ impl ToolHandler for WorkflowTool {
             }
             "get" => {
                 let workflow_id = required_str(input, "workflow_id", "get")?;
-                let project_id = resolve_workflow_project_id(db, input, workflow_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
-                let workflow = get_project_workflow_with_db(db, workflow_id).await?;
+                let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
+                let workflow = repos.project_workflows().get(workflow_id).await?;
                 let warnings = workflow_runtime_warnings(&workflow.graph);
                 envelope("ok", warnings, json!({ "workflow": workflow }))?
             }
             "create" => {
                 let project_id = resolve_project_id(ctx, input, None).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let name = required_str(input, "name", "create")?.to_string();
                 let description = optional_trimmed(input.get("description"));
                 let graph = input
@@ -141,8 +141,8 @@ impl ToolHandler for WorkflowTool {
             }
             "update" => {
                 let workflow_id = required_str(input, "workflow_id", "update")?;
-                let project_id = resolve_workflow_project_id(db, input, workflow_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let workflow = update_project_workflow_with_db(
                     db,
                     ctx.cloud_client.clone(),
@@ -172,8 +172,8 @@ impl ToolHandler for WorkflowTool {
             }
             "delete" => {
                 let workflow_id = required_str(input, "workflow_id", "delete")?;
-                let project_id = resolve_workflow_project_id(db, input, workflow_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 delete_project_workflow_with_db(db, ctx.cloud_client.clone(), workflow_id).await?;
                 envelope(
                     "deleted",
@@ -189,8 +189,8 @@ impl ToolHandler for WorkflowTool {
                 let enabled = input["enabled"]
                     .as_bool()
                     .ok_or("workflow: set_enabled requires 'enabled'")?;
-                let project_id = resolve_workflow_project_id(db, input, workflow_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let workflow = set_project_workflow_enabled_with_db(
                     db,
                     ctx.cloud_client.clone(),
@@ -207,8 +207,8 @@ impl ToolHandler for WorkflowTool {
             }
             "replace_graph" => {
                 let workflow_id = required_str(input, "workflow_id", "replace_graph")?;
-                let project_id = resolve_workflow_project_id(db, input, workflow_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let workflow = update_project_workflow_with_db(
                     db,
                     ctx.cloud_client.clone(),
@@ -231,9 +231,9 @@ impl ToolHandler for WorkflowTool {
             }
             "add_node" => {
                 let workflow_id = required_str(input, "workflow_id", "add_node")?;
-                let project_id = resolve_workflow_project_id(db, input, workflow_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
-                let mut workflow = get_project_workflow_with_db(db, workflow_id).await?;
+                let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
+                let mut workflow = repos.project_workflows().get(workflow_id).await?;
                 let node_type = required_str(input, "node_type", "add_node")?;
                 let mut data = workflow_node_default_data(node_type)
                     .ok_or_else(|| format!("workflow: unknown node type '{}'", node_type))?;
@@ -287,10 +287,10 @@ impl ToolHandler for WorkflowTool {
             }
             "move_node" => {
                 let workflow_id = required_str(input, "workflow_id", "move_node")?;
-                let project_id = resolve_workflow_project_id(db, input, workflow_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let node_id = required_str(input, "node_id", "move_node")?;
-                let mut workflow = get_project_workflow_with_db(db, workflow_id).await?;
+                let mut workflow = repos.project_workflows().get(workflow_id).await?;
                 let position = resolve_position(
                     &workflow.graph.nodes,
                     input
@@ -310,14 +310,14 @@ impl ToolHandler for WorkflowTool {
             }
             "update_node_data" => {
                 let workflow_id = required_str(input, "workflow_id", "update_node_data")?;
-                let project_id = resolve_workflow_project_id(db, input, workflow_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let node_id = required_str(input, "node_id", "update_node_data")?;
                 let patch = input
                     .get("data_patch")
                     .ok_or("workflow: update_node_data requires 'data_patch'")?;
                 ensure_object(patch, "workflow: data_patch must be an object")?;
-                let mut workflow = get_project_workflow_with_db(db, workflow_id).await?;
+                let mut workflow = repos.project_workflows().get(workflow_id).await?;
                 let node = workflow
                     .graph
                     .nodes
@@ -337,15 +337,15 @@ impl ToolHandler for WorkflowTool {
             }
             "replace_node_data" => {
                 let workflow_id = required_str(input, "workflow_id", "replace_node_data")?;
-                let project_id = resolve_workflow_project_id(db, input, workflow_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let node_id = required_str(input, "node_id", "replace_node_data")?;
                 let data = input
                     .get("data")
                     .ok_or("workflow: replace_node_data requires 'data'")?
                     .clone();
                 ensure_object(&data, "workflow: replace_node_data data must be an object")?;
-                let mut workflow = get_project_workflow_with_db(db, workflow_id).await?;
+                let mut workflow = repos.project_workflows().get(workflow_id).await?;
                 let node = workflow
                     .graph
                     .nodes
@@ -359,10 +359,10 @@ impl ToolHandler for WorkflowTool {
             }
             "delete_node" => {
                 let workflow_id = required_str(input, "workflow_id", "delete_node")?;
-                let project_id = resolve_workflow_project_id(db, input, workflow_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let node_id = required_str(input, "node_id", "delete_node")?;
-                let mut workflow = get_project_workflow_with_db(db, workflow_id).await?;
+                let mut workflow = repos.project_workflows().get(workflow_id).await?;
                 let before = workflow.graph.nodes.len();
                 workflow.graph.nodes.retain(|node| node.id != node_id);
                 if workflow.graph.nodes.len() == before {
@@ -385,11 +385,11 @@ impl ToolHandler for WorkflowTool {
             }
             "connect_nodes" => {
                 let workflow_id = required_str(input, "workflow_id", "connect_nodes")?;
-                let project_id = resolve_workflow_project_id(db, input, workflow_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let source_node_id = required_str(input, "source_node_id", "connect_nodes")?;
                 let target_node_id = required_str(input, "target_node_id", "connect_nodes")?;
-                let mut workflow = get_project_workflow_with_db(db, workflow_id).await?;
+                let mut workflow = repos.project_workflows().get(workflow_id).await?;
                 let source_node = workflow
                     .graph
                     .nodes
@@ -444,10 +444,10 @@ impl ToolHandler for WorkflowTool {
             }
             "delete_edge" => {
                 let workflow_id = required_str(input, "workflow_id", "delete_edge")?;
-                let project_id = resolve_workflow_project_id(db, input, workflow_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let edge_id = required_str(input, "edge_id", "delete_edge")?;
-                let mut workflow = get_project_workflow_with_db(db, workflow_id).await?;
+                let mut workflow = repos.project_workflows().get(workflow_id).await?;
                 let before = workflow.graph.edges.len();
                 workflow.graph.edges.retain(|edge| edge.id != edge_id);
                 if workflow.graph.edges.len() == before {
@@ -466,9 +466,9 @@ impl ToolHandler for WorkflowTool {
             }
             "run" => {
                 let workflow_id = required_str(input, "workflow_id", "run")?;
-                let project_id = resolve_workflow_project_id(db, input, workflow_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
-                let workflow = get_project_workflow_with_db(db, workflow_id).await?;
+                let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
+                let workflow = repos.project_workflows().get(workflow_id).await?;
                 if !workflow_has_trigger_node(&workflow.graph) {
                     return Err(structured_error(
                         "workflow_missing_trigger",
@@ -491,9 +491,9 @@ impl ToolHandler for WorkflowTool {
             }
             "list_runs" => {
                 let workflow_id = required_str(input, "workflow_id", "list_runs")?;
-                let project_id = resolve_workflow_project_id(db, input, workflow_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
-                let workflow = get_project_workflow_with_db(db, workflow_id).await?;
+                let project_id = resolve_workflow_project_id(ctx, input, workflow_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
+                let workflow = repos.project_workflows().get(workflow_id).await?;
                 let warnings = workflow_runtime_warnings(&workflow.graph);
                 let limit = parse_limit(input.get("limit"));
                 let runs = list_runs_for_workflow(db, workflow_id, limit)?;
@@ -501,16 +501,16 @@ impl ToolHandler for WorkflowTool {
             }
             "get_run" => {
                 let run_id = required_str(input, "run_id", "get_run")?;
-                let (_workflow_id, project_id) = resolve_run_scope(db, run_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                let (_workflow_id, project_id) = resolve_run_scope(ctx, run_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 let run = load_run_with_steps(db, run_id)?;
                 let warnings = run_runtime_warnings(&run);
                 envelope("ok", warnings, json!({ "run": run }))?
             }
             "cancel_run" => {
                 let run_id = required_str(input, "run_id", "cancel_run")?;
-                let (_workflow_id, project_id) = resolve_run_scope(db, run_id).await?;
-                enforce_project_scope(db, &ctx.agent_id, &project_id).await?;
+                let (_workflow_id, project_id) = resolve_run_scope(ctx, run_id).await?;
+                enforce_project_scope(ctx, &project_id).await?;
                 cancel_run(db, run_id)?;
                 let run = load_run_with_steps(db, run_id)?;
                 let warnings = run_runtime_warnings(&run);
@@ -578,21 +578,11 @@ async fn resolve_project_id(
     let Some(session_id) = ctx.current_session_id.as_deref() else {
         return Err("workflow: no project_id provided and no current session to infer from".into());
     };
-    let db = ctx.db.as_ref().ok_or("workflow: no database available")?;
-    let pool = db.0.clone();
-    let session_id = session_id.to_string();
-    let project_id: Option<String> =
-        tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
-            conn.query_row(
-                "SELECT project_id FROM chat_sessions WHERE id = ?1",
-                rusqlite::params![session_id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .map_err(|e| e.to_string())
-        })
-        .await
-        .map_err(|e| e.to_string())??;
+    let repos = ctx
+        .repos
+        .as_ref()
+        .ok_or("workflow: no repositories available")?;
+    let project_id = repos.chat().session_meta(session_id).await?.project_id;
     project_id.ok_or_else(|| {
         "workflow: no project_id provided and current session is not scoped to a project"
             .to_string()
@@ -600,7 +590,7 @@ async fn resolve_project_id(
 }
 
 async fn resolve_workflow_project_id(
-    db: &DbPool,
+    ctx: &ToolExecutionContext,
     input: &Value,
     workflow_id: &str,
 ) -> Result<String, String> {
@@ -609,32 +599,43 @@ async fn resolve_workflow_project_id(
             return Ok(project_id.to_string());
         }
     }
-    lookup_workflow_project_id_with_db(db, workflow_id).await
+    let repos = ctx
+        .repos
+        .as_ref()
+        .ok_or("workflow: no repositories available")?;
+    repos
+        .project_workflows()
+        .lookup_project_id(workflow_id)
+        .await
 }
 
-async fn resolve_run_scope(db: &DbPool, run_id: &str) -> Result<(String, String), String> {
-    lookup_run_scope_with_db(db, run_id).await
+async fn resolve_run_scope(
+    ctx: &ToolExecutionContext,
+    run_id: &str,
+) -> Result<(String, String), String> {
+    let repos = ctx
+        .repos
+        .as_ref()
+        .ok_or("workflow: no repositories available")?;
+    repos.project_workflows().lookup_run_scope(run_id).await
 }
 
-async fn enforce_project_scope(
-    db: &DbPool,
-    agent_id: &str,
-    project_id: &str,
-) -> Result<(), String> {
-    let pool = db.0.clone();
-    let agent_id = agent_id.to_string();
-    let project_id = project_id.to_string();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        assert_agent_in_project_sync(&conn, &project_id, &agent_id).map_err(|_| {
-            structured_error(
-                "agent_not_in_project",
-                format!("agent is not a member of project '{}'", project_id),
-            )
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+async fn enforce_project_scope(ctx: &ToolExecutionContext, project_id: &str) -> Result<(), String> {
+    let repos = ctx
+        .repos
+        .as_ref()
+        .ok_or("workflow: no repositories available")?;
+    let in_project = repos
+        .projects()
+        .agent_in_project(project_id, &ctx.agent_id)
+        .await?;
+    if !in_project {
+        return Err(structured_error(
+            "agent_not_in_project",
+            format!("agent is not a member of project '{}'", project_id),
+        ));
+    }
+    Ok(())
 }
 
 fn parse_graph(value: &Value) -> Result<WorkflowGraph, String> {

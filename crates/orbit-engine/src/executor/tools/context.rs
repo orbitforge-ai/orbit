@@ -2,9 +2,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, RwLock};
 
+use tauri::Manager;
 use tokio::sync::mpsc;
 use tracing::warn;
 
+use crate::app_context::AppContext;
+use crate::db::repos::Repos;
 use crate::db::DbPool;
 use crate::executor::engine::{
     AgentSemaphores, RunRequest, SessionExecutionRegistry, UserQuestionRegistry,
@@ -42,6 +45,7 @@ pub struct ToolExecutionContext {
     pub disabled_skills: Vec<String>,
     // ─── Agent Bus fields ───────────────────────────────────────────────
     pub db: Option<DbPool>,
+    pub repos: Option<Arc<dyn Repos>>,
     pub executor_tx: Option<mpsc::UnboundedSender<RunRequest>>,
     pub app: Option<tauri::AppHandle>,
     pub current_agent_id: Option<String>,
@@ -92,6 +96,9 @@ impl ToolExecutionContext {
             );
         }
         let global = crate::executor::global_settings::load_global_settings();
+        let repos = app
+            .try_state::<AppContext>()
+            .map(|state| state.repos.clone());
         Self {
             agent_id: agent_id.to_string(),
             _agent_root: agent_root,
@@ -103,6 +110,7 @@ impl ToolExecutionContext {
             web_search_provider: global.agent_defaults.web_search_provider,
             disabled_skills: ws_config.disabled_skills,
             db: Some(db),
+            repos,
             executor_tx: Some(executor_tx),
             app: Some(app),
             current_agent_id: Some(agent_id.to_string()),

@@ -64,17 +64,17 @@ Per-file remaining `DbPool` references (lower = closer to fully migrated). Read-
 | `triggers.rs` | 0 | `[done]` | Commands use `AppContext`; subscription reconcile can reuse `PluginManager` without Tauri state extraction. |
 | `llm.rs` | 0 | `[done]` | API-key sync and agent-loop trigger paths use `AppContext` cloud/db/executor coordinator. |
 | `tasks.rs` | 0 | `[done]` | CRUD uses `TaskRepo`; manual trigger path uses `AppContext` db/executor coordinator. |
-| `projects.rs` | 5 | `[next]` | `create_project` retains workspace-init side effects. |
-| `agents.rs` | 6 | `[next]` | `create_agent` / `update_agent` slug-rename → propose `AgentRepo::rename_with_references`. |
+| `projects.rs` | 2 | `[blocked]` | Commands use `AppContext`; `ProjectRepo::agent_in_project` exists, but remaining `DbPool` helper is still used by chat/session/agent-loop paths. |
+| `agents.rs` | 0 | `[done]` | Create/update/delete use `AppContext`; agent events emit through `RuntimeHost`; slug-rename coordinator remains local. |
 | `pulse.rs` | 0 | `[done]` | Pulse config read/update use `AppContext` db while keeping workspace + task/schedule/session coordinator logic. |
 | `skills.rs` | 0 | `[done]` | Skill list/delete cleanup paths use `AppContext` db; file-backed create/read unchanged. |
 | `workspace.rs` | 0 | `[done]` | Workspace config/prompt writes use `AppContext`; `agent:config_changed` emits through `RuntimeHost`. |
 | `auth.rs` | 0 | `[done]` | Auth commands/adapters use `AppContext` auth/cloud/db state directly. |
-| `project_board_columns.rs` | 10 | `[next]` | Revision-checked CRUD; design `ProjectBoardColumnRepo` write methods first. |
-| `plugins.rs` | 14 | `[next]` | Add `PluginRepo` trait surface (not yet defined). |
-| `project_workflows.rs` | 18 | `[next]` | Graph normalization + transactional swap; design carefully. |
+| `project_board_columns.rs` | 0 | `[done]` | Revision-checked CRUD uses `AppContext` db/cloud; transaction helpers remain local. |
+| `plugins.rs` | 0 | `[done]` | Entity DB reads + reload/secret reconciliation use `AppContext`; install/OAuth lifecycle still requires Tauri host. |
+| `project_workflows.rs` | 9 | `[wip]` | Executor `ToolExecutionContext` now carries repos; workflow tool read/scope paths use repos. Next: move workflow write helpers behind `ProjectWorkflowRepo`. |
 | `chat.rs` | 28 | `[blocked]` | Streaming session executor + worktree lifecycle still require a broader runtime/tool boundary, not just AppContext state extraction. |
-| `work_items.rs` | 36 | `[blocked]` | Write helpers are called from executor tools as `*_with_db`; unblock by threading repos/cloud through tool context or adding transaction-aware repo methods. |
+| `work_items.rs` | 36 | `[blocked]` | `ToolExecutionContext` now carries repos; unblock by adding transaction-aware repo methods and switching executor tool write helpers off `*_with_db`. |
 
 ### B.4 `tenant_id` column
 

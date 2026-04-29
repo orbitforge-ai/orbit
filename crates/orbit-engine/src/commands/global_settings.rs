@@ -19,7 +19,9 @@ mod http {
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct UpdateArgs { settings: GlobalSettings }
+    struct UpdateArgs {
+        settings: GlobalSettings,
+    }
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("get_global_settings", |_ctx, _args| async move {

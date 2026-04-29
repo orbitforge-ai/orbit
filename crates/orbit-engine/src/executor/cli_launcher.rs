@@ -68,7 +68,8 @@ pub fn build_pty_spec(kind: &CliKind, ctx: TerminalContext) -> Result<PtySpawnSp
         }
         CliKind::Codex => {
             let bin = cli_common::resolve_cli("codex").ok_or_else(|| {
-                "codex CLI not found on PATH. Install it from https://github.com/openai/codex.".to_string()
+                "codex CLI not found on PATH. Install it from https://github.com/openai/codex."
+                    .to_string()
             })?;
             // Codex doesn't take a system prompt flag; surface it via a
             // CODEX-recognized env var so newer versions can pick it up, and

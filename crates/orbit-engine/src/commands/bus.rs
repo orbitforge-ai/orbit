@@ -7,9 +7,7 @@
 
 use crate::app_context::AppContext;
 use crate::db::cloud::CloudClientState;
-use crate::models::bus::{
-    BusMessage, BusSubscription, CreateBusSubscription, PaginatedBusThread,
-};
+use crate::models::bus::{BusMessage, BusSubscription, CreateBusSubscription, PaginatedBusThread};
 
 #[tauri::command]
 pub async fn list_bus_messages(
@@ -108,7 +106,9 @@ pub async fn delete_bus_subscription(
     if let Some(client) = cloud.get() {
         let id_for_cloud = id.clone();
         tokio::spawn(async move {
-            let _ = client.delete_by_id("bus_subscriptions", &id_for_cloud).await;
+            let _ = client
+                .delete_by_id("bus_subscriptions", &id_for_cloud)
+                .await;
         });
     }
     Ok(())

@@ -102,6 +102,8 @@ pub trait ProjectRepo: Send + Sync {
     ) -> Result<Vec<ProjectAgentWithMeta>, String>;
     /// All projects an agent is a member of, in `added_at` order.
     async fn list_for_agent(&self, agent_id: &str) -> Result<Vec<Project>, String>;
+    /// True when the project membership row exists.
+    async fn agent_in_project(&self, project_id: &str, agent_id: &str) -> Result<bool, String>;
 
     /// Inserts (or updates) the membership row. `INSERT OR REPLACE` semantics
     /// so toggling the default flag for an existing member is a single call.
@@ -197,11 +199,7 @@ pub trait ProjectBoardColumnRepo: Send + Sync {
 /// `*_with_db` helpers in `commands/project_workflows.rs` for now.
 #[async_trait]
 pub trait ProjectWorkflowRepo: Send + Sync {
-    async fn list(
-        &self,
-        project_id: &str,
-        limit: i64,
-    ) -> Result<Vec<ProjectWorkflow>, String>;
+    async fn list(&self, project_id: &str, limit: i64) -> Result<Vec<ProjectWorkflow>, String>;
     async fn get(&self, id: &str) -> Result<ProjectWorkflow, String>;
     /// Project-id of the project that owns the given workflow.
     async fn lookup_project_id(&self, workflow_id: &str) -> Result<String, String>;
@@ -289,10 +287,7 @@ pub trait ChatRepo: Send + Sync {
     ) -> Result<ChatMessageRows, String>;
 
     async fn session_meta(&self, session_id: &str) -> Result<ChatSessionMeta, String>;
-    async fn session_execution(
-        &self,
-        session_id: &str,
-    ) -> Result<SessionExecutionStatus, String>;
+    async fn session_execution(&self, session_id: &str) -> Result<SessionExecutionStatus, String>;
     /// Convenience lookup used by `cancel_agent_session` to reject cancels
     /// against session types that don't run an agent loop.
     async fn session_type(&self, session_id: &str) -> Result<String, String>;

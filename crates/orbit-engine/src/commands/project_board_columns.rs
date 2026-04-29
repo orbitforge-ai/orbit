@@ -1,6 +1,5 @@
+use crate::app_context::AppContext;
 use crate::commands::project_boards::{get_default_board_sync, resolve_board_sync};
-use crate::db::cloud::CloudClientState;
-use crate::db::DbPool;
 use crate::models::project_board_column::{
     CreateProjectBoardColumn, DeleteProjectBoardColumn, ProjectBoardColumn,
     ReorderProjectBoardColumns, UpdateProjectBoardColumn,
@@ -551,7 +550,7 @@ fn append_reassigned_items_sync(
 pub async fn list_project_board_columns(
     project_id: String,
     board_id: Option<String>,
-    app: tauri::State<'_, crate::app_context::AppContext>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<Vec<ProjectBoardColumn>, String> {
     app.repos
         .project_board_columns()
@@ -562,12 +561,18 @@ pub async fn list_project_board_columns(
 #[tauri::command]
 pub async fn create_project_board_column(
     payload: CreateProjectBoardColumn,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
+) -> Result<ProjectBoardColumn, String> {
+    create_project_board_column_inner(payload, &app).await
+}
+
+async fn create_project_board_column_inner(
+    payload: CreateProjectBoardColumn,
+    app: &AppContext,
 ) -> Result<ProjectBoardColumn, String> {
     validate_board_role(payload.role.as_deref())?;
-    let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
+    let cloud = app.cloud.clone();
+    let pool = app.db.0.clone();
     let column = tokio::task::spawn_blocking(move || -> Result<ProjectBoardColumn, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
@@ -649,12 +654,19 @@ pub async fn create_project_board_column(
 pub async fn update_project_board_column(
     id: String,
     payload: UpdateProjectBoardColumn,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
+) -> Result<ProjectBoardColumn, String> {
+    update_project_board_column_inner(id, payload, &app).await
+}
+
+async fn update_project_board_column_inner(
+    id: String,
+    payload: UpdateProjectBoardColumn,
+    app: &AppContext,
 ) -> Result<ProjectBoardColumn, String> {
     validate_board_role(payload.role.as_ref().and_then(|role| role.as_deref()))?;
-    let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
+    let cloud = app.cloud.clone();
+    let pool = app.db.0.clone();
     let column = tokio::task::spawn_blocking(move || -> Result<ProjectBoardColumn, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let existing = get_column_by_id_sync(&conn, &id)?
@@ -715,11 +727,18 @@ pub async fn update_project_board_column(
 pub async fn delete_project_board_column(
     id: String,
     payload: DeleteProjectBoardColumn,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<(), String> {
-    let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
+    delete_project_board_column_inner(id, payload, &app).await
+}
+
+async fn delete_project_board_column_inner(
+    id: String,
+    payload: DeleteProjectBoardColumn,
+    app: &AppContext,
+) -> Result<(), String> {
+    let cloud = app.cloud.clone();
+    let pool = app.db.0.clone();
     let deleted_id = id.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let mut conn = pool.get().map_err(|e| e.to_string())?;
@@ -826,11 +845,18 @@ pub async fn delete_project_board_column(
 pub async fn reorder_project_board_columns(
     project_id: String,
     payload: ReorderProjectBoardColumns,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<Vec<ProjectBoardColumn>, String> {
-    let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
+    reorder_project_board_columns_inner(project_id, payload, &app).await
+}
+
+async fn reorder_project_board_columns_inner(
+    project_id: String,
+    payload: ReorderProjectBoardColumns,
+    app: &AppContext,
+) -> Result<Vec<ProjectBoardColumn>, String> {
+    let cloud = app.cloud.clone();
+    let pool = app.db.0.clone();
     let columns =
         tokio::task::spawn_blocking(move || -> Result<Vec<ProjectBoardColumn>, String> {
             let mut conn = pool.get().map_err(|e| e.to_string())?;
@@ -872,11 +898,7 @@ pub async fn reorder_project_board_columns(
 }
 
 mod http {
-    use tauri::Manager;
-
     use super::*;
-    use crate::db::cloud::CloudClientState;
-    use crate::db::DbPool;
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -920,27 +942,23 @@ mod http {
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("create_project_board_column", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: CreateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = create_project_board_column(a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            let r = create_project_board_column_inner(a.payload, &ctx).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("update_project_board_column", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: UpdateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = update_project_board_column(a.id, a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            let r = update_project_board_column_inner(a.id, a.payload, &ctx).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("delete_project_board_column", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: DeleteArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            delete_project_board_column(a.id, a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            delete_project_board_column_inner(a.id, a.payload, &ctx).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("reorder_project_board_columns", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: ReorderArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = reorder_project_board_columns(a.project_id, a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            let r = reorder_project_board_columns_inner(a.project_id, a.payload, &ctx).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
     }

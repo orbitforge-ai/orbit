@@ -160,7 +160,10 @@ impl PluginManager {
     /// Install the trigger dispatcher on the per-plugin core-api server before
     /// `start_core_api_servers` accepts connections. The host (Tauri app or
     /// standalone server) constructs the dispatcher and hands it in here.
-    pub fn set_core_api_dispatcher(&self, dispatcher: Arc<crate::triggers::dispatcher::Dispatcher>) {
+    pub fn set_core_api_dispatcher(
+        &self,
+        dispatcher: Arc<crate::triggers::dispatcher::Dispatcher>,
+    ) {
         self.core_api.set_dispatcher(dispatcher);
     }
 

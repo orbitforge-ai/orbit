@@ -1,6 +1,5 @@
 use crate::app_context::AppContext;
 use crate::commands::project_board_columns::ensure_project_board_columns;
-use crate::db::cloud::CloudClientState;
 use crate::db::DbPool;
 use crate::executor::workspace;
 use crate::models::agent::Agent;
@@ -50,10 +49,7 @@ pub async fn list_projects(
 }
 
 #[tauri::command]
-pub async fn get_project(
-    id: String,
-    app: tauri::State<'_, AppContext>,
-) -> Result<Project, String> {
+pub async fn get_project(id: String, app: tauri::State<'_, AppContext>) -> Result<Project, String> {
     app.repos
         .projects()
         .get(&id)
@@ -64,11 +60,14 @@ pub async fn get_project(
 #[tauri::command]
 pub async fn create_project(
     payload: CreateProject,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<Project, String> {
-    let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
+    create_project_inner(payload, &app).await
+}
+
+async fn create_project_inner(payload: CreateProject, app: &AppContext) -> Result<Project, String> {
+    let cloud = app.cloud.clone();
+    let pool = app.db.0.clone();
     let project: Project = tokio::task::spawn_blocking(move || -> Result<Project, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let base_slug = workspace::slugify(&payload.name);
@@ -142,10 +141,7 @@ pub async fn update_project(
 }
 
 #[tauri::command]
-pub async fn delete_project(
-    id: String,
-    app: tauri::State<'_, AppContext>,
-) -> Result<(), String> {
+pub async fn delete_project(id: String, app: tauri::State<'_, AppContext>) -> Result<(), String> {
     let cloud = app.cloud.clone();
     app.repos.projects().delete(&id).await?;
     cloud_delete!(cloud, "projects", id);
@@ -232,9 +228,8 @@ pub async fn add_agent_to_project(
     agent_id: String,
     is_default: bool,
     app: tauri::State<'_, AppContext>,
-    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<ProjectAgent, String> {
-    let cloud = cloud.inner().clone();
+    let cloud = app.cloud.clone();
     let pa = app
         .repos
         .projects()
@@ -257,9 +252,8 @@ pub async fn remove_agent_from_project(
     project_id: String,
     agent_id: String,
     app: tauri::State<'_, AppContext>,
-    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
-    let cloud = cloud.inner().clone();
+    let cloud = app.cloud.clone();
     let pid_for_cloud = project_id.clone();
     let aid_for_cloud = agent_id.clone();
     app.repos
@@ -420,8 +414,6 @@ struct RenameProjectEntryArgs {
 }
 
 pub fn register_http(reg: &mut crate::shim::registry::Registry) {
-    use tauri::Manager;
-
     reg.register("list_projects", |ctx, _args| async move {
         let result = ctx.repos.projects().list().await?;
         serde_json::to_value(result).map_err(|e| e.to_string())
@@ -436,13 +428,9 @@ pub fn register_http(reg: &mut crate::shim::registry::Registry) {
             .ok_or_else(|| format!("project not found: {id}"))?;
         serde_json::to_value(result).map_err(|e| e.to_string())
     });
-    // create_project still has board scaffolding + workspace init side
-    // effects, so it stays on the legacy DbPool path until those are
-    // factored into their own repo methods.
     reg.register("create_project", |ctx, args| async move {
-        let app = ctx.app()?;
         let a: CreateProjectArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-        let r = create_project(a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+        let r = create_project_inner(a.payload, &ctx).await?;
         serde_json::to_value(r).map_err(|e| e.to_string())
     });
     reg.register("update_project", |ctx, args| async move {
@@ -460,13 +448,19 @@ pub fn register_http(reg: &mut crate::shim::registry::Registry) {
         Ok(serde_json::Value::Null)
     });
     reg.register("list_project_agents", |ctx, args| async move {
-        let ProjectIdArgs { project_id } = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let ProjectIdArgs { project_id } =
+            serde_json::from_value(args).map_err(|e| e.to_string())?;
         let r = ctx.repos.projects().list_agents(&project_id).await?;
         serde_json::to_value(r).map_err(|e| e.to_string())
     });
     reg.register("list_project_agents_with_meta", |ctx, args| async move {
-        let ProjectIdArgs { project_id } = serde_json::from_value(args).map_err(|e| e.to_string())?;
-        let r = ctx.repos.projects().list_agents_with_meta(&project_id).await?;
+        let ProjectIdArgs { project_id } =
+            serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let r = ctx
+            .repos
+            .projects()
+            .list_agents_with_meta(&project_id)
+            .await?;
         serde_json::to_value(r).map_err(|e| e.to_string())
     });
     reg.register("list_agent_projects", |ctx, args| async move {
@@ -493,7 +487,8 @@ pub fn register_http(reg: &mut crate::shim::registry::Registry) {
         serde_json::to_value(pa).map_err(|e| e.to_string())
     });
     reg.register("remove_agent_from_project", |ctx, args| async move {
-        let a: RemoveAgentFromProjectArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+        let a: RemoveAgentFromProjectArgs =
+            serde_json::from_value(args).map_err(|e| e.to_string())?;
         let cloud = ctx.cloud.clone();
         let pid = a.project_id.clone();
         let aid = a.agent_id.clone();
@@ -511,8 +506,11 @@ pub fn register_http(reg: &mut crate::shim::registry::Registry) {
         Ok(serde_json::Value::Null)
     });
     reg.register("get_project_workspace_path", |_ctx, args| async move {
-        let ProjectIdArgs { project_id } = serde_json::from_value(args).map_err(|e| e.to_string())?;
-        Ok(serde_json::Value::String(get_project_workspace_path(project_id)))
+        let ProjectIdArgs { project_id } =
+            serde_json::from_value(args).map_err(|e| e.to_string())?;
+        Ok(serde_json::Value::String(get_project_workspace_path(
+            project_id,
+        )))
     });
     reg.register("list_project_workspace_files", |_ctx, args| async move {
         let a: ProjectPathArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;

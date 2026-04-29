@@ -224,8 +224,7 @@ impl TaskRepo for SqliteRepos {
             let id = Ulid::new().to_string();
             let now = chrono::Utc::now().to_rfc3339();
             let config_str = serde_json::to_string(&payload.config).err_str()?;
-            let tags_str =
-                serde_json::to_string(&payload.tags.unwrap_or_default()).err_str()?;
+            let tags_str = serde_json::to_string(&payload.tags.unwrap_or_default()).err_str()?;
             let max_duration = payload.max_duration_seconds.unwrap_or(3600);
             let max_retries = payload.max_retries.unwrap_or(0);
             let retry_delay = payload.retry_delay_seconds.unwrap_or(60);
@@ -279,7 +278,10 @@ impl TaskRepo for SqliteRepos {
             macro_rules! patch {
                 ($column:expr, $value:expr) => {
                     conn.execute(
-                        &format!("UPDATE tasks SET {} = ?1, updated_at = ?2 WHERE id = ?3", $column),
+                        &format!(
+                            "UPDATE tasks SET {} = ?1, updated_at = ?2 WHERE id = ?3",
+                            $column
+                        ),
                         params![$value, now, id],
                     )
                     .err_str()?;
@@ -447,7 +449,10 @@ impl AgentRepo for SqliteRepos {
             macro_rules! patch {
                 ($column:expr, $value:expr) => {
                     conn.execute(
-                        &format!("UPDATE agents SET {} = ?1, updated_at = ?2 WHERE id = ?3", $column),
+                        &format!(
+                            "UPDATE agents SET {} = ?1, updated_at = ?2 WHERE id = ?3",
+                            $column
+                        ),
                         params![$value, now, id],
                     )
                     .err_str()?;
@@ -753,6 +758,20 @@ impl ProjectRepo for SqliteRepos {
         .await
     }
 
+    async fn agent_in_project(&self, project_id: &str, agent_id: &str) -> Result<bool, String> {
+        let project_id = project_id.to_string();
+        let agent_id = agent_id.to_string();
+        self.with_conn(move |conn| {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM project_agents WHERE project_id = ?1 AND agent_id = ?2)",
+                params![project_id, agent_id],
+                |row| row.get::<_, bool>(0),
+            )
+            .err_str()
+        })
+        .await
+    }
+
     async fn add_agent(
         &self,
         project_id: &str,
@@ -811,8 +830,7 @@ impl ProjectRepo for SqliteRepos {
 
 // ── Schedules ───────────────────────────────────────────────────────────────
 
-const SCHEDULE_COLUMNS: &str =
-    "id, task_id, workflow_id, target_kind, kind, config, enabled, \
+const SCHEDULE_COLUMNS: &str = "id, task_id, workflow_id, target_kind, kind, config, enabled, \
      next_run_at, last_run_at, created_at, updated_at";
 
 fn map_schedule_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Schedule> {
@@ -999,7 +1017,9 @@ impl UserRepo for SqliteRepos {
     async fn list(&self) -> Result<Vec<User>, String> {
         self.with_conn(|conn| {
             let mut stmt = conn
-                .prepare("SELECT id, name, is_default, created_at FROM users ORDER BY created_at ASC")
+                .prepare(
+                    "SELECT id, name, is_default, created_at FROM users ORDER BY created_at ASC",
+                )
                 .err_str()?;
             let rows: Vec<User> = stmt
                 .query_map([], map_user_row)
@@ -1053,8 +1073,7 @@ impl UserRepo for SqliteRepos {
 // in `RUN_SUMMARY_SELECT` keeps the column ordering aligned with the row
 // mapper and removes the prior copy-pasted SELECT blocks.
 
-const RUN_SUMMARY_SELECT: &str =
-    "SELECT r.id, r.task_id, t.name as task_name, r.schedule_id,
+const RUN_SUMMARY_SELECT: &str = "SELECT r.id, r.task_id, t.name as task_name, r.schedule_id,
             r.agent_id, a.name as agent_name,
             r.state, r.trigger, r.exit_code,
             r.started_at, r.finished_at, r.duration_ms, r.retry_count, r.is_sub_agent,
@@ -1103,11 +1122,15 @@ impl RunRepo for SqliteRepos {
 
             // Helper that appends a `AND <col> = ?N` clause and pushes the
             // value, keeping the SQL/params in lockstep.
-            let mut push_eq = |col: &str, val: Box<dyn rusqlite::ToSql>, sql: &mut String, b: &mut Vec<Box<dyn rusqlite::ToSql>>| {
-                let n = b.len() + 1;
-                sql.push_str(&format!(" AND {col} = ?{n}"));
-                b.push(val);
-            };
+            let mut push_eq =
+                |col: &str,
+                 val: Box<dyn rusqlite::ToSql>,
+                 sql: &mut String,
+                 b: &mut Vec<Box<dyn rusqlite::ToSql>>| {
+                    let n = b.len() + 1;
+                    sql.push_str(&format!(" AND {col} = ?{n}"));
+                    b.push(val);
+                };
 
             if let Some(tid) = filter.task_id {
                 push_eq("r.task_id", Box::new(tid), &mut sql, &mut bound);
@@ -1210,10 +1233,7 @@ impl RunRepo for SqliteRepos {
         .await
     }
 
-    async fn agent_conversation(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<serde_json::Value>, String> {
+    async fn agent_conversation(&self, run_id: &str) -> Result<Option<serde_json::Value>, String> {
         let run_id = run_id.to_string();
         self.with_conn(move |conn| {
             let raw: Option<String> = conn
@@ -1489,11 +1509,7 @@ impl ProjectBoardRepo for SqliteRepos {
         .await
     }
 
-    async fn update(
-        &self,
-        id: &str,
-        payload: UpdateProjectBoard,
-    ) -> Result<ProjectBoard, String> {
+    async fn update(&self, id: &str, payload: UpdateProjectBoard) -> Result<ProjectBoard, String> {
         if let Some(prefix) = payload.prefix.as_deref() {
             validate_board_prefix(prefix)?;
         }
@@ -2116,10 +2132,7 @@ impl ChatRepo for SqliteRepos {
         .await
     }
 
-    async fn session_execution(
-        &self,
-        session_id: &str,
-    ) -> Result<SessionExecutionStatus, String> {
+    async fn session_execution(&self, session_id: &str) -> Result<SessionExecutionStatus, String> {
         let session_id = session_id.to_string();
         self.with_conn(move |conn| {
             let sid = session_id.clone();
@@ -2359,11 +2372,7 @@ fn map_project_workflow_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project
 
 #[async_trait]
 impl ProjectWorkflowRepo for SqliteRepos {
-    async fn list(
-        &self,
-        project_id: &str,
-        limit: i64,
-    ) -> Result<Vec<ProjectWorkflow>, String> {
+    async fn list(&self, project_id: &str, limit: i64) -> Result<Vec<ProjectWorkflow>, String> {
         let project_id = project_id.to_string();
         let limit = limit.clamp(1, 200);
         self.with_conn(move |conn| {
@@ -2386,9 +2395,7 @@ impl ProjectWorkflowRepo for SqliteRepos {
         let id = id.to_string();
         self.with_conn(move |conn| {
             conn.query_row(
-                &format!(
-                    "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1"
-                ),
+                &format!("SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1"),
                 params![id],
                 map_project_workflow_row,
             )
@@ -2440,9 +2447,7 @@ impl ProjectWorkflowRepo for SqliteRepos {
 const PROJECT_BOARD_COLUMN_COLUMNS: &str =
     "id, project_id, board_id, name, role, is_default, position, created_at, updated_at";
 
-fn map_project_board_column_row(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<ProjectBoardColumn> {
+fn map_project_board_column_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectBoardColumn> {
     Ok(ProjectBoardColumn {
         id: row.get(0)?,
         project_id: row.get(1)?,

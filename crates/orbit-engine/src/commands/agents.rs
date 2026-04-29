@@ -1,7 +1,7 @@
-use crate::db::cloud::CloudClientState;
-use crate::db::DbPool;
+use crate::app_context::AppContext;
 use crate::events::emitter::{
-    emit_agent_config_changed, emit_agent_created, emit_agent_deleted, emit_agent_updated,
+    emit_agent_config_changed_to_host, emit_agent_created_to_host, emit_agent_deleted_to_host,
+    emit_agent_updated_to_host,
 };
 use crate::executor::workspace;
 use crate::models::agent::{Agent, CreateAgent, UpdateAgent};
@@ -194,22 +194,22 @@ fn rename_agent_references(
 }
 
 #[tauri::command]
-pub async fn list_agents(
-    app: tauri::State<'_, crate::app_context::AppContext>,
-) -> Result<Vec<Agent>, String> {
+pub async fn list_agents(app: tauri::State<'_, AppContext>) -> Result<Vec<Agent>, String> {
     app.repos.agents().list().await
 }
 
 #[tauri::command]
 pub async fn create_agent(
-    app: tauri::AppHandle,
     payload: CreateAgent,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<Agent, String> {
+    create_agent_inner(payload, &app).await
+}
+
+async fn create_agent_inner(payload: CreateAgent, app: &AppContext) -> Result<Agent, String> {
     let role_id = payload.role_id.clone();
-    let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
+    let cloud = app.cloud.clone();
+    let pool = app.db.0.clone();
     let (agent, model_config_json): (Agent, String) = tokio::task::spawn_blocking(move || -> Result<(Agent, String), String> {
         let initial_identity = payload.identity.clone();
         let initial_role_id = payload.role_id.clone();
@@ -275,7 +275,7 @@ pub async fn create_agent(
     .await
     .map_err(|e| e.to_string())??;
 
-    emit_agent_created(&app, agent.clone(), role_id);
+    emit_agent_created_to_host(app.runtime.as_ref(), agent.clone(), role_id);
     // Include model_config in the initial upsert to avoid a race with a separate PATCH
     if let Some(client) = cloud.get() {
         let a = agent.clone();
@@ -291,14 +291,20 @@ pub async fn create_agent(
 
 #[tauri::command]
 pub async fn update_agent(
-    app: tauri::AppHandle,
     id: String,
     payload: UpdateAgent,
-    db: tauri::State<'_, DbPool>,
-    cloud: tauri::State<'_, CloudClientState>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<Agent, String> {
-    let cloud = cloud.inner().clone();
-    let pool = db.0.clone();
+    update_agent_inner(id, payload, &app).await
+}
+
+async fn update_agent_inner(
+    id: String,
+    payload: UpdateAgent,
+    app: &AppContext,
+) -> Result<Agent, String> {
+    let cloud = app.cloud.clone();
+    let pool = app.db.0.clone();
     let (agent, previous_agent_id, role_id): (Agent, Option<String>, Option<String>) =
         tokio::task::spawn_blocking(move || -> Result<(Agent, Option<String>, Option<String>), String> {
         let mut conn = pool.get().map_err(|e| e.to_string())?;
@@ -398,10 +404,14 @@ pub async fn update_agent(
     .await
     .map_err(|e| e.to_string())??;
 
-    emit_agent_updated(&app, agent.clone(), previous_agent_id.clone());
+    emit_agent_updated_to_host(
+        app.runtime.as_ref(),
+        agent.clone(),
+        previous_agent_id.clone(),
+    );
     if let Some(previous_agent_id) = previous_agent_id.as_deref() {
-        emit_agent_config_changed(&app, previous_agent_id, None);
-        emit_agent_config_changed(&app, &agent.id, role_id);
+        emit_agent_config_changed_to_host(app.runtime.as_ref(), previous_agent_id, None);
+        emit_agent_config_changed_to_host(app.runtime.as_ref(), &agent.id, role_id);
         cloud_delete!(cloud, "agents", previous_agent_id);
     }
     cloud_upsert_agent!(cloud, agent);
@@ -409,48 +419,46 @@ pub async fn update_agent(
 }
 
 #[tauri::command]
-pub async fn delete_agent(
-    tauri_app: tauri::AppHandle,
-    id: String,
-    app: tauri::State<'_, crate::app_context::AppContext>,
-    cloud: tauri::State<'_, CloudClientState>,
-) -> Result<(), String> {
+pub async fn delete_agent(id: String, app: tauri::State<'_, AppContext>) -> Result<(), String> {
     if id == "default" {
         return Err("cannot delete the default agent".to_string());
     }
-    let cloud = cloud.inner().clone();
+    let cloud = app.cloud.clone();
     app.repos.agents().delete(&id).await?;
-    emit_agent_deleted(&tauri_app, &id);
+    emit_agent_deleted_to_host(app.runtime.as_ref(), &id);
     cloud_delete!(cloud, "agents", id);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn cancel_run(
-    run_id: String,
-    app: tauri::State<'_, crate::app_context::AppContext>,
-) -> Result<(), String> {
+pub async fn cancel_run(run_id: String, app: tauri::State<'_, AppContext>) -> Result<(), String> {
     app.repos.runs().cancel(&run_id).await
 }
 
 mod http {
-    use tauri::Manager;
     use super::*;
-    use crate::db::cloud::CloudClientState;
-    use crate::db::DbPool;
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct IdArgs { id: String }
+    struct IdArgs {
+        id: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct CreateArgs { payload: CreateAgent }
+    struct CreateArgs {
+        payload: CreateAgent,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct UpdateArgs { id: String, payload: UpdateAgent }
+    struct UpdateArgs {
+        id: String,
+        payload: UpdateAgent,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct CancelArgs { run_id: String }
+    struct CancelArgs {
+        run_id: String,
+    }
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("list_agents", |ctx, _args| async move {
@@ -458,15 +466,13 @@ mod http {
             serde_json::to_value(result).map_err(|e| e.to_string())
         });
         reg.register("create_agent", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: CreateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = create_agent(app.clone(), a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            let r = create_agent_inner(a.payload, &ctx).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("update_agent", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: UpdateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = update_agent(app.clone(), a.id, a.payload, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            let r = update_agent_inner(a.id, a.payload, &ctx).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("delete_agent", |ctx, args| async move {
@@ -476,10 +482,7 @@ mod http {
             }
             let cloud = ctx.cloud.clone();
             ctx.repos.agents().delete(&a.id).await?;
-            // Best-effort: if a Tauri runtime is attached, emit the UI event.
-            if let Ok(app) = ctx.app() {
-                emit_agent_deleted(app, &a.id);
-            }
+            emit_agent_deleted_to_host(ctx.runtime.as_ref(), &a.id);
             cloud_delete!(cloud, "agents", a.id);
             Ok(serde_json::Value::Null)
         });

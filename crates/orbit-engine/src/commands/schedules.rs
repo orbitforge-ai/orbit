@@ -60,10 +60,7 @@ pub async fn toggle_schedule(
 }
 
 #[tauri::command]
-pub async fn delete_schedule(
-    id: String,
-    app: tauri::State<'_, AppContext>,
-) -> Result<(), String> {
+pub async fn delete_schedule(id: String, app: tauri::State<'_, AppContext>) -> Result<(), String> {
     let cloud = app.cloud.clone();
     app.repos.schedules().delete(&id).await?;
     if let Some(client) = cloud.get() {

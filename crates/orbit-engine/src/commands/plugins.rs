@@ -12,7 +12,7 @@ use serde_json::Value;
 use tauri::State;
 use tokio::time::timeout;
 
-use crate::db::DbPool;
+use crate::app_context::AppContext;
 use crate::executor::global_settings::load_global_settings;
 use crate::plugins::{
     self,
@@ -355,30 +355,32 @@ pub fn set_plugin_enabled(
 }
 
 #[tauri::command]
-pub async fn reload_plugin(
-    plugin_id: String,
-    app: tauri::AppHandle,
-    db: State<'_, DbPool>,
-    manager: State<'_, Arc<PluginManager>>,
-) -> Result<(), String> {
-    manager.reload(&app, &plugin_id)?;
+pub async fn reload_plugin(plugin_id: String, app: State<'_, AppContext>) -> Result<(), String> {
+    reload_plugin_inner(plugin_id, &app).await
+}
+
+async fn reload_plugin_inner(plugin_id: String, app: &AppContext) -> Result<(), String> {
+    let tauri_app = app.app()?.clone();
+    let manager = app.plugins.clone();
+    manager.reload(&tauri_app, &plugin_id)?;
     // A reload replaces the subprocess; its in-memory subscription set is
     // empty until we re-apply it. Without this, a listening agent stops
     // matching inbound messages after any reload (secret save, dev edit, etc.).
-    let db = db.inner().clone();
-    crate::triggers::subscriptions::reconcile_plugin(&app, &db, &plugin_id).await;
+    crate::triggers::subscriptions::reconcile_plugin_for_manager(&manager, &app.db, &plugin_id)
+        .await;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn reload_all_plugins(
-    app: tauri::AppHandle,
-    db: State<'_, DbPool>,
-    manager: State<'_, Arc<PluginManager>>,
-) -> Result<(), String> {
-    manager.reload_all(&app)?;
-    let db = db.inner().clone();
-    crate::triggers::subscriptions::reconcile_all(&app, &db).await;
+pub async fn reload_all_plugins(app: State<'_, AppContext>) -> Result<(), String> {
+    reload_all_plugins_inner(&app).await
+}
+
+async fn reload_all_plugins_inner(app: &AppContext) -> Result<(), String> {
+    let tauri_app = app.app()?.clone();
+    let manager = app.plugins.clone();
+    manager.reload_all(&tauri_app)?;
+    crate::triggers::subscriptions::reconcile_all_for_manager(&manager, &app.db).await;
     Ok(())
 }
 
@@ -435,10 +437,18 @@ pub async fn set_plugin_secret(
     plugin_id: String,
     key: String,
     value: String,
-    app: tauri::AppHandle,
-    db: State<'_, DbPool>,
-    manager: State<'_, Arc<PluginManager>>,
+    app: State<'_, AppContext>,
 ) -> Result<(), String> {
+    set_plugin_secret_inner(plugin_id, key, value, &app).await
+}
+
+async fn set_plugin_secret_inner(
+    plugin_id: String,
+    key: String,
+    value: String,
+    app: &AppContext,
+) -> Result<(), String> {
+    let manager = app.plugins.clone();
     let manifest = manager
         .manifest(&plugin_id)
         .ok_or_else(|| format!("plugin {:?} not installed", plugin_id))?;
@@ -451,9 +461,11 @@ pub async fn set_plugin_secret(
     plugins::oauth::set_secret(&plugin_id, &plugins::oauth::secret_account(&key), &value)?;
     // Reload so the subprocess picks up the new env var, then re-apply
     // subscriptions so a listening agent keeps matching inbound events.
-    let _ = manager.reload(&app, &plugin_id);
-    let db = db.inner().clone();
-    crate::triggers::subscriptions::reconcile_plugin(&app, &db, &plugin_id).await;
+    if let Some(tauri_app) = app.runtime.app_handle() {
+        let _ = manager.reload(&tauri_app, &plugin_id);
+    }
+    crate::triggers::subscriptions::reconcile_plugin_for_manager(&manager, &app.db, &plugin_id)
+        .await;
     Ok(())
 }
 
@@ -461,14 +473,23 @@ pub async fn set_plugin_secret(
 pub async fn delete_plugin_secret(
     plugin_id: String,
     key: String,
-    app: tauri::AppHandle,
-    db: State<'_, DbPool>,
-    manager: State<'_, Arc<PluginManager>>,
+    app: State<'_, AppContext>,
 ) -> Result<(), String> {
+    delete_plugin_secret_inner(plugin_id, key, &app).await
+}
+
+async fn delete_plugin_secret_inner(
+    plugin_id: String,
+    key: String,
+    app: &AppContext,
+) -> Result<(), String> {
+    let manager = app.plugins.clone();
     plugins::oauth::delete_secret(&plugin_id, &plugins::oauth::secret_account(&key));
-    let _ = manager.reload(&app, &plugin_id);
-    let db = db.inner().clone();
-    crate::triggers::subscriptions::reconcile_plugin(&app, &db, &plugin_id).await;
+    if let Some(tauri_app) = app.runtime.app_handle() {
+        let _ = manager.reload(&tauri_app, &plugin_id);
+    }
+    crate::triggers::subscriptions::reconcile_plugin_for_manager(&manager, &app.db, &plugin_id)
+        .await;
     Ok(())
 }
 
@@ -526,22 +547,40 @@ pub fn list_plugin_entities(
     project_id: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
-    db: State<'_, DbPool>,
+    app: State<'_, AppContext>,
+) -> Result<Vec<plugins::entities::PluginEntity>, String> {
+    list_plugin_entities_inner(plugin_id, entity_type, project_id, limit, offset, &app)
+}
+
+fn list_plugin_entities_inner(
+    plugin_id: String,
+    entity_type: String,
+    project_id: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    app: &AppContext,
 ) -> Result<Vec<plugins::entities::PluginEntity>, String> {
     let filter = plugins::entities::ListFilter {
         project_id,
         limit,
         offset,
     };
-    plugins::entities::list(&db, &plugin_id, &entity_type, &filter)
+    plugins::entities::list(&app.db, &plugin_id, &entity_type, &filter)
 }
 
 #[tauri::command]
 pub fn get_plugin_entity(
     id: String,
-    db: State<'_, DbPool>,
+    app: State<'_, AppContext>,
 ) -> Result<Option<plugins::entities::PluginEntity>, String> {
-    plugins::entities::get(&db, &id)
+    get_plugin_entity_inner(id, &app)
+}
+
+fn get_plugin_entity_inner(
+    id: String,
+    app: &AppContext,
+) -> Result<Option<plugins::entities::PluginEntity>, String> {
+    plugins::entities::get(&app.db, &id)
 }
 
 #[tauri::command]
@@ -944,62 +983,107 @@ fn require_dev_mode() -> Result<(), String> {
 }
 
 mod http {
-    use tauri::Manager;
     use super::*;
-    use crate::db::DbPool;
+    use tauri::Manager;
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct PluginIdArgs { plugin_id: String }
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct CallToolArgs { plugin_id: String, tool_name: String, #[serde(default)] args: Option<Value> }
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct SurfaceListArgs { surface: SurfaceActionSurface, #[serde(default)] path: Option<String> }
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct RunSurfaceArgs {
-        plugin_id: String, tool_name: String,
-        #[serde(default)] args: Option<Value>,
-        surface: SurfaceActionSurface, target: SurfaceActionTarget,
+    struct PluginIdArgs {
+        plugin_id: String,
     }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct PathArgs { path: String }
+    struct CallToolArgs {
+        plugin_id: String,
+        tool_name: String,
+        #[serde(default)]
+        args: Option<Value>,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct StagingIdArgs { staging_id: String }
+    struct SurfaceListArgs {
+        surface: SurfaceActionSurface,
+        #[serde(default)]
+        path: Option<String>,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct EnabledArgs { plugin_id: String, enabled: bool }
+    struct RunSurfaceArgs {
+        plugin_id: String,
+        tool_name: String,
+        #[serde(default)]
+        args: Option<Value>,
+        surface: SurfaceActionSurface,
+        target: SurfaceActionTarget,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct OAuthConfigArgs { plugin_id: String, provider_id: String, client_id: String, #[serde(default)] client_secret: Option<String> }
+    struct PathArgs {
+        path: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct OAuthProviderArgs { plugin_id: String, provider_id: String }
+    struct StagingIdArgs {
+        staging_id: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct SecretSetArgs { plugin_id: String, key: String, value: String }
+    struct EnabledArgs {
+        plugin_id: String,
+        enabled: bool,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct SecretDelArgs { plugin_id: String, key: String }
+    struct OAuthConfigArgs {
+        plugin_id: String,
+        provider_id: String,
+        client_id: String,
+        #[serde(default)]
+        client_secret: Option<String>,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct RuntimeLogArgs { plugin_id: String, #[serde(default)] tail_lines: Option<u32> }
+    struct OAuthProviderArgs {
+        plugin_id: String,
+        provider_id: String,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SecretSetArgs {
+        plugin_id: String,
+        key: String,
+        value: String,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SecretDelArgs {
+        plugin_id: String,
+        key: String,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RuntimeLogArgs {
+        plugin_id: String,
+        #[serde(default)]
+        tail_lines: Option<u32>,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct EntityListArgs {
         plugin_id: String,
         entity_type: String,
-        #[serde(default)] project_id: Option<String>,
-        #[serde(default)] limit: Option<i64>,
-        #[serde(default)] offset: Option<i64>,
+        #[serde(default)]
+        project_id: Option<String>,
+        #[serde(default)]
+        limit: Option<i64>,
+        #[serde(default)]
+        offset: Option<i64>,
     }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct EntityIdArgs { id: String }
+    struct EntityIdArgs {
+        id: String,
+    }
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("list_plugins", |ctx, _args| async move {
@@ -1011,23 +1095,43 @@ mod http {
             let app = ctx.app()?;
             let a: PluginIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
             let r = get_plugin_manifest(a.plugin_id, app.state::<Arc<PluginManager>>());
-            Ok(match r { Some(v) => serde_json::to_value(v).map_err(|e| e.to_string())?, None => Value::Null })
+            Ok(match r {
+                Some(v) => serde_json::to_value(v).map_err(|e| e.to_string())?,
+                None => Value::Null,
+            })
         });
         reg.register("plugin_call_tool", |ctx, args| async move {
             let app = ctx.app()?;
             let a: CallToolArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            plugin_call_tool(a.plugin_id, a.tool_name, a.args, app.clone(), app.state::<Arc<PluginManager>>()).await
+            plugin_call_tool(
+                a.plugin_id,
+                a.tool_name,
+                a.args,
+                app.clone(),
+                app.state::<Arc<PluginManager>>(),
+            )
+            .await
         });
         reg.register("list_plugin_surface_actions", |ctx, args| async move {
             let app = ctx.app()?;
             let a: SurfaceListArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = list_plugin_surface_actions(a.surface, a.path, app.state::<Arc<PluginManager>>()).await?;
+            let r =
+                list_plugin_surface_actions(a.surface, a.path, app.state::<Arc<PluginManager>>())
+                    .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("run_plugin_surface_action", |ctx, args| async move {
             let app = ctx.app()?;
             let a: RunSurfaceArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            run_plugin_surface_action(a.plugin_id, a.tool_name, a.args, a.surface, a.target, app.state::<Arc<PluginManager>>()).await
+            run_plugin_surface_action(
+                a.plugin_id,
+                a.tool_name,
+                a.args,
+                a.surface,
+                a.target,
+                app.state::<Arc<PluginManager>>(),
+            )
+            .await
         });
         reg.register("stage_plugin_install", |_ctx, args| async move {
             let a: PathArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
@@ -1037,7 +1141,11 @@ mod http {
         reg.register("confirm_plugin_install", |ctx, args| async move {
             let app = ctx.app()?;
             let a: StagingIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = confirm_plugin_install(a.staging_id, app.clone(), app.state::<Arc<PluginManager>>())?;
+            let r = confirm_plugin_install(
+                a.staging_id,
+                app.clone(),
+                app.state::<Arc<PluginManager>>(),
+            )?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("cancel_plugin_install", |_ctx, args| async move {
@@ -1048,24 +1156,31 @@ mod http {
         reg.register("install_plugin_from_directory", |ctx, args| async move {
             let app = ctx.app()?;
             let a: PathArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = install_plugin_from_directory(a.path, app.clone(), app.state::<Arc<PluginManager>>())?;
+            let r = install_plugin_from_directory(
+                a.path,
+                app.clone(),
+                app.state::<Arc<PluginManager>>(),
+            )?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("set_plugin_enabled", |ctx, args| async move {
             let app = ctx.app()?;
             let a: EnabledArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            set_plugin_enabled(a.plugin_id, a.enabled, app.clone(), app.state::<Arc<PluginManager>>())?;
+            set_plugin_enabled(
+                a.plugin_id,
+                a.enabled,
+                app.clone(),
+                app.state::<Arc<PluginManager>>(),
+            )?;
             Ok(Value::Null)
         });
         reg.register("reload_plugin", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: PluginIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            reload_plugin(a.plugin_id, app.clone(), app.state::<DbPool>(), app.state::<Arc<PluginManager>>()).await?;
+            reload_plugin_inner(a.plugin_id, &ctx).await?;
             Ok(Value::Null)
         });
         reg.register("reload_all_plugins", |ctx, _args| async move {
-            let app = ctx.app()?;
-            reload_all_plugins(app.clone(), app.state::<DbPool>(), app.state::<Arc<PluginManager>>()).await?;
+            reload_all_plugins_inner(&ctx).await?;
             Ok(Value::Null)
         });
         reg.register("uninstall_plugin", |ctx, args| async move {
@@ -1082,7 +1197,13 @@ mod http {
         reg.register("start_plugin_oauth", |ctx, args| async move {
             let app = ctx.app()?;
             let a: OAuthProviderArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            start_plugin_oauth(a.plugin_id, a.provider_id, app.clone(), app.state::<Arc<PluginManager>>()).await?;
+            start_plugin_oauth(
+                a.plugin_id,
+                a.provider_id,
+                app.clone(),
+                app.state::<Arc<PluginManager>>(),
+            )
+            .await?;
             Ok(Value::Null)
         });
         reg.register("disconnect_plugin_oauth", |_ctx, args| async move {
@@ -1093,19 +1214,31 @@ mod http {
         reg.register("get_plugin_runtime_log", |ctx, args| async move {
             let app = ctx.app()?;
             let a: RuntimeLogArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            Ok(Value::String(get_plugin_runtime_log(a.plugin_id, a.tail_lines, app.state::<Arc<PluginManager>>())))
+            Ok(Value::String(get_plugin_runtime_log(
+                a.plugin_id,
+                a.tail_lines,
+                app.state::<Arc<PluginManager>>(),
+            )))
         });
         reg.register("list_plugin_entities", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: EntityListArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = list_plugin_entities(a.plugin_id, a.entity_type, a.project_id, a.limit, a.offset, app.state::<DbPool>())?;
+            let r = list_plugin_entities_inner(
+                a.plugin_id,
+                a.entity_type,
+                a.project_id,
+                a.limit,
+                a.offset,
+                &ctx,
+            )?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("get_plugin_entity", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: EntityIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = get_plugin_entity(a.id, app.state::<DbPool>())?;
-            Ok(match r { Some(v) => serde_json::to_value(v).map_err(|e| e.to_string())?, None => Value::Null })
+            let r = get_plugin_entity_inner(a.id, &ctx)?;
+            Ok(match r {
+                Some(v) => serde_json::to_value(v).map_err(|e| e.to_string())?,
+                None => Value::Null,
+            })
         });
         reg.register("list_plugin_oauth_status", |ctx, _args| async move {
             let app = ctx.app()?;
@@ -1113,15 +1246,13 @@ mod http {
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("set_plugin_secret", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: SecretSetArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            set_plugin_secret(a.plugin_id, a.key, a.value, app.clone(), app.state::<DbPool>(), app.state::<Arc<PluginManager>>()).await?;
+            set_plugin_secret_inner(a.plugin_id, a.key, a.value, &ctx).await?;
             Ok(Value::Null)
         });
         reg.register("delete_plugin_secret", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: SecretDelArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            delete_plugin_secret(a.plugin_id, a.key, app.clone(), app.state::<DbPool>(), app.state::<Arc<PluginManager>>()).await?;
+            delete_plugin_secret_inner(a.plugin_id, a.key, &ctx).await?;
             Ok(Value::Null)
         });
         reg.register("list_plugin_secret_status", |ctx, _args| async move {

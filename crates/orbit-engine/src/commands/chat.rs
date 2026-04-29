@@ -195,8 +195,14 @@ pub async fn list_chat_sessions(
     project_id: Option<String>,
     app: tauri::State<'_, AppContext>,
 ) -> Result<Vec<ChatSession>, String> {
-    list_chat_sessions_impl(agent_id, include_archived, session_types, project_id, app.inner())
-        .await
+    list_chat_sessions_impl(
+        agent_id,
+        include_archived,
+        session_types,
+        project_id,
+        app.inner(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -597,11 +603,8 @@ fn sanitize_history_for_provider(messages: &[ChatMessage]) -> Vec<ChatMessage> {
 /// Hydrate the repo's `ChatMessageRow` (raw stored JSON) into the typed
 /// `ChatMessageWithMeta` shape the UI consumes. Parsing failures yield an
 /// empty content vec so the rest of the session still renders.
-fn hydrate_chat_message_row(
-    row: crate::models::chat::ChatMessageRow,
-) -> ChatMessageWithMeta {
-    let content: Vec<ContentBlock> =
-        serde_json::from_str(&row.content_json).unwrap_or_default();
+fn hydrate_chat_message_row(row: crate::models::chat::ChatMessageRow) -> ChatMessageWithMeta {
+    let content: Vec<ContentBlock> = serde_json::from_str(&row.content_json).unwrap_or_default();
     ChatMessageWithMeta {
         id: Some(row.id),
         role: row.role,
@@ -626,7 +629,11 @@ pub async fn get_chat_messages(
         .get_messages(&session_id, limit_val, offset_val)
         .await?;
     Ok(PaginatedChatMessages {
-        messages: rows.messages.into_iter().map(hydrate_chat_message_row).collect(),
+        messages: rows
+            .messages
+            .into_iter()
+            .map(hydrate_chat_message_row)
+            .collect(),
         total_count: rows.total_count,
         has_more: rows.has_more,
     })
@@ -1453,7 +1460,6 @@ async fn do_llm_chat(
 // `models/chat.rs` so the repo trait can return them. Re-imported below.
 use crate::models::chat::{ChatSessionMeta, SessionExecutionStatus};
 
-
 pub async fn get_chat_session_meta_impl(
     session_id: String,
     app: &AppContext,
@@ -1658,7 +1664,6 @@ pub struct SendChatMessageResponse {
 }
 
 mod http {
-    use tauri::Manager;
     use super::*;
     use crate::auth::AuthState;
     use crate::db::cloud::CloudClientState;
@@ -1668,51 +1673,70 @@ mod http {
     };
     use crate::executor::permissions::PermissionRegistry;
     use crate::memory_service::MemoryServiceState;
+    use tauri::Manager;
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct ListSessionsArgs {
         agent_id: String,
-        #[serde(default)] include_archived: Option<bool>,
-        #[serde(default)] session_types: Option<Vec<String>>,
-        #[serde(default)] project_id: Option<String>,
+        #[serde(default)]
+        include_archived: Option<bool>,
+        #[serde(default)]
+        session_types: Option<Vec<String>>,
+        #[serde(default)]
+        project_id: Option<String>,
     }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct CreateSessionArgs {
         agent_id: String,
-        #[serde(default)] title: Option<String>,
-        #[serde(default)] session_type: Option<String>,
-        #[serde(default)] project_id: Option<String>,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        session_type: Option<String>,
+        #[serde(default)]
+        project_id: Option<String>,
     }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct SessionIdArgs { session_id: String }
+    struct SessionIdArgs {
+        session_id: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct RenameArgs { session_id: String, title: String }
+    struct RenameArgs {
+        session_id: String,
+        title: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct GetMessagesArgs {
         session_id: String,
-        #[serde(default)] limit: Option<i64>,
-        #[serde(default)] offset: Option<i64>,
+        #[serde(default)]
+        limit: Option<i64>,
+        #[serde(default)]
+        offset: Option<i64>,
     }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct SendMessageArgs {
         session_id: String,
         content: String,
-        #[serde(default)] model_override: Option<ChatModelOverride>,
+        #[serde(default)]
+        model_override: Option<ChatModelOverride>,
     }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct RespondQuestionArgs { request_id: String, response: String }
+    struct RespondQuestionArgs {
+        request_id: String,
+        response: String,
+    }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct ContextUsageArgs {
         session_id: String,
-        #[serde(default)] model_override: Option<ChatModelOverride>,
+        #[serde(default)]
+        model_override: Option<ChatModelOverride>,
     }
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
@@ -1733,31 +1757,60 @@ mod http {
         reg.register("create_chat_session", |ctx, args| async move {
             let app = ctx.app()?;
             let a: CreateSessionArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = create_chat_session(a.agent_id, a.title, a.session_type, a.project_id, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            let r = create_chat_session(
+                a.agent_id,
+                a.title,
+                a.session_type,
+                a.project_id,
+                app.state::<DbPool>(),
+                app.state::<CloudClientState>(),
+            )
+            .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("rename_chat_session", |ctx, args| async move {
             let app = ctx.app()?;
             let a: RenameArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            rename_chat_session(a.session_id, a.title, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            rename_chat_session(
+                a.session_id,
+                a.title,
+                app.state::<DbPool>(),
+                app.state::<CloudClientState>(),
+            )
+            .await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("archive_chat_session", |ctx, args| async move {
             let app = ctx.app()?;
             let a: SessionIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            archive_chat_session(a.session_id, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            archive_chat_session(
+                a.session_id,
+                app.state::<DbPool>(),
+                app.state::<CloudClientState>(),
+            )
+            .await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("unarchive_chat_session", |ctx, args| async move {
             let app = ctx.app()?;
             let a: SessionIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            unarchive_chat_session(a.session_id, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            unarchive_chat_session(
+                a.session_id,
+                app.state::<DbPool>(),
+                app.state::<CloudClientState>(),
+            )
+            .await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("delete_chat_session", |ctx, args| async move {
             let app = ctx.app()?;
             let a: SessionIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            delete_chat_session(a.session_id, app.state::<DbPool>(), app.state::<CloudClientState>()).await?;
+            delete_chat_session(
+                a.session_id,
+                app.state::<DbPool>(),
+                app.state::<CloudClientState>(),
+            )
+            .await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("get_chat_messages", |ctx, args| async move {
@@ -1770,7 +1823,11 @@ mod http {
                 .get_messages(&a.session_id, limit, offset)
                 .await?;
             let r = PaginatedChatMessages {
-                messages: rows.messages.into_iter().map(hydrate_chat_message_row).collect(),
+                messages: rows
+                    .messages
+                    .into_iter()
+                    .map(hydrate_chat_message_row)
+                    .collect(),
                 total_count: rows.total_count,
                 has_more: rows.has_more,
             };
@@ -1793,13 +1850,19 @@ mod http {
                 app.state::<Option<MemoryServiceState>>(),
                 app.state::<AuthState>(),
                 app.state::<CloudClientState>(),
-            ).await?;
+            )
+            .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("respond_to_user_question", |ctx, args| async move {
             let app = ctx.app()?;
             let a: RespondQuestionArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            respond_to_user_question(a.request_id, a.response, app.state::<UserQuestionRegistry>()).await?;
+            respond_to_user_question(
+                a.request_id,
+                a.response,
+                app.state::<UserQuestionRegistry>(),
+            )
+            .await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("get_session_execution", |ctx, args| async move {
@@ -1845,12 +1908,17 @@ mod http {
                 app.state::<AuthState>(),
                 app.state::<CloudClientState>(),
                 app.state::<Option<MemoryServiceState>>(),
-            ).await?;
+            )
+            .await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("get_message_reactions", |ctx, args| async move {
             let a: SessionIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = ctx.repos.chat().list_message_reactions(&a.session_id).await?;
+            let r = ctx
+                .repos
+                .chat()
+                .list_message_reactions(&a.session_id)
+                .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
     }

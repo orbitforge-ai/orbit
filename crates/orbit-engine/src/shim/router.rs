@@ -111,11 +111,9 @@ async fn rpc(
     let args = body.map(|Json(v)| v).unwrap_or(Value::Null);
     match adapter(state.ctx.clone(), args).await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
-        Err(message) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": message })),
-        )
-            .into_response(),
+        Err(message) => {
+            (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
+        }
     }
 }
 

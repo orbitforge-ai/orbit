@@ -21,10 +21,7 @@ pub async fn list_users(app: tauri::State<'_, AppContext>) -> Result<Vec<User>, 
 }
 
 #[tauri::command]
-pub async fn create_user(
-    name: String,
-    app: tauri::State<'_, AppContext>,
-) -> Result<User, String> {
+pub async fn create_user(name: String, app: tauri::State<'_, AppContext>) -> Result<User, String> {
     let cloud = app.cloud.clone();
     let user = app.repos.users().create(name).await?;
     if let Some(client) = cloud.get() {

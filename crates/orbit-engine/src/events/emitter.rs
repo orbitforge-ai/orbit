@@ -515,6 +515,15 @@ pub fn emit_agent_created(
     crate::shim::ws::broadcast("agent:created", &payload);
 }
 
+pub fn emit_agent_created_to_host(
+    host: &dyn RuntimeHost,
+    agent: crate::models::agent::Agent,
+    role_id: Option<String>,
+) {
+    let payload = AgentCreatedPayload { agent, role_id };
+    emit_serialized(host, "agent:created", &payload);
+}
+
 pub fn emit_agent_updated(
     app: &tauri::AppHandle,
     agent: crate::models::agent::Agent,
@@ -530,6 +539,18 @@ pub fn emit_agent_updated(
     crate::shim::ws::broadcast("agent:updated", &payload);
 }
 
+pub fn emit_agent_updated_to_host(
+    host: &dyn RuntimeHost,
+    agent: crate::models::agent::Agent,
+    previous_agent_id: Option<String>,
+) {
+    let payload = AgentUpdatedPayload {
+        agent,
+        previous_agent_id,
+    };
+    emit_serialized(host, "agent:updated", &payload);
+}
+
 pub fn emit_agent_deleted(app: &tauri::AppHandle, agent_id: &str) {
     let payload = AgentDeletedPayload {
         agent_id: agent_id.to_string(),
@@ -538,6 +559,13 @@ pub fn emit_agent_deleted(app: &tauri::AppHandle, agent_id: &str) {
         warn!("failed to emit agent:deleted: {}", e);
     }
     crate::shim::ws::broadcast("agent:deleted", &payload);
+}
+
+pub fn emit_agent_deleted_to_host(host: &dyn RuntimeHost, agent_id: &str) {
+    let payload = AgentDeletedPayload {
+        agent_id: agent_id.to_string(),
+    };
+    emit_serialized(host, "agent:deleted", &payload);
 }
 
 // ─── Compaction status events ──────────────────────────────────────────────

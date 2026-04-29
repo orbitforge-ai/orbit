@@ -37,9 +37,7 @@ pub async fn get_run(id: String, app: tauri::State<'_, AppContext>) -> Result<Ru
 }
 
 #[tauri::command]
-pub async fn get_active_runs(
-    app: tauri::State<'_, AppContext>,
-) -> Result<Vec<RunSummary>, String> {
+pub async fn get_active_runs(app: tauri::State<'_, AppContext>) -> Result<Vec<RunSummary>, String> {
     app.repos.runs().list_active().await
 }
 
