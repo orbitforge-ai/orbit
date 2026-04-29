@@ -378,7 +378,7 @@ async fn dispatch(
             let Some(dispatcher) = dispatcher else {
                 return Err("trigger dispatcher not initialised".into());
             };
-            let result = dispatcher.dispatch(payload);
+            let result = dispatcher.dispatch(payload).await;
             Ok(serde_json::to_value(result)
                 .map_err(|e| format!("serialise dispatch result: {}", e))?)
         }

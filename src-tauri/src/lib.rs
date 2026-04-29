@@ -183,12 +183,15 @@ pub fn run() {
             // trigger-spawned agent's reply back to the originating channel.
             app.manage(triggers::reply_registry::ReplyRegistry::new());
             let runtime_host = runtime_host::tauri_host(app.handle().clone());
+            let repos: Arc<dyn db::repos::Repos> =
+                Arc::new(db::repos::sqlite::SqliteRepos::new(db_pool.clone()));
 
             // Trigger dispatcher — plugins emit inbound events via
             // `trigger.emit` on their per-plugin JSON-RPC socket. The
             // dispatcher must be installed on the core-api server *before*
             // the core-api sockets start accepting connections.
-            let dispatch_bindings = ProductionBindings::new(db_pool.clone(), runtime_host.clone());
+            let dispatch_bindings =
+                ProductionBindings::new_with_repos(repos.clone(), runtime_host.clone());
             let dispatcher = Arc::new(Dispatcher::new(dispatch_bindings));
             plugin_manager.set_core_api_dispatcher(dispatcher);
 
@@ -200,8 +203,6 @@ pub fn run() {
             // (Phase 1+) and, eventually, a standalone cloud server use this
             // instead of `tauri::State<T>` extractors. Fields are cloned views
             // of the same managed state registered above.
-            let repos: Arc<dyn db::repos::Repos> =
-                Arc::new(db::repos::sqlite::SqliteRepos::new(db_pool.clone()));
             let app_ctx = app_context::AppContext::new(
                 db_pool.clone(),
                 repos.clone(),

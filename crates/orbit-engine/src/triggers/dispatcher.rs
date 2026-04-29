@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use tracing::{debug, info};
 
 use crate::models::channel_binding::ChannelBinding;
@@ -32,10 +33,11 @@ pub struct DispatchResult {
 /// Pluggable lookup surface so the dispatcher can be unit-tested without
 /// booting the workflow orchestrator or agent runner. The real implementation
 /// in `lib.rs`'s setup wires this to the `DbPool` + `PluginManager`.
+#[async_trait]
 pub trait DispatchBindings: Send + Sync {
     /// Return every agent whose `listen_bindings` match the event's
     /// `(pluginId, channel, thread?)`. Returns `(agent_id, binding)` pairs.
-    fn matching_agent_bindings(
+    async fn matching_agent_bindings(
         &self,
         plugin_id: &str,
         channel_id: &str,
@@ -45,7 +47,7 @@ pub trait DispatchBindings: Send + Sync {
     /// Return every enabled workflow whose `triggerKind` and
     /// `triggerConfig` match the event's kind and channel/thread.
     /// Returns workflow ids.
-    fn matching_workflow_ids(&self, event: &TriggerEventPayload) -> Vec<String>;
+    async fn matching_workflow_ids(&self, event: &TriggerEventPayload) -> Vec<String>;
 
     /// Fire the workflow with the given trigger event as its seed input.
     /// Called for each matched workflow id.
@@ -75,7 +77,7 @@ impl Dispatcher {
         }
     }
 
-    pub fn dispatch(&self, event: TriggerEventPayload) -> DispatchResult {
+    pub async fn dispatch(&self, event: TriggerEventPayload) -> DispatchResult {
         if self.is_duplicate(&event.event_id) {
             debug!(event_id = %event.event_id, "trigger.emit: duplicate, dropping");
             return DispatchResult {
@@ -88,11 +90,14 @@ impl Dispatcher {
         // Agent fan-out: every matching binding spawns a fresh run. Apply the
         // `mentionOnly` filter here so the agent path stays in the dispatcher,
         // not leaked into the runner.
-        let agent_matches = self.bindings.matching_agent_bindings(
-            &event.plugin_id,
-            &event.channel.id,
-            event.channel.thread_id.as_deref(),
-        );
+        let agent_matches = self
+            .bindings
+            .matching_agent_bindings(
+                &event.plugin_id,
+                &event.channel.id,
+                event.channel.thread_id.as_deref(),
+            )
+            .await;
         let mut matched_agents = 0;
         for (agent_id, binding) in &agent_matches {
             if !binding.auto_respond {
@@ -108,7 +113,7 @@ impl Dispatcher {
 
         // Workflow fan-out: the bindings impl is responsible for the
         // `triggerConfig` channel/thread match.
-        let workflow_ids = self.bindings.matching_workflow_ids(&event);
+        let workflow_ids = self.bindings.matching_workflow_ids(&event).await;
         let matched_workflows = workflow_ids.len();
         for id in workflow_ids {
             self.bindings.run_workflow_from_event(&id, &event);
@@ -174,8 +179,9 @@ mod tests {
         workflow_runs: StdMutex<Vec<String>>,
     }
 
+    #[async_trait]
     impl DispatchBindings for Spy {
-        fn matching_agent_bindings(
+        async fn matching_agent_bindings(
             &self,
             _plugin_id: &str,
             _channel_id: &str,
@@ -184,7 +190,7 @@ mod tests {
             self.agent_matches.clone()
         }
 
-        fn matching_workflow_ids(&self, _event: &TriggerEventPayload) -> Vec<String> {
+        async fn matching_workflow_ids(&self, _event: &TriggerEventPayload) -> Vec<String> {
             self.workflow_ids.clone()
         }
 
@@ -228,44 +234,44 @@ mod tests {
         }
     }
 
-    #[test]
-    fn dedupe_drops_repeat_event_id() {
+    #[tokio::test]
+    async fn dedupe_drops_repeat_event_id() {
         let spy = Arc::new(Spy::default());
         let d = Dispatcher::new(spy.clone());
-        assert!(!d.dispatch(event("m1")).duplicate);
-        assert!(d.dispatch(event("m1")).duplicate);
-        assert!(!d.dispatch(event("m2")).duplicate);
+        assert!(!d.dispatch(event("m1")).await.duplicate);
+        assert!(d.dispatch(event("m1")).await.duplicate);
+        assert!(!d.dispatch(event("m2")).await.duplicate);
     }
 
-    #[test]
-    fn agent_fan_out_respects_auto_respond_flag() {
+    #[tokio::test]
+    async fn agent_fan_out_respects_auto_respond_flag() {
         let mut spy = Spy::default();
         spy.agent_matches = vec![("agent-a".into(), binding(false, false))];
         let spy = Arc::new(spy);
         let d = Dispatcher::new(spy.clone());
-        let r = d.dispatch(event("m1"));
+        let r = d.dispatch(event("m1")).await;
         assert_eq!(r.matched_agents, 0);
         assert!(spy.agent_runs.lock().unwrap().is_empty());
     }
 
-    #[test]
-    fn mention_only_filters_unmentioned_events() {
+    #[tokio::test]
+    async fn mention_only_filters_unmentioned_events() {
         let mut spy = Spy::default();
         spy.agent_matches = vec![("agent-a".into(), binding(true, true))];
         let spy = Arc::new(spy);
         let d = Dispatcher::new(spy.clone());
-        let r = d.dispatch(event("m1"));
+        let r = d.dispatch(event("m1")).await;
         assert_eq!(r.matched_agents, 0);
     }
 
-    #[test]
-    fn workflows_and_agents_fire_together() {
+    #[tokio::test]
+    async fn workflows_and_agents_fire_together() {
         let mut spy = Spy::default();
         spy.agent_matches = vec![("agent-a".into(), binding(true, false))];
         spy.workflow_ids = vec!["wf-1".into(), "wf-2".into()];
         let spy = Arc::new(spy);
         let d = Dispatcher::new(spy.clone());
-        let r = d.dispatch(event("m1"));
+        let r = d.dispatch(event("m1")).await;
         assert_eq!(r.matched_agents, 1);
         assert_eq!(r.matched_workflows, 2);
         assert_eq!(*spy.agent_runs.lock().unwrap(), vec!["agent-a"]);
