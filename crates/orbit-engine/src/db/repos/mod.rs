@@ -15,7 +15,7 @@
 //! `commands/{tasks,agents,runs,…}` are switched over from direct `DbPool`
 //! access. The local SQLite pool now runs through SQLx; remaining direct
 //! `DbPool` call sites use a compatibility facade until executor, scheduler,
-//! plugin, and workflow internals move to native backend abstractions.
+//! plugin, and remaining workflow internals move to native backend abstractions.
 
 pub mod postgres;
 pub mod sqlite;
@@ -43,7 +43,7 @@ use crate::models::user::User;
 use crate::models::work_item::{CreateWorkItem, UpdateWorkItem, WorkItem};
 use crate::models::work_item_comment::{CommentAuthor, WorkItemComment};
 use crate::models::work_item_event::WorkItemEvent;
-use crate::models::workflow_run::WorkflowRun;
+use crate::models::workflow_run::{WorkflowRun, WorkflowRunStep};
 
 /// Request/repository context shared across aggregate repos.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +84,7 @@ pub trait Repos: Send + Sync {
     fn work_items(&self) -> &dyn WorkItemRepo;
     fn work_item_events(&self) -> &dyn WorkItemEventRepo;
     fn workflow_runs(&self) -> &dyn WorkflowRunRepo;
+    fn workflow_seen_items(&self) -> &dyn WorkflowSeenItemRepo;
 }
 
 #[async_trait]
@@ -289,12 +290,45 @@ pub trait WorkItemEventRepo: Send + Sync {
     async fn list(&self, work_item_id: &str) -> Result<Vec<WorkItemEvent>, String>;
 }
 
-/// Workflow runs. Wraps the existing `workflows::orchestrator` / `store`
-/// helpers so command code no longer reaches into them with a `DbPool`.
-/// Write paths (start/cancel) still live in the orchestrator since they
-/// also drive the run loop.
+/// Workflow runs. Read paths power the inspection commands; write helpers are
+/// intentionally persistence-only so the orchestrator can keep owning run-loop
+/// side effects and event emission.
 #[async_trait]
 pub trait WorkflowRunRepo: Send + Sync {
+    async fn create_run(
+        &self,
+        workflow: &ProjectWorkflow,
+        trigger_kind: &str,
+        trigger_data: &serde_json::Value,
+    ) -> Result<WorkflowRun, String>;
+    async fn update_status(
+        &self,
+        workflow_id: &str,
+        run_id: &str,
+        status: &str,
+        error: Option<&str>,
+        started_at: Option<&str>,
+        completed_at: Option<&str>,
+    ) -> Result<(), String>;
+    async fn insert_step(
+        &self,
+        run_id: &str,
+        node_id: &str,
+        node_type: &str,
+        status: &str,
+        input: &serde_json::Value,
+        started_at: Option<&str>,
+        sequence: i64,
+    ) -> Result<WorkflowRunStep, String>;
+    async fn finish_step(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        status: &str,
+        output: Option<&serde_json::Value>,
+        error: Option<&str>,
+        completed_at: &str,
+    ) -> Result<(), String>;
     async fn list_for_workflow(
         &self,
         workflow_id: &str,
@@ -310,6 +344,20 @@ pub trait WorkflowRunRepo: Send + Sync {
         run_id: &str,
     ) -> Result<crate::models::workflow_run::WorkflowRunWithSteps, String>;
     async fn cancel(&self, run_id: &str) -> Result<(), String>;
+}
+
+/// Workflow-level dedupe state used by feed/http nodes.
+#[async_trait]
+pub trait WorkflowSeenItemRepo: Send + Sync {
+    /// Returns one boolean per fingerprint: `true` when the fingerprint was
+    /// newly recorded, `false` when it had already been seen.
+    async fn filter_unseen(
+        &self,
+        workflow_id: &str,
+        node_id: &str,
+        source_key: &str,
+        fingerprints: &[String],
+    ) -> Result<Vec<bool>, String>;
 }
 
 /// Filter knobs for `ChatRepo::list_sessions`.

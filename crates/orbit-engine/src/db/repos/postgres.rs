@@ -14,7 +14,7 @@ use crate::db::repos::{
     AgentRepo, BusMessageRepo, BusSubscriptionRepo, ChatRepo, ChatSessionListFilter,
     ProjectBoardColumnRepo, ProjectBoardRepo, ProjectRepo, ProjectWorkflowRepo, RepoCtx, Repos,
     RunListFilter, RunRepo, ScheduleRepo, TaskRepo, UserRepo, WorkItemEventRepo, WorkItemRepo,
-    WorkflowRunRepo,
+    WorkflowRunRepo, WorkflowSeenItemRepo,
 };
 use crate::executor::workspace;
 use crate::models::agent::{Agent, CreateAgent, UpdateAgent};
@@ -71,6 +71,43 @@ impl PgRepos {
     }
 }
 
+#[async_trait]
+impl WorkflowSeenItemRepo for PgRepos {
+    async fn filter_unseen(
+        &self,
+        workflow_id: &str,
+        node_id: &str,
+        source_key: &str,
+        fingerprints: &[String],
+    ) -> Result<Vec<bool>, String> {
+        let tenant_id = self.tenant_id();
+        let now = now();
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let mut inserted = Vec::with_capacity(fingerprints.len());
+        for fingerprint in fingerprints {
+            let result = sqlx::query(
+                "INSERT INTO workflow_seen_items (
+                    id, workflow_id, node_id, source_key, fingerprint, created_at, tenant_id
+                 ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+                 ON CONFLICT (workflow_id, node_id, source_key, fingerprint) DO NOTHING",
+            )
+            .bind(Ulid::new().to_string())
+            .bind(workflow_id)
+            .bind(node_id)
+            .bind(source_key)
+            .bind(fingerprint)
+            .bind(&now)
+            .bind(&tenant_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+            inserted.push(result.rows_affected() == 1);
+        }
+        tx.commit().await.map_err(db_err)?;
+        Ok(inserted)
+    }
+}
+
 impl Repos for PgRepos {
     fn agents(&self) -> &dyn AgentRepo {
         self
@@ -115,6 +152,9 @@ impl Repos for PgRepos {
         self
     }
     fn workflow_runs(&self) -> &dyn WorkflowRunRepo {
+        self
+    }
+    fn workflow_seen_items(&self) -> &dyn WorkflowSeenItemRepo {
         self
     }
 }
@@ -2697,6 +2737,153 @@ impl ProjectWorkflowRepo for PgRepos {
 
 #[async_trait]
 impl WorkflowRunRepo for PgRepos {
+    async fn create_run(
+        &self,
+        workflow: &ProjectWorkflow,
+        trigger_kind: &str,
+        trigger_data: &serde_json::Value,
+    ) -> Result<WorkflowRun, String> {
+        let tenant_id = self.tenant_id();
+        let id = Ulid::new().to_string();
+        let created_at = now();
+        let graph_snapshot =
+            serde_json::to_value(&workflow.graph).unwrap_or(serde_json::Value::Null);
+        let graph_str = serde_json::to_string(&workflow.graph).map_err(db_err)?;
+        let trigger_data_value = trigger_data.clone();
+        let trigger_data_str = json_string(trigger_data)?;
+        sqlx::query(
+            "INSERT INTO workflow_runs (
+                id, workflow_id, workflow_version, graph_snapshot, trigger_kind, trigger_data,
+                status, created_at, tenant_id
+             ) VALUES ($1,$2,$3,$4,$5,$6,'queued',$7,$8)",
+        )
+        .bind(&id)
+        .bind(&workflow.id)
+        .bind(workflow.version)
+        .bind(graph_str)
+        .bind(trigger_kind)
+        .bind(trigger_data_str)
+        .bind(&created_at)
+        .bind(&tenant_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(WorkflowRun {
+            id,
+            workflow_id: workflow.id.clone(),
+            workflow_version: workflow.version,
+            graph_snapshot,
+            trigger_kind: trigger_kind.to_string(),
+            trigger_data: trigger_data_value,
+            status: "queued".to_string(),
+            error: None,
+            started_at: None,
+            completed_at: None,
+            created_at,
+        })
+    }
+
+    async fn update_status(
+        &self,
+        workflow_id: &str,
+        run_id: &str,
+        status: &str,
+        error: Option<&str>,
+        started_at: Option<&str>,
+        completed_at: Option<&str>,
+    ) -> Result<(), String> {
+        sqlx::query(
+            "UPDATE workflow_runs
+             SET status = $1,
+                 error = COALESCE($2, error),
+                 started_at = COALESCE($3, started_at),
+                 completed_at = COALESCE($4, completed_at)
+             WHERE id = $5 AND workflow_id = $6 AND tenant_id = $7",
+        )
+        .bind(status)
+        .bind(error)
+        .bind(started_at)
+        .bind(completed_at)
+        .bind(run_id)
+        .bind(workflow_id)
+        .bind(self.tenant_id())
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn insert_step(
+        &self,
+        run_id: &str,
+        node_id: &str,
+        node_type: &str,
+        status: &str,
+        input: &serde_json::Value,
+        started_at: Option<&str>,
+        sequence: i64,
+    ) -> Result<WorkflowRunStep, String> {
+        let step = WorkflowRunStep {
+            id: Ulid::new().to_string(),
+            run_id: run_id.to_string(),
+            node_id: node_id.to_string(),
+            node_type: node_type.to_string(),
+            status: status.to_string(),
+            input: input.clone(),
+            output: None,
+            error: None,
+            started_at: started_at.map(String::from),
+            completed_at: None,
+            sequence,
+        };
+        sqlx::query(
+            "INSERT INTO workflow_run_steps (
+                id, run_id, node_id, node_type, status, input, started_at, sequence, tenant_id
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+        )
+        .bind(&step.id)
+        .bind(&step.run_id)
+        .bind(&step.node_id)
+        .bind(&step.node_type)
+        .bind(&step.status)
+        .bind(json_string(input)?)
+        .bind(&step.started_at)
+        .bind(step.sequence)
+        .bind(self.tenant_id())
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(step)
+    }
+
+    async fn finish_step(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        status: &str,
+        output: Option<&serde_json::Value>,
+        error: Option<&str>,
+        completed_at: &str,
+    ) -> Result<(), String> {
+        let output_str = output.map(json_string).transpose()?;
+        sqlx::query(
+            "UPDATE workflow_run_steps
+             SET status = $1, output = $2, error = $3, completed_at = $4
+             WHERE id = $5 AND run_id = $6 AND tenant_id = $7",
+        )
+        .bind(status)
+        .bind(output_str)
+        .bind(error)
+        .bind(completed_at)
+        .bind(step_id)
+        .bind(run_id)
+        .bind(self.tenant_id())
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
     async fn list_for_workflow(
         &self,
         workflow_id: &str,

@@ -14,21 +14,40 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::Utc;
+use serde::Serialize;
 use serde_json::{json, Value};
 use tracing::{info, warn};
-use ulid::Ulid;
 
 use crate::commands::project_workflows::workflow_has_trigger_node;
 use crate::db::repos::{sqlite::SqliteRepos, Repos};
 use crate::db::DbPool;
 use crate::models::project_workflow::{WorkflowEdge, WorkflowGraph, WorkflowNode};
 use crate::models::workflow_run::{WorkflowRun, WorkflowRunStep};
-use crate::runtime_host::RuntimeHostHandle;
+use crate::runtime_host::{emit_serialized, RuntimeHost, RuntimeHostHandle};
 use crate::workflows::nodes::{self, NodeExecutionContext, NodeFailure, NodeOutcome};
 use crate::workflows::store;
 use crate::workflows::template::{build_reference_aliases, OUTPUT_ALIASES_KEY};
 
 const MAX_STEPS: usize = 100;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkflowRunEventPayload {
+    workflow_id: String,
+    run_id: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkflowRunStepEventPayload {
+    workflow_id: String,
+    run_id: String,
+    step_id: String,
+    node_id: String,
+    node_type: String,
+    status: String,
+}
 
 #[derive(Clone)]
 pub struct WorkflowOrchestrator {
@@ -55,7 +74,7 @@ impl WorkflowOrchestrator {
         trigger_kind: &str,
         trigger_data: Value,
     ) -> Result<WorkflowRun, String> {
-        let workflow = store::load_workflow(&self.db, &workflow_id).await?;
+        let workflow = self.repos.project_workflows().get(&workflow_id).await?;
         if !workflow_has_trigger_node(&workflow.graph) {
             return Err(serde_json::json!({
                 "code": "workflow_missing_trigger",
@@ -63,14 +82,18 @@ impl WorkflowOrchestrator {
             })
             .to_string());
         }
-        let run = store::insert_run(
-            &self.db,
+        let run = self
+            .repos
+            .workflow_runs()
+            .create_run(&workflow, trigger_kind, &trigger_data)
+            .await?;
+        emit_run_event(
             self.host.as_ref(),
-            &workflow,
-            trigger_kind,
-            &trigger_data,
-        )
-        .await?;
+            &run.workflow_id,
+            &run.id,
+            &run.status,
+            "workflow_run:created",
+        );
 
         let this = WorkflowOrchestrator {
             db: self.db.clone(),
@@ -96,9 +119,7 @@ impl WorkflowOrchestrator {
         project_id: String,
     ) -> Result<(), String> {
         let started_at = Utc::now().to_rfc3339();
-        store::update_run_status(
-            &self.db,
-            self.host.as_ref(),
+        self.update_run_status_event(
             &workflow_id,
             &run.id,
             store::STATUS_RUNNING,
@@ -124,9 +145,7 @@ impl WorkflowOrchestrator {
             Some(t) => t,
             None => {
                 let err = "no trigger node in workflow graph";
-                store::fail_run(&self.db, self.host.as_ref(), &workflow_id, &run.id, err)
-                    .await
-                    .ok();
+                self.fail_run_event(&workflow_id, &run.id, err).await.ok();
                 return Err(err.into());
             }
         };
@@ -147,9 +166,7 @@ impl WorkflowOrchestrator {
         while let Some(node_id) = current {
             if sequence as usize >= MAX_STEPS {
                 let err = format!("workflow exceeded {} steps; aborting", MAX_STEPS);
-                store::fail_run(&self.db, self.host.as_ref(), &workflow_id, &run.id, &err)
-                    .await
-                    .ok();
+                self.fail_run_event(&workflow_id, &run.id, &err).await.ok();
                 return Err(err);
             }
 
@@ -157,9 +174,7 @@ impl WorkflowOrchestrator {
                 Some(n) => *n,
                 None => {
                     let err = format!("node {} referenced by edge not found", node_id);
-                    store::fail_run(&self.db, self.host.as_ref(), &workflow_id, &run.id, &err)
-                        .await
-                        .ok();
+                    self.fail_run_event(&workflow_id, &run.id, &err).await.ok();
                     return Err(err);
                 }
             };
@@ -186,24 +201,16 @@ impl WorkflowOrchestrator {
                     current = pick_next(&outgoing, &node.id, next_handle.as_deref());
                 }
                 Err(failure) => {
-                    store::fail_run(
-                        &self.db,
-                        self.host.as_ref(),
-                        &workflow_id,
-                        &run.id,
-                        &failure.message,
-                    )
-                    .await
-                    .ok();
+                    self.fail_run_event(&workflow_id, &run.id, &failure.message)
+                        .await
+                        .ok();
                     return Err(failure.message);
                 }
             }
         }
 
         let completed_at = Utc::now().to_rfc3339();
-        store::update_run_status(
-            &self.db,
-            self.host.as_ref(),
+        self.update_run_status_event(
             &workflow_id,
             &run.id,
             store::STATUS_SUCCESS,
@@ -217,6 +224,47 @@ impl WorkflowOrchestrator {
         Ok(())
     }
 
+    async fn update_run_status_event(
+        &self,
+        workflow_id: &str,
+        run_id: &str,
+        status: &str,
+        error: Option<&str>,
+        started_at: Option<&str>,
+        completed_at: Option<&str>,
+    ) -> Result<(), String> {
+        self.repos
+            .workflow_runs()
+            .update_status(workflow_id, run_id, status, error, started_at, completed_at)
+            .await?;
+        emit_run_event(
+            self.host.as_ref(),
+            workflow_id,
+            run_id,
+            status,
+            "workflow_run:updated",
+        );
+        Ok(())
+    }
+
+    async fn fail_run_event(
+        &self,
+        workflow_id: &str,
+        run_id: &str,
+        err: &str,
+    ) -> Result<(), String> {
+        let completed_at = Utc::now().to_rfc3339();
+        self.update_run_status_event(
+            workflow_id,
+            run_id,
+            store::STATUS_FAILED,
+            Some(err),
+            None,
+            Some(&completed_at),
+        )
+        .await
+    }
+
     async fn execute_node(
         &self,
         run_id: &str,
@@ -226,24 +274,31 @@ impl WorkflowOrchestrator {
         outputs: &Value,
         sequence: i64,
     ) -> Result<NodeOutcome, NodeFailure> {
-        let step_id = Ulid::new().to_string();
         let started_at = Utc::now().to_rfc3339();
         let input = json!({ "node_data": node.data, "upstream": outputs });
 
-        store::insert_step(
-            &self.db,
+        let step = self
+            .repos
+            .workflow_runs()
+            .insert_step(
+                run_id,
+                &node.id,
+                &node.node_type,
+                store::STATUS_RUNNING,
+                &input,
+                Some(&started_at),
+                sequence,
+            )
+            .await?;
+        emit_step_event(
             self.host.as_ref(),
             workflow_id,
-            &step_id,
             run_id,
+            &step.id,
             &node.id,
             &node.node_type,
             store::STATUS_RUNNING,
-            &input,
-            Some(&started_at),
-            sequence,
-        )
-        .await?;
+        );
 
         let result = nodes::execute(NodeExecutionContext {
             db: &self.db,
@@ -260,40 +315,93 @@ impl WorkflowOrchestrator {
         let completed_at = Utc::now().to_rfc3339();
         match &result {
             Ok(outcome) => {
-                store::finish_step(
-                    &self.db,
+                self.repos
+                    .workflow_runs()
+                    .finish_step(
+                        run_id,
+                        &step.id,
+                        store::STATUS_SUCCESS,
+                        Some(&outcome.output),
+                        None,
+                        &completed_at,
+                    )
+                    .await?;
+                emit_step_event(
                     self.host.as_ref(),
                     workflow_id,
                     run_id,
-                    &step_id,
+                    &step.id,
                     &node.id,
                     &node.node_type,
                     store::STATUS_SUCCESS,
-                    Some(&outcome.output),
-                    None,
-                    &completed_at,
-                )
-                .await?;
+                );
             }
             Err(failure) => {
-                store::finish_step(
-                    &self.db,
+                self.repos
+                    .workflow_runs()
+                    .finish_step(
+                        run_id,
+                        &step.id,
+                        store::STATUS_FAILED,
+                        failure.partial_output.as_ref(),
+                        Some(&failure.message),
+                        &completed_at,
+                    )
+                    .await?;
+                emit_step_event(
                     self.host.as_ref(),
                     workflow_id,
                     run_id,
-                    &step_id,
+                    &step.id,
                     &node.id,
                     &node.node_type,
                     store::STATUS_FAILED,
-                    failure.partial_output.as_ref(),
-                    Some(&failure.message),
-                    &completed_at,
-                )
-                .await?;
+                );
             }
         }
         result
     }
+}
+
+fn emit_run_event(
+    host: &dyn RuntimeHost,
+    workflow_id: &str,
+    run_id: &str,
+    status: &str,
+    event: &'static str,
+) {
+    emit_serialized(
+        host,
+        event,
+        &WorkflowRunEventPayload {
+            workflow_id: workflow_id.to_string(),
+            run_id: run_id.to_string(),
+            status: status.to_string(),
+        },
+    );
+}
+
+fn emit_step_event(
+    host: &dyn RuntimeHost,
+    workflow_id: &str,
+    run_id: &str,
+    step_id: &str,
+    node_id: &str,
+    node_type: &str,
+    status: &str,
+) {
+    emit_serialized(
+        host,
+        "workflow_run:step",
+        &WorkflowRunStepEventPayload {
+            workflow_id: workflow_id.to_string(),
+            run_id: run_id.to_string(),
+            step_id: step_id.to_string(),
+            node_id: node_id.to_string(),
+            node_type: node_type.to_string(),
+            status: status.to_string(),
+        },
+    );
 }
 
 fn group_edges(edges: &[WorkflowEdge]) -> HashMap<String, Vec<&WorkflowEdge>> {
@@ -464,7 +572,10 @@ mod tests {
             },
         );
         seed_workflow_fixture(&db, &wf);
-        let run = store::insert_run(&db, host.as_ref(), &wf, "manual", &json!({"ok": true}))
+        let run = orchestrator
+            .repos
+            .workflow_runs()
+            .create_run(&wf, "manual", &json!({"ok": true}))
             .await
             .unwrap();
 
@@ -512,7 +623,10 @@ mod tests {
             },
         );
         seed_workflow_fixture(&db, &wf);
-        let run = store::insert_run(&db, host.as_ref(), &wf, "manual", &Value::Null)
+        let run = orchestrator
+            .repos
+            .workflow_runs()
+            .create_run(&wf, "manual", &Value::Null)
             .await
             .unwrap();
 

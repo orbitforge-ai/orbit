@@ -70,7 +70,7 @@ pub(super) async fn execute(ctx: &NodeExecutionContext<'_>) -> Result<NodeOutcom
             normalized.truncate(limit);
         }
         let mut new_items =
-            filter_unseen_items(ctx.db, ctx.workflow_id, &ctx.node.id, &url, normalized).await?;
+            filter_unseen_items(ctx.repos, ctx.workflow_id, &ctx.node.id, &url, normalized).await?;
         unseen_items.append(&mut new_items);
     }
 

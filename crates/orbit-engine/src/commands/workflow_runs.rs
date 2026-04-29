@@ -1,9 +1,8 @@
 //! Workflow run inspection commands.
 //!
-//! Read paths flow through `WorkflowRunRepo`. The `start` path keeps using
-//! the orchestrator directly because it spawns the run loop. The `cancel`
-//! path goes through the repo, which itself dispatches to the orchestrator
-//! to flip state + nudge the loop.
+//! Read/cancel paths flow through `WorkflowRunRepo`. The `start` path still
+//! uses the orchestrator directly because it spawns the run loop, but run/step
+//! persistence is repo-backed underneath.
 
 use serde_json::Value;
 

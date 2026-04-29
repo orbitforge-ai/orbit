@@ -1,10 +1,7 @@
-use chrono::Utc;
-use rusqlite::OptionalExtension;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use ulid::Ulid;
 
-use crate::db::DbPool;
+use crate::db::repos::Repos;
 
 pub(crate) fn hash_text(input: &str) -> String {
     let mut hasher = Sha256::new();
@@ -34,69 +31,32 @@ pub(crate) fn fingerprint_listing(item: &Value, source_key: &str) -> String {
 }
 
 pub(crate) async fn filter_unseen_items(
-    db: &DbPool,
+    repos: &dyn Repos,
     workflow_id: &str,
     node_id: &str,
     source_key: &str,
     items: Vec<Value>,
 ) -> Result<Vec<Value>, String> {
-    let pool = db.0.clone();
-    let workflow_id = workflow_id.to_string();
-    let node_id = node_id.to_string();
-    let source_key = source_key.to_string();
-    tokio::task::spawn_blocking(move || -> Result<Vec<Value>, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let now = Utc::now().to_rfc3339();
-        let mut unseen = Vec::new();
-
-        for item in items {
-            let fingerprint = fingerprint_listing(&item, &source_key);
-            let exists: Option<String> = tx
-                .query_row(
-                    "SELECT id FROM workflow_seen_items
-                     WHERE workflow_id = ?1
-                       AND node_id = ?2
-                       AND source_key = ?3
-                       AND fingerprint = ?4
-                       AND tenant_id = COALESCE((SELECT tenant_id FROM project_workflows WHERE id = ?1), 'local')",
-                    rusqlite::params![workflow_id, node_id, source_key, fingerprint],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| e.to_string())?;
-            if exists.is_some() {
-                continue;
-            }
-
-            tx.execute(
-                "INSERT INTO workflow_seen_items (
-                    id, workflow_id, node_id, source_key, fingerprint, created_at, tenant_id
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE((SELECT tenant_id FROM project_workflows WHERE id = ?2), 'local'))",
-                rusqlite::params![
-                    Ulid::new().to_string(),
-                    workflow_id,
-                    node_id,
-                    source_key,
-                    fingerprint,
-                    now,
-                ],
-            )
-            .map_err(|e| e.to_string())?;
-            unseen.push(item);
-        }
-
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(unseen)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let fingerprints = items
+        .iter()
+        .map(|item| fingerprint_listing(item, source_key))
+        .collect::<Vec<_>>();
+    let inserted = repos
+        .workflow_seen_items()
+        .filter_unseen(workflow_id, node_id, source_key, &fingerprints)
+        .await?;
+    Ok(items
+        .into_iter()
+        .zip(inserted)
+        .filter_map(|(item, is_new)| is_new.then_some(item))
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{filter_unseen_items, fingerprint_listing, hash_text};
     use crate::db::connection::init as init_db;
+    use crate::db::repos::sqlite::SqliteRepos;
     use serde_json::json;
     use std::path::PathBuf;
 
@@ -136,6 +96,7 @@ mod tests {
     async fn filter_unseen_items_only_returns_new_rows() {
         let dir = temp_db_dir("seen-items");
         let db = init_db(dir.clone()).unwrap();
+        let repos = SqliteRepos::new(db.clone());
         seed_workflow_fixture(&db, "wf1");
 
         let items = vec![
@@ -143,10 +104,10 @@ mod tests {
             json!({"url": "https://example.com/b", "title": "B"}),
         ];
 
-        let first = filter_unseen_items(&db, "wf1", "node1", "feed", items.clone())
+        let first = filter_unseen_items(&repos, "wf1", "node1", "feed", items.clone())
             .await
             .unwrap();
-        let second = filter_unseen_items(&db, "wf1", "node1", "feed", items)
+        let second = filter_unseen_items(&repos, "wf1", "node1", "feed", items)
             .await
             .unwrap();
 

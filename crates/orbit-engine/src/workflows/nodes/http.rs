@@ -44,7 +44,7 @@ pub(super) async fn execute(ctx: &NodeExecutionContext<'_>) -> Result<NodeOutcom
         "bodyHash": hash_text(&body_text),
     });
     let is_new = filter_unseen_items(
-        ctx.db,
+        ctx.repos,
         ctx.workflow_id,
         &ctx.node.id,
         &url,

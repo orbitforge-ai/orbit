@@ -16,7 +16,7 @@ use crate::db::repos::{
     AgentRepo, BusMessageRepo, BusSubscriptionRepo, ChatRepo, ChatSessionListFilter,
     ProjectBoardColumnRepo, ProjectBoardRepo, ProjectRepo, ProjectWorkflowRepo, RepoCtx, Repos,
     RunListFilter, RunRepo, ScheduleRepo, TaskRepo, UserRepo, WorkItemEventRepo, WorkItemRepo,
-    WorkflowRunRepo,
+    WorkflowRunRepo, WorkflowSeenItemRepo,
 };
 use crate::db::DbPool;
 use crate::executor::workspace;
@@ -46,7 +46,9 @@ use crate::models::user::User;
 use crate::models::work_item::{CreateWorkItem, UpdateWorkItem, WorkItem};
 use crate::models::work_item_comment::{CommentAuthor, WorkItemComment};
 use crate::models::work_item_event::WorkItemEvent;
-use crate::models::workflow_run::{WorkflowRun, WorkflowRunSummary, WorkflowRunWithSteps};
+use crate::models::workflow_run::{
+    WorkflowRun, WorkflowRunStep, WorkflowRunSummary, WorkflowRunWithSteps,
+};
 use crate::scheduler::converter::{next_n_runs, to_cron};
 
 // ── Boilerplate-killers ─────────────────────────────────────────────────────
@@ -171,6 +173,9 @@ impl Repos for SqliteRepos {
         self
     }
     fn workflow_runs(&self) -> &dyn WorkflowRunRepo {
+        self
+    }
+    fn workflow_seen_items(&self) -> &dyn WorkflowSeenItemRepo {
         self
     }
 }
@@ -1404,13 +1409,190 @@ impl WorkItemEventRepo for SqliteRepos {
 
 // ── Workflow runs ───────────────────────────────────────────────────────────
 //
-// Thin wrapper: the heavy lifting still lives in `workflows::orchestrator` /
-// `workflows::store` because cancel-with-side-effects needs the orchestrator's
-// run-loop hooks. This impl just hides the `DbPool` from command code so the
-// trait surface stays consistent.
+// Persistence helpers for workflow runs. The orchestrator owns event emission
+// and the run-loop; this impl only mutates rows.
 
 #[async_trait]
 impl WorkflowRunRepo for SqliteRepos {
+    async fn create_run(
+        &self,
+        workflow: &ProjectWorkflow,
+        trigger_kind: &str,
+        trigger_data: &serde_json::Value,
+    ) -> Result<WorkflowRun, String> {
+        let id = Ulid::new().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let tenant_id = self.tenant_id();
+        let graph_snapshot =
+            serde_json::to_value(&workflow.graph).unwrap_or(serde_json::Value::Null);
+        let graph_str = serde_json::to_string(&workflow.graph).err_str()?;
+        let trigger_data_value = trigger_data.clone();
+        let trigger_data_str = serde_json::to_string(trigger_data).err_str()?;
+        let run = WorkflowRun {
+            id: id.clone(),
+            workflow_id: workflow.id.clone(),
+            workflow_version: workflow.version,
+            graph_snapshot,
+            trigger_kind: trigger_kind.to_string(),
+            trigger_data: trigger_data_value,
+            status: crate::workflows::store::STATUS_QUEUED.to_string(),
+            error: None,
+            started_at: None,
+            completed_at: None,
+            created_at: now.clone(),
+        };
+        let workflow_id = workflow.id.clone();
+        let workflow_version = workflow.version;
+        let trigger_kind = trigger_kind.to_string();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "INSERT INTO workflow_runs (id, workflow_id, workflow_version, graph_snapshot,
+                                            trigger_kind, trigger_data, status, created_at, tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    id,
+                    workflow_id,
+                    workflow_version,
+                    graph_str,
+                    trigger_kind,
+                    trigger_data_str,
+                    crate::workflows::store::STATUS_QUEUED,
+                    now,
+                    tenant_id,
+                ],
+            )
+            .err_str()?;
+            Ok(())
+        })
+        .await?;
+        Ok(run)
+    }
+
+    async fn update_status(
+        &self,
+        workflow_id: &str,
+        run_id: &str,
+        status: &str,
+        error: Option<&str>,
+        started_at: Option<&str>,
+        completed_at: Option<&str>,
+    ) -> Result<(), String> {
+        let tenant_id = self.tenant_id();
+        let workflow_id = workflow_id.to_string();
+        let run_id = run_id.to_string();
+        let status = status.to_string();
+        let error = error.map(String::from);
+        let started_at = started_at.map(String::from);
+        let completed_at = completed_at.map(String::from);
+        self.with_conn(move |conn| {
+            conn.execute(
+                "UPDATE workflow_runs SET status = ?1, error = COALESCE(?2, error),
+                                          started_at = COALESCE(?3, started_at),
+                                          completed_at = COALESCE(?4, completed_at)
+                 WHERE id = ?5 AND workflow_id = ?6 AND tenant_id = ?7",
+                params![
+                    status,
+                    error,
+                    started_at,
+                    completed_at,
+                    run_id,
+                    workflow_id,
+                    tenant_id,
+                ],
+            )
+            .err_str()?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn insert_step(
+        &self,
+        run_id: &str,
+        node_id: &str,
+        node_type: &str,
+        status: &str,
+        input: &serde_json::Value,
+        started_at: Option<&str>,
+        sequence: i64,
+    ) -> Result<WorkflowRunStep, String> {
+        let step = WorkflowRunStep {
+            id: Ulid::new().to_string(),
+            run_id: run_id.to_string(),
+            node_id: node_id.to_string(),
+            node_type: node_type.to_string(),
+            status: status.to_string(),
+            input: input.clone(),
+            output: None,
+            error: None,
+            started_at: started_at.map(String::from),
+            completed_at: None,
+            sequence,
+        };
+        let input_str = serde_json::to_string(input).err_str()?;
+        let tenant_id = self.tenant_id();
+        let step_for_insert = step.clone();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "INSERT INTO workflow_run_steps (id, run_id, node_id, node_type, status, input,
+                                                  started_at, sequence, tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    step_for_insert.id,
+                    step_for_insert.run_id,
+                    step_for_insert.node_id,
+                    step_for_insert.node_type,
+                    step_for_insert.status,
+                    input_str,
+                    step_for_insert.started_at,
+                    step_for_insert.sequence,
+                    tenant_id,
+                ],
+            )
+            .err_str()?;
+            Ok(())
+        })
+        .await?;
+        Ok(step)
+    }
+
+    async fn finish_step(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        status: &str,
+        output: Option<&serde_json::Value>,
+        error: Option<&str>,
+        completed_at: &str,
+    ) -> Result<(), String> {
+        let tenant_id = self.tenant_id();
+        let run_id = run_id.to_string();
+        let step_id = step_id.to_string();
+        let status = status.to_string();
+        let output_str = output.map(serde_json::to_string).transpose().err_str()?;
+        let error = error.map(String::from);
+        let completed_at = completed_at.to_string();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "UPDATE workflow_run_steps SET status = ?1, output = ?2, error = ?3,
+                                                completed_at = ?4
+                 WHERE id = ?5 AND run_id = ?6 AND tenant_id = ?7",
+                params![
+                    status,
+                    output_str,
+                    error,
+                    completed_at,
+                    step_id,
+                    run_id,
+                    tenant_id
+                ],
+            )
+            .err_str()?;
+            Ok(())
+        })
+        .await
+    }
+
     async fn list_for_workflow(
         &self,
         workflow_id: &str,
@@ -1476,6 +1658,50 @@ impl WorkflowRunRepo for SqliteRepos {
         })
         .await
         .err_str()?
+    }
+}
+
+#[async_trait]
+impl WorkflowSeenItemRepo for SqliteRepos {
+    async fn filter_unseen(
+        &self,
+        workflow_id: &str,
+        node_id: &str,
+        source_key: &str,
+        fingerprints: &[String],
+    ) -> Result<Vec<bool>, String> {
+        let tenant_id = self.tenant_id();
+        let workflow_id = workflow_id.to_string();
+        let node_id = node_id.to_string();
+        let source_key = source_key.to_string();
+        let fingerprints = fingerprints.to_vec();
+        self.with_conn_mut(move |conn| {
+            let tx = conn.transaction().err_str()?;
+            let now = chrono::Utc::now().to_rfc3339();
+            let mut inserted = Vec::with_capacity(fingerprints.len());
+            for fingerprint in fingerprints {
+                let changed = tx
+                    .execute(
+                        "INSERT OR IGNORE INTO workflow_seen_items (
+                            id, workflow_id, node_id, source_key, fingerprint, created_at, tenant_id
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        params![
+                            Ulid::new().to_string(),
+                            &workflow_id,
+                            &node_id,
+                            &source_key,
+                            &fingerprint,
+                            &now,
+                            &tenant_id,
+                        ],
+                    )
+                    .err_str()?;
+                inserted.push(changed == 1);
+            }
+            tx.commit().err_str()?;
+            Ok(inserted)
+        })
+        .await
     }
 }
 

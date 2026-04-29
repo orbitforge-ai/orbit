@@ -31,9 +31,9 @@ This is a living index of what's done in Phase B so work can be split across age
 
 ### B.1 Trait surface (`crates/orbit-engine/src/db/repos/mod.rs`)
 
-15 aggregates currently defined on `Repos`:
+16 aggregates currently defined on `Repos`:
 
-`agents`, `bus_messages`, `bus_subscriptions`, `chat`, `project_board_columns`, `project_boards`, `project_workflows`, `projects`, `runs`, `schedules`, `tasks`, `users`, `work_items`, `work_item_events`, `workflow_runs`.
+`agents`, `bus_messages`, `bus_subscriptions`, `chat`, `project_board_columns`, `project_boards`, `project_workflows`, `projects`, `runs`, `schedules`, `tasks`, `users`, `work_items`, `work_item_events`, `workflow_runs`, `workflow_seen_items`.
 
 Status: `[done]` for the repo-backed command surface listed below. The original-plan goal of moving every executor/scheduler/plugin/workflow persistence path to native backend traits remains `[partial]`; `AppContext.db` and the SQLite compatibility facade still support local runtime internals.
 
@@ -51,6 +51,8 @@ Status: `[done]` for the repo-backed command surface listed below. The original-
   - `BusSubscriptionRepo::create`, `set_enabled`, `delete`
   - `ProjectBoardRepo::create`, `update`, `delete` (cross-table re-parenting)
   - `WorkflowRunRepo::cancel`
+  - `WorkflowRunRepo::create_run`, `update_status`, `insert_step`, `finish_step`
+  - `WorkflowSeenItemRepo::filter_unseen`
   - `ChatRepo::create_session`, `rename_session`, `archive_session`, `unarchive_session`, `delete_session`, `append_message`, `upsert_active_skill`
   - `WorkItemRepo::create`, `update`, `delete`, `claim`, `move_item`, `reorder`, `block`, `unblock`, `complete`, comment CRUD
 - `[next]` Coordinator-style writes that span aggregates or filesystem/cloud side effects can now migrate command signatures/adapters to `AppContext`. Keep the actual repo extraction scoped per command.
@@ -61,7 +63,7 @@ Per-file remaining direct `DbPool` command arguments are zero. Audit note: this 
 
 | File | DbPool refs | Status | Notes / next slice |
 |---|---|---|---|
-| `workflow_runs.rs` | 0 | `[partial]` | Tauri + shim start paths use `AppContext` runtime/db; read/cancel paths use repo. Workflow start still uses local runtime DB state. |
+| `workflow_runs.rs` | 0 | `[partial]` | Tauri + shim start paths use `AppContext`; run/step persistence now uses `WorkflowRunRepo`. Node execution still carries local runtime DB for node internals. |
 | `terminals.rs` | 0 | `[done]` | Session agent lookup uses `ChatRepo::session_meta`; PTY lifecycle still uses Tauri registry. |
 | `triggers.rs` | 0 | `[done]` | Commands use `AppContext`; subscription reconcile can reuse `PluginManager` without Tauri state extraction. |
 | `llm.rs` | 0 | `[done]` | API-key sync and agent-loop trigger paths use `AppContext` cloud/db/executor coordinator. |
@@ -96,7 +98,7 @@ Per-file remaining direct `DbPool` command arguments are zero. Audit note: this 
 - `[done]` Phase C schema/runtime slice: consolidated Postgres migration lives under `crates/orbit-engine/src/db/migrations/postgres/`, creates the current tenant-bearing schema, forces RLS on every table, and grants the default-deny `application_role`.
 - `[done]` `orbit_server` selects `PgRepos` only when `ORBIT_DB_BACKEND=postgres`, uses `ORBIT_POSTGRES_URL` (or `DATABASE_URL` fallback after explicit opt-in), requires `ORBIT_TENANT_ID`, and requires `ORBIT_POSTGRES_MIGRATIONS_URL` when `ORBIT_APPLY_POSTGRES_MIGRATIONS=1`.
 - `[done]` Online migration story, PgBouncer/session-pool requirement, migration test harness command, and EXPLAIN baseline list are documented in `docs/ops/postgres-phase-c.md`.
-- `[partial]` Original Phase C is not fully complete: executor, scheduler, plugin, workflow, and workspace internals still run through local SQLite engine state; Postgres currently covers repo-backed command surfaces.
+- `[partial]` Original Phase C is not fully complete: executor, scheduler, plugin, remaining workflow node internals, and workspace internals still run through local SQLite engine state; Postgres currently covers repo-backed command surfaces plus workflow run persistence and seen-items dedupe.
 
 ### B.6 Sqlx swap on the SQLite path
 
@@ -107,7 +109,9 @@ Per-file remaining direct `DbPool` command arguments are zero. Audit note: this 
 
 ### Original-plan audit blockers / remaining verification
 
-- `[next]` Full Postgres engine path: move executor, scheduler, plugins, workflow store/seen-items, trigger bindings, and workspace/session internals off direct local SQLite calls or define an explicit local-runtime boundary.
+- `[done]` Workflow run persistence sub-slice: orchestrator start/status/step writes now flow through `WorkflowRunRepo` for SQLite/Postgres while preserving orchestrator-owned event emission.
+- `[done]` Workflow seen-items sub-slice: feed/http dedupe now flows through `WorkflowSeenItemRepo` for SQLite/Postgres while the pure fingerprinting helper stays in workflow runtime code.
+- `[next]` Full Postgres engine path: move executor, scheduler, plugins, remaining workflow node internals, trigger bindings, and workspace/session internals off direct local SQLite calls or define an explicit local-runtime boundary.
 - `[next]` Live RLS integration: run `ORBIT_TEST_POSTGRES_URL=... ORBIT_TEST_POSTGRES_APPLY_MIGRATIONS=1 cargo test -p orbit-engine --test pg_repos_rls -- --ignored --nocapture`.
 - `[next]` Local desktop smoke: verify Tauri desktop still boots, lists Projects, starts a chat/session, and can create/update local agents/projects/work items.
 - `[next]` Headless local smoke: boot `orbit-server` with only `ORBIT_DATA_DIR`, verify it uses SQLite, loads the UI, and lists Projects.
