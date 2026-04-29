@@ -27,6 +27,7 @@ use crate::executor::mcp_server::McpServerHandle;
 use crate::executor::permissions::PermissionRegistry;
 use crate::memory_service::MemoryServiceState;
 use crate::plugins::PluginManager;
+use crate::runtime_host::{tauri_host, RuntimeHostHandle};
 
 /// Shared state handed to every HTTP adapter.
 #[derive(Clone)]
@@ -53,6 +54,8 @@ pub struct AppContext {
     pub mcp: McpServerHandle,
     pub plugins: Arc<PluginManager>,
     pub memory: Option<MemoryServiceState>,
+    /// Runtime boundary for event emission and optional desktop-only services.
+    pub runtime: RuntimeHostHandle,
     /// `None` when running on a cloud server with no Tauri runtime.
     pub tauri: Option<tauri::AppHandle>,
 }
@@ -85,6 +88,49 @@ impl AppContext {
         memory: Option<MemoryServiceState>,
         tauri: Option<tauri::AppHandle>,
     ) -> Self {
+        let runtime = tauri
+            .as_ref()
+            .map(|app| tauri_host(app.clone()))
+            .unwrap_or_else(crate::runtime_host::headless_host);
+        Self::new_with_runtime(
+            db,
+            repos,
+            auth,
+            cloud,
+            active_user,
+            executor_tx,
+            agent_semaphores,
+            sessions,
+            permissions,
+            user_questions,
+            bg_processes,
+            mcp,
+            plugins,
+            memory,
+            runtime,
+            tauri,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_runtime(
+        db: DbPool,
+        repos: Arc<dyn Repos>,
+        auth: AuthState,
+        cloud: CloudClientState,
+        active_user: ActiveUser,
+        executor_tx: ExecutorTx,
+        agent_semaphores: AgentSemaphores,
+        sessions: SessionExecutionRegistry,
+        permissions: PermissionRegistry,
+        user_questions: UserQuestionRegistry,
+        bg_processes: BgProcessRegistry,
+        mcp: McpServerHandle,
+        plugins: Arc<PluginManager>,
+        memory: Option<MemoryServiceState>,
+        runtime: RuntimeHostHandle,
+        tauri: Option<tauri::AppHandle>,
+    ) -> Self {
         Self {
             db,
             repos,
@@ -100,6 +146,7 @@ impl AppContext {
             mcp,
             plugins,
             memory,
+            runtime,
             tauri,
         }
     }

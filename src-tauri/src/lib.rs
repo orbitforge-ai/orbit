@@ -12,6 +12,7 @@ pub use orbit_engine::executor;
 pub use orbit_engine::memory_service;
 pub use orbit_engine::models;
 pub use orbit_engine::plugins;
+pub use orbit_engine::runtime_host;
 pub use orbit_engine::scheduler;
 pub use orbit_engine::shim;
 pub use orbit_engine::triggers;
@@ -181,12 +182,13 @@ pub fn run() {
             // Reply-target registry used by the `message` tool to route a
             // trigger-spawned agent's reply back to the originating channel.
             app.manage(triggers::reply_registry::ReplyRegistry::new());
+            let runtime_host = runtime_host::tauri_host(app.handle().clone());
 
             // Trigger dispatcher — plugins emit inbound events via
             // `trigger.emit` on their per-plugin JSON-RPC socket. The
             // dispatcher must be installed on the core-api server *before*
             // the core-api sockets start accepting connections.
-            let dispatch_bindings = ProductionBindings::new(db_pool.clone(), app.handle().clone());
+            let dispatch_bindings = ProductionBindings::new(db_pool.clone(), runtime_host.clone());
             let dispatcher = Arc::new(Dispatcher::new(dispatch_bindings));
             plugin_manager.set_core_api_dispatcher(dispatcher);
 
@@ -212,9 +214,13 @@ pub fn run() {
                 app.state::<PermissionRegistry>().inner().clone(),
                 app.state::<UserQuestionRegistry>().inner().clone(),
                 app.state::<BgProcessRegistry>().inner().clone(),
-                app.state::<executor::mcp_server::McpServerHandle>().inner().clone(),
+                app.state::<executor::mcp_server::McpServerHandle>()
+                    .inner()
+                    .clone(),
                 plugin_manager,
-                app.state::<Option<memory_service::MemoryServiceState>>().inner().clone(),
+                app.state::<Option<memory_service::MemoryServiceState>>()
+                    .inner()
+                    .clone(),
                 Some(app.handle().clone()),
             );
             let app_ctx_arc = std::sync::Arc::new(app_ctx.clone());
@@ -258,7 +264,7 @@ pub fn run() {
                 db_pool.clone(),
                 executor_rx,
                 executor_tx.clone(),
-                app.handle().clone(),
+                runtime_host.clone(),
                 agent_semaphores,
                 session_registry.clone(),
                 permission_registry.clone(),
@@ -272,7 +278,7 @@ pub fn run() {
             let scheduler = SchedulerEngine::new(
                 db_pool,
                 ExecutorTx(executor_tx),
-                app.handle().clone(),
+                runtime_host.clone(),
                 log_dir,
             );
             tauri::async_runtime::spawn(async move { scheduler.run().await });

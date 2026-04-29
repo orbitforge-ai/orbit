@@ -6,9 +6,7 @@ use crate::workflows::nodes::{NodeExecutionContext, NodeFailure, NodeOutcome};
 use crate::workflows::seen_items::{filter_unseen_items, hash_text};
 use crate::workflows::template::{normalize_http_body, render_template, required_template};
 
-pub(super) async fn execute<R: tauri::Runtime>(
-    ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, NodeFailure> {
+pub(super) async fn execute(ctx: &NodeExecutionContext<'_>) -> Result<NodeOutcome, NodeFailure> {
     let url_template = required_template(&ctx.node.data, "url", "integration.http.request")?;
     let url = render_template(&url_template, ctx.outputs)
         .trim()

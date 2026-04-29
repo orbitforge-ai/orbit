@@ -4,9 +4,7 @@ use crate::models::project_workflow::RuleNode;
 use crate::workflows::nodes::{NodeExecutionContext, NodeFailure, NodeOutcome};
 use crate::workflows::rule_eval::eval_rule;
 
-pub(super) fn execute<R: tauri::Runtime>(
-    ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, NodeFailure> {
+pub(super) fn execute(ctx: &NodeExecutionContext<'_>) -> Result<NodeOutcome, NodeFailure> {
     let rule_value = ctx
         .node
         .data

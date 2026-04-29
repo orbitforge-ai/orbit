@@ -7,6 +7,7 @@ use crate::db::DbPool;
 use crate::executor::engine::{ExecutorTx, RunRequest};
 use crate::models::schedule::{OneShotConfig, RecurringConfig};
 use crate::models::task::Task;
+use crate::runtime_host::RuntimeHostHandle;
 use crate::scheduler::converter::{compute_next, to_cron};
 use crate::workflows::orchestrator::WorkflowOrchestrator;
 
@@ -15,7 +16,7 @@ use crate::workflows::orchestrator::WorkflowOrchestrator;
 pub struct SchedulerEngine {
     db: DbPool,
     executor_tx: ExecutorTx,
-    app: tauri::AppHandle,
+    host: RuntimeHostHandle,
     log_dir: PathBuf,
 }
 
@@ -23,13 +24,13 @@ impl SchedulerEngine {
     pub fn new(
         db: DbPool,
         executor_tx: ExecutorTx,
-        app: tauri::AppHandle,
+        host: RuntimeHostHandle,
         log_dir: PathBuf,
     ) -> Self {
         Self {
             db,
             executor_tx,
-            app,
+            host,
             log_dir,
         }
     }
@@ -152,7 +153,8 @@ impl SchedulerEngine {
                         "fired_at": now,
                     });
 
-                    let orchestrator = WorkflowOrchestrator::new(self.db.clone(), self.app.clone());
+                    let orchestrator =
+                        WorkflowOrchestrator::new(self.db.clone(), self.host.clone());
                     let workflow_id_log = workflow_id.clone();
                     let schedule_id_log = schedule_id.clone();
                     tokio::spawn(async move {

@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::app_context::AppContext;
 use crate::db::DbPool;
 use crate::models::workflow_run::{WorkflowRun, WorkflowRunSummary, WorkflowRunWithSteps};
+use crate::runtime_host::tauri_host;
 use crate::workflows::WorkflowOrchestrator;
 
 #[tauri::command]
@@ -21,7 +22,7 @@ pub async fn start_workflow_run(
 ) -> Result<WorkflowRun, String> {
     // Orchestrator-side: starting a run also boots the per-run state machine,
     // which the repo trait deliberately stays out of.
-    let orchestrator = WorkflowOrchestrator::new(db.inner().clone(), app);
+    let orchestrator = WorkflowOrchestrator::new(db.inner().clone(), tauri_host(app));
     orchestrator
         .start_run(workflow_id, "manual", trigger_data.unwrap_or(Value::Null))
         .await
@@ -71,7 +72,6 @@ pub async fn cancel_workflow_run(
 
 mod http {
     use super::*;
-    use tauri::Manager;
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -102,12 +102,13 @@ mod http {
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("start_workflow_run", |ctx, args| async move {
-            // Start still needs the AppHandle for the orchestrator's run-loop
-            // hooks; reading from ctx.app() works in desktop, fails in headless
-            // until A.7 lands.
-            let app = ctx.app()?;
             let a: StartArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = start_workflow_run(a.workflow_id, a.trigger_data, app.state::<DbPool>(), app.clone())
+            let r = WorkflowOrchestrator::new(ctx.db.clone(), ctx.runtime.clone())
+                .start_run(
+                    a.workflow_id,
+                    "manual",
+                    a.trigger_data.unwrap_or(Value::Null),
+                )
                 .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });

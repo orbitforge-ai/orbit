@@ -7,19 +7,25 @@ mod logic;
 mod plugin;
 
 use serde_json::Value;
-use tauri::Runtime;
 
 use crate::db::DbPool;
 use crate::models::project_workflow::WorkflowNode;
+use crate::runtime_host::RuntimeHost;
 
-pub(crate) struct NodeExecutionContext<'a, R: Runtime> {
+pub(crate) struct NodeExecutionContext<'a> {
     pub db: &'a DbPool,
-    pub app: &'a tauri::AppHandle<R>,
+    pub host: &'a dyn RuntimeHost,
     pub run_id: &'a str,
     pub workflow_id: &'a str,
     pub project_id: &'a str,
     pub node: &'a WorkflowNode,
     pub outputs: &'a Value,
+}
+
+impl<'a> NodeExecutionContext<'a> {
+    pub fn app_handle(&self) -> Option<tauri::AppHandle> {
+        self.host.app_handle()
+    }
 }
 
 pub(crate) struct NodeOutcome {
@@ -91,9 +97,7 @@ pub fn node_type_has_executor(node_type: &str) -> bool {
     route_node_type(node_type).is_some()
 }
 
-pub(crate) async fn execute<R: Runtime>(
-    ctx: NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, NodeFailure> {
+pub(crate) async fn execute(ctx: NodeExecutionContext<'_>) -> Result<NodeOutcome, NodeFailure> {
     match route_node_type(ctx.node.node_type.as_str()) {
         Some(NodeExecutorKind::Trigger) => Ok(NodeOutcome {
             output: ctx.outputs.get("trigger").cloned().unwrap_or(Value::Null),

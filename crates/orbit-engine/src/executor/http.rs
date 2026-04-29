@@ -5,8 +5,9 @@ use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 use url::Url;
 
-use crate::events::emitter::emit_log_chunk;
+use crate::events::emitter::emit_log_chunk_to_host;
 use crate::models::task::HttpRequestConfig;
+use crate::runtime_host::RuntimeHostHandle;
 
 pub struct ProcessResult {
     pub exit_code: i32,
@@ -163,7 +164,7 @@ pub async fn run_http(
     cfg: &HttpRequestConfig,
     log_path: &PathBuf,
     timeout_secs: u64,
-    app: &tauri::AppHandle,
+    host: RuntimeHostHandle,
     cancel: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<ProcessResult, String> {
     if let Some(parent) = log_path.parent() {
@@ -183,7 +184,11 @@ pub async fn run_http(
         warn!(run_id = run_id, url = %cfg.url, reason = %reason, "SSRF protection blocked request");
         let msg = format!("[blocked] {}\n", reason);
         log_file.write_all(msg.as_bytes()).await.ok();
-        emit_log_chunk(app, run_id, vec![("stderr".to_string(), reason.clone())]);
+        emit_log_chunk_to_host(
+            host.as_ref(),
+            run_id,
+            vec![("stderr".to_string(), reason.clone())],
+        );
         return Ok(ProcessResult {
             exit_code: 1,
             duration_ms: 0,
@@ -197,7 +202,11 @@ pub async fn run_http(
                 warn!(run_id = run_id, header = %k, "CRLF header injection blocked");
                 let msg = format!("[blocked] {}\n", reason);
                 log_file.write_all(msg.as_bytes()).await.ok();
-                emit_log_chunk(app, run_id, vec![("stderr".to_string(), reason.clone())]);
+                emit_log_chunk_to_host(
+                    host.as_ref(),
+                    run_id,
+                    vec![("stderr".to_string(), reason.clone())],
+                );
                 return Ok(ProcessResult {
                     exit_code: 1,
                     duration_ms: 0,
@@ -207,7 +216,11 @@ pub async fn run_http(
                 warn!(run_id = run_id, header = %k, "CRLF header injection blocked");
                 let msg = format!("[blocked] {}\n", reason);
                 log_file.write_all(msg.as_bytes()).await.ok();
-                emit_log_chunk(app, run_id, vec![("stderr".to_string(), reason.clone())]);
+                emit_log_chunk_to_host(
+                    host.as_ref(),
+                    run_id,
+                    vec![("stderr".to_string(), reason.clone())],
+                );
                 return Ok(ProcessResult {
                     exit_code: 1,
                     duration_ms: 0,
@@ -219,8 +232,8 @@ pub async fn run_http(
     // Log request details
     let req_line = format!("--> {} {}\n", cfg.method.to_uppercase(), cfg.url);
     log_file.write_all(req_line.as_bytes()).await.ok();
-    emit_log_chunk(
-        app,
+    emit_log_chunk_to_host(
+        host.as_ref(),
         run_id,
         vec![(
             "stdout".to_string(),
@@ -265,7 +278,7 @@ pub async fn run_http(
         _ = cancel => {
             let msg = "run cancelled";
             log_file.write_all(format!("[cancelled]\n").as_bytes()).await.ok();
-            emit_log_chunk(app, run_id, vec![("stdout".to_string(), msg.to_string())]);
+            emit_log_chunk_to_host(host.as_ref(), run_id, vec![("stdout".to_string(), msg.to_string())]);
             return Err("cancelled".to_string());
         }
     };
@@ -280,8 +293,8 @@ pub async fn run_http(
         duration_ms
     );
     log_file.write_all(status_line.as_bytes()).await.ok();
-    emit_log_chunk(
-        app,
+    emit_log_chunk_to_host(
+        host.as_ref(),
         run_id,
         vec![(
             "stdout".to_string(),
@@ -311,7 +324,11 @@ pub async fn run_http(
     log_file.write_all(truncated.as_bytes()).await.ok();
 
     for line in body_str.lines().take(100) {
-        emit_log_chunk(app, run_id, vec![("stdout".to_string(), line.to_string())]);
+        emit_log_chunk_to_host(
+            host.as_ref(),
+            run_id,
+            vec![("stdout".to_string(), line.to_string())],
+        );
     }
 
     // Determine success based on expected status codes
@@ -334,8 +351,8 @@ pub async fn run_http(
     if exit_code != 0 {
         let err_line = format!("[error] unexpected status: {}\n", status.as_u16());
         log_file.write_all(err_line.as_bytes()).await.ok();
-        emit_log_chunk(
-            app,
+        emit_log_chunk_to_host(
+            host.as_ref(),
             run_id,
             vec![(
                 "stderr".to_string(),

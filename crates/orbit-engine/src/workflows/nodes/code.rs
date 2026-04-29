@@ -2,14 +2,13 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use serde_json::{json, Map, Value};
-use tauri::Emitter;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
-use tracing::warn;
 use ulid::Ulid;
 
 use crate::events::emitter::{LogLine, RunLogChunkPayload};
 use crate::executor::workspace;
+use crate::runtime_host::{emit_serialized, RuntimeHost};
 use crate::workflows::nodes::{NodeExecutionContext, NodeFailure, NodeOutcome};
 use crate::workflows::template::{render_template, OUTPUT_ALIASES_KEY};
 
@@ -22,9 +21,7 @@ struct ProcessCapture {
     stdout: String,
 }
 
-pub(super) async fn execute<R: tauri::Runtime>(
-    ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, NodeFailure> {
+pub(super) async fn execute(ctx: &NodeExecutionContext<'_>) -> Result<NodeOutcome, NodeFailure> {
     match ctx.node.node_type.as_str() {
         "code.bash.run" => execute_bash(ctx).await,
         "code.script.run" => execute_script(ctx).await,
@@ -32,9 +29,7 @@ pub(super) async fn execute<R: tauri::Runtime>(
     }
 }
 
-async fn execute_bash<R: tauri::Runtime>(
-    ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, NodeFailure> {
+async fn execute_bash(ctx: &NodeExecutionContext<'_>) -> Result<NodeOutcome, NodeFailure> {
     let script_template = required_code_field(&ctx.node.data, "script", "code.bash.run")?;
     let cwd = resolve_working_directory(ctx.project_id, working_directory(&ctx.node.data))?;
     let timeout_secs = timeout_seconds(&ctx.node.data);
@@ -57,7 +52,7 @@ async fn execute_bash<R: tauri::Runtime>(
     let _ = tokio::fs::remove_file(&script_path).await;
 
     let capture = capture?;
-    emit_process_logs(ctx.app, ctx.run_id, &capture.stdout, &capture.stderr);
+    emit_process_logs(ctx.host, ctx.run_id, &capture.stdout, &capture.stderr);
 
     if capture.exit_code != 0 {
         return Err(NodeFailure::with_output(
@@ -84,9 +79,7 @@ async fn execute_bash<R: tauri::Runtime>(
     })
 }
 
-async fn execute_script<R: tauri::Runtime>(
-    ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, NodeFailure> {
+async fn execute_script(ctx: &NodeExecutionContext<'_>) -> Result<NodeOutcome, NodeFailure> {
     let source = required_code_field(&ctx.node.data, "source", "code.script.run")?;
     let language = script_language(&ctx.node.data)?;
     let cwd = resolve_working_directory(ctx.project_id, working_directory(&ctx.node.data))?;
@@ -147,7 +140,7 @@ async fn execute_script<R: tauri::Runtime>(
     let _ = tokio::fs::remove_file(&context_path).await;
 
     let capture = capture?;
-    emit_process_logs(ctx.app, ctx.run_id, &capture.stdout, &capture.stderr);
+    emit_process_logs(ctx.host, ctx.run_id, &capture.stdout, &capture.stderr);
 
     if capture.exit_code != 0 {
         return Err(NodeFailure::with_output(
@@ -285,12 +278,7 @@ async fn cleanup_capture_files(stdout_path: &Path, stderr_path: &Path) -> Result
     Ok(())
 }
 
-fn emit_process_logs<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    run_id: &str,
-    stdout: &str,
-    stderr: &str,
-) {
+fn emit_process_logs(host: &dyn RuntimeHost, run_id: &str, stdout: &str, stderr: &str) {
     let mut lines = Vec::new();
     lines.extend(
         stdout
@@ -311,9 +299,7 @@ fn emit_process_logs<R: tauri::Runtime>(
                 .collect(),
             timestamp: chrono::Utc::now().to_rfc3339(),
         };
-        if let Err(error) = app.emit("run:log_chunk", &payload) {
-            warn!("failed to emit run:log_chunk: {}", error);
-        }
+        emit_serialized(host, "run:log_chunk", &payload);
     }
 }
 

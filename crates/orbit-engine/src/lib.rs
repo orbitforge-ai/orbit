@@ -9,9 +9,9 @@
 //! Tauri-specific bits (the `tauri::Builder`, tray menu, window events,
 //! `tauri::generate_handler!`, and `tauri-plugin-*` crates) live in
 //! `src-tauri/`. This crate still depends on the `tauri` core crate because
-//! `AppContext::tauri` is `Option<tauri::AppHandle>`, `events/emitter.rs`
-//! uses the `tauri::Emitter` trait, and `commands/*` carry `#[tauri::command]`
-//! annotations — that coupling will be lifted behind a trait in a later phase.
+//! `commands/*` carry `#[tauri::command]` annotations for desktop command
+//! registration. Runtime emission and optional Tauri access are carried behind
+//! `runtime_host::RuntimeHost`.
 
 pub mod app_context;
 pub mod auth;
@@ -23,6 +23,7 @@ pub mod executor;
 pub mod memory_service;
 pub mod models;
 pub mod plugins;
+pub mod runtime_host;
 pub mod scheduler;
 pub mod shim;
 pub mod triggers;

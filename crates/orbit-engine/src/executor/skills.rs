@@ -1219,6 +1219,22 @@ Bad
     fn active_skills_round_trip_through_db_state() {
         let dir = std::env::temp_dir().join(format!("orbit-skill-test-{}", ulid::Ulid::new()));
         let db = init_db(dir).expect("db should initialize");
+        {
+            let conn = db.get().expect("db connection");
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO agents (id, name, description, state, max_concurrent_runs, created_at, updated_at)
+                 VALUES (?1, ?2, NULL, 'idle', 1, ?3, ?3)",
+                rusqlite::params!["agent-1", "Agent 1", now],
+            )
+            .expect("agent fixture should persist");
+            conn.execute(
+                "INSERT INTO chat_sessions (id, agent_id, title, archived, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 0, ?4, ?4)",
+                rusqlite::params!["session-1", "agent-1", "Session 1", now],
+            )
+            .expect("session fixture should persist");
+        }
 
         upsert_active_skill(&db, "session-1", "code-review", "Use review mode", None)
             .expect("active skill should persist");

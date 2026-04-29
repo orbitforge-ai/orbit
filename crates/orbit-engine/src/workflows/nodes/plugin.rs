@@ -4,10 +4,11 @@ use crate::plugins;
 use crate::workflows::nodes::{NodeExecutionContext, NodeFailure, NodeOutcome};
 use crate::workflows::template::render_template;
 
-pub(super) async fn execute<R: tauri::Runtime>(
-    ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, NodeFailure> {
-    let manager = plugins::from_state(ctx.app);
+pub(super) async fn execute(ctx: &NodeExecutionContext<'_>) -> Result<NodeOutcome, NodeFailure> {
+    let app = ctx
+        .app_handle()
+        .ok_or_else(|| "plugin workflow nodes require a Tauri runtime host".to_string())?;
+    let manager = plugins::from_state(&app);
     let (manifest, tool_name) = manager
         .manifests()
         .into_iter()

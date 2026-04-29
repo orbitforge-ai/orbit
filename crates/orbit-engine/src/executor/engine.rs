@@ -5,7 +5,7 @@ use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
 use tracing::{error, info, warn};
 
 use crate::db::DbPool;
-use crate::events::emitter::{emit_bus_message_sent, emit_run_state_changed};
+use crate::events::emitter::{emit_bus_message_sent_to_host, emit_run_state_changed_to_host};
 use crate::executor::memory::MemoryClient;
 use crate::executor::permissions::PermissionRegistry;
 use crate::executor::state_machine::{transition, ExecutorEvent};
@@ -14,6 +14,7 @@ use crate::models::run::RunState;
 use crate::models::task::{
     AgentLoopConfig, AgentStepConfig, HttpRequestConfig, ScriptFileConfig, ShellCommandConfig, Task,
 };
+use crate::runtime_host::{RuntimeHost, RuntimeHostHandle};
 use serde_json;
 
 const DEFAULT_AGENT_ID: &str = "default";
@@ -285,7 +286,7 @@ pub struct ExecutorEngine {
     rx: mpsc::UnboundedReceiver<RunRequest>,
     /// Clone of the sender so the engine can enqueue retry runs.
     tx: mpsc::UnboundedSender<RunRequest>,
-    app: tauri::AppHandle,
+    host: RuntimeHostHandle,
     agent_semaphores: AgentSemaphores,
     session_registry: SessionExecutionRegistry,
     permission_registry: PermissionRegistry,
@@ -303,7 +304,7 @@ impl ExecutorEngine {
         db: DbPool,
         rx: mpsc::UnboundedReceiver<RunRequest>,
         tx: mpsc::UnboundedSender<RunRequest>,
-        app: tauri::AppHandle,
+        host: RuntimeHostHandle,
         agent_semaphores: AgentSemaphores,
         session_registry: SessionExecutionRegistry,
         permission_registry: PermissionRegistry,
@@ -315,7 +316,7 @@ impl ExecutorEngine {
             db,
             rx,
             tx,
-            app,
+            host,
             agent_semaphores,
             session_registry,
             permission_registry,
@@ -343,7 +344,7 @@ impl ExecutorEngine {
                 .get_or_create(&agent_id, &self.db)
                 .await;
             let db = self.db.clone();
-            let app = self.app.clone();
+            let host = self.host.clone();
             let log_dir = self.log_dir.clone();
             let registry = self.registry.clone();
             let agent_semaphores = self.agent_semaphores.clone();
@@ -365,7 +366,7 @@ impl ExecutorEngine {
                                 if let Err(e) = run_one(
                                     req.clone(),
                                     db.clone(),
-                                    app.clone(),
+                                    host.clone(),
                                     log_dir.clone(),
                                     cancel_rx,
                                     tx.clone(),
@@ -391,18 +392,18 @@ impl ExecutorEngine {
                                     &agent_id,
                                     req.chain_depth,
                                     &tx,
-                                    &app,
+                                    host.as_ref(),
                                 )
                                 .await;
                                 // Schedule retry if needed
-                                schedule_retry_if_needed(req, &db, &tx, &app).await;
+                                schedule_retry_if_needed(req, &db, &tx, host.clone()).await;
                             });
                         }
                         Err(_) => {
                             warn!(run_id = req.run_id, "skipping run — agent at capacity");
                             let _ = mark_run_skipped(&db, &req.run_id);
-                            emit_run_state_changed(
-                                &app,
+                            emit_run_state_changed_to_host(
+                                host.as_ref(),
                                 &req.run_id,
                                 RunState::Pending.as_str(),
                                 RunState::Cancelled.as_str(),
@@ -414,8 +415,8 @@ impl ExecutorEngine {
                     // Cancel currently active runs for this agent
                     let cancelled = registry.cancel_agent_runs(&agent_id, &db).await;
                     for run_id in &cancelled {
-                        emit_run_state_changed(
-                            &app,
+                        emit_run_state_changed_to_host(
+                            host.as_ref(),
                             run_id,
                             RunState::Running.as_str(),
                             RunState::Cancelled.as_str(),
@@ -434,7 +435,7 @@ impl ExecutorEngine {
                         if let Err(e) = run_one(
                             req.clone(),
                             db.clone(),
-                            app.clone(),
+                            host.clone(),
                             log_dir.clone(),
                             cancel_rx,
                             tx.clone(),
@@ -459,10 +460,10 @@ impl ExecutorEngine {
                             &agent_id,
                             req.chain_depth,
                             &tx,
-                            &app,
+                            host.as_ref(),
                         )
                         .await;
-                        schedule_retry_if_needed(req, &db, &tx, &app).await;
+                        schedule_retry_if_needed(req, &db, &tx, host.clone()).await;
                     });
                 }
                 // "allow" | "queue" — natural semaphore behavior
@@ -476,7 +477,7 @@ impl ExecutorEngine {
                         if let Err(e) = run_one(
                             req.clone(),
                             db.clone(),
-                            app.clone(),
+                            host.clone(),
                             log_dir.clone(),
                             cancel_rx,
                             tx.clone(),
@@ -501,10 +502,10 @@ impl ExecutorEngine {
                             &agent_id,
                             req.chain_depth,
                             &tx,
-                            &app,
+                            host.as_ref(),
                         )
                         .await;
-                        schedule_retry_if_needed(req, &db, &tx, &app).await;
+                        schedule_retry_if_needed(req, &db, &tx, host.clone()).await;
                     });
                 }
             }
@@ -517,7 +518,7 @@ impl ExecutorEngine {
 async fn run_one(
     req: RunRequest,
     db: DbPool,
-    app: tauri::AppHandle,
+    host: RuntimeHostHandle,
     log_dir: PathBuf,
     cancel: oneshot::Receiver<()>,
     executor_tx: mpsc::UnboundedSender<RunRequest>,
@@ -531,8 +532,8 @@ async fn run_one(
     let task = req.task;
 
     update_run_state(&db, &run_id, &RunState::Running, None, None, None)?;
-    emit_run_state_changed(
-        &app,
+    emit_run_state_changed_to_host(
+        host.as_ref(),
         &run_id,
         RunState::Pending.as_str(),
         RunState::Running.as_str(),
@@ -545,17 +546,17 @@ async fn run_one(
         "shell_command" => {
             let cfg: ShellCommandConfig =
                 serde_json::from_value(task.config.clone()).map_err(|e| e.to_string())?;
-            process::run_shell(&run_id, &cfg, &log_path, timeout_secs, &app, cancel).await
+            process::run_shell(&run_id, &cfg, &log_path, timeout_secs, host.clone(), cancel).await
         }
         "script_file" => {
             let cfg: ScriptFileConfig =
                 serde_json::from_value(task.config.clone()).map_err(|e| e.to_string())?;
-            process::run_script(&run_id, &cfg, &log_path, timeout_secs, &app, cancel).await
+            process::run_script(&run_id, &cfg, &log_path, timeout_secs, host.clone(), cancel).await
         }
         "http_request" => {
             let cfg: HttpRequestConfig =
                 serde_json::from_value(task.config.clone()).map_err(|e| e.to_string())?;
-            http::run_http(&run_id, &cfg, &log_path, timeout_secs, &app, cancel)
+            http::run_http(&run_id, &cfg, &log_path, timeout_secs, host.clone(), cancel)
                 .await
                 .map(|r| process::ProcessResult {
                     exit_code: r.exit_code,
@@ -569,6 +570,9 @@ async fn run_one(
                 .agent_id
                 .clone()
                 .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string());
+            let app = host
+                .app_handle()
+                .ok_or_else(|| "agent_step requires a Tauri runtime host".to_string())?;
             agent_loop::run_agent_prompt(
                 &run_id,
                 &agent_id,
@@ -599,6 +603,9 @@ async fn run_one(
             // Pulse tasks route to run_pulse (chat-session-based)
             let is_pulse = task.tags.iter().any(|t| t == "pulse");
             let is_sub_agent = task.tags.iter().any(|t| t == "sub_agent");
+            let app = host
+                .app_handle()
+                .ok_or_else(|| "agent_loop requires a Tauri runtime host".to_string())?;
             if is_pulse {
                 agent_loop::run_pulse(
                     &run_id,
@@ -672,8 +679,8 @@ async fn run_one(
                 None,
             )?;
 
-            emit_run_state_changed(
-                &app,
+            emit_run_state_changed_to_host(
+                host.as_ref(),
                 &run_id,
                 RunState::Running.as_str(),
                 next_state.as_str(),
@@ -681,8 +688,8 @@ async fn run_one(
         }
         Err(reason) if reason == "cancelled" => {
             update_run_state(&db, &run_id, &RunState::Cancelled, Some(-1), None, None)?;
-            emit_run_state_changed(
-                &app,
+            emit_run_state_changed_to_host(
+                host.as_ref(),
                 &run_id,
                 RunState::Running.as_str(),
                 RunState::Cancelled.as_str(),
@@ -697,8 +704,8 @@ async fn run_one(
 
             let metadata = serde_json::json!({ "error": reason });
             update_run_state(&db, &run_id, &next_state, Some(-1), None, Some(metadata))?;
-            emit_run_state_changed(
-                &app,
+            emit_run_state_changed_to_host(
+                host.as_ref(),
                 &run_id,
                 RunState::Running.as_str(),
                 next_state.as_str(),
@@ -706,7 +713,9 @@ async fn run_one(
         }
     }
 
-    permission_registry.cancel_for_run(&run_id, &app).await;
+    permission_registry
+        .cancel_for_run_with_host(&run_id, host.as_ref())
+        .await;
 
     Ok(())
 }
@@ -716,7 +725,7 @@ async fn schedule_retry_if_needed(
     req: RunRequest,
     db: &DbPool,
     tx: &mpsc::UnboundedSender<RunRequest>,
-    app: &tauri::AppHandle,
+    host: RuntimeHostHandle,
 ) {
     let conn = match db.get() {
         Ok(c) => c,
@@ -796,12 +805,12 @@ async fn schedule_retry_if_needed(
     };
 
     let tx_clone = tx.clone();
-    let app_clone = app.clone();
+    let host_clone = host.clone();
 
     tokio::spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
         info!(run_id = retry_run_id, "firing retry run");
-        emit_run_state_changed(&app_clone, &retry_run_id, "pending", "pending");
+        emit_run_state_changed_to_host(host_clone.as_ref(), &retry_run_id, "pending", "pending");
         let _ = tx_clone.send(retry_req);
     });
 }
@@ -894,7 +903,7 @@ async fn evaluate_bus_subscriptions(
     agent_id: &str,
     chain_depth: i64,
     tx: &mpsc::UnboundedSender<RunRequest>,
-    app: &tauri::AppHandle,
+    host: &dyn RuntimeHost,
 ) {
     // Load the run's final state
     let final_state = {
@@ -1084,8 +1093,8 @@ async fn evaluate_bus_subscriptions(
         }
 
         // Emit event
-        emit_bus_message_sent(
-            app,
+        emit_bus_message_sent_to_host(
+            host,
             &msg_id,
             agent_id,
             &subscriber_agent_id,

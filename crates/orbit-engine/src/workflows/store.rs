@@ -1,12 +1,12 @@
 use chrono::Utc;
 use serde::Serialize;
 use serde_json::Value;
-use tauri::Emitter;
 use ulid::Ulid;
 
 use crate::db::DbPool;
 use crate::models::project_workflow::{ProjectWorkflow, WorkflowGraph};
 use crate::models::workflow_run::{WorkflowRun, WorkflowRunStep, WorkflowRunSummary};
+use crate::runtime_host::{emit_serialized, RuntimeHost};
 
 pub(crate) const STATUS_QUEUED: &str = "queued";
 pub(crate) const STATUS_RUNNING: &str = "running";
@@ -75,7 +75,7 @@ pub(crate) async fn load_workflow(
 
 pub(crate) async fn insert_run(
     db: &DbPool,
-    app: &tauri::AppHandle<impl tauri::Runtime>,
+    host: &dyn RuntimeHost,
     workflow: &ProjectWorkflow,
     trigger_kind: &str,
     trigger_data: &Value,
@@ -129,9 +129,10 @@ pub(crate) async fn insert_run(
         completed_at: None,
         created_at: now,
     };
-    let _ = app.emit(
+    emit_serialized(
+        host,
         "workflow_run:created",
-        WorkflowRunEventPayload {
+        &WorkflowRunEventPayload {
             workflow_id: run.workflow_id.clone(),
             run_id: run.id.clone(),
             status: run.status.clone(),
@@ -142,7 +143,7 @@ pub(crate) async fn insert_run(
 
 pub(crate) async fn update_run_status(
     db: &DbPool,
-    app: &tauri::AppHandle<impl tauri::Runtime>,
+    host: &dyn RuntimeHost,
     workflow_id: &str,
     run_id: &str,
     status: &str,
@@ -157,7 +158,11 @@ pub(crate) async fn update_run_status(
     let error = error.map(String::from);
     let started_at = started_at.map(String::from);
     let completed_at = completed_at.map(String::from);
-    let app = app.clone();
+    let host_payload = WorkflowRunEventPayload {
+        workflow_id: workflow_id.clone(),
+        run_id: run_id.clone(),
+        status: status.clone(),
+    };
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.execute(
@@ -168,23 +173,17 @@ pub(crate) async fn update_run_status(
             rusqlite::params![status, error, started_at, completed_at, run_id],
         )
         .map_err(|e| e.to_string())?;
-        let _ = app.emit(
-            "workflow_run:updated",
-            WorkflowRunEventPayload {
-                workflow_id,
-                run_id,
-                status,
-            },
-        );
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    emit_serialized(host, "workflow_run:updated", &host_payload);
+    Ok(())
 }
 
 pub(crate) async fn fail_run(
     db: &DbPool,
-    app: &tauri::AppHandle<impl tauri::Runtime>,
+    host: &dyn RuntimeHost,
     workflow_id: &str,
     run_id: &str,
     err: &str,
@@ -192,7 +191,7 @@ pub(crate) async fn fail_run(
     let now = Utc::now().to_rfc3339();
     update_run_status(
         db,
-        app,
+        host,
         workflow_id,
         run_id,
         STATUS_FAILED,
@@ -206,7 +205,7 @@ pub(crate) async fn fail_run(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn insert_step(
     db: &DbPool,
-    app: &tauri::AppHandle<impl tauri::Runtime>,
+    host: &dyn RuntimeHost,
     workflow_id: &str,
     step_id: &str,
     run_id: &str,
@@ -226,7 +225,14 @@ pub(crate) async fn insert_step(
     let status = status.to_string();
     let input_str = serde_json::to_string(input).unwrap_or_else(|_| "{}".into());
     let started_at = started_at.map(String::from);
-    let app = app.clone();
+    let host_payload = WorkflowRunStepEventPayload {
+        workflow_id: workflow_id.clone(),
+        run_id: run_id.clone(),
+        step_id: step_id.clone(),
+        node_id: node_id.clone(),
+        node_type: node_type.clone(),
+        status: status.clone(),
+    };
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.execute(
@@ -238,27 +244,18 @@ pub(crate) async fn insert_step(
             ],
         )
         .map_err(|e| e.to_string())?;
-        let _ = app.emit(
-            "workflow_run:step",
-            WorkflowRunStepEventPayload {
-                workflow_id,
-                run_id,
-                step_id,
-                node_id,
-                node_type,
-                status,
-            },
-        );
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    emit_serialized(host, "workflow_run:step", &host_payload);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn finish_step(
     db: &DbPool,
-    app: &tauri::AppHandle<impl tauri::Runtime>,
+    host: &dyn RuntimeHost,
     workflow_id: &str,
     run_id: &str,
     step_id: &str,
@@ -279,7 +276,14 @@ pub(crate) async fn finish_step(
     let output_str = output.map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".into()));
     let error = error.map(String::from);
     let completed_at = completed_at.to_string();
-    let app = app.clone();
+    let host_payload = WorkflowRunStepEventPayload {
+        workflow_id: workflow_id.clone(),
+        run_id: run_id.clone(),
+        step_id: step_id.clone(),
+        node_id: node_id.clone(),
+        node_type: node_type.clone(),
+        status: status.clone(),
+    };
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.execute(
@@ -289,21 +293,12 @@ pub(crate) async fn finish_step(
             rusqlite::params![status, output_str, error, completed_at, step_id],
         )
         .map_err(|e| e.to_string())?;
-        let _ = app.emit(
-            "workflow_run:step",
-            WorkflowRunStepEventPayload {
-                workflow_id,
-                run_id,
-                step_id,
-                node_id,
-                node_type,
-                status,
-            },
-        );
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    emit_serialized(host, "workflow_run:step", &host_payload);
+    Ok(())
 }
 
 pub fn load_run_with_steps(

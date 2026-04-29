@@ -4,7 +4,9 @@ use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
 use tracing::{info, warn};
 
-use crate::events::emitter::{emit_permission_cancelled, emit_permission_request};
+use crate::events::emitter::{
+    emit_permission_cancelled, emit_permission_cancelled_to_host, emit_permission_request,
+};
 use crate::executor::agent_tools::{self, ToolExecutionContext};
 use crate::executor::global_settings;
 use crate::executor::workspace::PermissionRule;
@@ -88,6 +90,24 @@ impl PermissionRegistry {
 
     /// Cancel all pending requests for a given run_id.
     pub async fn cancel_for_run(&self, run_id: &str, app: &tauri::AppHandle) {
+        self.cancel_for_run_with_emit(run_id, |request_id, run_id| {
+            emit_permission_cancelled(app, request_id, run_id);
+        })
+        .await;
+    }
+
+    pub async fn cancel_for_run_with_host(
+        &self,
+        run_id: &str,
+        host: &dyn crate::runtime_host::RuntimeHost,
+    ) {
+        self.cancel_for_run_with_emit(run_id, |request_id, run_id| {
+            emit_permission_cancelled_to_host(host, request_id, run_id);
+        })
+        .await;
+    }
+
+    async fn cancel_for_run_with_emit(&self, run_id: &str, emit: impl Fn(&str, &str)) {
         let mut pending = self.pending.lock().await;
         let to_cancel: Vec<String> = pending
             .iter()
@@ -96,7 +116,7 @@ impl PermissionRegistry {
             .collect();
         for request_id in &to_cancel {
             if let Some(entry) = pending.remove(request_id) {
-                emit_permission_cancelled(app, request_id, &entry.run_id);
+                emit(request_id, &entry.run_id);
                 // Dropping the sender causes the receiver to get Err, which we handle as cancellation
                 drop(entry.response_tx);
             }

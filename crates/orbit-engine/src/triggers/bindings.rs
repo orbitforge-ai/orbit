@@ -11,23 +11,23 @@
 use std::sync::Arc;
 
 use serde_json::json;
-use tauri::{AppHandle, Emitter};
 
 use crate::db::DbPool;
 use crate::executor::workspace;
 use crate::models::channel_binding::ChannelBinding;
 use crate::models::trigger_event::TriggerEventPayload;
+use crate::runtime_host::RuntimeHostHandle;
 
 use super::dispatcher::DispatchBindings;
 
 pub struct ProductionBindings {
     db: DbPool,
-    app: AppHandle,
+    host: RuntimeHostHandle,
 }
 
 impl ProductionBindings {
-    pub fn new(db: DbPool, app: AppHandle) -> Arc<Self> {
-        Arc::new(Self { db, app })
+    pub fn new(db: DbPool, host: RuntimeHostHandle) -> Arc<Self> {
+        Arc::new(Self { db, host })
     }
 
     fn agent_ids(&self) -> Vec<String> {
@@ -110,7 +110,7 @@ impl DispatchBindings for ProductionBindings {
     fn run_workflow_from_event(&self, workflow_id: &str, event: &TriggerEventPayload) {
         // Phase 1: surface as a Tauri event. The workflow orchestrator
         // integration (`run_from_trigger_event`) lands in the next slice.
-        let _ = self.app.emit(
+        self.host.emit_json(
             "trigger:workflow",
             json!({
                 "workflowId": workflow_id,
@@ -133,7 +133,7 @@ impl DispatchBindings for ProductionBindings {
         // Inform the UI side (history, toasts, logs) that a trigger-driven
         // run is starting, then spawn the actual agent loop on a detached
         // task.
-        let _ = self.app.emit(
+        self.host.emit_json(
             "trigger:agent",
             json!({
                 "agentId": agent_id,
@@ -141,11 +141,19 @@ impl DispatchBindings for ProductionBindings {
                 "event": event,
             }),
         );
-        super::spawn::spawn_agent_run_from_event(
-            self.app.clone(),
-            agent_id.to_string(),
-            binding.clone(),
-            event.clone(),
-        );
+        if let Some(app) = self.host.app_handle() {
+            super::spawn::spawn_agent_run_from_event(
+                app,
+                agent_id.to_string(),
+                binding.clone(),
+                event.clone(),
+            );
+        } else {
+            tracing::warn!(
+                agent_id,
+                event_id = %event.event_id,
+                "trigger dispatch → agent skipped: no Tauri runtime host yet"
+            );
+        }
     }
 }

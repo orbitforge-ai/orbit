@@ -17,9 +17,7 @@ use crate::workflows::template::{
     parse_agent_output, render_agent_prompt, render_optional_template,
 };
 
-pub(super) async fn execute<R: tauri::Runtime>(
-    ctx: &NodeExecutionContext<'_, R>,
-) -> Result<NodeOutcome, NodeFailure> {
+pub(super) async fn execute(ctx: &NodeExecutionContext<'_>) -> Result<NodeOutcome, NodeFailure> {
     let agent_id = ctx
         .node
         .data
@@ -65,8 +63,10 @@ pub(super) async fn execute<R: tauri::Runtime>(
     if ws_config.provider.is_empty() {
         return Err(format!("agent {} has no provider configured", agent_id).into());
     }
-    let runtime_app = ctx
-        .app
+    let app = ctx
+        .app_handle()
+        .ok_or_else(|| "agent.run requires a Tauri runtime host".to_string())?;
+    let runtime_app = app
         .try_state::<crate::RuntimeAppHandleState>()
         .map(|state| state.0.clone())
         .ok_or_else(|| "agent.run requires the managed runtime app handle".to_string())?;
@@ -80,12 +80,13 @@ pub(super) async fn execute<R: tauri::Runtime>(
     let permission_registry =
         runtime_app.state::<crate::executor::permissions::PermissionRegistry>();
     let memory_client = ctx
-        .app
+        .app_handle()
+        .ok_or_else(|| "agent.run requires a Tauri runtime host".to_string())?
         .state::<Option<MemoryServiceState>>()
         .as_ref()
         .map(|state| state.client.clone());
-    let memory_user_id = resolve_memory_user_id(ctx.app).await;
-    let cloud_client = ctx.app.state::<CloudClientState>().get();
+    let memory_user_id = resolve_memory_user_id(&runtime_app).await;
+    let cloud_client = runtime_app.state::<CloudClientState>().get();
 
     let run_cfg = AgentLoopConfig {
         goal: prompt.clone(),

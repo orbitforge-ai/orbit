@@ -4,8 +4,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::debug;
 
-use crate::events::emitter::emit_log_chunk;
+use crate::events::emitter::emit_log_chunk_to_host;
 use crate::models::task::{ScriptFileConfig, ShellCommandConfig};
+use crate::runtime_host::RuntimeHostHandle;
 
 /// Result of running a process.
 pub struct ProcessResult {
@@ -20,7 +21,7 @@ pub async fn run_shell(
     cfg: &ShellCommandConfig,
     log_path: &PathBuf,
     timeout_secs: u64,
-    app: &tauri::AppHandle,
+    host: RuntimeHostHandle,
     cancel: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<ProcessResult, String> {
     let shell = cfg.shell.as_deref().unwrap_or("/bin/sh");
@@ -38,7 +39,7 @@ pub async fn run_shell(
         cfg.environment.as_ref(),
         log_path,
         timeout_secs,
-        app,
+        host,
         cancel,
     )
     .await
@@ -50,7 +51,7 @@ pub async fn run_script(
     cfg: &ScriptFileConfig,
     log_path: &PathBuf,
     timeout_secs: u64,
-    app: &tauri::AppHandle,
+    host: RuntimeHostHandle,
     cancel: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<ProcessResult, String> {
     let interpreter = cfg.interpreter.as_deref().unwrap_or("/bin/sh");
@@ -68,7 +69,7 @@ pub async fn run_script(
         cfg.environment.as_ref(),
         log_path,
         timeout_secs,
-        app,
+        host,
         cancel,
     )
     .await
@@ -82,7 +83,7 @@ async fn run_command(
     environment: Option<&std::collections::HashMap<String, String>>,
     log_path: &PathBuf,
     timeout_secs: u64,
-    app: &tauri::AppHandle,
+    host: RuntimeHostHandle,
     cancel: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<ProcessResult, String> {
     if let Some(parent) = log_path.parent() {
@@ -112,7 +113,7 @@ async fn run_command(
 
     let run_id_clone = run_id.to_string();
     let log_path_clone = log_path.clone();
-    let app_clone = app.clone();
+    let host_clone = host.clone();
 
     // Spawn a task to read stdout + stderr and batch-emit log lines
     let log_task = tokio::spawn(async move {
@@ -183,14 +184,18 @@ async fn run_command(
                 }
                 _ = interval.tick() => {
                     if !batch.is_empty() {
-                        emit_log_chunk(&app_clone, &run_id_clone, std::mem::take(&mut batch));
+                        emit_log_chunk_to_host(
+                            host_clone.as_ref(),
+                            &run_id_clone,
+                            std::mem::take(&mut batch),
+                        );
                     }
                 }
             }
         }
 
         if !batch.is_empty() {
-            emit_log_chunk(&app_clone, &run_id_clone, batch);
+            emit_log_chunk_to_host(host_clone.as_ref(), &run_id_clone, batch);
         }
     });
 

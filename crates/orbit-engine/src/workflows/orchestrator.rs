@@ -14,7 +14,6 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use serde_json::{json, Value};
-use tauri::Runtime;
 use tracing::{info, warn};
 use ulid::Ulid;
 
@@ -22,6 +21,7 @@ use crate::commands::project_workflows::workflow_has_trigger_node;
 use crate::db::DbPool;
 use crate::models::project_workflow::{WorkflowEdge, WorkflowGraph, WorkflowNode};
 use crate::models::workflow_run::{WorkflowRun, WorkflowRunStep};
+use crate::runtime_host::RuntimeHostHandle;
 use crate::workflows::nodes::{self, NodeExecutionContext, NodeFailure, NodeOutcome};
 use crate::workflows::store;
 use crate::workflows::template::{build_reference_aliases, OUTPUT_ALIASES_KEY};
@@ -29,14 +29,14 @@ use crate::workflows::template::{build_reference_aliases, OUTPUT_ALIASES_KEY};
 const MAX_STEPS: usize = 100;
 
 #[derive(Clone)]
-pub struct WorkflowOrchestrator<R: Runtime> {
+pub struct WorkflowOrchestrator {
     db: DbPool,
-    app: tauri::AppHandle<R>,
+    host: RuntimeHostHandle,
 }
 
-impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
-    pub fn new(db: DbPool, app: tauri::AppHandle<R>) -> Self {
-        Self { db, app }
+impl WorkflowOrchestrator {
+    pub fn new(db: DbPool, host: RuntimeHostHandle) -> Self {
+        Self { db, host }
     }
 
     /// Persist a `queued` `workflow_runs` row, then spawn the actual execution
@@ -55,12 +55,18 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
             })
             .to_string());
         }
-        let run =
-            store::insert_run(&self.db, &self.app, &workflow, trigger_kind, &trigger_data).await?;
+        let run = store::insert_run(
+            &self.db,
+            self.host.as_ref(),
+            &workflow,
+            trigger_kind,
+            &trigger_data,
+        )
+        .await?;
 
         let this = WorkflowOrchestrator {
             db: self.db.clone(),
-            app: self.app.clone(),
+            host: self.host.clone(),
         };
         let run_clone = run.clone();
         let project_id = workflow.project_id.clone();
@@ -83,7 +89,7 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
         let started_at = Utc::now().to_rfc3339();
         store::update_run_status(
             &self.db,
-            &self.app,
+            self.host.as_ref(),
             &workflow_id,
             &run.id,
             store::STATUS_RUNNING,
@@ -109,7 +115,7 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
             Some(t) => t,
             None => {
                 let err = "no trigger node in workflow graph";
-                store::fail_run(&self.db, &self.app, &workflow_id, &run.id, err)
+                store::fail_run(&self.db, self.host.as_ref(), &workflow_id, &run.id, err)
                     .await
                     .ok();
                 return Err(err.into());
@@ -132,7 +138,7 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
         while let Some(node_id) = current {
             if sequence as usize >= MAX_STEPS {
                 let err = format!("workflow exceeded {} steps; aborting", MAX_STEPS);
-                store::fail_run(&self.db, &self.app, &workflow_id, &run.id, &err)
+                store::fail_run(&self.db, self.host.as_ref(), &workflow_id, &run.id, &err)
                     .await
                     .ok();
                 return Err(err);
@@ -142,7 +148,7 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
                 Some(n) => *n,
                 None => {
                     let err = format!("node {} referenced by edge not found", node_id);
-                    store::fail_run(&self.db, &self.app, &workflow_id, &run.id, &err)
+                    store::fail_run(&self.db, self.host.as_ref(), &workflow_id, &run.id, &err)
                         .await
                         .ok();
                     return Err(err);
@@ -171,9 +177,15 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
                     current = pick_next(&outgoing, &node.id, next_handle.as_deref());
                 }
                 Err(failure) => {
-                    store::fail_run(&self.db, &self.app, &workflow_id, &run.id, &failure.message)
-                        .await
-                        .ok();
+                    store::fail_run(
+                        &self.db,
+                        self.host.as_ref(),
+                        &workflow_id,
+                        &run.id,
+                        &failure.message,
+                    )
+                    .await
+                    .ok();
                     return Err(failure.message);
                 }
             }
@@ -182,7 +194,7 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
         let completed_at = Utc::now().to_rfc3339();
         store::update_run_status(
             &self.db,
-            &self.app,
+            self.host.as_ref(),
             &workflow_id,
             &run.id,
             store::STATUS_SUCCESS,
@@ -211,7 +223,7 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
 
         store::insert_step(
             &self.db,
-            &self.app,
+            self.host.as_ref(),
             workflow_id,
             &step_id,
             run_id,
@@ -226,7 +238,7 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
 
         let result = nodes::execute(NodeExecutionContext {
             db: &self.db,
-            app: &self.app,
+            host: self.host.as_ref(),
             run_id,
             workflow_id,
             project_id,
@@ -240,7 +252,7 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
             Ok(outcome) => {
                 store::finish_step(
                     &self.db,
-                    &self.app,
+                    self.host.as_ref(),
                     workflow_id,
                     run_id,
                     &step_id,
@@ -256,7 +268,7 @@ impl<R: Runtime + 'static> WorkflowOrchestrator<R> {
             Err(failure) => {
                 store::finish_step(
                     &self.db,
-                    &self.app,
+                    self.host.as_ref(),
                     workflow_id,
                     run_id,
                     &step_id,
@@ -322,7 +334,6 @@ pub fn cancel_run(pool: &DbPool, run_id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{group_edges, pick_next, WorkflowOrchestrator};
-    use crate::db::cloud::CloudClientState;
     use crate::db::connection::init as init_db;
     use crate::models::project_workflow::ProjectWorkflow;
     use crate::models::project_workflow::{
@@ -332,7 +343,6 @@ mod tests {
     use crate::workflows::store;
     use serde_json::{json, Value};
     use std::path::PathBuf;
-    use tauri::test::{mock_builder, mock_context, noop_assets};
 
     fn temp_db_dir(name: &str) -> PathBuf {
         let dir =
@@ -432,11 +442,8 @@ mod tests {
     async fn execute_run_completes_simple_trigger_workflow() {
         let dir = temp_db_dir("happy");
         let db = init_db(dir.clone()).unwrap();
-        let app = mock_builder()
-            .manage(CloudClientState::empty())
-            .build(mock_context(noop_assets()))
-            .unwrap();
-        let orchestrator = WorkflowOrchestrator::new(db.clone(), app.handle().clone());
+        let host = crate::runtime_host::headless_host();
+        let orchestrator = WorkflowOrchestrator::new(db.clone(), host.clone());
         let wf = workflow(
             "wf-happy",
             "project-1",
@@ -447,15 +454,9 @@ mod tests {
             },
         );
         seed_workflow_fixture(&db, &wf);
-        let run = store::insert_run(
-            &db,
-            &app.handle().clone(),
-            &wf,
-            "manual",
-            &json!({"ok": true}),
-        )
-        .await
-        .unwrap();
+        let run = store::insert_run(&db, host.as_ref(), &wf, "manual", &json!({"ok": true}))
+            .await
+            .unwrap();
 
         orchestrator
             .execute_run(run.clone(), wf.id.clone(), wf.project_id.clone())
@@ -475,11 +476,8 @@ mod tests {
     async fn execute_run_marks_failed_node_and_run() {
         let dir = temp_db_dir("failure");
         let db = init_db(dir.clone()).unwrap();
-        let app = mock_builder()
-            .manage(CloudClientState::empty())
-            .build(mock_context(noop_assets()))
-            .unwrap();
-        let orchestrator = WorkflowOrchestrator::new(db.clone(), app.handle().clone());
+        let host = crate::runtime_host::headless_host();
+        let orchestrator = WorkflowOrchestrator::new(db.clone(), host.clone());
         let wf = workflow(
             "wf-failure",
             "project-1",
@@ -504,7 +502,7 @@ mod tests {
             },
         );
         seed_workflow_fixture(&db, &wf);
-        let run = store::insert_run(&db, &app.handle().clone(), &wf, "manual", &Value::Null)
+        let run = store::insert_run(&db, host.as_ref(), &wf, "manual", &Value::Null)
             .await
             .unwrap();
 

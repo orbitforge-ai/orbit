@@ -2,6 +2,8 @@ use serde::Serialize;
 use tauri::Emitter;
 use tracing::warn;
 
+use crate::runtime_host::{emit_serialized, RuntimeHost};
+
 // ─── Event Payloads ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -179,6 +181,18 @@ pub fn emit_log_chunk(app: &tauri::AppHandle, run_id: &str, lines: Vec<(String, 
     crate::shim::ws::broadcast("run:log_chunk", &payload);
 }
 
+pub fn emit_log_chunk_to_host(host: &dyn RuntimeHost, run_id: &str, lines: Vec<(String, String)>) {
+    let payload = RunLogChunkPayload {
+        run_id: run_id.to_string(),
+        lines: lines
+            .into_iter()
+            .map(|(stream, line)| LogLine { stream, line })
+            .collect(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    emit_serialized(host, "run:log_chunk", &payload);
+}
+
 pub fn emit_run_state_changed(
     app: &tauri::AppHandle,
     run_id: &str,
@@ -195,6 +209,21 @@ pub fn emit_run_state_changed(
         warn!("failed to emit run:state_changed: {}", e);
     }
     crate::shim::ws::broadcast("run:state_changed", &payload);
+}
+
+pub fn emit_run_state_changed_to_host(
+    host: &dyn RuntimeHost,
+    run_id: &str,
+    previous_state: &str,
+    new_state: &str,
+) {
+    let payload = RunStateChangedPayload {
+        run_id: run_id.to_string(),
+        previous_state: previous_state.to_string(),
+        new_state: new_state.to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    emit_serialized(host, "run:state_changed", &payload);
 }
 
 pub fn emit_agent_llm_chunk(app: &tauri::AppHandle, run_id: &str, delta: &str, iteration: u32) {
@@ -346,6 +375,29 @@ pub fn emit_bus_message_sent(
     crate::shim::ws::broadcast("bus:message_sent", &event_payload);
 }
 
+pub fn emit_bus_message_sent_to_host(
+    host: &dyn RuntimeHost,
+    message_id: &str,
+    from_agent_id: &str,
+    to_agent_id: &str,
+    kind: &str,
+    payload: serde_json::Value,
+    triggered_session_id: Option<&str>,
+    triggered_run_id: Option<&str>,
+) {
+    let event_payload = BusMessageSentPayload {
+        message_id: message_id.to_string(),
+        from_agent_id: from_agent_id.to_string(),
+        to_agent_id: to_agent_id.to_string(),
+        kind: kind.to_string(),
+        payload,
+        triggered_session_id: triggered_session_id.map(|s| s.to_string()),
+        triggered_run_id: triggered_run_id.map(|s| s.to_string()),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    emit_serialized(host, "bus:message_sent", &event_payload);
+}
+
 pub fn emit_user_question(
     app: &tauri::AppHandle,
     request_id: &str,
@@ -440,6 +492,15 @@ pub fn emit_permission_cancelled(app: &tauri::AppHandle, request_id: &str, run_i
         warn!("failed to emit permission:cancelled: {}", e);
     }
     crate::shim::ws::broadcast("permission:cancelled", &payload);
+}
+
+pub fn emit_permission_cancelled_to_host(host: &dyn RuntimeHost, request_id: &str, run_id: &str) {
+    let payload = PermissionCancelledPayload {
+        request_id: request_id.to_string(),
+        run_id: run_id.to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    emit_serialized(host, "permission:cancelled", &payload);
 }
 
 pub fn emit_agent_created(

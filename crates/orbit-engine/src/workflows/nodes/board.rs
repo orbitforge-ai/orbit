@@ -71,8 +71,8 @@ impl WorkItemAction {
     }
 }
 
-pub(super) async fn execute_proposal_enqueue<R: tauri::Runtime>(
-    ctx: &NodeExecutionContext<'_, R>,
+pub(super) async fn execute_proposal_enqueue(
+    ctx: &NodeExecutionContext<'_>,
 ) -> Result<NodeOutcome, NodeFailure> {
     let candidates_path =
         required_template(&ctx.node.data, "candidatesPath", "board.proposal.enqueue")?;
@@ -159,7 +159,9 @@ pub(super) async fn execute_proposal_enqueue<R: tauri::Runtime>(
             })),
         };
         let item = create_work_item_with_db(ctx.db, payload).await?;
-        sync_work_item_cloud(ctx.app, item.clone());
+        if let Some(app) = ctx.app_handle() {
+            sync_work_item_cloud(&app, item.clone());
+        }
         work_items.push(item);
     }
 
@@ -174,8 +176,8 @@ pub(super) async fn execute_proposal_enqueue<R: tauri::Runtime>(
     })
 }
 
-pub(super) async fn execute_work_item<R: tauri::Runtime>(
-    ctx: &NodeExecutionContext<'_, R>,
+pub(super) async fn execute_work_item(
+    ctx: &NodeExecutionContext<'_>,
 ) -> Result<NodeOutcome, NodeFailure> {
     let action = WorkItemAction::parse(ctx.node.data.get("action").and_then(|v| v.as_str()))?;
 
@@ -247,7 +249,9 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
             };
 
             let item = create_work_item_with_db(ctx.db, payload).await?;
-            sync_work_item_cloud(ctx.app, item.clone());
+            if let Some(app) = ctx.app_handle() {
+                sync_work_item_cloud(&app, item.clone());
+            }
 
             Ok(NodeOutcome {
                 output: json!({
@@ -388,7 +392,9 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                 },
             )
             .await?;
-            sync_work_item_cloud(ctx.app, item.clone());
+            if let Some(app) = ctx.app_handle() {
+                sync_work_item_cloud(&app, item.clone());
+            }
             Ok(NodeOutcome {
                 output: json!({
                     "action": action.as_str(),
@@ -417,7 +423,9 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
             }
             let item =
                 move_work_item_with_db(ctx.db, item_id.clone(), column_id.clone(), None).await?;
-            sync_work_item_cloud(ctx.app, item.clone());
+            if let Some(app) = ctx.app_handle() {
+                sync_work_item_cloud(&app, item.clone());
+            }
             Ok(NodeOutcome {
                 output: json!({
                     "action": action.as_str(),
@@ -443,7 +451,9 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                 ctx.outputs,
             )?;
             let item = block_work_item_with_db(ctx.db, item_id.clone(), reason.clone()).await?;
-            sync_work_item_cloud(ctx.app, item.clone());
+            if let Some(app) = ctx.app_handle() {
+                sync_work_item_cloud(&app, item.clone());
+            }
             Ok(NodeOutcome {
                 output: json!({
                     "action": action.as_str(),
@@ -462,7 +472,9 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                 ctx.outputs,
             )?;
             let item = complete_work_item_with_db(ctx.db, item_id.clone()).await?;
-            sync_work_item_cloud(ctx.app, item.clone());
+            if let Some(app) = ctx.app_handle() {
+                sync_work_item_cloud(&app, item.clone());
+            }
             Ok(NodeOutcome {
                 output: json!({
                     "action": action.as_str(),
@@ -498,7 +510,9 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
             let comment =
                 create_work_item_comment_with_db(ctx.db, item_id.clone(), body.clone(), author)
                     .await?;
-            sync_work_item_comment_cloud(ctx.app, comment.clone());
+            if let Some(app) = ctx.app_handle() {
+                sync_work_item_comment_cloud(&app, comment.clone());
+            }
             Ok(NodeOutcome {
                 output: json!({
                     "action": action.as_str(),
@@ -535,7 +549,9 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                 ctx.outputs,
             )?;
             delete_work_item_with_db(ctx.db, item_id.clone()).await?;
-            delete_work_item_cloud(ctx.app, item_id.clone());
+            if let Some(app) = ctx.app_handle() {
+                delete_work_item_cloud(&app, item_id.clone());
+            }
             Ok(NodeOutcome {
                 output: json!({
                     "action": action.as_str(),
@@ -559,7 +575,9 @@ pub(super) async fn execute_work_item<R: tauri::Runtime>(
                 ctx.outputs,
             )?;
             let item = claim_work_item_with_db(ctx.db, item_id.clone(), agent_id.clone()).await?;
-            sync_work_item_cloud(ctx.app, item.clone());
+            if let Some(app) = ctx.app_handle() {
+                sync_work_item_cloud(&app, item.clone());
+            }
             Ok(NodeOutcome {
                 output: json!({
                     "action": action.as_str(),

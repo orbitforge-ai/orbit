@@ -23,11 +23,13 @@ use orbit_engine::db::connection::init as init_db;
 use orbit_engine::db::repos::{sqlite::SqliteRepos, Repos};
 use orbit_engine::executor::bg_processes::BgProcessRegistry;
 use orbit_engine::executor::engine::{
-    AgentSemaphores, ExecutorTx, SessionExecutionRegistry, UserQuestionRegistry,
+    AgentSemaphores, ExecutorEngine, ExecutorTx, SessionExecutionRegistry, UserQuestionRegistry,
 };
 use orbit_engine::executor::mcp_server;
 use orbit_engine::executor::permissions::PermissionRegistry;
 use orbit_engine::plugins::PluginManager;
+use orbit_engine::runtime_host::headless_host;
+use orbit_engine::scheduler::SchedulerEngine;
 use orbit_engine::shim;
 use tokio::sync::mpsc;
 
@@ -45,7 +47,8 @@ fn data_dir_from_env() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var("WORKSPACE_DIR") {
         return Ok(PathBuf::from(dir));
     }
-    let home = std::env::var("HOME").context("HOME, WORKSPACE_DIR, or ORBIT_DATA_DIR must be set")?;
+    let home =
+        std::env::var("HOME").context("HOME, WORKSPACE_DIR, or ORBIT_DATA_DIR must be set")?;
     Ok(PathBuf::from(home).join(".orbit"))
 }
 
@@ -66,8 +69,7 @@ async fn main() -> Result<()> {
     tracing::info!(version, data_dir = %data_dir.display(), port, "orbit-server starting");
 
     // ── DB ──────────────────────────────────────────────────────────────────
-    let db_pool = init_db(data_dir.clone())
-        .map_err(|e| anyhow::anyhow!("init_db failed: {e}"))?;
+    let db_pool = init_db(data_dir.clone()).map_err(|e| anyhow::anyhow!("init_db failed: {e}"))?;
 
     // ── Stub managed-state values ──────────────────────────────────────────
     // The headless server has no Tauri runtime, so command adapters that read
@@ -77,12 +79,10 @@ async fn main() -> Result<()> {
     let cloud_state = CloudClientState::empty();
     let active_user = ActiveUser::new("default_user".to_string());
 
-    // Executor channel — receiver is parked; the headless server doesn't run
-    // the executor loop yet (blocked on Phase A.7 AppHandle decoupling for the
-    // ExecutorEngine constructor itself).
-    let (executor_tx_inner, _executor_rx) =
+    let (executor_tx_inner, executor_rx) =
         mpsc::unbounded_channel::<orbit_engine::executor::engine::RunRequest>();
     let executor_tx = ExecutorTx(executor_tx_inner);
+    let runtime_host = headless_host();
 
     let agent_semaphores = AgentSemaphores::new();
     let session_registry = SessionExecutionRegistry::new();
@@ -128,15 +128,38 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("shim token init failed: {e}"))?;
     let registry = shim::registry::build();
 
-    let addr = shim::start(ctx, registry, mode, port)
+    let addr = shim::start(ctx.clone(), registry, mode, port)
         .await
         .map_err(|e| anyhow::anyhow!("shim failed to bind: {e}"))?;
 
     tracing::info!(%addr, "orbit-server bound");
-    tracing::warn!(
-        "executor + scheduler not running yet — command paths that need them \
-         (run_task, agent execution, schedule firing) will fail. \
-         Track Phase A.7 for the AppHandle decoupling that unblocks engine boot."
+
+    let log_dir = data_dir.join("logs");
+    let engine = ExecutorEngine::new(
+        ctx.db.clone(),
+        executor_rx,
+        ctx.executor_tx.0.clone(),
+        runtime_host.clone(),
+        ctx.agent_semaphores.clone(),
+        ctx.sessions.clone(),
+        ctx.permissions.clone(),
+        log_dir.clone(),
+        None,
+        None,
+    );
+    tokio::spawn(async move { engine.run().await });
+
+    let scheduler = SchedulerEngine::new(
+        ctx.db.clone(),
+        ctx.executor_tx.clone(),
+        runtime_host.clone(),
+        log_dir,
+    );
+    tokio::spawn(async move { scheduler.run().await });
+
+    tracing::info!(
+        "headless executor + scheduler started; agent/plugin paths that still \
+         require desktop-only state will return a runtime-host error"
     );
 
     // Block forever — the shim is running on background tasks.
