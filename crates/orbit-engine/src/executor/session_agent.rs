@@ -652,7 +652,10 @@ pub async fn save_chat_message(
         .map_err(|e| e.to_string())?;
 
         conn.execute(
-            "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
+            "UPDATE chat_sessions
+                SET updated_at = ?1
+              WHERE id = ?2
+                AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local')",
             rusqlite::params![now, sid],
         )
         .map_err(|e| e.to_string())?;
@@ -704,7 +707,9 @@ pub async fn update_session_execution_state(
              ELSE ?3
            END,
            updated_at = ?4
-       WHERE id = ?5 AND COALESCE(execution_state, '') != 'cancelled'",
+       WHERE id = ?5
+         AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?5), 'local')
+         AND COALESCE(execution_state, '') != 'cancelled'",
             rusqlite::params![
                 execution_state,
                 finish_summary,
@@ -761,7 +766,10 @@ async fn update_last_input_tokens(db: &DbPool, session_id: &str, input_tokens: u
         if let Ok(conn) = pool.get() {
             let now = chrono::Utc::now().to_rfc3339();
             let _ = conn.execute(
-                "UPDATE chat_sessions SET last_input_tokens = ?1, updated_at = ?2 WHERE id = ?3",
+                "UPDATE chat_sessions
+                    SET last_input_tokens = ?1, updated_at = ?2
+                  WHERE id = ?3
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?3), 'local')",
                 rusqlite::params![input_tokens, now, session_id],
             );
         }
@@ -778,7 +786,9 @@ async fn load_session_messages(db: &DbPool, session_id: &str) -> Result<Vec<Chat
             .prepare(
                 "SELECT role, content
        FROM chat_messages
-       WHERE session_id = ?1 AND is_compacted = 0
+       WHERE session_id = ?1
+         AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')
+         AND is_compacted = 0
        ORDER BY created_at ASC",
             )
             .map_err(|e| e.to_string())?;
@@ -826,7 +836,10 @@ async fn is_session_cancelled(
         };
         let state: Option<String> = conn
             .query_row(
-                "SELECT execution_state FROM chat_sessions WHERE id = ?1",
+                "SELECT execution_state
+                   FROM chat_sessions
+                  WHERE id = ?1
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
                 rusqlite::params![session_id],
                 |row| row.get(0),
             )
@@ -913,7 +926,10 @@ async fn extract_session_memories(
     let _ = tokio::task::spawn_blocking(move || {
         if let Ok(conn) = pool.get() {
             let _ = conn.execute(
-        "UPDATE memory_extraction_log SET memories_extracted = ?1, status = ?2 WHERE id = ?3",
+        "UPDATE memory_extraction_log
+            SET memories_extracted = ?1, status = ?2
+          WHERE id = ?3
+            AND tenant_id = COALESCE((SELECT tenant_id FROM memory_extraction_log WHERE id = ?3), 'local')",
         rusqlite::params![count, status, log_id],
       );
         }
@@ -1002,7 +1018,10 @@ async fn load_session_type(db: &DbPool, session_id: &str) -> Result<String, Stri
     tokio::task::spawn_blocking(move || -> Result<String, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.query_row(
-            "SELECT session_type FROM chat_sessions WHERE id = ?1",
+            "SELECT session_type
+               FROM chat_sessions
+              WHERE id = ?1
+                AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
             rusqlite::params![sid],
             |row| row.get(0),
         )

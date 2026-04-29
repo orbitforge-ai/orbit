@@ -83,7 +83,10 @@ Per-file remaining `DbPool` references (lower = closer to fully migrated). Read-
 - `[done]` Migration 31 adds `tenant_id TEXT NOT NULL DEFAULT 'local'` to all tables.
 - `[done]` `RepoCtx { tenant_id }` added; `SqliteRepos::new` defaults to `'local'`, `with_tenant`/`with_ctx` allow explicit context, and repo-owned `sqlite.rs` inserts write `tenant_id` explicitly.
 - `[done]` All `INSERT INTO` SQL blocks under `crates/orbit-engine/src` now write `tenant_id` explicitly, either from `RepoCtx`, a parent row (`projects`, `agents`, `tasks`, `chat_sessions`, etc.), or `'local'` for bootstrap/test scaffolding.
-- `[next]` Add tenant predicates to read/update/delete paths as part of shared Postgres/RLS hardening; per-tenant SQLite remains covered by write-time tenant attribution.
+- `[done]` `SqliteRepos` read/update/delete paths now bind `RepoCtx.tenant_id` across tasks, agents, projects/memberships, schedules, users, runs, workflow runs, boards/columns, bus, chat, work items/comments/events, and project workflows.
+- `[done]` Raw-query audit batch 1: workflow run store updates, workflow seen-items dedupe, default-board backfill, and project board/column transaction helpers now scope through parent `tenant_id`.
+- `[done]` Raw-query audit batch 2: command coordinators, scheduler/triggers, workflow store, plugin entity/core helpers, cloud import/export, executor loops/context/compaction/session worktree, and executor tools now scope tenant-bearing reads/mutations through a parent row or explicit `'local'` legacy default.
+- `[done]` B.4 verification sweep: insert audit is clean; raw SQL audit has only false positives from log strings, prompts, or dynamic SQL whose tenant predicate is appended in a separate string.
 
 ### B.5 PostgreSQL backend (Phase C — unblocked)
 

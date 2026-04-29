@@ -39,6 +39,7 @@ fn next_available_agent_id(
     conn: &Connection,
     name: &str,
     current_id: Option<&str>,
+    tenant_id: &str,
 ) -> Result<String, String> {
     let base_slug = workspace::slugify(name);
     let base_slug = if base_slug.is_empty() {
@@ -53,8 +54,8 @@ fn next_available_agent_id(
     loop {
         let existing = conn
             .query_row(
-                "SELECT id FROM agents WHERE id = ?1",
-                rusqlite::params![candidate],
+                "SELECT id FROM agents WHERE id = ?1 AND tenant_id = ?2",
+                rusqlite::params![candidate, tenant_id],
                 |row| row.get::<_, String>(0),
             )
             .optional()
@@ -103,12 +104,17 @@ fn rename_agent_workflow_references(
     old_agent_id: &str,
     new_agent_id: &str,
     now: &str,
+    tenant_id: &str,
 ) -> Result<(), String> {
     let mut stmt = tx
-        .prepare("SELECT id, graph, trigger_config FROM project_workflows")
+        .prepare(
+            "SELECT id, graph, trigger_config
+               FROM project_workflows
+              WHERE tenant_id = ?1",
+        )
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([], |row| {
+        .query_map(rusqlite::params![tenant_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -153,8 +159,8 @@ fn rename_agent_workflow_references(
         tx.execute(
             "UPDATE project_workflows
                 SET graph = ?1, trigger_config = ?2, version = version + 1, updated_at = ?3
-              WHERE id = ?4",
-            rusqlite::params![graph_json, trigger_config_json, now, workflow_id],
+              WHERE id = ?4 AND tenant_id = ?5",
+            rusqlite::params![graph_json, trigger_config_json, now, workflow_id, tenant_id],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -167,30 +173,31 @@ fn rename_agent_references(
     old_agent_id: &str,
     new_agent_id: &str,
     now: &str,
+    tenant_id: &str,
 ) -> Result<(), String> {
     for sql in [
-        "UPDATE tasks SET agent_id = ?1 WHERE agent_id = ?2",
-        "UPDATE runs SET agent_id = ?1 WHERE agent_id = ?2",
-        "UPDATE chat_sessions SET agent_id = ?1 WHERE agent_id = ?2",
-        "UPDATE agent_conversations SET agent_id = ?1 WHERE agent_id = ?2",
-        "UPDATE agent_tasks SET agent_id = ?1 WHERE agent_id = ?2",
-        "UPDATE project_agents SET agent_id = ?1 WHERE agent_id = ?2",
-        "UPDATE bus_messages SET from_agent_id = ?1 WHERE from_agent_id = ?2",
-        "UPDATE bus_messages SET to_agent_id = ?1 WHERE to_agent_id = ?2",
-        "UPDATE bus_subscriptions SET subscriber_agent_id = ?1 WHERE subscriber_agent_id = ?2",
-        "UPDATE bus_subscriptions SET source_agent_id = ?1 WHERE source_agent_id = ?2",
-        "UPDATE work_items SET assignee_agent_id = ?1 WHERE assignee_agent_id = ?2",
-        "UPDATE work_items SET created_by_agent_id = ?1 WHERE created_by_agent_id = ?2",
-        "UPDATE work_item_comments SET author_agent_id = ?1 WHERE author_agent_id = ?2",
-        "UPDATE memory_extraction_log SET agent_id = ?1 WHERE agent_id = ?2",
-        "UPDATE channel_sessions SET agent_id = ?1 WHERE agent_id = ?2",
-        "UPDATE plugin_entities SET created_by_agent_id = ?1 WHERE created_by_agent_id = ?2",
+        "UPDATE tasks SET agent_id = ?1 WHERE agent_id = ?2 AND tenant_id = ?3",
+        "UPDATE runs SET agent_id = ?1 WHERE agent_id = ?2 AND tenant_id = ?3",
+        "UPDATE chat_sessions SET agent_id = ?1 WHERE agent_id = ?2 AND tenant_id = ?3",
+        "UPDATE agent_conversations SET agent_id = ?1 WHERE agent_id = ?2 AND tenant_id = ?3",
+        "UPDATE agent_tasks SET agent_id = ?1 WHERE agent_id = ?2 AND tenant_id = ?3",
+        "UPDATE project_agents SET agent_id = ?1 WHERE agent_id = ?2 AND tenant_id = ?3",
+        "UPDATE bus_messages SET from_agent_id = ?1 WHERE from_agent_id = ?2 AND tenant_id = ?3",
+        "UPDATE bus_messages SET to_agent_id = ?1 WHERE to_agent_id = ?2 AND tenant_id = ?3",
+        "UPDATE bus_subscriptions SET subscriber_agent_id = ?1 WHERE subscriber_agent_id = ?2 AND tenant_id = ?3",
+        "UPDATE bus_subscriptions SET source_agent_id = ?1 WHERE source_agent_id = ?2 AND tenant_id = ?3",
+        "UPDATE work_items SET assignee_agent_id = ?1 WHERE assignee_agent_id = ?2 AND tenant_id = ?3",
+        "UPDATE work_items SET created_by_agent_id = ?1 WHERE created_by_agent_id = ?2 AND tenant_id = ?3",
+        "UPDATE work_item_comments SET author_agent_id = ?1 WHERE author_agent_id = ?2 AND tenant_id = ?3",
+        "UPDATE memory_extraction_log SET agent_id = ?1 WHERE agent_id = ?2 AND tenant_id = ?3",
+        "UPDATE channel_sessions SET agent_id = ?1 WHERE agent_id = ?2 AND tenant_id = ?3",
+        "UPDATE plugin_entities SET created_by_agent_id = ?1 WHERE created_by_agent_id = ?2 AND tenant_id = ?3",
     ] {
-        tx.execute(sql, rusqlite::params![new_agent_id, old_agent_id])
+        tx.execute(sql, rusqlite::params![new_agent_id, old_agent_id, tenant_id])
             .map_err(|e| e.to_string())?;
     }
 
-    rename_agent_workflow_references(tx, old_agent_id, new_agent_id, now)
+    rename_agent_workflow_references(tx, old_agent_id, new_agent_id, now, tenant_id)
 }
 
 #[tauri::command]
@@ -215,7 +222,7 @@ async fn create_agent_inner(payload: CreateAgent, app: &AppContext) -> Result<Ag
         let initial_role_id = payload.role_id.clone();
         let initial_role_instructions = payload.role_system_instructions.clone();
         let conn = pool.get().map_err(|e| e.to_string())?;
-        let id = next_available_agent_id(&conn, &payload.name, None)?;
+        let id = next_available_agent_id(&conn, &payload.name, None, "local")?;
 
         let now = chrono::Utc::now().to_rfc3339();
         let max_runs = payload.max_concurrent_runs.unwrap_or(5);
@@ -229,7 +236,7 @@ async fn create_agent_inner(payload: CreateAgent, app: &AppContext) -> Result<Ag
 
         let agent = conn.query_row(
             "SELECT id, name, description, state, max_concurrent_runs, heartbeat_at, created_at, updated_at
-             FROM agents WHERE id = ?1",
+             FROM agents WHERE id = ?1 AND tenant_id = 'local'",
             rusqlite::params![id],
             |row| {
                 Ok(Agent {
@@ -265,7 +272,7 @@ async fn create_agent_inner(payload: CreateAgent, app: &AppContext) -> Result<Ag
         let model_config_json = workspace::serialize_model_config(&agent.id)
             .unwrap_or_else(|_| "{}".to_string());
         conn.execute(
-            "UPDATE agents SET model_config = ?1 WHERE id = ?2",
+            "UPDATE agents SET model_config = ?1 WHERE id = ?2 AND tenant_id = 'local'",
             rusqlite::params![model_config_json, agent.id],
         )
         .map_err(|e| e.to_string())?;
@@ -309,8 +316,19 @@ async fn update_agent_inner(
         tokio::task::spawn_blocking(move || -> Result<(Agent, Option<String>, Option<String>), String> {
         let mut conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
+        let tenant_id = conn
+            .query_row(
+                "SELECT tenant_id FROM agents WHERE id = ?1",
+                rusqlite::params![&id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .unwrap_or_else(|| "local".to_string());
         let next_id = match payload.name.as_deref() {
-            Some(name) if id != "default" => next_available_agent_id(&conn, name, Some(&id))?,
+            Some(name) if id != "default" => {
+                next_available_agent_id(&conn, name, Some(&id), &tenant_id)?
+            }
             _ => id.clone(),
         };
         let slug_changed = next_id != id;
@@ -319,8 +337,10 @@ async fn update_agent_inner(
             let active_run_count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM runs
-                      WHERE agent_id = ?1 AND state IN ('pending', 'queued', 'running')",
-                    rusqlite::params![id],
+                      WHERE agent_id = ?1
+                        AND tenant_id = ?2
+                        AND state IN ('pending', 'queued', 'running')",
+                    rusqlite::params![id, tenant_id],
                     |row| row.get(0),
                 )
                 .map_err(|e| e.to_string())?;
@@ -335,31 +355,31 @@ async fn update_agent_inner(
 
         if slug_changed {
             tx.execute(
-                "UPDATE agents SET id = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![next_id, now, id],
+                "UPDATE agents SET id = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                rusqlite::params![next_id, now, id, tenant_id],
             )
             .map_err(|e| e.to_string())?;
-            rename_agent_references(&tx, &id, &next_id, &now)?;
+            rename_agent_references(&tx, &id, &next_id, &now, &tenant_id)?;
         }
 
         if let Some(name) = &payload.name {
             tx.execute(
-                "UPDATE agents SET name = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![name, now, next_id],
+                "UPDATE agents SET name = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                rusqlite::params![name, now, next_id, tenant_id],
             )
             .map_err(|e| e.to_string())?;
         }
         if let Some(desc) = &payload.description {
             tx.execute(
-                "UPDATE agents SET description = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![desc, now, next_id],
+                "UPDATE agents SET description = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                rusqlite::params![desc, now, next_id, tenant_id],
             )
             .map_err(|e| e.to_string())?;
         }
         if let Some(max_runs) = payload.max_concurrent_runs {
             tx.execute(
-                "UPDATE agents SET max_concurrent_runs = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![max_runs, now, next_id],
+                "UPDATE agents SET max_concurrent_runs = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                rusqlite::params![max_runs, now, next_id, tenant_id],
             )
             .map_err(|e| e.to_string())?;
         }
@@ -367,8 +387,8 @@ async fn update_agent_inner(
         let agent = tx
         .query_row(
             "SELECT id, name, description, state, max_concurrent_runs, heartbeat_at, created_at, updated_at
-             FROM agents WHERE id = ?1",
-            rusqlite::params![next_id],
+             FROM agents WHERE id = ?1 AND tenant_id = ?2",
+            rusqlite::params![next_id, tenant_id],
             |row| {
                 Ok(Agent {
                     id: row.get(0)?,

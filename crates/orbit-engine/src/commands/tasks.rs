@@ -101,7 +101,11 @@ async fn trigger_task_inner(task_id: String, app: &AppContext) -> Result<String,
         .query_row(
           "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
                         retry_delay_seconds, concurrency_policy, tags, agent_id,
-                        enabled, created_at, updated_at, project_id FROM tasks WHERE id = ?1 AND enabled = 1",
+                        enabled, created_at, updated_at, project_id
+                 FROM tasks
+                WHERE id = ?1
+                  AND enabled = 1
+                  AND tenant_id = COALESCE((SELECT tenant_id FROM tasks WHERE id = ?1), 'local')",
           rusqlite::params![task_id],
           |row| {
             let cfg: String = row.get(4)?;

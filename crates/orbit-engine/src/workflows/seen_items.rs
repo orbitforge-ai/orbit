@@ -55,7 +55,11 @@ pub(crate) async fn filter_unseen_items(
             let exists: Option<String> = tx
                 .query_row(
                     "SELECT id FROM workflow_seen_items
-                     WHERE workflow_id = ?1 AND node_id = ?2 AND source_key = ?3 AND fingerprint = ?4",
+                     WHERE workflow_id = ?1
+                       AND node_id = ?2
+                       AND source_key = ?3
+                       AND fingerprint = ?4
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM project_workflows WHERE id = ?1), 'local')",
                     rusqlite::params![workflow_id, node_id, source_key, fingerprint],
                     |row| row.get(0),
                 )

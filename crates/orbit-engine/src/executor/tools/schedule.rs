@@ -254,8 +254,9 @@ async fn list_owned_schedules(
             .prepare(
                 "SELECT s.id, s.task_id, t.name, s.kind, s.enabled, s.next_run_at, s.last_run_at
                  FROM schedules s
-                 INNER JOIN tasks t ON t.id = s.task_id
+                 INNER JOIN tasks t ON t.id = s.task_id AND t.tenant_id = s.tenant_id
                  WHERE t.agent_id = ?1
+                   AND t.tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?1), 'local')
                    AND t.tags NOT LIKE '%\"pulse\"%'
                  ORDER BY s.created_at DESC",
             )
@@ -427,7 +428,12 @@ async fn get_pulse_config(
         let pulse_task: Option<(String, bool)> = conn
             .query_row(
                 "SELECT id, enabled FROM tasks
-                 WHERE agent_id = ?1 AND project_id = ?2 AND tags LIKE ?3",
+                 WHERE agent_id = ?1
+                   AND project_id = ?2
+                   AND tags LIKE ?3
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2),
+                                            (SELECT tenant_id FROM agents WHERE id = ?1),
+                                            'local')",
                 rusqlite::params![
                     agent_id.clone(),
                     project_id.clone(),
@@ -442,7 +448,9 @@ async fn get_pulse_config(
                 let sched: Option<(String, String, bool, Option<String>, Option<String>)> = conn
                     .query_row(
                         "SELECT id, config, enabled, next_run_at, last_run_at
-                         FROM schedules WHERE task_id = ?1",
+                         FROM schedules
+                        WHERE task_id = ?1
+                          AND tenant_id = COALESCE((SELECT tenant_id FROM tasks WHERE id = ?1), 'local')",
                         rusqlite::params![task_id.clone()],
                         |row| {
                             Ok((
@@ -476,7 +484,12 @@ async fn get_pulse_config(
         let session_id: Option<String> = conn
             .query_row(
                 "SELECT id FROM chat_sessions
-                 WHERE agent_id = ?1 AND project_id = ?2 AND session_type = 'pulse'",
+                 WHERE agent_id = ?1
+                   AND project_id = ?2
+                   AND session_type = 'pulse'
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2),
+                                            (SELECT tenant_id FROM agents WHERE id = ?1),
+                                            'local')",
                 rusqlite::params![agent_id, project_id],
                 |row| row.get(0),
             )
@@ -523,7 +536,12 @@ async fn set_pulse_config(
             let existing_task_id: Option<String> = conn
                 .query_row(
                     "SELECT id FROM tasks
-                     WHERE agent_id = ?1 AND project_id = ?2 AND tags LIKE ?3",
+                     WHERE agent_id = ?1
+                       AND project_id = ?2
+                       AND tags LIKE ?3
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2),
+                                                (SELECT tenant_id FROM agents WHERE id = ?1),
+                                                'local')",
                     rusqlite::params![
                         agent_id.clone(),
                         project_id_str.clone(),
@@ -537,15 +555,21 @@ async fn set_pulse_config(
             let task_config_str = task_config.to_string();
             let agent_name: String = conn
                 .query_row(
-                    "SELECT name FROM agents WHERE id = ?1",
-                    rusqlite::params![agent_id.clone()],
+                    "SELECT name
+                       FROM agents
+                      WHERE id = ?1
+                        AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local')",
+                    rusqlite::params![agent_id.clone(), project_id_str.clone()],
                     |row| row.get(0),
                 )
                 .unwrap_or_else(|_| agent_id.chars().take(20).collect());
             let project_name: String = conn
                 .query_row(
-                    "SELECT name FROM projects WHERE id = ?1",
-                    rusqlite::params![project_id_str.clone()],
+                    "SELECT name
+                       FROM projects
+                      WHERE id = ?1
+                        AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local')",
+                    rusqlite::params![project_id_str.clone(), agent_id.clone()],
                     |row| row.get(0),
                 )
                 .unwrap_or_else(|_| project_id_str.chars().take(20).collect());
@@ -555,8 +579,18 @@ async fn set_pulse_config(
                 conn.execute(
                     "UPDATE tasks
                      SET config = ?1, name = ?2, enabled = 1, updated_at = ?3
-                     WHERE id = ?4",
-                    rusqlite::params![task_config_str, task_name, now, task_id],
+                     WHERE id = ?4
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?5),
+                                                (SELECT tenant_id FROM agents WHERE id = ?6),
+                                                'local')",
+                    rusqlite::params![
+                        task_config_str,
+                        task_name,
+                        now,
+                        task_id,
+                        project_id_str.clone(),
+                        agent_id.clone()
+                    ],
                 )
                 .map_err(|e| e.to_string())?;
                 task_id
@@ -588,7 +622,10 @@ async fn set_pulse_config(
 
             let existing_schedule_id: Option<String> = conn
                 .query_row(
-                    "SELECT id FROM schedules WHERE task_id = ?1",
+                    "SELECT id
+                       FROM schedules
+                      WHERE task_id = ?1
+                        AND tenant_id = COALESCE((SELECT tenant_id FROM tasks WHERE id = ?1), 'local')",
                     rusqlite::params![task_id.clone()],
                     |row| row.get(0),
                 )
@@ -598,13 +635,15 @@ async fn set_pulse_config(
                 conn.execute(
                     "UPDATE schedules
                      SET config = ?1, enabled = ?2, next_run_at = ?3, updated_at = ?4
-                     WHERE id = ?5",
+                     WHERE id = ?5
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM tasks WHERE id = ?6), 'local')",
                     rusqlite::params![
                         sched_config_str,
                         pulse_enabled_i64,
                         next_run_at,
                         now,
-                        schedule_id
+                        schedule_id,
+                        task_id.clone()
                     ],
                 )
                 .map_err(|e| e.to_string())?;
@@ -631,7 +670,12 @@ async fn set_pulse_config(
             let session_id: Option<String> = conn
                 .query_row(
                     "SELECT id FROM chat_sessions
-                     WHERE agent_id = ?1 AND project_id = ?2 AND session_type = 'pulse'",
+                     WHERE agent_id = ?1
+                       AND project_id = ?2
+                       AND session_type = 'pulse'
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2),
+                                                (SELECT tenant_id FROM agents WHERE id = ?1),
+                                                'local')",
                     rusqlite::params![agent_id.clone(), project_id_str.clone()],
                     |row| row.get(0),
                 )
@@ -641,7 +685,9 @@ async fn set_pulse_config(
                     "SELECT id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
                             chain_depth, execution_state, finish_summary, terminal_error,
                             created_at, updated_at, project_id, worktree_name, worktree_branch, worktree_path
-                     FROM chat_sessions WHERE id = ?1",
+                     FROM chat_sessions
+                     WHERE id = ?1
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
                     rusqlite::params![session_id],
                     parse_chat_session_row,
                 )
@@ -661,7 +707,9 @@ async fn set_pulse_config(
                     "SELECT id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
                             chain_depth, execution_state, finish_summary, terminal_error,
                             created_at, updated_at, project_id, worktree_name, worktree_branch, worktree_path
-                     FROM chat_sessions WHERE id = ?1",
+                     FROM chat_sessions
+                     WHERE id = ?1
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
                     rusqlite::params![session_id],
                     parse_chat_session_row,
                 )
@@ -673,7 +721,9 @@ async fn set_pulse_config(
                     "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
                             retry_delay_seconds, concurrency_policy, tags, agent_id, enabled,
                             created_at, updated_at, project_id
-                     FROM tasks WHERE id = ?1",
+                     FROM tasks
+                     WHERE id = ?1
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM tasks WHERE id = ?1), 'local')",
                     rusqlite::params![task_id],
                     parse_task_row,
                 )
@@ -682,7 +732,9 @@ async fn set_pulse_config(
                 .query_row(
                     "SELECT id, task_id, workflow_id, target_kind, kind, config, enabled,
                             next_run_at, last_run_at, created_at, updated_at
-                     FROM schedules WHERE id = ?1",
+                     FROM schedules
+                     WHERE id = ?1
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM schedules WHERE id = ?1), 'local')",
                     rusqlite::params![schedule_id],
                     parse_schedule_row,
                 )
@@ -792,7 +844,9 @@ async fn load_owned_task(db: &DbPool, agent_id: &str, task_id: &str) -> Result<O
                     retry_delay_seconds, concurrency_policy, tags, agent_id, enabled,
                     created_at, updated_at, project_id
              FROM tasks
-             WHERE id = ?1 AND agent_id = ?2",
+             WHERE id = ?1
+               AND agent_id = ?2
+               AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local')",
             rusqlite::params![task_id.clone(), agent_id],
             |row| {
                 let task = parse_task_row(row)?;
@@ -824,8 +878,10 @@ async fn load_owned_schedule(
                     t.id, t.name, t.description, t.kind, t.config, t.max_duration_seconds, t.max_retries,
                     t.retry_delay_seconds, t.concurrency_policy, t.tags, t.agent_id, t.enabled, t.created_at, t.updated_at, t.project_id
              FROM schedules s
-             INNER JOIN tasks t ON t.id = s.task_id
-             WHERE s.id = ?1 AND t.agent_id = ?2",
+             INNER JOIN tasks t ON t.id = s.task_id AND t.tenant_id = s.tenant_id
+             WHERE s.id = ?1
+               AND t.agent_id = ?2
+               AND s.tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local')",
             rusqlite::params![schedule_id.clone(), agent_id],
             |row| {
                 let schedule = Schedule {
@@ -964,8 +1020,10 @@ async fn insert_schedule_record(
         conn.query_row(
             "SELECT id, task_id, workflow_id, target_kind, kind, config, enabled,
                     next_run_at, last_run_at, created_at, updated_at
-             FROM schedules WHERE id = ?1",
-            rusqlite::params![id],
+             FROM schedules
+             WHERE id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2), 'local')",
+            rusqlite::params![id, task_id],
             parse_schedule_row,
         )
         .map_err(|e| e.to_string())
@@ -991,14 +1049,17 @@ async fn update_schedule_record(
         conn.execute(
             "UPDATE schedules
              SET config = ?1, enabled = ?2, next_run_at = ?3, updated_at = ?4
-             WHERE id = ?5",
+             WHERE id = ?5
+               AND tenant_id = COALESCE((SELECT tenant_id FROM schedules WHERE id = ?5), 'local')",
             rusqlite::params![config_str, enabled, next_run_at, now, schedule_id],
         )
         .map_err(|e| e.to_string())?;
         conn.query_row(
             "SELECT id, task_id, workflow_id, target_kind, kind, config, enabled,
                     next_run_at, last_run_at, created_at, updated_at
-             FROM schedules WHERE id = ?1",
+             FROM schedules
+             WHERE id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM schedules WHERE id = ?1), 'local')",
             rusqlite::params![schedule_id],
             parse_schedule_row,
         )
@@ -1014,7 +1075,9 @@ async fn delete_schedule_record(db: &DbPool, schedule_id: &str) -> Result<(), St
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.execute(
-            "DELETE FROM schedules WHERE id = ?1",
+            "DELETE FROM schedules
+              WHERE id = ?1
+                AND tenant_id = COALESCE((SELECT tenant_id FROM schedules WHERE id = ?1), 'local')",
             rusqlite::params![schedule_id],
         )
         .map_err(|e| e.to_string())?;

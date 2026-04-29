@@ -80,7 +80,11 @@ pub async fn resolve_agent(
     tokio::task::spawn_blocking(move || -> Result<ResolvedAgent, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.query_row(
-            "SELECT id, name FROM agents WHERE id = ?1 OR name = ?1 LIMIT 1",
+            "SELECT id, name
+               FROM agents
+              WHERE (id = ?1 OR name = ?1)
+                AND tenant_id = 'local'
+              LIMIT 1",
             rusqlite::params![lookup.clone()],
             |row| {
                 Ok(ResolvedAgent {
@@ -204,8 +208,9 @@ pub async fn load_accessible_session(
                         chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
                         project_id, allow_sub_agents, worktree_name, worktree_branch, worktree_path
                  FROM chat_sessions
-                 WHERE id = ?1",
-                rusqlite::params![session_id.clone()],
+                 WHERE id = ?1
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local')",
+                rusqlite::params![session_id.clone(), requester_agent_id],
                 |row| {
                     Ok(AccessibleSessionRecord {
                         session: ChatSession {
@@ -246,8 +251,9 @@ pub async fn load_accessible_session(
                 "SELECT EXISTS(
                    SELECT 1
                    FROM bus_messages
-                   WHERE (from_agent_id = ?1 AND to_agent_id = ?2)
-                      OR (from_agent_id = ?2 AND to_agent_id = ?1)
+                   WHERE ((from_agent_id = ?1 AND to_agent_id = ?2)
+                      OR (from_agent_id = ?2 AND to_agent_id = ?1))
+                     AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?1), 'local')
                  )",
                 rusqlite::params![requester_agent_id, row.session.agent_id.clone()],
                 |result_row| result_row.get(0),
@@ -343,7 +349,10 @@ pub async fn update_session_source_bus_message(
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.execute(
-            "UPDATE chat_sessions SET source_bus_message_id = ?1 WHERE id = ?2",
+            "UPDATE chat_sessions
+                SET source_bus_message_id = ?1
+              WHERE id = ?2
+                AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local')",
             rusqlite::params![message_id, session_id],
         )
         .map_err(|e| e.to_string())?;
@@ -365,7 +374,10 @@ pub async fn update_session_chain_depth(
         let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "UPDATE chat_sessions SET chain_depth = ?1, updated_at = ?2 WHERE id = ?3",
+            "UPDATE chat_sessions
+                SET chain_depth = ?1, updated_at = ?2
+              WHERE id = ?3
+                AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?3), 'local')",
             rusqlite::params![chain_depth, now, session_id],
         )
         .map_err(|e| e.to_string())?;
@@ -382,7 +394,10 @@ pub async fn load_execution_state(db: &DbPool, session_id: &str) -> Result<Optio
     tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.query_row(
-            "SELECT execution_state FROM chat_sessions WHERE id = ?1",
+            "SELECT execution_state
+               FROM chat_sessions
+              WHERE id = ?1
+                AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
             rusqlite::params![session_id],
             |row| row.get(0),
         )
@@ -412,7 +427,9 @@ pub async fn wait_for_session_terminal(
             let conn = pool.get().map_err(|e| e.to_string())?;
             conn.query_row(
                 "SELECT COALESCE(execution_state, 'queued'), finish_summary, terminal_error
-                 FROM chat_sessions WHERE id = ?1",
+                 FROM chat_sessions
+                 WHERE id = ?1
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
                 rusqlite::params![session_id],
                 |row| {
                     Ok(SessionTerminalState {
@@ -448,6 +465,7 @@ pub async fn list_child_sessions(
                         terminal_error, allow_sub_agents, created_at, updated_at
                  FROM chat_sessions
                  WHERE parent_session_id = ?1
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')
                  ORDER BY created_at ASC",
             )
             .map_err(|e| e.to_string())?;

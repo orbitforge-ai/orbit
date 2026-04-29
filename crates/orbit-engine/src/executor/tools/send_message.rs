@@ -106,12 +106,17 @@ impl ToolHandler for SendMessageTool {
         let (to_agent_id, to_agent_name) = {
             let pool = db.clone();
             let target_str = target.to_string();
+            let from_agent_id = from_agent.to_string();
             tokio::task::spawn_blocking(move || {
                 let conn = pool.get().map_err(|e| e.to_string())?;
                 let result: Result<(String, String), String> = conn
                     .query_row(
-                        "SELECT id, name FROM agents WHERE id = ?1 OR name = ?1 LIMIT 1",
-                        rusqlite::params![target_str],
+                        "SELECT id, name
+                           FROM agents
+                          WHERE (id = ?1 OR name = ?1)
+                            AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local')
+                          LIMIT 1",
+                        rusqlite::params![target_str, from_agent_id],
                         |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
                     )
                     .map_err(|_| format!("Agent '{}' not found", target_str));
@@ -197,7 +202,10 @@ impl ToolHandler for SendMessageTool {
                 .map_err(|e| e.to_string())?;
 
                 conn.execute(
-                    "UPDATE chat_sessions SET source_bus_message_id = ?1 WHERE id = ?2",
+                    "UPDATE chat_sessions
+                        SET source_bus_message_id = ?1
+                      WHERE id = ?2
+                        AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local')",
                     rusqlite::params![msg_id, new_session_id],
                 )
                 .map_err(|e| e.to_string())?;
@@ -296,7 +304,10 @@ impl ToolHandler for SendMessageTool {
                 tokio::task::spawn_blocking(move || {
                     let conn = pool.get().ok()?;
                     conn.query_row(
-                        "SELECT execution_state, finish_summary, terminal_error FROM chat_sessions WHERE id = ?1",
+                        "SELECT execution_state, finish_summary, terminal_error
+                           FROM chat_sessions
+                          WHERE id = ?1
+                            AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
                         rusqlite::params![sid],
                         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                     )

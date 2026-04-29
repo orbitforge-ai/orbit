@@ -645,6 +645,7 @@ pub fn load_active_skills_for_session(
             "SELECT skill_name, instructions, source_path, activated_at
              FROM active_session_skills
              WHERE session_id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')
              ORDER BY activated_at ASC",
         )
         .map_err(|e| e.to_string())?;
@@ -711,8 +712,9 @@ pub fn load_active_skill_names_for_agent(
         .prepare(
             "SELECT DISTINCT aks.skill_name
              FROM active_session_skills aks
-             JOIN chat_sessions cs ON cs.id = aks.session_id
-             WHERE cs.agent_id = ?1",
+             JOIN chat_sessions cs ON cs.id = aks.session_id AND cs.tenant_id = aks.tenant_id
+             WHERE cs.agent_id = ?1
+               AND cs.tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?1), 'local')",
         )
         .map_err(|e| e.to_string())?;
 
@@ -752,7 +754,8 @@ pub fn load_discovered_skill_names_for_session(
         .prepare(
             "SELECT skill_name
              FROM discovered_session_skills
-             WHERE session_id = ?1",
+             WHERE session_id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
         )
         .map_err(|e| e.to_string())?;
 
@@ -820,8 +823,8 @@ pub fn mark_matching_path_skills_discoverable(
     let now = Utc::now().to_rfc3339();
     for name in &matched_names {
         conn.execute(
-            "INSERT OR IGNORE INTO discovered_session_skills (session_id, skill_name, discovered_at)
-             VALUES (?1, ?2, ?3)",
+            "INSERT OR IGNORE INTO discovered_session_skills (session_id, skill_name, discovered_at, tenant_id)
+             VALUES (?1, ?2, ?3, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local'))",
             params![session_id, name, now],
         )
         .map_err(|e| e.to_string())?;
@@ -839,14 +842,16 @@ pub fn clear_skill_state_for_agent_sessions(
     conn.execute(
         "DELETE FROM active_session_skills
          WHERE session_id IN (SELECT id FROM chat_sessions WHERE agent_id = ?1)
-           AND skill_name = ?2",
+           AND skill_name = ?2
+           AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?1), 'local')",
         params![agent_id, skill_name],
     )
     .map_err(|e| e.to_string())?;
     conn.execute(
         "DELETE FROM discovered_session_skills
          WHERE session_id IN (SELECT id FROM chat_sessions WHERE agent_id = ?1)
-           AND skill_name = ?2",
+           AND skill_name = ?2
+           AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?1), 'local')",
         params![agent_id, skill_name],
     )
     .map_err(|e| e.to_string())?;
@@ -879,14 +884,20 @@ fn delete_session_skill_names(
     for name in names {
         if delete_active {
             conn.execute(
-                "DELETE FROM active_session_skills WHERE session_id = ?1 AND skill_name = ?2",
+                "DELETE FROM active_session_skills
+                  WHERE session_id = ?1
+                    AND skill_name = ?2
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
                 params![session_id, name],
             )
             .map_err(|e| e.to_string())?;
         }
         if delete_discovered {
             conn.execute(
-                "DELETE FROM discovered_session_skills WHERE session_id = ?1 AND skill_name = ?2",
+                "DELETE FROM discovered_session_skills
+                  WHERE session_id = ?1
+                    AND skill_name = ?2
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
                 params![session_id, name],
             )
             .map_err(|e| e.to_string())?;

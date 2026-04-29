@@ -34,7 +34,7 @@ impl ProductionBindings {
         let Ok(conn) = self.db.0.get() else {
             return Vec::new();
         };
-        let Ok(mut stmt) = conn.prepare("SELECT id FROM agents") else {
+        let Ok(mut stmt) = conn.prepare("SELECT id FROM agents WHERE tenant_id = 'local'") else {
             return Vec::new();
         };
         stmt.query_map([], |row| row.get::<_, String>(0))
@@ -71,7 +71,7 @@ impl DispatchBindings for ProductionBindings {
         };
         let Ok(mut stmt) = conn.prepare(
             "SELECT id, trigger_config FROM project_workflows \
-             WHERE enabled = 1 AND trigger_kind = ?1",
+             WHERE enabled = 1 AND trigger_kind = ?1 AND tenant_id = 'local'",
         ) else {
             return Vec::new();
         };

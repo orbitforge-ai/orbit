@@ -23,7 +23,8 @@ pub async fn load_session_worktree_state(
             .query_row(
                 "SELECT worktree_name, worktree_branch, worktree_path
                  FROM chat_sessions
-                 WHERE id = ?1",
+                 WHERE id = ?1
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
                 rusqlite::params![session_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
@@ -53,7 +54,10 @@ pub async fn load_session_project_id(
         let conn = pool.get().map_err(|e| e.to_string())?;
         let project_id: Option<String> = conn
             .query_row(
-                "SELECT project_id FROM chat_sessions WHERE id = ?1",
+                "SELECT project_id
+                   FROM chat_sessions
+                  WHERE id = ?1
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
                 rusqlite::params![session_id],
                 |row| row.get(0),
             )
@@ -91,7 +95,8 @@ pub async fn set_session_worktree_state(
                  worktree_branch = ?2,
                  worktree_path = ?3,
                  updated_at = ?4
-             WHERE id = ?5",
+             WHERE id = ?5
+               AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?5), 'local')",
             rusqlite::params![name, branch, path, now, session_id],
         )
         .map_err(|e| e.to_string())?;

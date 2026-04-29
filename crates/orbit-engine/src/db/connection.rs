@@ -244,39 +244,49 @@ fn backfill_default_project_boards(
     let now = chrono::Utc::now().to_rfc3339();
 
     let mut project_stmt = conn.prepare(
-        "SELECT p.id, p.name
+        "SELECT p.id, p.name, p.tenant_id
            FROM projects p
           WHERE NOT EXISTS (
               SELECT 1 FROM project_boards b
-               WHERE b.project_id = p.id AND b.is_default = 1
+               WHERE b.project_id = p.id
+                 AND b.tenant_id = p.tenant_id
+                 AND b.is_default = 1
           )",
     )?;
-    let projects: Vec<(String, String)> = project_stmt
+    let projects: Vec<(String, String, String)> = project_stmt
         .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         })?
         .filter_map(|r| r.ok())
         .collect();
     drop(project_stmt);
 
-    for (project_id, project_name) in projects {
+    for (project_id, project_name, tenant_id) in projects {
         let board_id = Ulid::new().to_string();
-        let prefix = derive_default_board_prefix(conn, &project_id, &project_name)?;
+        let prefix = derive_default_board_prefix(conn, &project_id, &tenant_id, &project_name)?;
 
         conn.execute(
             "INSERT INTO project_boards (id, project_id, name, prefix, position, is_default, created_at, updated_at, tenant_id)
-             VALUES (?1, ?2, 'Default', ?3, 1024.0, 1, ?4, ?4, COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
-            params![board_id, project_id, prefix, now],
+             VALUES (?1, ?2, 'Default', ?3, 1024.0, 1, ?4, ?4, ?5)",
+            params![board_id, project_id, prefix, now, tenant_id],
         )?;
 
         conn.execute(
-            "UPDATE project_board_columns SET board_id = ?1 WHERE project_id = ?2 AND board_id IS NULL",
-            params![board_id, project_id],
+            "UPDATE project_board_columns
+                SET board_id = ?1
+              WHERE project_id = ?2 AND tenant_id = ?3 AND board_id IS NULL",
+            params![board_id, project_id, tenant_id],
         )?;
 
         conn.execute(
-            "UPDATE work_items SET board_id = ?1 WHERE project_id = ?2 AND board_id IS NULL",
-            params![board_id, project_id],
+            "UPDATE work_items
+                SET board_id = ?1
+              WHERE project_id = ?2 AND tenant_id = ?3 AND board_id IS NULL",
+            params![board_id, project_id, tenant_id],
         )?;
     }
 
@@ -286,6 +296,7 @@ fn backfill_default_project_boards(
 fn derive_default_board_prefix(
     conn: &rusqlite::Connection,
     project_id: &str,
+    tenant_id: &str,
     project_name: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     use rusqlite::params;
@@ -312,8 +323,11 @@ fn derive_default_board_prefix(
             continue;
         }
         let taken: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM project_boards WHERE project_id = ?1 AND prefix = ?2)",
-            params![project_id, candidate],
+            "SELECT EXISTS(
+                SELECT 1 FROM project_boards
+                 WHERE project_id = ?1 AND tenant_id = ?2 AND prefix = ?3
+             )",
+            params![project_id, tenant_id, candidate],
             |row| row.get(0),
         )?;
         if !taken {

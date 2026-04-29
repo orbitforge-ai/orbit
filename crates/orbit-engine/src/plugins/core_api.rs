@@ -313,7 +313,10 @@ async fn dispatch(
             let conn = db.get().map_err(|e| e.to_string())?;
             let row = conn
                 .query_row(
-                    "SELECT id, project_id, title, status, created_at FROM work_items WHERE id = ?1",
+                    "SELECT id, project_id, title, status, created_at
+                       FROM work_items
+                      WHERE id = ?1
+                        AND tenant_id = COALESCE((SELECT tenant_id FROM work_items WHERE id = ?1), 'local')",
                     rusqlite::params![id],
                     |row| {
                         Ok(json!({
@@ -345,7 +348,10 @@ async fn dispatch(
             let mut stmt = conn
                 .prepare(
                     "SELECT id, project_id, title, status, created_at
-                     FROM work_items WHERE project_id = ?1 ORDER BY created_at DESC LIMIT 200",
+                       FROM work_items
+                      WHERE project_id = ?1
+                        AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
+                      ORDER BY created_at DESC LIMIT 200",
                 )
                 .map_err(|e| e.to_string())?;
             let items: Vec<Value> = stmt

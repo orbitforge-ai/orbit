@@ -116,7 +116,10 @@ pub fn is_circuit_open(db: &DbPool, session_id: &str) -> Result<bool, String> {
     let conn = db.get().map_err(|e| e.to_string())?;
     let count: i64 = conn
         .query_row(
-            "SELECT compaction_failure_count FROM chat_sessions WHERE id = ?1",
+            "SELECT compaction_failure_count
+               FROM chat_sessions
+              WHERE id = ?1
+                AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
             rusqlite::params![session_id],
             |row| row.get(0),
         )
@@ -129,7 +132,12 @@ pub fn record_compaction_failure(db: &DbPool, session_id: &str) -> Result<(), St
     let conn = db.get().map_err(|e| e.to_string())?;
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
-        "UPDATE chat_sessions SET compaction_failure_count = compaction_failure_count + 1, compaction_last_failure_at = ?1, updated_at = ?1 WHERE id = ?2",
+        "UPDATE chat_sessions
+            SET compaction_failure_count = compaction_failure_count + 1,
+                compaction_last_failure_at = ?1,
+                updated_at = ?1
+          WHERE id = ?2
+            AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local')",
         rusqlite::params![now, session_id],
     )
     .map_err(|e| e.to_string())?;
@@ -142,7 +150,10 @@ fn reset_compaction_failures_in_tx(
     session_id: &str,
 ) -> Result<(), String> {
     tx.execute(
-        "UPDATE chat_sessions SET compaction_failure_count = 0, compaction_last_failure_at = NULL WHERE id = ?1",
+        "UPDATE chat_sessions
+            SET compaction_failure_count = 0, compaction_last_failure_at = NULL
+          WHERE id = ?1
+            AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
         rusqlite::params![session_id],
     )
     .map_err(|e| e.to_string())?;
@@ -331,7 +342,9 @@ async fn perform_compaction_inner(
             let mut stmt = conn
                 .prepare(
                     "SELECT id, role, content, created_at FROM chat_messages
-                     WHERE session_id = ?1 AND is_compacted = 0
+                     WHERE session_id = ?1
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')
+                       AND is_compacted = 0
                      ORDER BY created_at ASC",
                 )
                 .map_err(|e| e.to_string())?;
@@ -533,12 +546,19 @@ async fn perform_compaction_inner(
             .map(|(i, _)| format!("?{}", i + 1))
             .collect();
         let sql = format!(
-            "UPDATE chat_messages SET is_compacted = 1 WHERE id IN ({})",
-            placeholders.join(", ")
+            "UPDATE chat_messages
+                SET is_compacted = 1
+              WHERE id IN ({})
+                AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?{}), 'local')",
+            placeholders.join(", "),
+            compacted_msg_ids.len() + 1
         );
         let params: Vec<Box<dyn rusqlite::types::ToSql>> = compacted_msg_ids
             .iter()
             .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>)
+            .chain(std::iter::once(
+                Box::new(sid.clone()) as Box<dyn rusqlite::types::ToSql>
+            ))
             .collect();
         tx.execute(&sql, rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())))
             .map_err(|e| e.to_string())?;
@@ -560,7 +580,10 @@ async fn perform_compaction_inner(
 
         // Update session with estimated remaining tokens
         tx.execute(
-            "UPDATE chat_sessions SET last_input_tokens = ?1, updated_at = ?2 WHERE id = ?3",
+            "UPDATE chat_sessions
+                SET last_input_tokens = ?1, updated_at = ?2
+              WHERE id = ?3
+                AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?3), 'local')",
             rusqlite::params![est, now, sid],
         )
         .map_err(|e| e.to_string())?;
@@ -641,7 +664,10 @@ async fn perform_compaction_inner(
                 let _ = tokio::task::spawn_blocking(move || {
                     if let Ok(conn) = pool.get() {
                         let _ = conn.execute(
-                            "UPDATE memory_extraction_log SET memories_extracted = ?1, status = ?2 WHERE id = ?3",
+                            "UPDATE memory_extraction_log
+                                SET memories_extracted = ?1, status = ?2
+                              WHERE id = ?3
+                                AND tenant_id = COALESCE((SELECT tenant_id FROM memory_extraction_log WHERE id = ?3), 'local')",
                             rusqlite::params![count, status, log_id],
                         );
                     }

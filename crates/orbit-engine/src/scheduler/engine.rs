@@ -66,7 +66,7 @@ impl SchedulerEngine {
             .prepare(
                 "SELECT s.id, s.target_kind, s.task_id, s.workflow_id, s.kind, s.config
                  FROM schedules s
-                 WHERE s.enabled = 1 AND s.next_run_at <= ?1",
+                 WHERE s.enabled = 1 AND s.next_run_at <= ?1 AND s.tenant_id = 'local'",
             )
             .map_err(|e| e.to_string())?;
 
@@ -185,7 +185,7 @@ impl SchedulerEngine {
                             let next = compute_next(&cron_expr);
                             conn
                 .execute(
-                  "UPDATE schedules SET next_run_at = ?1, last_run_at = ?2, updated_at = ?2 WHERE id = ?3",
+                  "UPDATE schedules SET next_run_at = ?1, last_run_at = ?2, updated_at = ?2 WHERE id = ?3 AND tenant_id = 'local'",
                   rusqlite::params![next, now, schedule_id]
                 )
                 .ok();
@@ -195,7 +195,7 @@ impl SchedulerEngine {
                 "one_shot" => {
                     conn
             .execute(
-              "UPDATE schedules SET enabled = 0, last_run_at = ?1, next_run_at = NULL, updated_at = ?1 WHERE id = ?2",
+              "UPDATE schedules SET enabled = 0, last_run_at = ?1, next_run_at = NULL, updated_at = ?1 WHERE id = ?2 AND tenant_id = 'local'",
               rusqlite::params![now, schedule_id]
             )
             .ok();
@@ -215,7 +215,7 @@ impl SchedulerEngine {
         conn.execute(
             "UPDATE workflow_runs
              SET status = 'failed', error = ?1, completed_at = ?2
-             WHERE status IN ('queued', 'running')",
+             WHERE status IN ('queued', 'running') AND tenant_id = 'local'",
             rusqlite::params![err, now],
         )
         .map_err(|e| e.to_string())?;
@@ -223,7 +223,7 @@ impl SchedulerEngine {
         conn.execute(
             "UPDATE workflow_run_steps
              SET status = 'failed', error = COALESCE(error, ?1), completed_at = ?2
-             WHERE status IN ('queued', 'running')",
+             WHERE status IN ('queued', 'running') AND tenant_id = 'local'",
             rusqlite::params![err, now],
         )
         .map_err(|e| e.to_string())?;
@@ -238,7 +238,7 @@ impl SchedulerEngine {
 
         let mut stmt = conn
       .prepare(
-        "SELECT id, kind, config FROM schedules WHERE enabled = 1 AND (next_run_at IS NULL OR next_run_at < ?1)"
+        "SELECT id, kind, config FROM schedules WHERE enabled = 1 AND tenant_id = 'local' AND (next_run_at IS NULL OR next_run_at < ?1)"
       )
       .map_err(|e| e.to_string())?;
 
@@ -264,7 +264,7 @@ impl SchedulerEngine {
                             let next = compute_next(&cron_expr);
                             conn
                 .execute(
-                  "UPDATE schedules SET next_run_at = ?1, updated_at = ?2 WHERE id = ?3",
+                  "UPDATE schedules SET next_run_at = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = 'local'",
                   rusqlite::params![next, now, id]
                 )
                 .ok();
@@ -280,7 +280,7 @@ impl SchedulerEngine {
                                 // Still in the future — keep next_run_at as run_at
                                 conn
                   .execute(
-                    "UPDATE schedules SET next_run_at = ?1, updated_at = ?2 WHERE id = ?3",
+                    "UPDATE schedules SET next_run_at = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = 'local'",
                     rusqlite::params![cfg.run_at, now, id]
                   )
                   .ok();
@@ -288,7 +288,7 @@ impl SchedulerEngine {
                                 // Past — disable schedule (missed one-shot)
                                 conn
                   .execute(
-                    "UPDATE schedules SET enabled = 0, next_run_at = NULL, updated_at = ?1 WHERE id = ?2",
+                    "UPDATE schedules SET enabled = 0, next_run_at = NULL, updated_at = ?1 WHERE id = ?2 AND tenant_id = 'local'",
                     rusqlite::params![now, id]
                   )
                   .ok();
@@ -310,7 +310,7 @@ impl SchedulerEngine {
 
         conn.execute(
             "UPDATE runs SET state = 'failure', finished_at = ?1, metadata = ?2
-             WHERE state IN ('running', 'queued')",
+             WHERE state IN ('running', 'queued') AND tenant_id = 'local'",
             rusqlite::params![now, metadata],
         )
         .map_err(|e| e.to_string())?;
@@ -324,7 +324,7 @@ fn load_task(conn: &rusqlite::Connection, task_id: &str) -> Option<Task> {
         "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
                 retry_delay_seconds, concurrency_policy, tags, agent_id,
                 enabled, created_at, updated_at, project_id
-         FROM tasks WHERE id = ?1",
+         FROM tasks WHERE id = ?1 AND tenant_id = 'local'",
         rusqlite::params![task_id],
         |row| {
             let config_str: String = row.get(4)?;

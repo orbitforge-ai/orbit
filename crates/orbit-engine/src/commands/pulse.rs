@@ -48,7 +48,12 @@ async fn get_pulse_config_inner(
         let pulse_task: Option<(String, bool)> = conn
             .query_row(
                 "SELECT id, enabled FROM tasks
-                 WHERE agent_id = ?1 AND project_id = ?2 AND tags LIKE '%\"pulse\"%'",
+                 WHERE agent_id = ?1
+                   AND project_id = ?2
+                   AND tags LIKE '%\"pulse\"%'
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2),
+                                            (SELECT tenant_id FROM agents WHERE id = ?1),
+                                            'local')",
                 rusqlite::params![aid, pid],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
             )
@@ -59,7 +64,9 @@ async fn get_pulse_config_inner(
                 let sched: Option<(String, String, bool, Option<String>, Option<String>)> = conn
                     .query_row(
                         "SELECT id, config, enabled, next_run_at, last_run_at
-                         FROM schedules WHERE task_id = ?1",
+                         FROM schedules
+                        WHERE task_id = ?1
+                          AND tenant_id = COALESCE((SELECT tenant_id FROM tasks WHERE id = ?1), 'local')",
                         rusqlite::params![tid],
                         |row| {
                             Ok((
@@ -86,7 +93,12 @@ async fn get_pulse_config_inner(
         let session_id: Option<String> = conn
             .query_row(
                 "SELECT id FROM chat_sessions
-                 WHERE agent_id = ?1 AND project_id = ?2 AND session_type = 'pulse'",
+                 WHERE agent_id = ?1
+                   AND project_id = ?2
+                   AND session_type = 'pulse'
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2),
+                                            (SELECT tenant_id FROM agents WHERE id = ?1),
+                                            'local')",
                 rusqlite::params![aid, pid],
                 |row| row.get(0),
             )
@@ -150,7 +162,12 @@ async fn update_pulse_inner(
         let existing_task_id: Option<String> = conn
             .query_row(
                 "SELECT id FROM tasks
-                 WHERE agent_id = ?1 AND project_id = ?2 AND tags LIKE '%\"pulse\"%'",
+                 WHERE agent_id = ?1
+                   AND project_id = ?2
+                   AND tags LIKE '%\"pulse\"%'
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2),
+                                            (SELECT tenant_id FROM agents WHERE id = ?1),
+                                            'local')",
                 rusqlite::params![aid, pid],
                 |row| row.get(0),
             )
@@ -161,16 +178,20 @@ async fn update_pulse_inner(
 
         let agent_name: String = conn
             .query_row(
-                "SELECT name FROM agents WHERE id = ?1",
-                rusqlite::params![aid],
+                "SELECT name FROM agents
+                  WHERE id = ?1
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local')",
+                rusqlite::params![aid, pid],
                 |row| row.get(0),
             )
             .unwrap_or_else(|_| aid.chars().take(20).collect());
 
         let project_name: String = conn
             .query_row(
-                "SELECT name FROM projects WHERE id = ?1",
-                rusqlite::params![pid],
+                "SELECT name FROM projects
+                  WHERE id = ?1
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local')",
+                rusqlite::params![pid, aid],
                 |row| row.get(0),
             )
             .unwrap_or_else(|_| pid.chars().take(20).collect());
@@ -179,8 +200,13 @@ async fn update_pulse_inner(
 
         let task_id = if let Some(tid) = existing_task_id {
             conn.execute(
-                "UPDATE tasks SET config = ?1, name = ?2, updated_at = ?3 WHERE id = ?4",
-                rusqlite::params![task_config_str, task_name, now, tid],
+                "UPDATE tasks
+                    SET config = ?1, name = ?2, updated_at = ?3
+                  WHERE id = ?4
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?5),
+                                             (SELECT tenant_id FROM agents WHERE id = ?6),
+                                             'local')",
+                rusqlite::params![task_config_str, task_name, now, tid, pid, aid],
             )
             .map_err(|e| e.to_string())?;
             tid
@@ -205,7 +231,9 @@ async fn update_pulse_inner(
         // ── Find or create schedule ──────────────────────────────────────
         let existing_schedule_id: Option<String> = conn
             .query_row(
-                "SELECT id FROM schedules WHERE task_id = ?1",
+                "SELECT id FROM schedules
+                  WHERE task_id = ?1
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM tasks WHERE id = ?1), 'local')",
                 rusqlite::params![task_id],
                 |row| row.get(0),
             )
@@ -225,8 +253,11 @@ async fn update_pulse_inner(
 
         let schedule_id = if let Some(sid) = existing_schedule_id {
             conn.execute(
-                "UPDATE schedules SET config = ?1, enabled = ?2, next_run_at = ?3, updated_at = ?4 WHERE id = ?5",
-                rusqlite::params![sched_config_str, enabled as i64, next_run_at, now, sid],
+                "UPDATE schedules
+                    SET config = ?1, enabled = ?2, next_run_at = ?3, updated_at = ?4
+                  WHERE id = ?5
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM tasks WHERE id = ?6), 'local')",
+                rusqlite::params![sched_config_str, enabled as i64, next_run_at, now, sid, task_id],
             )
             .map_err(|e| e.to_string())?;
             sid
@@ -245,7 +276,12 @@ async fn update_pulse_inner(
         let session_id: String = conn
             .query_row(
                 "SELECT id FROM chat_sessions
-                 WHERE agent_id = ?1 AND project_id = ?2 AND session_type = 'pulse'",
+                 WHERE agent_id = ?1
+                   AND project_id = ?2
+                   AND session_type = 'pulse'
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2),
+                                            (SELECT tenant_id FROM agents WHERE id = ?1),
+                                            'local')",
                 rusqlite::params![aid, pid],
                 |row| row.get(0),
             )
@@ -263,8 +299,10 @@ async fn update_pulse_inner(
 
         let last_run_at: Option<String> = conn
             .query_row(
-                "SELECT last_run_at FROM schedules WHERE id = ?1",
-                rusqlite::params![schedule_id],
+                "SELECT last_run_at FROM schedules
+                  WHERE id = ?1
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2), 'local')",
+                rusqlite::params![schedule_id, task_id],
                 |row| row.get(0),
             )
             .ok()

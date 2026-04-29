@@ -280,8 +280,10 @@ async fn create_agent_task(
         conn.query_row(
             "SELECT id, session_id, agent_id, subject, description, status, active_form,
                     blocked_by, metadata, created_at, updated_at
-             FROM agent_tasks WHERE id = ?1",
-            rusqlite::params![task_id],
+             FROM agent_tasks
+             WHERE id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local')",
+            rusqlite::params![task_id, session_id],
             parse_agent_task,
         )
         .map_err(|e| e.to_string())
@@ -306,6 +308,7 @@ async fn list_agent_tasks(
                         blocked_by, metadata, created_at, updated_at
                  FROM agent_tasks
                  WHERE session_id = ?1 AND agent_id = ?2
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')
                  ORDER BY
                     CASE status
                         WHEN 'in_progress' THEN 0
@@ -342,7 +345,10 @@ async fn get_agent_task(
             "SELECT id, session_id, agent_id, subject, description, status, active_form,
                     blocked_by, metadata, created_at, updated_at
              FROM agent_tasks
-             WHERE id = ?1 AND session_id = ?2 AND agent_id = ?3",
+             WHERE id = ?1
+               AND session_id = ?2
+               AND agent_id = ?3
+               AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local')",
             rusqlite::params![task_id.clone(), session_id, agent_id],
             parse_agent_task,
         )
@@ -390,7 +396,10 @@ async fn update_agent_task(
                 "SELECT id, session_id, agent_id, subject, description, status, active_form,
                         blocked_by, metadata, created_at, updated_at
                  FROM agent_tasks
-                 WHERE id = ?1 AND session_id = ?2 AND agent_id = ?3",
+                 WHERE id = ?1
+                   AND session_id = ?2
+                   AND agent_id = ?3
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local')",
                 rusqlite::params![task_id.clone(), session_id, agent_id],
                 parse_agent_task,
             )
@@ -423,7 +432,8 @@ async fn update_agent_task(
                  active_form = ?4,
                  blocked_by = ?5,
                  updated_at = ?6
-             WHERE id = ?7",
+             WHERE id = ?7
+               AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?8), 'local')",
             rusqlite::params![
                 next_subject,
                 next_description,
@@ -431,7 +441,8 @@ async fn update_agent_task(
                 next_active_form,
                 blocked_by_json,
                 now,
-                task_id
+                task_id,
+                session_id
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -439,8 +450,10 @@ async fn update_agent_task(
         conn.query_row(
             "SELECT id, session_id, agent_id, subject, description, status, active_form,
                     blocked_by, metadata, created_at, updated_at
-             FROM agent_tasks WHERE id = ?1",
-            rusqlite::params![task_id],
+             FROM agent_tasks
+             WHERE id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local')",
+            rusqlite::params![task_id, session_id],
             parse_agent_task,
         )
         .map_err(|e| e.to_string())
@@ -466,14 +479,21 @@ async fn delete_agent_task(
                 "SELECT id, session_id, agent_id, subject, description, status, active_form,
                         blocked_by, metadata, created_at, updated_at
                  FROM agent_tasks
-                 WHERE id = ?1 AND session_id = ?2 AND agent_id = ?3",
+                 WHERE id = ?1
+                   AND session_id = ?2
+                   AND agent_id = ?3
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local')",
                 rusqlite::params![task_id.clone(), session_id.clone(), agent_id.clone()],
                 parse_agent_task,
             )
             .map_err(|_| format!("task: task '{}' not found", task_id))?;
 
         conn.execute(
-            "DELETE FROM agent_tasks WHERE id = ?1 AND session_id = ?2 AND agent_id = ?3",
+            "DELETE FROM agent_tasks
+              WHERE id = ?1
+                AND session_id = ?2
+                AND agent_id = ?3
+                AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local')",
             rusqlite::params![task_id.clone(), session_id, agent_id],
         )
         .map_err(|e| e.to_string())?;
@@ -482,7 +502,9 @@ async fn delete_agent_task(
             .prepare(
                 "SELECT id, blocked_by
                  FROM agent_tasks
-                 WHERE session_id = ?1 AND agent_id = ?2",
+                 WHERE session_id = ?1
+                   AND agent_id = ?2
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
             )
             .map_err(|e| e.to_string())?;
         let rows: Vec<(String, String)> = stmt
@@ -502,8 +524,16 @@ async fn delete_agent_task(
             if blocked_by.len() != original_len {
                 let next_json = serde_json::to_string(&blocked_by).map_err(|e| e.to_string())?;
                 conn.execute(
-                    "UPDATE agent_tasks SET blocked_by = ?1, updated_at = ?2 WHERE id = ?3",
-                    rusqlite::params![next_json, chrono::Utc::now().to_rfc3339(), other_id],
+                    "UPDATE agent_tasks
+                        SET blocked_by = ?1, updated_at = ?2
+                      WHERE id = ?3
+                        AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?4), 'local')",
+                    rusqlite::params![
+                        next_json,
+                        chrono::Utc::now().to_rfc3339(),
+                        other_id,
+                        deleted.session_id
+                    ],
                 )
                 .map_err(|e| e.to_string())?;
             }
@@ -537,6 +567,7 @@ async fn ensure_blocked_by_exists(
                     "SELECT EXISTS(
                         SELECT 1 FROM agent_tasks
                         WHERE id = ?1 AND session_id = ?2 AND agent_id = ?3
+                          AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local')
                      )",
                     rusqlite::params![task_id.clone(), session_id, agent_id],
                     |row| row.get(0),

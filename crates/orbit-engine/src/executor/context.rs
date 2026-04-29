@@ -529,7 +529,10 @@ impl ContextStage for BasePromptStage {
             tokio::task::spawn_blocking(move || -> String {
                 if let Ok(conn) = pool.get() {
                     conn.query_row(
-                        "SELECT name FROM agents WHERE id = ?1",
+                        "SELECT name
+                           FROM agents
+                          WHERE id = ?1
+                            AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?1), 'local')",
                         rusqlite::params![aid],
                         |row| row.get(0),
                     )
@@ -550,14 +553,21 @@ impl ContextStage for BasePromptStage {
                 let conn = pool.get().ok()?;
                 let title: String = conn
                     .query_row(
-                        "SELECT title FROM chat_sessions WHERE id = ?1",
+                        "SELECT title
+                           FROM chat_sessions
+                          WHERE id = ?1
+                            AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
                         rusqlite::params![sid],
                         |row| row.get(0),
                     )
                     .ok()?;
                 let count: u32 = conn
                     .query_row(
-                        "SELECT COUNT(*) FROM chat_messages WHERE session_id = ?1 AND is_compacted = 0",
+                        "SELECT COUNT(*)
+                           FROM chat_messages
+                          WHERE session_id = ?1
+                            AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')
+                            AND is_compacted = 0",
                         rusqlite::params![sid],
                         |row| row.get(0),
                     )
@@ -579,7 +589,10 @@ impl ContextStage for BasePromptStage {
                     let conn = pool.get().ok()?;
                     let project_name: String = conn
                         .query_row(
-                            "SELECT name FROM projects WHERE id = ?1",
+                            "SELECT name
+                               FROM projects
+                              WHERE id = ?1
+                                AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')",
                             rusqlite::params![project_id.clone()],
                             |row| row.get(0),
                         )
@@ -587,7 +600,9 @@ impl ContextStage for BasePromptStage {
                     let open_count: i64 = conn
                         .query_row(
                             "SELECT COUNT(*) FROM work_items
-                             WHERE project_id = ?1 AND status NOT IN ('done', 'cancelled')",
+                             WHERE project_id = ?1
+                               AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
+                               AND status NOT IN ('done', 'cancelled')",
                             rusqlite::params![project_id.clone()],
                             |row| row.get(0),
                         )
@@ -595,7 +610,9 @@ impl ContextStage for BasePromptStage {
                     let active_count: i64 = conn
                         .query_row(
                             "SELECT COUNT(*) FROM work_items
-                             WHERE project_id = ?1 AND status IN ('in_progress', 'review', 'blocked')",
+                             WHERE project_id = ?1
+                               AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
+                               AND status IN ('in_progress', 'review', 'blocked')",
                             rusqlite::params![project_id.clone()],
                             |row| row.get(0),
                         )
@@ -605,6 +622,7 @@ impl ContextStage for BasePromptStage {
                         .prepare(
                             "SELECT id, title, status FROM work_items
                              WHERE project_id = ?1 AND status IN ('in_progress', 'review', 'blocked')
+                               AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
                              ORDER BY
                                CASE status
                                  WHEN 'blocked' THEN 0
@@ -777,7 +795,11 @@ impl ContextStage for BasePromptStage {
                             Err(_) => return Vec::new(),
                         };
                         let mut stmt = match conn.prepare(
-                        "SELECT id, name, description FROM agents WHERE id != ?1 ORDER BY name ASC",
+                        "SELECT id, name, description
+                           FROM agents
+                          WHERE id != ?1
+                            AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?1), 'local')
+                          ORDER BY name ASC",
                     ) {
                         Ok(s) => s,
                         Err(_) => return Vec::new(),
@@ -821,6 +843,7 @@ impl ContextStage for BasePromptStage {
                     let mut stmt = match conn.prepare(
                         "SELECT id, content FROM chat_messages
                          WHERE session_id = ?1 AND role = 'user' AND is_compacted = 0
+                           AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')
                          ORDER BY created_at DESC LIMIT 10",
                     ) {
                         Ok(s) => s,
@@ -1012,6 +1035,7 @@ impl ContextStage for MessageHistoryStage {
                                 .prepare(
                                     "SELECT role, content FROM chat_messages
                                  WHERE session_id = ?1 AND is_compacted = 0
+                                   AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')
                                  ORDER BY created_at ASC",
                                 )
                                 .map_err(|e| e.to_string())?;

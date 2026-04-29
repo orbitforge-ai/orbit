@@ -97,7 +97,9 @@ pub fn get(db: &DbPool, id: &str) -> Result<Option<PluginEntity>, String> {
         .prepare(
             "SELECT id, plugin_id, entity_type, project_id, data,
                     created_by_agent_id, created_at, updated_at
-             FROM plugin_entities WHERE id = ?1",
+             FROM plugin_entities
+             WHERE id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM plugin_entities WHERE id = ?1), 'local')",
         )
         .map_err(|e| e.to_string())?;
     let mut rows = stmt
@@ -126,8 +128,12 @@ pub fn list(
         Box::new(entity_type.to_string()),
     ];
     if let Some(pid) = &filter.project_id {
-        sql.push_str(" AND project_id = ?3");
+        sql.push_str(
+            " AND project_id = ?3 AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?3), 'local')",
+        );
         params.push(Box::new(pid.clone()));
+    } else {
+        sql.push_str(" AND tenant_id = 'local'");
     }
     sql.push_str(" ORDER BY created_at DESC");
     sql.push_str(" LIMIT ?");
@@ -154,7 +160,10 @@ pub fn update(db: &DbPool, id: &str, data: &Value) -> Result<PluginEntity, Strin
         .map_err(|e| format!("failed to serialize entity data: {}", e))?;
     let affected = conn
         .execute(
-            "UPDATE plugin_entities SET data = ?1, updated_at = ?2 WHERE id = ?3",
+            "UPDATE plugin_entities
+                SET data = ?1, updated_at = ?2
+              WHERE id = ?3
+                AND tenant_id = COALESCE((SELECT tenant_id FROM plugin_entities WHERE id = ?3), 'local')",
             rusqlite::params![data_str, now, id],
         )
         .map_err(|e| format!("update plugin_entity: {}", e))?;
@@ -167,12 +176,16 @@ pub fn update(db: &DbPool, id: &str, data: &Value) -> Result<PluginEntity, Strin
 pub fn delete(db: &DbPool, id: &str) -> Result<(), String> {
     let conn = db.get().map_err(|e| e.to_string())?;
     conn.execute(
-        "DELETE FROM plugin_entity_relations WHERE from_id = ?1 OR to_id = ?1",
+        "DELETE FROM plugin_entity_relations
+         WHERE (from_id = ?1 OR to_id = ?1)
+           AND tenant_id = COALESCE((SELECT tenant_id FROM plugin_entities WHERE id = ?1), 'local')",
         rusqlite::params![id],
     )
     .map_err(|e| format!("delete plugin_entity_relations: {}", e))?;
     conn.execute(
-        "DELETE FROM plugin_entities WHERE id = ?1",
+        "DELETE FROM plugin_entities
+         WHERE id = ?1
+           AND tenant_id = COALESCE((SELECT tenant_id FROM plugin_entities WHERE id = ?1), 'local')",
         rusqlite::params![id],
     )
     .map_err(|e| format!("delete plugin_entity: {}", e))?;
@@ -219,7 +232,12 @@ pub fn unlink(db: &DbPool, from_id: &str, to_id: &str, relation: &str) -> Result
     let conn = db.get().map_err(|e| e.to_string())?;
     conn.execute(
         "DELETE FROM plugin_entity_relations
-         WHERE from_id = ?1 AND to_id = ?2 AND relation = ?3",
+         WHERE from_id = ?1
+           AND to_id = ?2
+           AND relation = ?3
+           AND tenant_id = COALESCE((SELECT tenant_id FROM plugin_entities WHERE id = ?1),
+                                    (SELECT tenant_id FROM plugin_entities WHERE id = ?2),
+                                    'local')",
         rusqlite::params![from_id, to_id, relation],
     )
     .map_err(|e| format!("delete plugin_entity_relation: {}", e))?;
@@ -232,7 +250,8 @@ pub fn list_relations(db: &DbPool, entity_id: &str) -> Result<Vec<PluginEntityRe
         .prepare(
             "SELECT id, from_kind, from_type, from_id, to_kind, to_type, to_id, relation, created_at
              FROM plugin_entity_relations
-             WHERE from_id = ?1 OR to_id = ?1",
+             WHERE (from_id = ?1 OR to_id = ?1)
+               AND tenant_id = COALESCE((SELECT tenant_id FROM plugin_entities WHERE id = ?1), 'local')",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt

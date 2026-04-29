@@ -87,7 +87,7 @@ fn compute_desired(db: &DbPool) -> std::collections::BTreeMap<String, BTreeSet<S
 
     // Agent listen_bindings.
     if let Ok(conn) = db.0.get() {
-        if let Ok(mut stmt) = conn.prepare("SELECT id FROM agents") {
+        if let Ok(mut stmt) = conn.prepare("SELECT id FROM agents WHERE tenant_id = 'local'") {
             let rows = stmt
                 .query_map([], |row| row.get::<_, String>(0))
                 .ok()
@@ -114,7 +114,7 @@ fn compute_desired(db: &DbPool) -> std::collections::BTreeMap<String, BTreeSet<S
     if let Ok(conn) = db.0.get() {
         if let Ok(mut stmt) = conn.prepare(
             "SELECT trigger_kind, trigger_config FROM project_workflows \
-             WHERE enabled = 1 AND trigger_kind LIKE 'trigger.%'",
+             WHERE enabled = 1 AND trigger_kind LIKE 'trigger.%' AND tenant_id = 'local'",
         ) {
             let rows = stmt
                 .query_map([], |row| {

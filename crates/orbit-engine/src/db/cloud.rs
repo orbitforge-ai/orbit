@@ -1011,7 +1011,8 @@ fn read_agents(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>,
     let mut stmt = conn
         .prepare(
             "SELECT id, name, description, state, max_concurrent_runs, heartbeat_at,
-                    model_config, created_at, updated_at FROM agents",
+                    model_config, created_at, updated_at FROM agents
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1047,7 +1048,8 @@ fn read_tasks(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, 
         .prepare(
             "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
                     retry_delay_seconds, concurrency_policy, tags, agent_id, enabled,
-                    created_at, updated_at, project_id FROM tasks",
+                    created_at, updated_at, project_id FROM tasks
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1084,7 +1086,8 @@ fn read_schedules(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Valu
     let mut stmt = conn
         .prepare(
             "SELECT id, task_id, workflow_id, target_kind, kind, config, enabled,
-                    next_run_at, last_run_at, created_at, updated_at FROM schedules",
+                    next_run_at, last_run_at, created_at, updated_at FROM schedules
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1118,7 +1121,8 @@ fn read_runs(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, S
             "SELECT id, task_id, schedule_id, agent_id, state, trigger, exit_code, pid,
                     log_path, started_at, finished_at, duration_ms, retry_count,
                     parent_run_id, metadata, chain_depth, source_bus_message_id,
-                    is_sub_agent, created_at, project_id FROM runs",
+                    is_sub_agent, created_at, project_id FROM runs
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1163,7 +1167,8 @@ fn read_agent_conversations(
         .prepare(
             "SELECT id, agent_id, run_id, messages, total_input_tokens,
                     total_output_tokens, iterations, created_at, updated_at
-             FROM agent_conversations",
+             FROM agent_conversations
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1196,7 +1201,8 @@ fn read_chat_sessions(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<
                     execution_state, finish_summary, terminal_error,
                     created_at, updated_at, project_id, allow_sub_agents,
                     worktree_name, worktree_branch, worktree_path
-             FROM chat_sessions",
+             FROM chat_sessions
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1235,7 +1241,8 @@ fn read_chat_messages(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<
     let mut stmt = conn
         .prepare(
             "SELECT id, session_id, role, content, token_count, is_compacted, created_at
-             FROM chat_messages",
+             FROM chat_messages
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1266,7 +1273,8 @@ fn read_chat_compaction_summaries(
         .prepare(
             "SELECT id, session_id, summary_message_id, compacted_message_ids,
                     original_token_count, summary_token_count, created_at
-             FROM chat_compaction_summaries",
+             FROM chat_compaction_summaries
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1295,7 +1303,8 @@ fn read_bus_messages(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<V
             "SELECT id, from_agent_id, from_run_id, from_session_id,
                     to_agent_id, to_run_id, to_session_id,
                     kind, event_type, payload, status, created_at
-             FROM bus_messages",
+             FROM bus_messages
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1331,7 +1340,8 @@ fn read_bus_subscriptions(
         .prepare(
             "SELECT id, subscriber_agent_id, source_agent_id, event_type, task_id,
                     payload_template, enabled, max_chain_depth, created_at, updated_at
-             FROM bus_subscriptions",
+             FROM bus_subscriptions
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1359,7 +1369,7 @@ fn read_bus_subscriptions(
 
 fn read_users(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, String> {
     let mut stmt = conn
-        .prepare("SELECT id, name, is_default, created_at FROM users")
+        .prepare("SELECT id, name, is_default, created_at FROM users WHERE tenant_id = 'local'")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
@@ -1385,7 +1395,8 @@ fn read_memory_extraction_log(
     let mut stmt = conn
         .prepare(
             "SELECT id, session_id, agent_id, memories_extracted, status, created_at
-             FROM memory_extraction_log",
+             FROM memory_extraction_log
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1408,7 +1419,11 @@ fn read_memory_extraction_log(
 
 fn read_projects(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, String> {
     let mut stmt = conn
-        .prepare("SELECT id, name, description, created_at, updated_at FROM projects")
+        .prepare(
+            "SELECT id, name, description, created_at, updated_at
+               FROM projects
+              WHERE tenant_id = 'local'",
+        )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
@@ -1429,7 +1444,11 @@ fn read_projects(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value
 
 fn read_project_agents(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, String> {
     let mut stmt = conn
-        .prepare("SELECT project_id, agent_id, is_default, added_at FROM project_agents")
+        .prepare(
+            "SELECT project_id, agent_id, is_default, added_at
+               FROM project_agents
+              WHERE tenant_id = 'local'",
+        )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
@@ -1455,7 +1474,8 @@ fn read_project_board_columns(
     let mut stmt = conn
         .prepare(
             "SELECT id, project_id, name, role, is_default, position, created_at, updated_at
-             FROM project_board_columns",
+             FROM project_board_columns
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1484,7 +1504,8 @@ fn read_work_items(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Val
             "SELECT id, project_id, title, description, kind, column_id, status, priority,
                     assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
                     labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at
-             FROM work_items",
+             FROM work_items
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1526,7 +1547,8 @@ fn read_project_workflows(
         .prepare(
             "SELECT id, project_id, name, description, enabled, graph,
                     trigger_kind, trigger_config, version, created_at, updated_at
-             FROM project_workflows",
+             FROM project_workflows
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1558,7 +1580,8 @@ fn read_workflow_runs(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<
         .prepare(
             "SELECT id, workflow_id, workflow_version, graph_snapshot, trigger_kind,
                     trigger_data, status, error, started_at, completed_at, created_at
-             FROM workflow_runs",
+             FROM workflow_runs
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1593,7 +1616,8 @@ fn read_work_item_comments(
     let mut stmt = conn
         .prepare(
             "SELECT id, work_item_id, author_kind, author_agent_id, body, created_at, updated_at
-             FROM work_item_comments",
+             FROM work_item_comments
+             WHERE tenant_id = 'local'",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1654,8 +1678,8 @@ fn write_agents(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), Str
         conn.execute(
             "INSERT OR REPLACE INTO agents
              (id, name, description, state, max_concurrent_runs, heartbeat_at,
-              model_config, created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+              model_config, created_at, updated_at, tenant_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'local')",
             rusqlite::params![
                 agent_id,
                 str_val(&r, "name"),
@@ -1685,8 +1709,11 @@ fn write_tasks(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), Stri
             "INSERT OR REPLACE INTO tasks
              (id, name, description, kind, config, max_duration_seconds, max_retries,
               retry_delay_seconds, concurrency_policy, tags, agent_id, enabled,
-              created_at, updated_at, project_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+              created_at, updated_at, project_id, tenant_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,
+                     COALESCE((SELECT tenant_id FROM projects WHERE id = ?15),
+                              (SELECT tenant_id FROM agents WHERE id = ?11),
+                              'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "name"),
@@ -1720,8 +1747,11 @@ fn write_schedules(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), 
         conn.execute(
             "INSERT OR REPLACE INTO schedules
              (id, task_id, workflow_id, target_kind, kind, config, enabled,
-              next_run_at, last_run_at, created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+              next_run_at, last_run_at, created_at, updated_at, tenant_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,
+                     COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2),
+                              (SELECT tenant_id FROM project_workflows WHERE id = ?3),
+                              'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 opt_str(&r, "task_id"),
@@ -1748,8 +1778,12 @@ fn write_runs(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), Strin
              (id, task_id, schedule_id, agent_id, state, trigger, exit_code, pid,
               log_path, started_at, finished_at, duration_ms, retry_count,
               parent_run_id, metadata, chain_depth, source_bus_message_id,
-              is_sub_agent, created_at, project_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
+              is_sub_agent, created_at, project_id, tenant_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,
+                     COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2),
+                              (SELECT tenant_id FROM projects WHERE id = ?20),
+                              (SELECT tenant_id FROM agents WHERE id = ?4),
+                              'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "task_id"),
@@ -1783,8 +1817,11 @@ fn write_agent_conversations(conn: &rusqlite::Connection, rows: Vec<Value>) -> R
         conn.execute(
             "INSERT OR REPLACE INTO agent_conversations
              (id, agent_id, run_id, messages, total_input_tokens,
-              total_output_tokens, iterations, created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+              total_output_tokens, iterations, created_at, updated_at, tenant_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,
+                     COALESCE((SELECT tenant_id FROM runs WHERE id = ?3),
+                              (SELECT tenant_id FROM agents WHERE id = ?2),
+                              'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "agent_id"),
@@ -1810,8 +1847,12 @@ fn write_chat_sessions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<
               parent_session_id, source_bus_message_id, chain_depth,
               execution_state, finish_summary, terminal_error,
               created_at, updated_at, project_id, allow_sub_agents,
-              worktree_name, worktree_branch, worktree_path)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+              worktree_name, worktree_branch, worktree_path, tenant_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,
+                     COALESCE((SELECT tenant_id FROM projects WHERE id = ?15),
+                              (SELECT tenant_id FROM agents WHERE id = ?2),
+                              (SELECT tenant_id FROM chat_sessions WHERE id = ?7),
+                              'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "agent_id"),
@@ -1843,8 +1884,9 @@ fn write_chat_messages(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO chat_messages
-             (id, session_id, role, content, token_count, is_compacted, created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+             (id, session_id, role, content, token_count, is_compacted, created_at, tenant_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,
+                     COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "session_id"),
@@ -1870,8 +1912,9 @@ fn write_chat_compaction_summaries(
         conn.execute(
             "INSERT OR REPLACE INTO chat_compaction_summaries
              (id, session_id, summary_message_id, compacted_message_ids,
-              original_token_count, summary_token_count, created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+              original_token_count, summary_token_count, created_at, tenant_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,
+                     COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "session_id"),
@@ -1893,8 +1936,13 @@ fn write_bus_messages(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(
             "INSERT OR REPLACE INTO bus_messages
              (id, from_agent_id, from_run_id, from_session_id,
               to_agent_id, to_run_id, to_session_id,
-              kind, event_type, payload, status, created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+              kind, event_type, payload, status, created_at, tenant_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,
+                     COALESCE((SELECT tenant_id FROM agents WHERE id = ?2),
+                              (SELECT tenant_id FROM agents WHERE id = ?5),
+                              (SELECT tenant_id FROM runs WHERE id = ?3),
+                              (SELECT tenant_id FROM chat_sessions WHERE id = ?4),
+                              'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "from_agent_id"),
@@ -1920,8 +1968,12 @@ fn write_bus_subscriptions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Res
         conn.execute(
             "INSERT OR REPLACE INTO bus_subscriptions
              (id, subscriber_agent_id, source_agent_id, event_type, task_id,
-              payload_template, enabled, max_chain_depth, created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+              payload_template, enabled, max_chain_depth, created_at, updated_at, tenant_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,
+                     COALESCE((SELECT tenant_id FROM agents WHERE id = ?2),
+                              (SELECT tenant_id FROM agents WHERE id = ?3),
+                              (SELECT tenant_id FROM tasks WHERE id = ?5),
+                              'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "subscriber_agent_id"),
@@ -1943,8 +1995,8 @@ fn write_bus_subscriptions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Res
 fn write_users(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
-            "INSERT OR REPLACE INTO users (id, name, is_default, created_at)
-             VALUES (?1,?2,?3,?4)",
+            "INSERT OR REPLACE INTO users (id, name, is_default, created_at, tenant_id)
+             VALUES (?1,?2,?3,?4,'local')",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "name"),
@@ -1964,8 +2016,11 @@ fn write_memory_extraction_log(
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO memory_extraction_log
-             (id, session_id, agent_id, memories_extracted, status, created_at)
-             VALUES (?1,?2,?3,?4,?5,?6)",
+             (id, session_id, agent_id, memories_extracted, status, created_at, tenant_id)
+             VALUES (?1,?2,?3,?4,?5,?6,
+                     COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2),
+                              (SELECT tenant_id FROM agents WHERE id = ?3),
+                              'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 opt_str(&r, "session_id"),
@@ -1983,8 +2038,8 @@ fn write_memory_extraction_log(
 fn write_projects(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
-            "INSERT OR REPLACE INTO projects (id, name, description, created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5)",
+            "INSERT OR REPLACE INTO projects (id, name, description, created_at, updated_at, tenant_id)
+             VALUES (?1,?2,?3,?4,?5,'local')",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "name"),
@@ -2001,8 +2056,11 @@ fn write_projects(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), S
 fn write_project_agents(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(), String> {
     for r in rows {
         conn.execute(
-            "INSERT OR REPLACE INTO project_agents (project_id, agent_id, is_default, added_at)
-             VALUES (?1,?2,?3,?4)",
+            "INSERT OR REPLACE INTO project_agents (project_id, agent_id, is_default, added_at, tenant_id)
+             VALUES (?1,?2,?3,?4,
+                     COALESCE((SELECT tenant_id FROM projects WHERE id = ?1),
+                              (SELECT tenant_id FROM agents WHERE id = ?2),
+                              'local'))",
             rusqlite::params![
                 str_val(&r, "project_id"),
                 str_val(&r, "agent_id"),
@@ -2022,8 +2080,9 @@ fn write_project_board_columns(
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO project_board_columns (
-                id, project_id, name, status, role, is_default, position, created_at, updated_at
-             ) VALUES (?1,?2,?3,COALESCE(?4, 'backlog'),?4,?5,?6,?7,?8)",
+                id, project_id, name, status, role, is_default, position, created_at, updated_at, tenant_id
+             ) VALUES (?1,?2,?3,COALESCE(?4, 'backlog'),?4,?5,?6,?7,?8,
+                       COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "project_id"),
@@ -2046,8 +2105,9 @@ fn write_work_items(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<(),
             "INSERT OR REPLACE INTO work_items (
                 id, project_id, title, description, kind, column_id, status, priority,
                 assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
-                labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+                labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at, tenant_id
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,
+                       COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "project_id"),
@@ -2080,8 +2140,9 @@ fn write_project_workflows(conn: &rusqlite::Connection, rows: Vec<Value>) -> Res
         conn.execute(
             "INSERT OR REPLACE INTO project_workflows (
                 id, project_id, name, description, enabled, graph,
-                trigger_kind, trigger_config, version, created_at, updated_at
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                trigger_kind, trigger_config, version, created_at, updated_at, tenant_id
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,
+                       COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "project_id"),
@@ -2110,8 +2171,9 @@ fn write_workflow_runs(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<
         conn.execute(
             "INSERT OR REPLACE INTO workflow_runs (
                 id, workflow_id, workflow_version, graph_snapshot, trigger_kind,
-                trigger_data, status, error, started_at, completed_at, created_at
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                trigger_data, status, error, started_at, completed_at, created_at, tenant_id
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,
+                       COALESCE((SELECT tenant_id FROM project_workflows WHERE id = ?2), 'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "workflow_id"),
@@ -2135,8 +2197,11 @@ fn write_work_item_comments(conn: &rusqlite::Connection, rows: Vec<Value>) -> Re
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO work_item_comments (
-                id, work_item_id, author_kind, author_agent_id, body, created_at, updated_at
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                id, work_item_id, author_kind, author_agent_id, body, created_at, updated_at, tenant_id
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,
+                       COALESCE((SELECT tenant_id FROM work_items WHERE id = ?2),
+                                (SELECT tenant_id FROM agents WHERE id = ?4),
+                                'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "work_item_id"),
@@ -2157,7 +2222,11 @@ fn read_message_reactions(
     user_id: &str,
 ) -> Result<Vec<Value>, String> {
     let mut stmt = conn
-        .prepare("SELECT id, message_id, session_id, emoji, created_at FROM message_reactions")
+        .prepare(
+            "SELECT id, message_id, session_id, emoji, created_at
+               FROM message_reactions
+              WHERE tenant_id = 'local'",
+        )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
@@ -2180,8 +2249,11 @@ fn write_message_reactions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Res
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO message_reactions
-             (id, message_id, session_id, emoji, created_at)
-             VALUES (?1,?2,?3,?4,?5)",
+             (id, message_id, session_id, emoji, created_at, tenant_id)
+             VALUES (?1,?2,?3,?4,?5,
+                     COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?3),
+                              (SELECT tenant_id FROM chat_messages WHERE id = ?2),
+                              'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
                 str_val(&r, "message_id"),

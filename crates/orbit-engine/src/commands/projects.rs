@@ -81,7 +81,7 @@ async fn create_project_inner(payload: CreateProject, app: &AppContext) -> Resul
             let mut suffix = 1;
             while conn
                 .query_row(
-                    "SELECT 1 FROM projects WHERE id = ?1",
+                    "SELECT 1 FROM projects WHERE id = ?1 AND tenant_id = 'local'",
                     rusqlite::params![candidate],
                     |_| Ok(()),
                 )
@@ -103,7 +103,9 @@ async fn create_project_inner(payload: CreateProject, app: &AppContext) -> Resul
 
         let project = conn
             .query_row(
-                "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?1",
+                "SELECT id, name, description, created_at, updated_at
+                   FROM projects
+                  WHERE id = ?1 AND tenant_id = 'local'",
                 rusqlite::params![id],
                 map_project,
             )
@@ -158,7 +160,12 @@ pub fn assert_agent_in_project_sync(
 ) -> Result<(), String> {
     let exists: bool = conn
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM project_agents WHERE project_id = ?1 AND agent_id = ?2)",
+            "SELECT EXISTS(
+                SELECT 1 FROM project_agents
+                 WHERE project_id = ?1
+                   AND agent_id = ?2
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
+            )",
             rusqlite::params![project_id, agent_id],
             |row| row.get(0),
         )

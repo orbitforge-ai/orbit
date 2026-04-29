@@ -226,7 +226,10 @@ async fn sync_agent_config_side_effects(
         tokio::task::spawn_blocking(move || -> Result<(), String> {
             let conn = pool.get().map_err(|e| e.to_string())?;
             conn.execute(
-                "UPDATE agents SET model_config = ?1 WHERE id = ?2",
+                "UPDATE agents
+                    SET model_config = ?1
+                  WHERE id = ?2
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local')",
                 rusqlite::params![model_config_json_for_db, agent_id],
             )
             .map_err(|e| e.to_string())?;

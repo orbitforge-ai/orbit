@@ -171,7 +171,9 @@ pub fn ensure_project_board_columns(
 ) -> Result<(), String> {
     let count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM project_board_columns WHERE project_id = ?1",
+            "SELECT COUNT(*) FROM project_board_columns
+             WHERE project_id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')",
             params![project_id],
             |row| row.get(0),
         )
@@ -236,14 +238,24 @@ pub fn list_project_board_columns_sync(
     let (sql, params_vec): (String, Vec<&dyn rusqlite::ToSql>) = match &effective_board_id {
         Some(board) => (
             format!(
-                "SELECT {} FROM project_board_columns WHERE project_id = ?1 AND board_id = ?2 ORDER BY position ASC, created_at ASC",
+                "SELECT {} FROM project_board_columns
+                 WHERE project_id = ?1
+                   AND board_id = ?2
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
+                 ORDER BY position ASC, created_at ASC",
                 COLUMN_SELECT
             ),
-            vec![&project_id as &dyn rusqlite::ToSql, board as &dyn rusqlite::ToSql],
+            vec![
+                &project_id as &dyn rusqlite::ToSql,
+                board as &dyn rusqlite::ToSql,
+            ],
         ),
         None => (
             format!(
-                "SELECT {} FROM project_board_columns WHERE project_id = ?1 ORDER BY position ASC, created_at ASC",
+                "SELECT {} FROM project_board_columns
+                 WHERE project_id = ?1
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
+                 ORDER BY position ASC, created_at ASC",
                 COLUMN_SELECT
             ),
             vec![&project_id as &dyn rusqlite::ToSql],
@@ -271,7 +283,12 @@ pub fn get_default_column_sync(
         Some(board) => conn
             .query_row(
                 &format!(
-                    "SELECT {} FROM project_board_columns WHERE project_id = ?1 AND board_id = ?2 AND is_default = 1 LIMIT 1",
+                    "SELECT {} FROM project_board_columns
+                     WHERE project_id = ?1
+                       AND board_id = ?2
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
+                       AND is_default = 1
+                     LIMIT 1",
                     COLUMN_SELECT
                 ),
                 params![project_id, board],
@@ -282,7 +299,11 @@ pub fn get_default_column_sync(
         None => conn
             .query_row(
                 &format!(
-                    "SELECT {} FROM project_board_columns WHERE project_id = ?1 AND is_default = 1 LIMIT 1",
+                    "SELECT {} FROM project_board_columns
+                     WHERE project_id = ?1
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
+                       AND is_default = 1
+                     LIMIT 1",
                     COLUMN_SELECT
                 ),
                 params![project_id],
@@ -307,7 +328,12 @@ pub fn get_column_by_role_sync(
         Some(board) => conn
             .query_row(
                 &format!(
-                    "SELECT {} FROM project_board_columns WHERE project_id = ?1 AND board_id = ?2 AND role = ?3 ORDER BY position ASC LIMIT 1",
+                    "SELECT {} FROM project_board_columns
+                     WHERE project_id = ?1
+                       AND board_id = ?2
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
+                       AND role = ?3
+                     ORDER BY position ASC LIMIT 1",
                     COLUMN_SELECT
                 ),
                 params![project_id, board, role],
@@ -318,7 +344,11 @@ pub fn get_column_by_role_sync(
         None => conn
             .query_row(
                 &format!(
-                    "SELECT {} FROM project_board_columns WHERE project_id = ?1 AND role = ?2 ORDER BY position ASC LIMIT 1",
+                    "SELECT {} FROM project_board_columns
+                     WHERE project_id = ?1
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
+                       AND role = ?2
+                     ORDER BY position ASC LIMIT 1",
                     COLUMN_SELECT
                 ),
                 params![project_id, role],
@@ -335,7 +365,9 @@ pub fn get_column_by_id_sync(
 ) -> Result<Option<ProjectBoardColumn>, String> {
     conn.query_row(
         &format!(
-            "SELECT {} FROM project_board_columns WHERE id = ?1",
+            "SELECT {} FROM project_board_columns
+              WHERE id = ?1
+                AND tenant_id = COALESCE((SELECT tenant_id FROM project_board_columns WHERE id = ?1), 'local')",
             COLUMN_SELECT
         ),
         params![id],
@@ -350,7 +382,9 @@ pub fn current_board_revision_sync(
     project_id: &str,
 ) -> Result<Option<String>, String> {
     conn.query_row(
-        "SELECT MAX(updated_at) FROM project_board_columns WHERE project_id = ?1",
+        "SELECT MAX(updated_at) FROM project_board_columns
+         WHERE project_id = ?1
+           AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')",
         params![project_id],
         |row| row.get(0),
     )
@@ -457,7 +491,9 @@ fn set_default_column_sync(
         "UPDATE project_board_columns
             SET is_default = CASE WHEN id = ?1 THEN 1 ELSE 0 END,
                 updated_at = ?2
-          WHERE project_id = ?3 AND board_id = ?4",
+          WHERE project_id = ?3
+            AND board_id = ?4
+            AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?3), 'local')",
         params![column_id, now, project_id, board_id],
     )
     .map_err(|e| e.to_string())?;
@@ -470,7 +506,11 @@ fn list_referencing_workflows_sync(
     column_id: &str,
 ) -> Result<Vec<(String, String)>, String> {
     let mut stmt = conn
-        .prepare("SELECT id, name, graph FROM project_workflows WHERE project_id = ?1")
+        .prepare(
+            "SELECT id, name, graph FROM project_workflows
+             WHERE project_id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')",
+        )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![project_id], |row| {
@@ -520,7 +560,10 @@ fn append_reassigned_items_sync(
 ) -> Result<(), String> {
     let mut stmt = tx
         .prepare(
-            "SELECT id FROM work_items WHERE column_id = ?1 ORDER BY position ASC, created_at ASC",
+            "SELECT id FROM work_items
+             WHERE column_id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM project_board_columns WHERE id = ?1), 'local')
+             ORDER BY position ASC, created_at ASC",
         )
         .map_err(|e| e.to_string())?;
     let item_ids = stmt
@@ -530,7 +573,9 @@ fn append_reassigned_items_sync(
         .collect::<Vec<_>>();
     let mut next_position: f64 = tx
         .query_row(
-            "SELECT COALESCE(MAX(position), 0) FROM work_items WHERE column_id = ?1",
+            "SELECT COALESCE(MAX(position), 0) FROM work_items
+             WHERE column_id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM project_board_columns WHERE id = ?1), 'local')",
             params![destination_column_id],
             |row| row.get(0),
         )
@@ -538,8 +583,17 @@ fn append_reassigned_items_sync(
     for item_id in item_ids {
         next_position += 1024.0;
         tx.execute(
-            "UPDATE work_items SET column_id = ?1, position = ?2, updated_at = ?3 WHERE id = ?4",
-            params![destination_column_id, next_position, now, item_id],
+            "UPDATE work_items
+                SET column_id = ?1, position = ?2, updated_at = ?3
+              WHERE id = ?4
+                AND tenant_id = COALESCE((SELECT tenant_id FROM project_board_columns WHERE id = ?5), 'local')",
+            params![
+                destination_column_id,
+                next_position,
+                now,
+                item_id,
+                source_column_id
+            ],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -591,7 +645,10 @@ async fn create_project_board_column_inner(
             None => {
                 let max: Option<f64> = conn
                     .query_row(
-                        "SELECT MAX(position) FROM project_board_columns WHERE project_id = ?1 AND board_id = ?2",
+                        "SELECT MAX(position) FROM project_board_columns
+                         WHERE project_id = ?1
+                           AND board_id = ?2
+                           AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')",
                         params![payload.project_id, board_id],
                         |row| row.get(0),
                     )
@@ -603,7 +660,13 @@ async fn create_project_board_column_inner(
         };
         let has_default: bool = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM project_board_columns WHERE project_id = ?1 AND board_id = ?2 AND is_default = 1)",
+                "SELECT EXISTS(
+                    SELECT 1 FROM project_board_columns
+                     WHERE project_id = ?1
+                       AND board_id = ?2
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
+                       AND is_default = 1
+                 )",
                 params![payload.project_id, board_id],
                 |row| row.get(0),
             )
@@ -614,7 +677,11 @@ async fn create_project_board_column_inner(
         }
         if is_default {
             conn.execute(
-                "UPDATE project_board_columns SET is_default = 0, updated_at = ?1 WHERE project_id = ?2 AND board_id = ?3",
+                "UPDATE project_board_columns
+                    SET is_default = 0, updated_at = ?1
+                  WHERE project_id = ?2
+                    AND board_id = ?3
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local')",
                 params![now, payload.project_id, board_id],
             )
             .map_err(|e| e.to_string())?;
@@ -637,8 +704,13 @@ async fn create_project_board_column_inner(
         )
         .map_err(|e| e.to_string())?;
         conn.query_row(
-            &format!("SELECT {} FROM project_board_columns WHERE id = ?1", COLUMN_SELECT),
-            params![id],
+            &format!(
+                "SELECT {} FROM project_board_columns
+                 WHERE id = ?1
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local')",
+                COLUMN_SELECT
+            ),
+            params![id, payload.project_id],
             map_project_board_column,
         )
         .map_err(|e| e.to_string())
@@ -682,15 +754,21 @@ async fn update_project_board_column_inner(
                 return Err("board column name must be non-empty".into());
             }
             conn.execute(
-                "UPDATE project_board_columns SET name = ?1, updated_at = ?2 WHERE id = ?3",
-                params![name.trim(), now, id],
+                "UPDATE project_board_columns
+                    SET name = ?1, updated_at = ?2
+                  WHERE id = ?3
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?4), 'local')",
+                params![name.trim(), now, id, existing.project_id],
             )
             .map_err(|e| e.to_string())?;
         }
         if let Some(position) = payload.position {
             conn.execute(
-                "UPDATE project_board_columns SET position = ?1, updated_at = ?2 WHERE id = ?3",
-                params![position, now, id],
+                "UPDATE project_board_columns
+                    SET position = ?1, updated_at = ?2
+                  WHERE id = ?3
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?4), 'local')",
+                params![position, now, id, existing.project_id],
             )
             .map_err(|e| e.to_string())?;
         }
@@ -699,8 +777,11 @@ async fn update_project_board_column_inner(
                 return Err("default column cannot use a terminal role".into());
             }
             conn.execute(
-                "UPDATE project_board_columns SET role = ?1, status = COALESCE(?1, status), updated_at = ?2 WHERE id = ?3",
-                params![role, now, id],
+                "UPDATE project_board_columns
+                    SET role = ?1, status = COALESCE(?1, status), updated_at = ?2
+                  WHERE id = ?3
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?4), 'local')",
+                params![role, now, id, existing.project_id],
             )
             .map_err(|e| e.to_string())?;
         }
@@ -710,8 +791,13 @@ async fn update_project_board_column_inner(
             return Err("choose another default column before unsetting the current default".into());
         }
         conn.query_row(
-            &format!("SELECT {} FROM project_board_columns WHERE id = ?1", COLUMN_SELECT),
-            params![id],
+            &format!(
+                "SELECT {} FROM project_board_columns
+                 WHERE id = ?1
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local')",
+                COLUMN_SELECT
+            ),
+            params![id, existing.project_id],
             map_project_board_column,
         )
         .map_err(|e| e.to_string())
@@ -765,7 +851,9 @@ async fn delete_project_board_column_inner(
 
         let source_count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM work_items WHERE column_id = ?1",
+                "SELECT COUNT(*) FROM work_items
+                 WHERE column_id = ?1
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM project_board_columns WHERE id = ?1), 'local')",
                 params![id],
                 |row| row.get(0),
             )
@@ -821,14 +909,21 @@ async fn delete_project_board_column_inner(
         }
         if let Some(default_destination) = default_destination.as_ref() {
             tx.execute(
-                "UPDATE project_board_columns SET is_default = CASE WHEN id = ?1 THEN 1 ELSE 0 END, updated_at = ?2 WHERE project_id = ?3 AND board_id = ?4",
+                "UPDATE project_board_columns
+                    SET is_default = CASE WHEN id = ?1 THEN 1 ELSE 0 END,
+                        updated_at = ?2
+                  WHERE project_id = ?3
+                    AND board_id = ?4
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?3), 'local')",
                 params![default_destination.id, now, existing.project_id, existing.board_id],
             )
             .map_err(|e| e.to_string())?;
         }
         tx.execute(
-            "DELETE FROM project_board_columns WHERE id = ?1",
-            params![id],
+            "DELETE FROM project_board_columns
+             WHERE id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local')",
+            params![id, existing.project_id],
         )
         .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
@@ -880,8 +975,11 @@ async fn reorder_project_board_columns_inner(
             let tx = conn.transaction().map_err(|e| e.to_string())?;
             for (idx, column_id) in payload.ordered_ids.iter().enumerate() {
                 tx.execute(
-                    "UPDATE project_board_columns SET position = ?1, updated_at = ?2 WHERE id = ?3",
-                    params![((idx + 1) as f64) * 1024.0, now, column_id],
+                    "UPDATE project_board_columns
+                        SET position = ?1, updated_at = ?2
+                      WHERE id = ?3
+                        AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?4), 'local')",
+                    params![((idx + 1) as f64) * 1024.0, now, column_id, project_id],
                 )
                 .map_err(|e| e.to_string())?;
             }

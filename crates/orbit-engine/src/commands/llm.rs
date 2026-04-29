@@ -184,8 +184,10 @@ async fn trigger_agent_loop_inner(
         let task = conn
           .query_row(
             "SELECT id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, enabled, created_at, updated_at, project_id
-                     FROM tasks WHERE id = ?1",
-            rusqlite::params![task_id],
+                     FROM tasks
+                    WHERE id = ?1
+                      AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local')",
+            rusqlite::params![task_id, agent_id],
             |row| {
               let tags_str: String = row.get(9)?;
               let config_str: String = row.get(4)?;

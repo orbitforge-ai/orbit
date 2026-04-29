@@ -37,7 +37,8 @@ pub async fn resolve_session_id(
             .query_row(
                 "SELECT session_id FROM channel_sessions
                    WHERE agent_id = ?1 AND plugin_id = ?2
-                     AND provider_channel_id = ?3 AND provider_thread_id = ?4",
+                     AND provider_channel_id = ?3 AND provider_thread_id = ?4
+                     AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?1), 'local')",
                 rusqlite::params![agent_id, plugin_id, channel_id, thread_id],
                 |row| row.get::<_, String>(0),
             )
@@ -164,7 +165,9 @@ async fn load_binding(db: &DbPool, session_id: &str) -> Result<Option<ChannelBin
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.query_row(
             "SELECT plugin_id, provider_channel_id, provider_thread_id
-               FROM channel_sessions WHERE session_id = ?1",
+               FROM channel_sessions
+              WHERE session_id = ?1
+                AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
             rusqlite::params![sid],
             |row| {
                 Ok(ChannelBindingRow {

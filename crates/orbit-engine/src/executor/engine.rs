@@ -130,7 +130,7 @@ impl AgentSemaphores {
             tokio::task::spawn_blocking(move || -> Option<Vec<(String, usize)>> {
                 let conn = pool.get().ok()?;
                 let mut stmt = conn
-                    .prepare("SELECT id, max_concurrent_runs FROM agents")
+                    .prepare("SELECT id, max_concurrent_runs FROM agents WHERE tenant_id = 'local'")
                     .ok()?;
                 let rows = stmt
                     .query_map([], |row| {
@@ -170,7 +170,10 @@ impl AgentSemaphores {
             let conn = pool.get().ok()?;
             let n: i64 = conn
                 .query_row(
-                    "SELECT max_concurrent_runs FROM agents WHERE id = ?1",
+                    "SELECT max_concurrent_runs
+                       FROM agents
+                      WHERE id = ?1
+                        AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?1), 'local')",
                     rusqlite::params![id],
                     |row| row.get(0),
                 )
@@ -737,7 +740,10 @@ async fn schedule_retry_if_needed(
     // Only retry if last run ended in failure
     let state: Option<String> = conn
         .query_row(
-            "SELECT state FROM runs WHERE id = ?1",
+            "SELECT state
+               FROM runs
+              WHERE id = ?1
+                AND tenant_id = COALESCE((SELECT tenant_id FROM runs WHERE id = ?1), 'local')",
             rusqlite::params![req.run_id],
             |row| row.get(0),
         )
@@ -846,7 +852,8 @@ fn update_run_state(
             started_at = COALESCE(?4, started_at),
             finished_at = COALESCE(?5, finished_at),
             metadata = COALESCE(?6, metadata)
-         WHERE id = ?7",
+         WHERE id = ?7
+           AND tenant_id = COALESCE((SELECT tenant_id FROM runs WHERE id = ?7), 'local')",
         rusqlite::params![
             state.as_str(),
             exit_code,
@@ -867,7 +874,10 @@ fn mark_run_skipped(db: &DbPool, run_id: &str) -> Result<(), String> {
     let now = chrono::Utc::now().to_rfc3339();
     let metadata = serde_json::json!({ "skip_reason": "agent at capacity" }).to_string();
     conn.execute(
-        "UPDATE runs SET state = 'cancelled', finished_at = ?1, metadata = ?2 WHERE id = ?3",
+        "UPDATE runs
+            SET state = 'cancelled', finished_at = ?1, metadata = ?2
+          WHERE id = ?3
+            AND tenant_id = COALESCE((SELECT tenant_id FROM runs WHERE id = ?3), 'local')",
         rusqlite::params![now, metadata, run_id],
     )
     .map_err(|e| e.to_string())?;
@@ -877,10 +887,13 @@ fn mark_run_skipped(db: &DbPool, run_id: &str) -> Result<(), String> {
 fn mark_run_cancelled(db: &DbPool, run_id: &str) -> Result<(), String> {
     let conn = db.get().map_err(|e| e.to_string())?;
     let now = chrono::Utc::now().to_rfc3339();
-    conn
-    .execute(
-      "UPDATE runs SET state = 'cancelled', finished_at = ?1 WHERE id = ?2 AND state IN ('pending', 'running', 'queued')",
-      rusqlite::params![now, run_id]
+    conn.execute(
+        "UPDATE runs
+          SET state = 'cancelled', finished_at = ?1
+        WHERE id = ?2
+          AND tenant_id = COALESCE((SELECT tenant_id FROM runs WHERE id = ?2), 'local')
+          AND state IN ('pending', 'running', 'queued')",
+        rusqlite::params![now, run_id],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -890,7 +903,10 @@ fn update_agent_heartbeat(db: &DbPool, agent_id: &str) {
     if let Ok(conn) = db.get() {
         let now = chrono::Utc::now().to_rfc3339();
         let _ = conn.execute(
-            "UPDATE agents SET heartbeat_at = ?1, updated_at = ?1 WHERE id = ?2",
+            "UPDATE agents
+                SET heartbeat_at = ?1, updated_at = ?1
+              WHERE id = ?2
+                AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local')",
             rusqlite::params![now, agent_id],
         );
     }
@@ -912,7 +928,10 @@ async fn evaluate_bus_subscriptions(
         match tokio::task::spawn_blocking(move || {
             let conn = pool.get().ok()?;
             conn.query_row(
-                "SELECT state FROM runs WHERE id = ?1",
+                "SELECT state
+                   FROM runs
+                  WHERE id = ?1
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM runs WHERE id = ?1), 'local')",
                 rusqlite::params![rid],
                 |row| row.get::<_, String>(0),
             )
@@ -944,7 +963,9 @@ async fn evaluate_bus_subscriptions(
                 .prepare(
                     "SELECT id, subscriber_agent_id, event_type, task_id, max_chain_depth
        FROM bus_subscriptions
-       WHERE source_agent_id = ?1 AND enabled = 1",
+       WHERE source_agent_id = ?1
+         AND enabled = 1
+         AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?1), 'local')",
                 )
                 .map_err(|e| e.to_string())?;
 
@@ -1003,7 +1024,9 @@ async fn evaluate_bus_subscriptions(
       let conn = pool.get().map_err(|e| e.to_string())?;
       let row = conn.query_row(
         "SELECT id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, enabled, created_at, updated_at, project_id
-         FROM tasks WHERE id = ?1",
+         FROM tasks
+        WHERE id = ?1
+          AND tenant_id = COALESCE((SELECT tenant_id FROM tasks WHERE id = ?1), 'local')",
         rusqlite::params![tid],
         |row| {
           let tags_str: String = row.get(9)?;

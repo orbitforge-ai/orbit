@@ -525,7 +525,10 @@ pub async fn send_chat_message(
             // Get session
             let (agent_id, title, chain_depth, session_type, execution_state): (String, String, i64, String, Option<String>) = conn
             .query_row(
-              "SELECT agent_id, title, chain_depth, session_type, execution_state FROM chat_sessions WHERE id = ?1",
+              "SELECT agent_id, title, chain_depth, session_type, execution_state
+                 FROM chat_sessions
+                WHERE id = ?1
+                  AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
               rusqlite::params![sid],
               |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
             )
@@ -535,7 +538,10 @@ pub async fn send_chat_message(
             let mut stmt = conn
                 .prepare(
                     "SELECT role, content FROM chat_messages
-                     WHERE session_id = ?1 AND is_compacted = 0 ORDER BY created_at ASC",
+                     WHERE session_id = ?1
+                       AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')
+                       AND is_compacted = 0
+                     ORDER BY created_at ASC",
                 )
                 .map_err(|e| e.to_string())?;
 
@@ -574,7 +580,10 @@ pub async fn send_chat_message(
 
             // Update session timestamp
             conn.execute(
-                "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
+                "UPDATE chat_sessions
+                    SET updated_at = ?1
+                  WHERE id = ?2
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local')",
                 rusqlite::params![now, sid],
             )
             .map_err(|e| e.to_string())?;
@@ -590,7 +599,10 @@ pub async fn send_chat_message(
                 });
                 if let Some(t) = first_text {
                     let _ = conn.execute(
-                        "UPDATE chat_sessions SET title = ?1 WHERE id = ?2",
+                        "UPDATE chat_sessions
+                            SET title = ?1
+                          WHERE id = ?2
+                            AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local')",
                         rusqlite::params![t, sid],
                     );
                 }
@@ -1191,7 +1203,10 @@ async fn do_llm_chat(
             if let Ok(conn) = pool.get() {
                 let now = chrono::Utc::now().to_rfc3339();
                 let _ = conn.execute(
-          "UPDATE chat_sessions SET last_input_tokens = ?1, updated_at = ?2 WHERE id = ?3",
+          "UPDATE chat_sessions
+              SET last_input_tokens = ?1, updated_at = ?2
+            WHERE id = ?3
+              AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?3), 'local')",
           rusqlite::params![input_tokens, now, sid],
         );
             }

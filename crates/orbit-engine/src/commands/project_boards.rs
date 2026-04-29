@@ -47,7 +47,10 @@ pub fn list_project_boards_sync(
     project_id: &str,
 ) -> Result<Vec<ProjectBoard>, String> {
     let sql = format!(
-        "SELECT {} FROM project_boards WHERE project_id = ?1 ORDER BY is_default DESC, position ASC, created_at ASC",
+        "SELECT {} FROM project_boards
+         WHERE project_id = ?1
+           AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
+         ORDER BY is_default DESC, position ASC, created_at ASC",
         BOARD_SELECT
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -64,7 +67,12 @@ pub fn get_board_by_id_sync(
     id: &str,
 ) -> Result<Option<ProjectBoard>, String> {
     conn.query_row(
-        &format!("SELECT {} FROM project_boards WHERE id = ?1", BOARD_SELECT),
+        &format!(
+            "SELECT {} FROM project_boards
+             WHERE id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM project_boards WHERE id = ?1), 'local')",
+            BOARD_SELECT
+        ),
         params![id],
         map_project_board,
     )
@@ -78,7 +86,11 @@ pub fn get_default_board_sync(
 ) -> Result<Option<ProjectBoard>, String> {
     conn.query_row(
         &format!(
-            "SELECT {} FROM project_boards WHERE project_id = ?1 AND is_default = 1 LIMIT 1",
+            "SELECT {} FROM project_boards
+             WHERE project_id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
+               AND is_default = 1
+             LIMIT 1",
             BOARD_SELECT
         ),
         params![project_id],

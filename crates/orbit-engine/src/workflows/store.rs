@@ -42,9 +42,11 @@ pub(crate) async fn load_workflow(
     tokio::task::spawn_blocking(move || -> Result<ProjectWorkflow, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.query_row(
-            "SELECT id, project_id, name, description, enabled, graph, trigger_kind,
+             "SELECT id, project_id, name, description, enabled, graph, trigger_kind,
                     trigger_config, version, created_at, updated_at
-             FROM project_workflows WHERE id = ?1",
+               FROM project_workflows
+              WHERE id = ?1
+                AND tenant_id = COALESCE((SELECT tenant_id FROM project_workflows WHERE id = ?1), 'local')",
             rusqlite::params![id],
             |row| {
                 let graph_str: String = row.get(5)?;
@@ -169,8 +171,10 @@ pub(crate) async fn update_run_status(
             "UPDATE workflow_runs SET status = ?1, error = COALESCE(?2, error),
                                       started_at = COALESCE(?3, started_at),
                                       completed_at = COALESCE(?4, completed_at)
-             WHERE id = ?5",
-            rusqlite::params![status, error, started_at, completed_at, run_id],
+             WHERE id = ?5
+               AND workflow_id = ?6
+               AND tenant_id = COALESCE((SELECT tenant_id FROM project_workflows WHERE id = ?6), 'local')",
+            rusqlite::params![status, error, started_at, completed_at, run_id, workflow_id],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -289,8 +293,10 @@ pub(crate) async fn finish_step(
         conn.execute(
             "UPDATE workflow_run_steps SET status = ?1, output = ?2, error = ?3,
                                             completed_at = ?4
-             WHERE id = ?5",
-            rusqlite::params![status, output_str, error, completed_at, step_id],
+             WHERE id = ?5
+               AND run_id = ?6
+               AND tenant_id = COALESCE((SELECT tenant_id FROM workflow_runs WHERE id = ?6), 'local')",
+            rusqlite::params![status, output_str, error, completed_at, step_id, run_id],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -305,13 +311,21 @@ pub fn load_run_with_steps(
     pool: &DbPool,
     run_id: &str,
 ) -> Result<(WorkflowRun, Vec<WorkflowRunStep>), String> {
+    load_run_with_steps_for_tenant(pool, run_id, "local")
+}
+
+pub fn load_run_with_steps_for_tenant(
+    pool: &DbPool,
+    run_id: &str,
+    tenant_id: &str,
+) -> Result<(WorkflowRun, Vec<WorkflowRunStep>), String> {
     let conn = pool.get().map_err(|e| e.to_string())?;
     let run = conn
         .query_row(
             "SELECT id, workflow_id, workflow_version, graph_snapshot, trigger_kind,
                     trigger_data, status, error, started_at, completed_at, created_at
-             FROM workflow_runs WHERE id = ?1",
-            rusqlite::params![run_id],
+             FROM workflow_runs WHERE id = ?1 AND tenant_id = ?2",
+            rusqlite::params![run_id, tenant_id],
             map_run_row,
         )
         .map_err(|e| format!("workflow run {} not found: {}", run_id, e))?;
@@ -320,11 +334,11 @@ pub fn load_run_with_steps(
         .prepare(
             "SELECT id, run_id, node_id, node_type, status, input, output, error,
                     started_at, completed_at, sequence
-             FROM workflow_run_steps WHERE run_id = ?1 ORDER BY sequence ASC",
+             FROM workflow_run_steps WHERE run_id = ?1 AND tenant_id = ?2 ORDER BY sequence ASC",
         )
         .map_err(|e| e.to_string())?;
     let steps = stmt
-        .query_map(rusqlite::params![run_id], map_step_row)
+        .query_map(rusqlite::params![run_id, tenant_id], map_step_row)
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
         .collect();
@@ -336,27 +350,49 @@ pub fn list_runs_for_workflow(
     workflow_id: &str,
     limit: i64,
 ) -> Result<Vec<WorkflowRun>, String> {
+    list_runs_for_workflow_for_tenant(pool, workflow_id, limit, "local")
+}
+
+pub fn list_runs_for_workflow_for_tenant(
+    pool: &DbPool,
+    workflow_id: &str,
+    limit: i64,
+    tenant_id: &str,
+) -> Result<Vec<WorkflowRun>, String> {
     let conn = pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
             "SELECT id, workflow_id, workflow_version, graph_snapshot, trigger_kind,
                     trigger_data, status, error, started_at, completed_at, created_at
-             FROM workflow_runs WHERE workflow_id = ?1
-             ORDER BY created_at DESC LIMIT ?2",
+             FROM workflow_runs WHERE workflow_id = ?1 AND tenant_id = ?2
+             ORDER BY created_at DESC LIMIT ?3",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(rusqlite::params![workflow_id, limit], map_run_row)
+        .query_map(
+            rusqlite::params![workflow_id, tenant_id, limit],
+            map_run_row,
+        )
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
         .collect();
     Ok(rows)
 }
 
+#[allow(dead_code)]
 pub fn list_runs_for_project(
     pool: &DbPool,
     project_id: &str,
     limit: i64,
+) -> Result<Vec<WorkflowRunSummary>, String> {
+    list_runs_for_project_for_tenant(pool, project_id, limit, "local")
+}
+
+pub fn list_runs_for_project_for_tenant(
+    pool: &DbPool,
+    project_id: &str,
+    limit: i64,
+    tenant_id: &str,
 ) -> Result<Vec<WorkflowRunSummary>, String> {
     let conn = pool.get().map_err(|e| e.to_string())?;
     let mut stmt = conn
@@ -364,13 +400,16 @@ pub fn list_runs_for_project(
             "SELECT wr.id, wr.workflow_id, pw.name, wr.workflow_version, wr.trigger_kind,
                     wr.status, wr.error, wr.started_at, wr.completed_at, wr.created_at
              FROM workflow_runs wr
-             INNER JOIN project_workflows pw ON pw.id = wr.workflow_id
-             WHERE pw.project_id = ?1
-             ORDER BY wr.created_at DESC LIMIT ?2",
+             INNER JOIN project_workflows pw ON pw.id = wr.workflow_id AND pw.tenant_id = wr.tenant_id
+             WHERE pw.project_id = ?1 AND wr.tenant_id = ?2
+             ORDER BY wr.created_at DESC LIMIT ?3",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(rusqlite::params![project_id, limit], map_run_summary_row)
+        .query_map(
+            rusqlite::params![project_id, tenant_id, limit],
+            map_run_summary_row,
+        )
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
         .collect();
@@ -378,20 +417,24 @@ pub fn list_runs_for_project(
 }
 
 pub fn cancel_run(pool: &DbPool, run_id: &str) -> Result<(), String> {
+    cancel_run_for_tenant(pool, run_id, "local")
+}
+
+pub fn cancel_run_for_tenant(pool: &DbPool, run_id: &str, tenant_id: &str) -> Result<(), String> {
     let conn = pool.get().map_err(|e| e.to_string())?;
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE workflow_runs
          SET status = ?1, error = COALESCE(error, 'cancelled'), completed_at = ?2
-         WHERE id = ?3 AND status IN ('queued', 'running')",
-        rusqlite::params![STATUS_FAILED, now, run_id],
+         WHERE id = ?3 AND tenant_id = ?4 AND status IN ('queued', 'running')",
+        rusqlite::params![STATUS_FAILED, now, run_id, tenant_id],
     )
     .map_err(|e| e.to_string())?;
     conn.execute(
         "UPDATE workflow_run_steps
          SET status = ?1, error = COALESCE(error, 'cancelled'), completed_at = ?2
-         WHERE run_id = ?3 AND status IN ('queued', 'running')",
-        rusqlite::params![STATUS_SKIPPED, now, run_id],
+         WHERE run_id = ?3 AND tenant_id = ?4 AND status IN ('queued', 'running')",
+        rusqlite::params![STATUS_SKIPPED, now, run_id, tenant_id],
     )
     .map_err(|e| e.to_string())?;
     Ok(())

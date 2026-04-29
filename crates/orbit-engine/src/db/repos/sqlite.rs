@@ -11,9 +11,7 @@ use rusqlite::{params, OptionalExtension};
 use std::collections::HashSet;
 use ulid::Ulid;
 
-use crate::commands::project_board_columns::{
-    list_project_board_columns_sync, resolve_board_column_sync,
-};
+use crate::commands::project_board_columns::validate_board_role;
 use crate::commands::work_item_events::{event_kind, insert_event, Actor};
 use crate::db::repos::{
     AgentRepo, BusMessageRepo, BusSubscriptionRepo, ChatRepo, ChatSessionListFilter,
@@ -207,15 +205,16 @@ fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
 #[async_trait]
 impl TaskRepo for SqliteRepos {
     async fn list(&self) -> Result<Vec<Task>, String> {
-        self.with_conn(|conn| {
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
             // Newest first so the dashboard shows recent activity at the top.
             let mut stmt = conn
                 .prepare(&format!(
-                    "SELECT {TASK_COLUMNS} FROM tasks ORDER BY created_at DESC"
+                    "SELECT {TASK_COLUMNS} FROM tasks WHERE tenant_id = ?1 ORDER BY created_at DESC"
                 ))
                 .err_str()?;
             let rows: Vec<Task> = stmt
-                .query_map([], map_task_row)
+                .query_map(params![tenant_id], map_task_row)
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -226,10 +225,11 @@ impl TaskRepo for SqliteRepos {
 
     async fn get(&self, id: &str) -> Result<Option<Task>, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
-                &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1"),
-                params![id],
+                &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1 AND tenant_id = ?2"),
+                params![id, tenant_id],
                 map_task_row,
             )
             .optional()
@@ -280,8 +280,8 @@ impl TaskRepo for SqliteRepos {
             .err_str()?;
 
             conn.query_row(
-                &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1"),
-                params![id],
+                &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1 AND tenant_id = ?2"),
+                params![id, tenant_id],
                 map_task_row,
             )
             .err_str()
@@ -291,6 +291,7 @@ impl TaskRepo for SqliteRepos {
 
     async fn update(&self, id: &str, payload: UpdateTask) -> Result<Task, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
 
@@ -302,10 +303,10 @@ impl TaskRepo for SqliteRepos {
                 ($column:expr, $value:expr) => {
                     conn.execute(
                         &format!(
-                            "UPDATE tasks SET {} = ?1, updated_at = ?2 WHERE id = ?3",
+                            "UPDATE tasks SET {} = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
                             $column
                         ),
-                        params![$value, now, id],
+                        params![$value, &now, &id, &tenant_id],
                     )
                     .err_str()?;
                 };
@@ -353,8 +354,8 @@ impl TaskRepo for SqliteRepos {
             }
 
             conn.query_row(
-                &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1"),
-                params![id],
+                &format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1 AND tenant_id = ?2"),
+                params![id, tenant_id],
                 map_task_row,
             )
             .err_str()
@@ -364,9 +365,13 @@ impl TaskRepo for SqliteRepos {
 
     async fn delete(&self, id: &str) -> Result<(), String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
-            conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])
-                .err_str()?;
+            conn.execute(
+                "DELETE FROM tasks WHERE id = ?1 AND tenant_id = ?2",
+                params![id, tenant_id],
+            )
+            .err_str()?;
             Ok(())
         })
         .await
@@ -394,15 +399,16 @@ fn map_agent_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Agent> {
 #[async_trait]
 impl AgentRepo for SqliteRepos {
     async fn list(&self) -> Result<Vec<Agent>, String> {
-        self.with_conn(|conn| {
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
             // Oldest first matches the existing UI order in the agent picker.
             let mut stmt = conn
                 .prepare(&format!(
-                    "SELECT {AGENT_COLUMNS} FROM agents ORDER BY created_at ASC"
+                    "SELECT {AGENT_COLUMNS} FROM agents WHERE tenant_id = ?1 ORDER BY created_at ASC"
                 ))
                 .err_str()?;
             let rows: Vec<Agent> = stmt
-                .query_map([], map_agent_row)
+                .query_map(params![tenant_id], map_agent_row)
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -413,10 +419,11 @@ impl AgentRepo for SqliteRepos {
 
     async fn get(&self, id: &str) -> Result<Option<Agent>, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
-                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE id = ?1"),
-                params![id],
+                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE id = ?1 AND tenant_id = ?2"),
+                params![id, tenant_id],
                 map_agent_row,
             )
             .optional()
@@ -430,7 +437,7 @@ impl AgentRepo for SqliteRepos {
         self.with_conn(move |conn| {
             // Slug-style ID derived from the agent's display name; collisions
             // get a numeric suffix.
-            let id = next_available_agent_id_inner(conn, &payload.name, None)?;
+            let id = next_available_agent_id_inner(conn, &payload.name, None, &tenant_id)?;
             let now = chrono::Utc::now().to_rfc3339();
             let max_runs = payload.max_concurrent_runs.unwrap_or(5);
 
@@ -442,8 +449,8 @@ impl AgentRepo for SqliteRepos {
             .err_str()?;
 
             conn.query_row(
-                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE id = ?1"),
-                params![id],
+                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE id = ?1 AND tenant_id = ?2"),
+                params![id, tenant_id],
                 map_agent_row,
             )
             .err_str()
@@ -454,10 +461,11 @@ impl AgentRepo for SqliteRepos {
     async fn set_model_config(&self, id: &str, model_config_json: &str) -> Result<(), String> {
         let id = id.to_string();
         let mc = model_config_json.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.execute(
-                "UPDATE agents SET model_config = ?1 WHERE id = ?2",
-                params![mc, id],
+                "UPDATE agents SET model_config = ?1 WHERE id = ?2 AND tenant_id = ?3",
+                params![mc, id, tenant_id],
             )
             .err_str()?;
             Ok(())
@@ -467,6 +475,7 @@ impl AgentRepo for SqliteRepos {
 
     async fn update_basic(&self, id: &str, payload: UpdateAgent) -> Result<Agent, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             // Same Some-field-per-UPDATE shape as TaskRepo::update.
@@ -474,10 +483,10 @@ impl AgentRepo for SqliteRepos {
                 ($column:expr, $value:expr) => {
                     conn.execute(
                         &format!(
-                            "UPDATE agents SET {} = ?1, updated_at = ?2 WHERE id = ?3",
+                            "UPDATE agents SET {} = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
                             $column
                         ),
-                        params![$value, now, id],
+                        params![$value, &now, &id, &tenant_id],
                     )
                     .err_str()?;
                 };
@@ -492,8 +501,8 @@ impl AgentRepo for SqliteRepos {
                 patch!("max_concurrent_runs", max_runs);
             }
             conn.query_row(
-                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE id = ?1"),
-                params![id],
+                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE id = ?1 AND tenant_id = ?2"),
+                params![id, tenant_id],
                 map_agent_row,
             )
             .err_str()
@@ -503,9 +512,13 @@ impl AgentRepo for SqliteRepos {
 
     async fn delete(&self, id: &str) -> Result<(), String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
-            conn.execute("DELETE FROM agents WHERE id = ?1", params![id])
-                .err_str()?;
+            conn.execute(
+                "DELETE FROM agents WHERE id = ?1 AND tenant_id = ?2",
+                params![id, tenant_id],
+            )
+            .err_str()?;
             Ok(())
         })
         .await
@@ -518,8 +531,9 @@ impl AgentRepo for SqliteRepos {
     ) -> Result<String, String> {
         let name = name.to_string();
         let current_id = current_id.map(|s| s.to_string());
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
-            next_available_agent_id_inner(conn, &name, current_id.as_deref())
+            next_available_agent_id_inner(conn, &name, current_id.as_deref(), &tenant_id)
         })
         .await
     }
@@ -529,6 +543,7 @@ fn next_available_agent_id_inner(
     conn: &rusqlite::Connection,
     name: &str,
     current_id: Option<&str>,
+    tenant_id: &str,
 ) -> Result<String, String> {
     let base_slug = workspace::slugify(name);
     let base_slug = if base_slug.is_empty() {
@@ -541,8 +556,8 @@ fn next_available_agent_id_inner(
     loop {
         let existing: Option<String> = conn
             .query_row(
-                "SELECT id FROM agents WHERE id = ?1",
-                params![candidate],
+                "SELECT id FROM agents WHERE id = ?1 AND tenant_id = ?2",
+                params![candidate, tenant_id],
                 |row| row.get::<_, String>(0),
             )
             .optional()
@@ -584,7 +599,8 @@ fn map_project_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectS
 #[async_trait]
 impl ProjectRepo for SqliteRepos {
     async fn list(&self) -> Result<Vec<ProjectSummary>, String> {
-        self.with_conn(|conn| {
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
             // Single LEFT JOIN gives us each project's agent count without
             // an N+1 follow-up query.
             let mut stmt = conn
@@ -595,13 +611,15 @@ impl ProjectRepo for SqliteRepos {
                      LEFT JOIN (
                          SELECT project_id, COUNT(*) AS agent_count
                          FROM project_agents
+                         WHERE tenant_id = ?1
                          GROUP BY project_id
                      ) pa ON pa.project_id = p.id
+                     WHERE p.tenant_id = ?1
                      ORDER BY p.created_at ASC",
                 )
                 .err_str()?;
             let rows: Vec<ProjectSummary> = stmt
-                .query_map([], map_project_summary_row)
+                .query_map(params![tenant_id], map_project_summary_row)
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -612,10 +630,11 @@ impl ProjectRepo for SqliteRepos {
 
     async fn get(&self, id: &str) -> Result<Option<Project>, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
-                "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?1",
-                params![id],
+                "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?1 AND tenant_id = ?2",
+                params![id, tenant_id],
                 map_project_row,
             )
             .optional()
@@ -638,8 +657,8 @@ impl ProjectRepo for SqliteRepos {
             let mut suffix = 1;
             while conn
                 .query_row(
-                    "SELECT 1 FROM projects WHERE id = ?1",
-                    params![candidate],
+                    "SELECT 1 FROM projects WHERE id = ?1 AND tenant_id = ?2",
+                    params![candidate, &tenant_id],
                     |_| Ok(()),
                 )
                 .is_ok()
@@ -658,8 +677,8 @@ impl ProjectRepo for SqliteRepos {
             .err_str()?;
 
             conn.query_row(
-                "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?1",
-                params![id],
+                "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?1 AND tenant_id = ?2",
+                params![id, tenant_id],
                 map_project_row,
             )
             .err_str()
@@ -669,25 +688,26 @@ impl ProjectRepo for SqliteRepos {
 
     async fn update(&self, id: &str, payload: UpdateProject) -> Result<Project, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             if let Some(name) = &payload.name {
                 conn.execute(
-                    "UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3",
-                    params![name, now, id],
+                    "UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                    params![name, &now, &id, &tenant_id],
                 )
                 .err_str()?;
             }
             if let Some(desc) = &payload.description {
                 conn.execute(
-                    "UPDATE projects SET description = ?1, updated_at = ?2 WHERE id = ?3",
-                    params![desc, now, id],
+                    "UPDATE projects SET description = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                    params![desc, &now, &id, &tenant_id],
                 )
                 .err_str()?;
             }
             conn.query_row(
-                "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?1",
-                params![id],
+                "SELECT id, name, description, created_at, updated_at FROM projects WHERE id = ?1 AND tenant_id = ?2",
+                params![id, tenant_id],
                 map_project_row,
             )
             .err_str()
@@ -697,9 +717,13 @@ impl ProjectRepo for SqliteRepos {
 
     async fn delete(&self, id: &str) -> Result<(), String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
-            conn.execute("DELETE FROM projects WHERE id = ?1", params![id])
-                .err_str()?;
+            conn.execute(
+                "DELETE FROM projects WHERE id = ?1 AND tenant_id = ?2",
+                params![id, tenant_id],
+            )
+            .err_str()?;
             Ok(())
         })
         .await
@@ -707,19 +731,20 @@ impl ProjectRepo for SqliteRepos {
 
     async fn list_agents(&self, project_id: &str) -> Result<Vec<Agent>, String> {
         let project_id = project_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             // Same column projection the agent repo uses, joined through the
             // project_agents membership table.
             let mut stmt = conn
                 .prepare(&format!(
                     "SELECT {AGENT_COLUMNS} FROM agents a \
-                     JOIN project_agents pa ON pa.agent_id = a.id \
-                     WHERE pa.project_id = ?1 \
+                     JOIN project_agents pa ON pa.agent_id = a.id AND pa.tenant_id = a.tenant_id \
+                     WHERE pa.project_id = ?1 AND pa.tenant_id = ?2 AND a.tenant_id = ?2 \
                      ORDER BY a.created_at ASC"
                 ))
                 .err_str()?;
             let rows: Vec<Agent> = stmt
-                .query_map(params![project_id], map_agent_row)
+                .query_map(params![project_id, tenant_id], map_agent_row)
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -733,19 +758,20 @@ impl ProjectRepo for SqliteRepos {
         project_id: &str,
     ) -> Result<Vec<ProjectAgentWithMeta>, String> {
         let project_id = project_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             // Default agents float to the top so the project header row in
             // the UI is always the per-project default.
             let mut stmt = conn
                 .prepare(&format!(
                     "SELECT {AGENT_COLUMNS}, pa.is_default FROM agents a \
-                     JOIN project_agents pa ON pa.agent_id = a.id \
-                     WHERE pa.project_id = ?1 \
+                     JOIN project_agents pa ON pa.agent_id = a.id AND pa.tenant_id = a.tenant_id \
+                     WHERE pa.project_id = ?1 AND pa.tenant_id = ?2 AND a.tenant_id = ?2 \
                      ORDER BY pa.is_default DESC, a.created_at ASC"
                 ))
                 .err_str()?;
             let rows: Vec<ProjectAgentWithMeta> = stmt
-                .query_map(params![project_id], |row| {
+                .query_map(params![project_id, tenant_id], |row| {
                     Ok(ProjectAgentWithMeta {
                         agent: map_agent_row(row)?,
                         // is_default is one column past the standard agent
@@ -763,18 +789,19 @@ impl ProjectRepo for SqliteRepos {
 
     async fn list_for_agent(&self, agent_id: &str) -> Result<Vec<Project>, String> {
         let agent_id = agent_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let mut stmt = conn
                 .prepare(
                     "SELECT p.id, p.name, p.description, p.created_at, p.updated_at \
                      FROM projects p \
-                     JOIN project_agents pa ON pa.project_id = p.id \
-                     WHERE pa.agent_id = ?1 \
+                     JOIN project_agents pa ON pa.project_id = p.id AND pa.tenant_id = p.tenant_id \
+                     WHERE pa.agent_id = ?1 AND pa.tenant_id = ?2 AND p.tenant_id = ?2 \
                      ORDER BY pa.added_at ASC",
                 )
                 .err_str()?;
             let rows: Vec<Project> = stmt
-                .query_map(params![agent_id], map_project_row)
+                .query_map(params![agent_id, tenant_id], map_project_row)
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -786,10 +813,11 @@ impl ProjectRepo for SqliteRepos {
     async fn agent_in_project(&self, project_id: &str, agent_id: &str) -> Result<bool, String> {
         let project_id = project_id.to_string();
         let agent_id = agent_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM project_agents WHERE project_id = ?1 AND agent_id = ?2)",
-                params![project_id, agent_id],
+                "SELECT EXISTS(SELECT 1 FROM project_agents WHERE project_id = ?1 AND agent_id = ?2 AND tenant_id = ?3)",
+                params![project_id, agent_id, tenant_id],
                 |row| row.get::<_, bool>(0),
             )
             .err_str()
@@ -805,14 +833,15 @@ impl ProjectRepo for SqliteRepos {
     ) -> Result<ProjectAgent, String> {
         let project_id = project_id.to_string();
         let agent_id = agent_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             // INSERT OR REPLACE so flipping the default flag on an existing
             // membership row is a single statement.
             conn.execute(
-                "INSERT OR REPLACE INTO project_agents (project_id, agent_id, is_default, added_at)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![project_id, agent_id, is_default as i64, now],
+                "INSERT OR REPLACE INTO project_agents (project_id, agent_id, is_default, added_at, tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![project_id, agent_id, is_default as i64, now, tenant_id],
             )
             .err_str()?;
             Ok(ProjectAgent {
@@ -828,12 +857,13 @@ impl ProjectRepo for SqliteRepos {
     async fn remove_agent(&self, project_id: &str, agent_id: &str) -> Result<(), String> {
         let project_id = project_id.to_string();
         let agent_id = agent_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn_mut(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             let tx = conn.transaction().err_str()?;
             tx.execute(
-                "DELETE FROM project_agents WHERE project_id = ?1 AND agent_id = ?2",
-                params![project_id, agent_id],
+                "DELETE FROM project_agents WHERE project_id = ?1 AND agent_id = ?2 AND tenant_id = ?3",
+                params![project_id, agent_id, tenant_id],
             )
             .err_str()?;
             // Clear any work item assignments held by this agent in this project.
@@ -842,8 +872,8 @@ impl ProjectRepo for SqliteRepos {
             tx.execute(
                 "UPDATE work_items \
                     SET assignee_agent_id = NULL, updated_at = ?1 \
-                  WHERE project_id = ?2 AND assignee_agent_id = ?3",
-                params![now, project_id, agent_id],
+                  WHERE project_id = ?2 AND assignee_agent_id = ?3 AND tenant_id = ?4",
+                params![now, project_id, agent_id, tenant_id],
             )
             .err_str()?;
             tx.commit().err_str()?;
@@ -878,15 +908,16 @@ fn map_schedule_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Schedule> {
 #[async_trait]
 impl ScheduleRepo for SqliteRepos {
     async fn list(&self) -> Result<Vec<Schedule>, String> {
-        self.with_conn(|conn| {
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
             // Newest-first matches the dashboard ordering.
             let mut stmt = conn
                 .prepare(&format!(
-                    "SELECT {SCHEDULE_COLUMNS} FROM schedules ORDER BY created_at DESC"
+                    "SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE tenant_id = ?1 ORDER BY created_at DESC"
                 ))
                 .err_str()?;
             let rows: Vec<Schedule> = stmt
-                .query_map([], map_schedule_row)
+                .query_map(params![tenant_id], map_schedule_row)
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -897,14 +928,15 @@ impl ScheduleRepo for SqliteRepos {
 
     async fn list_for_task(&self, task_id: &str) -> Result<Vec<Schedule>, String> {
         let task_id = task_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let mut stmt = conn
                 .prepare(&format!(
-                    "SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE task_id = ?1"
+                    "SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE task_id = ?1 AND tenant_id = ?2"
                 ))
                 .err_str()?;
             let rows: Vec<Schedule> = stmt
-                .query_map(params![task_id], map_schedule_row)
+                .query_map(params![task_id, tenant_id], map_schedule_row)
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -915,14 +947,15 @@ impl ScheduleRepo for SqliteRepos {
 
     async fn list_for_workflow(&self, workflow_id: &str) -> Result<Vec<Schedule>, String> {
         let workflow_id = workflow_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let mut stmt = conn
                 .prepare(&format!(
-                    "SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE workflow_id = ?1"
+                    "SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE workflow_id = ?1 AND tenant_id = ?2"
                 ))
                 .err_str()?;
             let rows: Vec<Schedule> = stmt
-                .query_map(params![workflow_id], map_schedule_row)
+                .query_map(params![workflow_id, tenant_id], map_schedule_row)
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -989,8 +1022,8 @@ impl ScheduleRepo for SqliteRepos {
             .err_str()?;
 
             conn.query_row(
-                &format!("SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE id = ?1"),
-                params![id],
+                &format!("SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE id = ?1 AND tenant_id = ?2"),
+                params![id, tenant_id],
                 map_schedule_row,
             )
             .err_str()
@@ -1000,16 +1033,17 @@ impl ScheduleRepo for SqliteRepos {
 
     async fn toggle(&self, id: &str, enabled: bool) -> Result<Schedule, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             conn.execute(
-                "UPDATE schedules SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
-                params![enabled as i64, now, id],
+                "UPDATE schedules SET enabled = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                params![enabled as i64, now, id, tenant_id],
             )
             .err_str()?;
             conn.query_row(
-                &format!("SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE id = ?1"),
-                params![id],
+                &format!("SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE id = ?1 AND tenant_id = ?2"),
+                params![id, tenant_id],
                 map_schedule_row,
             )
             .err_str()
@@ -1019,9 +1053,13 @@ impl ScheduleRepo for SqliteRepos {
 
     async fn delete(&self, id: &str) -> Result<(), String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
-            conn.execute("DELETE FROM schedules WHERE id = ?1", params![id])
-                .err_str()?;
+            conn.execute(
+                "DELETE FROM schedules WHERE id = ?1 AND tenant_id = ?2",
+                params![id, tenant_id],
+            )
+            .err_str()?;
             Ok(())
         })
         .await
@@ -1042,14 +1080,15 @@ fn map_user_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
 #[async_trait]
 impl UserRepo for SqliteRepos {
     async fn list(&self) -> Result<Vec<User>, String> {
-        self.with_conn(|conn| {
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, name, is_default, created_at FROM users ORDER BY created_at ASC",
+                    "SELECT id, name, is_default, created_at FROM users WHERE tenant_id = ?1 ORDER BY created_at ASC",
                 )
                 .err_str()?;
             let rows: Vec<User> = stmt
-                .query_map([], map_user_row)
+                .query_map(params![tenant_id], map_user_row)
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -1080,11 +1119,12 @@ impl UserRepo for SqliteRepos {
 
     async fn exists(&self, id: &str) -> Result<bool, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let count: i64 = conn
                 .query_row(
-                    "SELECT COUNT(*) FROM users WHERE id = ?1",
-                    params![id],
+                    "SELECT COUNT(*) FROM users WHERE id = ?1 AND tenant_id = ?2",
+                    params![id, tenant_id],
                     |row| row.get(0),
                 )
                 .err_str()?;
@@ -1109,8 +1149,8 @@ const RUN_SUMMARY_SELECT: &str = "SELECT r.id, r.task_id, t.name as task_name, r
             json_extract(r.metadata, '$.chat_session_id') as chat_session_id,
             r.project_id
      FROM runs r
-     LEFT JOIN tasks t ON t.id = r.task_id
-     LEFT JOIN agents a ON a.id = r.agent_id";
+     LEFT JOIN tasks t ON t.id = r.task_id AND t.tenant_id = r.tenant_id
+     LEFT JOIN agents a ON a.id = r.agent_id AND a.tenant_id = r.tenant_id";
 
 fn map_run_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> {
     Ok(RunSummary {
@@ -1139,14 +1179,16 @@ fn map_run_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> 
 #[async_trait]
 impl RunRepo for SqliteRepos {
     async fn list(&self, filter: RunListFilter) -> Result<Vec<RunSummary>, String> {
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             // Limit / offset are bound positionally as ?1 / ?2 so the optional
             // filters can append after them without renumbering.
             let mut bound: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
             bound.push(Box::new(filter.limit.unwrap_or(100)));
             bound.push(Box::new(filter.offset.unwrap_or(0)));
+            bound.push(Box::new(tenant_id));
 
-            let mut sql = format!("{} WHERE 1=1", RUN_SUMMARY_SELECT);
+            let mut sql = format!("{} WHERE r.tenant_id = ?3", RUN_SUMMARY_SELECT);
 
             // Helper that appends a `AND <col> = ?N` clause and pushes the
             // value, keeping the SQL/params in lockstep.
@@ -1188,13 +1230,14 @@ impl RunRepo for SqliteRepos {
 
     async fn get(&self, id: &str) -> Result<Option<Run>, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
                 "SELECT id, task_id, schedule_id, agent_id, state, trigger, exit_code, pid,
                         log_path, started_at, finished_at, duration_ms, retry_count,
                         parent_run_id, metadata, is_sub_agent, created_at, project_id
-                 FROM runs WHERE id = ?1",
-                params![id],
+                 FROM runs WHERE id = ?1 AND tenant_id = ?2",
+                params![id, tenant_id],
                 |row| {
                     let meta_str: String = row.get(14)?;
                     Ok(Run {
@@ -1227,14 +1270,15 @@ impl RunRepo for SqliteRepos {
     }
 
     async fn list_active(&self) -> Result<Vec<RunSummary>, String> {
-        self.with_conn(|conn| {
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
             let sql = format!(
-                "{} WHERE r.state IN ('pending', 'queued', 'running') ORDER BY r.created_at DESC",
+                "{} WHERE r.tenant_id = ?1 AND r.state IN ('pending', 'queued', 'running') ORDER BY r.created_at DESC",
                 RUN_SUMMARY_SELECT
             );
             let mut stmt = conn.prepare(&sql).err_str()?;
             let rows: Vec<RunSummary> = stmt
-                .query_map([], map_run_summary_row)
+                .query_map(params![tenant_id], map_run_summary_row)
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -1245,14 +1289,15 @@ impl RunRepo for SqliteRepos {
 
     async fn list_sub_agents(&self, parent_run_id: &str) -> Result<Vec<RunSummary>, String> {
         let parent = parent_run_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let sql = format!(
-                "{} WHERE r.parent_run_id = ?1 AND r.is_sub_agent = 1 ORDER BY r.created_at ASC",
+                "{} WHERE r.parent_run_id = ?1 AND r.tenant_id = ?2 AND r.is_sub_agent = 1 ORDER BY r.created_at ASC",
                 RUN_SUMMARY_SELECT
             );
             let mut stmt = conn.prepare(&sql).err_str()?;
             let rows: Vec<RunSummary> = stmt
-                .query_map(params![parent], map_run_summary_row)
+                .query_map(params![parent, tenant_id], map_run_summary_row)
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -1263,11 +1308,12 @@ impl RunRepo for SqliteRepos {
 
     async fn agent_conversation(&self, run_id: &str) -> Result<Option<serde_json::Value>, String> {
         let run_id = run_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let raw: Option<String> = conn
                 .query_row(
-                    "SELECT messages FROM agent_conversations WHERE run_id = ?1",
-                    params![run_id],
+                    "SELECT messages FROM agent_conversations WHERE run_id = ?1 AND tenant_id = ?2",
+                    params![run_id, tenant_id],
                     |row| row.get::<_, String>(0),
                 )
                 .optional()
@@ -1282,10 +1328,11 @@ impl RunRepo for SqliteRepos {
 
     async fn log_path(&self, run_id: &str) -> Result<Option<String>, String> {
         let run_id = run_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
-                "SELECT log_path FROM runs WHERE id = ?1",
-                params![run_id],
+                "SELECT log_path FROM runs WHERE id = ?1 AND tenant_id = ?2",
+                params![run_id, tenant_id],
                 |row| row.get::<_, Option<String>>(0),
             )
             .optional()
@@ -1297,14 +1344,15 @@ impl RunRepo for SqliteRepos {
 
     async fn cancel(&self, run_id: &str) -> Result<(), String> {
         let run_id = run_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             // Guard with state IN (...) so we don't clobber a run that
             // already finished — the cancel is a no-op in that case.
             conn.execute(
                 "UPDATE runs SET state = 'cancelled', finished_at = ?1 \
-                 WHERE id = ?2 AND state IN ('pending', 'queued', 'running')",
-                params![now, run_id],
+                 WHERE id = ?2 AND tenant_id = ?3 AND state IN ('pending', 'queued', 'running')",
+                params![now, run_id, tenant_id],
             )
             .err_str()?;
             Ok(())
@@ -1335,17 +1383,18 @@ fn map_work_item_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkItem
 impl WorkItemEventRepo for SqliteRepos {
     async fn list(&self, work_item_id: &str) -> Result<Vec<WorkItemEvent>, String> {
         let work_item_id = work_item_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             // Chronological order; ULID id breaks ties for events created in
             // the same second.
             let sql = format!(
                 "SELECT {WORK_ITEM_EVENT_COLUMNS} FROM work_item_events
-                 WHERE work_item_id = ?1
+                 WHERE work_item_id = ?1 AND tenant_id = ?2
                  ORDER BY created_at ASC, id ASC"
             );
             let mut stmt = conn.prepare(&sql).err_str()?;
             let rows: Vec<WorkItemEvent> = stmt
-                .query_map(params![work_item_id], map_work_item_event_row)
+                .query_map(params![work_item_id, tenant_id], map_work_item_event_row)
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -1371,9 +1420,15 @@ impl WorkflowRunRepo for SqliteRepos {
     ) -> Result<Vec<WorkflowRun>, String> {
         let pool = DbPool(self.pool.0.clone());
         let workflow_id = workflow_id.to_string();
+        let tenant_id = self.tenant_id();
         let limit = limit.clamp(1, 200);
         tokio::task::spawn_blocking(move || {
-            crate::workflows::orchestrator::list_runs_for_workflow(&pool, &workflow_id, limit)
+            crate::workflows::store::list_runs_for_workflow_for_tenant(
+                &pool,
+                &workflow_id,
+                limit,
+                &tenant_id,
+            )
         })
         .await
         .err_str()?
@@ -1386,9 +1441,15 @@ impl WorkflowRunRepo for SqliteRepos {
     ) -> Result<Vec<WorkflowRunSummary>, String> {
         let pool = DbPool(self.pool.0.clone());
         let project_id = project_id.to_string();
+        let tenant_id = self.tenant_id();
         let limit = limit.clamp(1, 200);
         tokio::task::spawn_blocking(move || {
-            crate::workflows::store::list_runs_for_project(&pool, &project_id, limit)
+            crate::workflows::store::list_runs_for_project_for_tenant(
+                &pool,
+                &project_id,
+                limit,
+                &tenant_id,
+            )
         })
         .await
         .err_str()?
@@ -1397,8 +1458,11 @@ impl WorkflowRunRepo for SqliteRepos {
     async fn get_with_steps(&self, run_id: &str) -> Result<WorkflowRunWithSteps, String> {
         let pool = DbPool(self.pool.0.clone());
         let run_id = run_id.to_string();
+        let tenant_id = self.tenant_id();
         tokio::task::spawn_blocking(move || -> Result<WorkflowRunWithSteps, String> {
-            let (run, steps) = crate::workflows::orchestrator::load_run_with_steps(&pool, &run_id)?;
+            let (run, steps) = crate::workflows::store::load_run_with_steps_for_tenant(
+                &pool, &run_id, &tenant_id,
+            )?;
             Ok(WorkflowRunWithSteps { run, steps })
         })
         .await
@@ -1408,8 +1472,9 @@ impl WorkflowRunRepo for SqliteRepos {
     async fn cancel(&self, run_id: &str) -> Result<(), String> {
         let pool = DbPool(self.pool.0.clone());
         let run_id = run_id.to_string();
+        let tenant_id = self.tenant_id();
         tokio::task::spawn_blocking(move || {
-            crate::workflows::orchestrator::cancel_run(&pool, &run_id)
+            crate::workflows::store::cancel_run_for_tenant(&pool, &run_id, &tenant_id)
         })
         .await
         .err_str()?
@@ -1449,16 +1514,17 @@ fn validate_board_prefix(prefix: &str) -> Result<(), String> {
 impl ProjectBoardRepo for SqliteRepos {
     async fn list(&self, project_id: &str) -> Result<Vec<ProjectBoard>, String> {
         let project_id = project_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             // Default board first, then explicit position, then creation order.
             let sql = format!(
                 "SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards \
-                 WHERE project_id = ?1 \
+                 WHERE project_id = ?1 AND tenant_id = ?2 \
                  ORDER BY is_default DESC, position ASC, created_at ASC"
             );
             let mut stmt = conn.prepare(&sql).err_str()?;
             let rows: Vec<ProjectBoard> = stmt
-                .query_map(params![project_id], map_project_board_row)
+                .query_map(params![project_id, tenant_id], map_project_board_row)
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -1469,10 +1535,11 @@ impl ProjectBoardRepo for SqliteRepos {
 
     async fn get(&self, id: &str) -> Result<Option<ProjectBoard>, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
-                &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1"),
-                params![id],
+                &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1 AND tenant_id = ?2"),
+                params![id, tenant_id],
                 map_project_board_row,
             )
             .optional()
@@ -1495,8 +1562,8 @@ impl ProjectBoardRepo for SqliteRepos {
             // tools like Linear/Jira.
             let prefix_taken: bool = conn
                 .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM project_boards WHERE project_id = ?1 AND prefix = ?2)",
-                    params![payload.project_id, prefix],
+                    "SELECT EXISTS(SELECT 1 FROM project_boards WHERE project_id = ?1 AND prefix = ?2 AND tenant_id = ?3)",
+                    params![payload.project_id, prefix, tenant_id],
                     |row| row.get(0),
                 )
                 .err_str()?;
@@ -1514,8 +1581,8 @@ impl ProjectBoardRepo for SqliteRepos {
             // renumbering everyone — large step gives plenty of headroom.
             let next_position: f64 = conn
                 .query_row(
-                    "SELECT COALESCE(MAX(position), 0) FROM project_boards WHERE project_id = ?1",
-                    params![payload.project_id],
+                    "SELECT COALESCE(MAX(position), 0) FROM project_boards WHERE project_id = ?1 AND tenant_id = ?2",
+                    params![payload.project_id, tenant_id],
                     |row| row.get(0),
                 )
                 .err_str()?;
@@ -1529,8 +1596,8 @@ impl ProjectBoardRepo for SqliteRepos {
             .err_str()?;
 
             conn.query_row(
-                &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1"),
-                params![id],
+                &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1 AND tenant_id = ?2"),
+                params![id, tenant_id],
                 map_project_board_row,
             )
             .err_str()
@@ -1543,11 +1610,12 @@ impl ProjectBoardRepo for SqliteRepos {
             validate_board_prefix(prefix)?;
         }
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let existing: ProjectBoard = conn
                 .query_row(
-                    &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1"),
-                    params![id],
+                    &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1 AND tenant_id = ?2"),
+                    params![id, tenant_id],
                     map_project_board_row,
                 )
                 .optional()
@@ -1561,8 +1629,8 @@ impl ProjectBoardRepo for SqliteRepos {
                     return Err("board name must be non-empty".into());
                 }
                 conn.execute(
-                    "UPDATE project_boards SET name = ?1, updated_at = ?2 WHERE id = ?3",
-                    params![name, now, id],
+                    "UPDATE project_boards SET name = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                    params![name, &now, &id, &tenant_id],
                 )
                 .err_str()?;
             }
@@ -1571,8 +1639,8 @@ impl ProjectBoardRepo for SqliteRepos {
                 if prefix != existing.prefix {
                     let taken: bool = conn
                         .query_row(
-                            "SELECT EXISTS(SELECT 1 FROM project_boards WHERE project_id = ?1 AND prefix = ?2 AND id != ?3)",
-                            params![existing.project_id, prefix, id],
+                            "SELECT EXISTS(SELECT 1 FROM project_boards WHERE project_id = ?1 AND prefix = ?2 AND id != ?3 AND tenant_id = ?4)",
+                            params![existing.project_id, prefix, id, tenant_id],
                             |row| row.get(0),
                         )
                         .err_str()?;
@@ -1583,16 +1651,16 @@ impl ProjectBoardRepo for SqliteRepos {
                         ));
                     }
                     conn.execute(
-                        "UPDATE project_boards SET prefix = ?1, updated_at = ?2 WHERE id = ?3",
-                        params![prefix, now, id],
+                        "UPDATE project_boards SET prefix = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                        params![prefix, &now, &id, &tenant_id],
                     )
                     .err_str()?;
                 }
             }
 
             conn.query_row(
-                &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1"),
-                params![id],
+                &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1 AND tenant_id = ?2"),
+                params![id, tenant_id],
                 map_project_board_row,
             )
             .err_str()
@@ -1602,13 +1670,14 @@ impl ProjectBoardRepo for SqliteRepos {
 
     async fn delete(&self, id: &str, payload: DeleteProjectBoard) -> Result<(), String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn_mut(move |conn| {
             // Re-fetch existing inside the same transaction so we can rely on
             // the project_id / is_default state being consistent.
             let existing: ProjectBoard = conn
                 .query_row(
-                    &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1"),
-                    params![id],
+                    &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1 AND tenant_id = ?2"),
+                    params![id, tenant_id],
                     map_project_board_row,
                 )
                 .optional()
@@ -1619,12 +1688,12 @@ impl ProjectBoardRepo for SqliteRepos {
             let siblings: Vec<ProjectBoard> = {
                 let sql = format!(
                     "SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards \
-                     WHERE project_id = ?1 \
+                     WHERE project_id = ?1 AND tenant_id = ?2 \
                      ORDER BY is_default DESC, position ASC, created_at ASC"
                 );
                 let mut stmt = conn.prepare(&sql).err_str()?;
                 let rows: Vec<ProjectBoard> = stmt
-                    .query_map(params![existing.project_id], map_project_board_row)
+                    .query_map(params![existing.project_id, tenant_id], map_project_board_row)
                     .err_str()?
                     .filter_map(|r| r.ok())
                     .collect();
@@ -1639,8 +1708,8 @@ impl ProjectBoardRepo for SqliteRepos {
             // (which deletes everything via FK cascade).
             let item_count: i64 = conn
                 .query_row(
-                    "SELECT COUNT(*) FROM work_items WHERE board_id = ?1",
-                    params![id],
+                    "SELECT COUNT(*) FROM work_items WHERE board_id = ?1 AND tenant_id = ?2",
+                    params![id, tenant_id],
                     |row| row.get(0),
                 )
                 .err_str()?;
@@ -1650,9 +1719,9 @@ impl ProjectBoardRepo for SqliteRepos {
                     let dest: ProjectBoard = conn
                         .query_row(
                             &format!(
-                                "SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1"
+                                "SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1 AND tenant_id = ?2"
                             ),
-                            params![dest_id],
+                            params![dest_id, tenant_id],
                             map_project_board_row,
                         )
                         .optional()
@@ -1686,13 +1755,13 @@ impl ProjectBoardRepo for SqliteRepos {
             if let Some(destination) = destination.as_ref() {
                 // Re-parent every column and work item to the destination.
                 tx.execute(
-                    "UPDATE project_board_columns SET board_id = ?1, updated_at = ?2 WHERE board_id = ?3",
-                    params![destination.id, now, id],
+                    "UPDATE project_board_columns SET board_id = ?1, updated_at = ?2 WHERE board_id = ?3 AND tenant_id = ?4",
+                    params![destination.id, now, id, tenant_id],
                 )
                 .err_str()?;
                 tx.execute(
-                    "UPDATE work_items SET board_id = ?1, updated_at = ?2 WHERE board_id = ?3",
-                    params![destination.id, now, id],
+                    "UPDATE work_items SET board_id = ?1, updated_at = ?2 WHERE board_id = ?3 AND tenant_id = ?4",
+                    params![destination.id, now, id, tenant_id],
                 )
                 .err_str()?;
             }
@@ -1705,18 +1774,21 @@ impl ProjectBoardRepo for SqliteRepos {
                     .find(|b| b.id != id)
                     .ok_or_else(|| "expected at least one remaining board".to_string())?;
                 tx.execute(
-                    "UPDATE project_boards SET is_default = 0, updated_at = ?1 WHERE id = ?2",
-                    params![now, id],
+                    "UPDATE project_boards SET is_default = 0, updated_at = ?1 WHERE id = ?2 AND tenant_id = ?3",
+                    params![now, id, tenant_id],
                 )
                 .err_str()?;
                 tx.execute(
-                    "UPDATE project_boards SET is_default = 1, updated_at = ?1 WHERE id = ?2",
-                    params![now, next_default.id],
+                    "UPDATE project_boards SET is_default = 1, updated_at = ?1 WHERE id = ?2 AND tenant_id = ?3",
+                    params![now, next_default.id, tenant_id],
                 )
                 .err_str()?;
             }
 
-            tx.execute("DELETE FROM project_boards WHERE id = ?1", params![id])
+            tx.execute(
+                "DELETE FROM project_boards WHERE id = ?1 AND tenant_id = ?2",
+                params![id, tenant_id],
+            )
                 .err_str()?;
             tx.commit().err_str()?;
             Ok(())
@@ -1757,6 +1829,7 @@ impl BusMessageRepo for SqliteRepos {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<BusMessage>, String> {
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             // Two SQL shapes: filtered by agent (sender or recipient) vs. all.
             // Building both with the same column projection so the row mapper
@@ -1765,17 +1838,23 @@ impl BusMessageRepo for SqliteRepos {
                 Some(aid) => (
                     format!(
                         "SELECT {BUS_MESSAGE_COLUMNS} FROM bus_messages \
-                         WHERE from_agent_id = ?1 OR to_agent_id = ?1 \
-                         ORDER BY created_at DESC LIMIT ?2 OFFSET ?3"
+                         WHERE tenant_id = ?1 AND (from_agent_id = ?2 OR to_agent_id = ?2) \
+                         ORDER BY created_at DESC LIMIT ?3 OFFSET ?4"
                     ),
-                    vec![Box::new(aid), Box::new(limit), Box::new(offset)],
+                    vec![
+                        Box::new(tenant_id),
+                        Box::new(aid),
+                        Box::new(limit),
+                        Box::new(offset),
+                    ],
                 ),
                 None => (
                     format!(
                         "SELECT {BUS_MESSAGE_COLUMNS} FROM bus_messages \
-                         ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
+                         WHERE tenant_id = ?1 \
+                         ORDER BY created_at DESC LIMIT ?2 OFFSET ?3"
                     ),
-                    vec![Box::new(limit), Box::new(offset)],
+                    vec![Box::new(tenant_id), Box::new(limit), Box::new(offset)],
                 ),
             };
             let mut stmt = conn.prepare(&sql).err_str()?;
@@ -1797,11 +1876,12 @@ impl BusMessageRepo for SqliteRepos {
         offset: i64,
     ) -> Result<PaginatedBusThread, String> {
         let agent_id = agent_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let total_count: i64 = conn
                 .query_row(
-                    "SELECT COUNT(*) FROM bus_messages WHERE to_agent_id = ?1",
-                    params![agent_id],
+                    "SELECT COUNT(*) FROM bus_messages WHERE to_agent_id = ?1 AND tenant_id = ?2",
+                    params![agent_id, tenant_id],
                     |row| row.get(0),
                 )
                 .err_str()?;
@@ -1815,17 +1895,17 @@ impl BusMessageRepo for SqliteRepos {
                             bm.to_run_id, r.state, json_extract(r.metadata, '$.finish_summary'),
                             bm.to_session_id, cs.execution_state, cs.finish_summary
                      FROM bus_messages bm
-                     LEFT JOIN agents a ON a.id = bm.from_agent_id
-                     LEFT JOIN runs r ON r.id = bm.to_run_id
-                     LEFT JOIN chat_sessions cs ON cs.id = bm.to_session_id
-                     WHERE bm.to_agent_id = ?1
+                     LEFT JOIN agents a ON a.id = bm.from_agent_id AND a.tenant_id = bm.tenant_id
+                     LEFT JOIN runs r ON r.id = bm.to_run_id AND r.tenant_id = bm.tenant_id
+                     LEFT JOIN chat_sessions cs ON cs.id = bm.to_session_id AND cs.tenant_id = bm.tenant_id
+                     WHERE bm.to_agent_id = ?1 AND bm.tenant_id = ?2
                      ORDER BY bm.created_at DESC
-                     LIMIT ?2 OFFSET ?3",
+                     LIMIT ?3 OFFSET ?4",
                 )
                 .err_str()?;
 
             let messages: Vec<BusThreadMessage> = stmt
-                .query_map(params![agent_id, limit, offset], |row| {
+                .query_map(params![agent_id, tenant_id, limit, offset], |row| {
                     let payload_str: String = row.get(5)?;
                     Ok(BusThreadMessage {
                         id: row.get(0)?,
@@ -1886,22 +1966,24 @@ fn map_bus_subscription_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BusSubs
 #[async_trait]
 impl BusSubscriptionRepo for SqliteRepos {
     async fn list(&self, agent_id: Option<String>) -> Result<Vec<BusSubscription>, String> {
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let (sql, bound): (String, Vec<Box<dyn rusqlite::ToSql>>) = match agent_id {
                 Some(aid) => (
                     format!(
                         "SELECT {BUS_SUBSCRIPTION_COLUMNS} FROM bus_subscriptions \
-                         WHERE subscriber_agent_id = ?1 OR source_agent_id = ?1 \
+                         WHERE tenant_id = ?1 AND (subscriber_agent_id = ?2 OR source_agent_id = ?2) \
                          ORDER BY created_at DESC"
                     ),
-                    vec![Box::new(aid)],
+                    vec![Box::new(tenant_id), Box::new(aid)],
                 ),
                 None => (
                     format!(
                         "SELECT {BUS_SUBSCRIPTION_COLUMNS} FROM bus_subscriptions \
+                         WHERE tenant_id = ?1 \
                          ORDER BY created_at DESC"
                     ),
-                    vec![],
+                    vec![Box::new(tenant_id)],
                 ),
             };
             let mut stmt = conn.prepare(&sql).err_str()?;
@@ -1956,11 +2038,12 @@ impl BusSubscriptionRepo for SqliteRepos {
 
     async fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             conn.execute(
-                "UPDATE bus_subscriptions SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
-                params![enabled, now, id],
+                "UPDATE bus_subscriptions SET enabled = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                params![enabled, now, id, tenant_id],
             )
             .err_str()?;
             Ok(())
@@ -1970,9 +2053,13 @@ impl BusSubscriptionRepo for SqliteRepos {
 
     async fn delete(&self, id: &str) -> Result<(), String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
-            conn.execute("DELETE FROM bus_subscriptions WHERE id = ?1", params![id])
-                .err_str()?;
+            conn.execute(
+                "DELETE FROM bus_subscriptions WHERE id = ?1 AND tenant_id = ?2",
+                params![id, tenant_id],
+            )
+            .err_str()?;
             Ok(())
         })
         .await
@@ -1992,9 +2079,9 @@ const CHAT_SESSION_SELECT: &str = "SELECT cs.id, cs.agent_id, cs.title, cs.archi
                 cs.created_at, cs.updated_at, cs.project_id,
                 cs.worktree_name, cs.worktree_branch, cs.worktree_path
          FROM chat_sessions cs
-         LEFT JOIN bus_messages bm ON bm.id = cs.source_bus_message_id
-         LEFT JOIN agents a ON a.id = bm.from_agent_id
-         LEFT JOIN chat_sessions src ON src.id = bm.from_session_id";
+         LEFT JOIN bus_messages bm ON bm.id = cs.source_bus_message_id AND bm.tenant_id = cs.tenant_id
+         LEFT JOIN agents a ON a.id = bm.from_agent_id AND a.tenant_id = cs.tenant_id
+         LEFT JOIN chat_sessions src ON src.id = bm.from_session_id AND src.tenant_id = cs.tenant_id";
 
 fn map_chat_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatSession> {
     Ok(ChatSession {
@@ -2038,12 +2125,15 @@ impl ChatRepo for SqliteRepos {
         &self,
         filter: ChatSessionListFilter,
     ) -> Result<Vec<ChatSession>, String> {
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             // Filters compose dynamically: agent_id is mandatory (?1),
             // optional project_id pinning + optional session_type IN-list
             // append after with sequential placeholders.
-            let mut sql = format!("{CHAT_SESSION_SELECT} WHERE cs.agent_id = ?1");
-            let mut bound: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(filter.agent_id)];
+            let mut sql =
+                format!("{CHAT_SESSION_SELECT} WHERE cs.agent_id = ?1 AND cs.tenant_id = ?2");
+            let mut bound: Vec<Box<dyn rusqlite::ToSql>> =
+                vec![Box::new(filter.agent_id), Box::new(tenant_id)];
 
             if !filter.include_archived {
                 sql.push_str(" AND cs.archived = 0");
@@ -2085,11 +2175,12 @@ impl ChatRepo for SqliteRepos {
         offset: i64,
     ) -> Result<ChatMessageRows, String> {
         let session_id = session_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let total_count: i64 = conn
                 .query_row(
-                    "SELECT COUNT(*) FROM chat_messages WHERE session_id = ?1",
-                    params![session_id],
+                    "SELECT COUNT(*) FROM chat_messages WHERE session_id = ?1 AND tenant_id = ?2",
+                    params![session_id, tenant_id],
                     |row| row.get(0),
                 )
                 .err_str()?;
@@ -2102,14 +2193,17 @@ impl ChatRepo for SqliteRepos {
                     .prepare(
                         "SELECT id, role, content, created_at, is_compacted FROM (
                            SELECT id, role, content, created_at, is_compacted
-                           FROM chat_messages WHERE session_id = ?1
+                           FROM chat_messages WHERE session_id = ?1 AND tenant_id = ?2
                            ORDER BY created_at DESC
-                           LIMIT ?2 OFFSET ?3
+                           LIMIT ?3 OFFSET ?4
                          ) sub ORDER BY created_at ASC",
                     )
                     .err_str()?;
                 let rows: Vec<ChatMessageRow> = stmt
-                    .query_map(params![session_id, limit, offset], map_chat_message_row)
+                    .query_map(
+                        params![session_id, tenant_id, limit, offset],
+                        map_chat_message_row,
+                    )
                     .err_str()?
                     .filter_map(|r| r.ok())
                     .collect();
@@ -2118,11 +2212,11 @@ impl ChatRepo for SqliteRepos {
                 let mut stmt = conn
                     .prepare(
                         "SELECT id, role, content, created_at, is_compacted FROM chat_messages
-                         WHERE session_id = ?1 ORDER BY created_at ASC",
+                         WHERE session_id = ?1 AND tenant_id = ?2 ORDER BY created_at ASC",
                     )
                     .err_str()?;
                 let rows: Vec<ChatMessageRow> = stmt
-                    .query_map(params![session_id], map_chat_message_row)
+                    .query_map(params![session_id, tenant_id], map_chat_message_row)
                     .err_str()?
                     .filter_map(|r| r.ok())
                     .collect();
@@ -2191,11 +2285,12 @@ impl ChatRepo for SqliteRepos {
 
     async fn rename_session(&self, session_id: &str, title: String) -> Result<String, String> {
         let session_id = session_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             conn.execute(
-                "UPDATE chat_sessions SET title = ?1, updated_at = ?2 WHERE id = ?3",
-                params![title, &now, session_id],
+                "UPDATE chat_sessions SET title = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                params![title, &now, session_id, tenant_id],
             )
             .err_str()?;
             Ok(now)
@@ -2205,11 +2300,12 @@ impl ChatRepo for SqliteRepos {
 
     async fn archive_session(&self, session_id: &str) -> Result<String, String> {
         let session_id = session_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let active_execution: Option<String> = conn
                 .query_row(
-                    "SELECT execution_state FROM chat_sessions WHERE id = ?1",
-                    params![&session_id],
+                    "SELECT execution_state FROM chat_sessions WHERE id = ?1 AND tenant_id = ?2",
+                    params![&session_id, &tenant_id],
                     |row| row.get(0),
                 )
                 .ok();
@@ -2222,19 +2318,19 @@ impl ChatRepo for SqliteRepos {
 
             let now = chrono::Utc::now().to_rfc3339();
             conn.execute(
-                "UPDATE chat_sessions SET archived = 1, updated_at = ?1 WHERE id = ?2",
-                params![&now, &session_id],
+                "UPDATE chat_sessions SET archived = 1, updated_at = ?1 WHERE id = ?2 AND tenant_id = ?3",
+                params![&now, &session_id, &tenant_id],
             )
             .err_str()?;
             conn.execute(
-                "UPDATE chat_sessions SET archived = 1, updated_at = ?1 WHERE parent_session_id = ?2",
-                params![&now, &session_id],
+                "UPDATE chat_sessions SET archived = 1, updated_at = ?1 WHERE parent_session_id = ?2 AND tenant_id = ?3",
+                params![&now, &session_id, &tenant_id],
             )
             .err_str()?;
             conn.execute(
                 "UPDATE chat_sessions SET archived = 1, updated_at = ?1 \
-                 WHERE id IN (SELECT bm.to_session_id FROM bus_messages bm WHERE bm.from_session_id = ?2 AND bm.to_session_id IS NOT NULL)",
-                params![&now, &session_id],
+                 WHERE tenant_id = ?3 AND id IN (SELECT bm.to_session_id FROM bus_messages bm WHERE bm.from_session_id = ?2 AND bm.tenant_id = ?3 AND bm.to_session_id IS NOT NULL)",
+                params![&now, &session_id, &tenant_id],
             )
             .err_str()?;
             Ok(now)
@@ -2244,22 +2340,23 @@ impl ChatRepo for SqliteRepos {
 
     async fn unarchive_session(&self, session_id: &str) -> Result<String, String> {
         let session_id = session_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             conn.execute(
-                "UPDATE chat_sessions SET archived = 0, updated_at = ?1 WHERE id = ?2",
-                params![&now, &session_id],
+                "UPDATE chat_sessions SET archived = 0, updated_at = ?1 WHERE id = ?2 AND tenant_id = ?3",
+                params![&now, &session_id, &tenant_id],
             )
             .err_str()?;
             conn.execute(
-                "UPDATE chat_sessions SET archived = 0, updated_at = ?1 WHERE parent_session_id = ?2",
-                params![&now, &session_id],
+                "UPDATE chat_sessions SET archived = 0, updated_at = ?1 WHERE parent_session_id = ?2 AND tenant_id = ?3",
+                params![&now, &session_id, &tenant_id],
             )
             .err_str()?;
             conn.execute(
                 "UPDATE chat_sessions SET archived = 0, updated_at = ?1 \
-                 WHERE id IN (SELECT bm.to_session_id FROM bus_messages bm WHERE bm.from_session_id = ?2 AND bm.to_session_id IS NOT NULL)",
-                params![&now, &session_id],
+                 WHERE tenant_id = ?3 AND id IN (SELECT bm.to_session_id FROM bus_messages bm WHERE bm.from_session_id = ?2 AND bm.tenant_id = ?3 AND bm.to_session_id IS NOT NULL)",
+                params![&now, &session_id, &tenant_id],
             )
             .err_str()?;
             Ok(now)
@@ -2269,11 +2366,12 @@ impl ChatRepo for SqliteRepos {
 
     async fn delete_session(&self, session_id: &str) -> Result<(), String> {
         let session_id = session_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let active_execution: Option<String> = conn
                 .query_row(
-                    "SELECT execution_state FROM chat_sessions WHERE id = ?1",
-                    params![&session_id],
+                    "SELECT execution_state FROM chat_sessions WHERE id = ?1 AND tenant_id = ?2",
+                    params![&session_id, &tenant_id],
                     |row| row.get(0),
                 )
                 .ok();
@@ -2284,8 +2382,8 @@ impl ChatRepo for SqliteRepos {
                 return Err("cannot delete an active agent session".to_string());
             }
             conn.execute(
-                "DELETE FROM chat_sessions WHERE id = ?1",
-                params![session_id],
+                "DELETE FROM chat_sessions WHERE id = ?1 AND tenant_id = ?2",
+                params![session_id, tenant_id],
             )
             .err_str()?;
             Ok(())
@@ -2314,8 +2412,8 @@ impl ChatRepo for SqliteRepos {
             .err_str()?;
 
             conn.execute(
-                "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
-                params![&now, &session_id],
+                "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2 AND tenant_id = ?3",
+                params![&now, &session_id, &tenant_id],
             )
             .err_str()?;
 
@@ -2361,14 +2459,15 @@ impl ChatRepo for SqliteRepos {
 
     async fn session_meta(&self, session_id: &str) -> Result<ChatSessionMeta, String> {
         let session_id = session_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let sid = session_id.clone();
             conn.query_row(
                 "SELECT cs.agent_id, cs.project_id, p.name
                  FROM chat_sessions cs
-                 LEFT JOIN projects p ON p.id = cs.project_id
-                 WHERE cs.id = ?1",
-                params![session_id],
+                 LEFT JOIN projects p ON p.id = cs.project_id AND p.tenant_id = cs.tenant_id
+                 WHERE cs.id = ?1 AND cs.tenant_id = ?2",
+                params![session_id, tenant_id],
                 |row| {
                     Ok(ChatSessionMeta {
                         session_id: sid.clone(),
@@ -2385,12 +2484,13 @@ impl ChatRepo for SqliteRepos {
 
     async fn session_execution(&self, session_id: &str) -> Result<SessionExecutionStatus, String> {
         let session_id = session_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let sid = session_id.clone();
             conn.query_row(
                 "SELECT execution_state, finish_summary, terminal_error \
-                 FROM chat_sessions WHERE id = ?1",
-                params![session_id],
+                 FROM chat_sessions WHERE id = ?1 AND tenant_id = ?2",
+                params![session_id, tenant_id],
                 |row| {
                     Ok(SessionExecutionStatus {
                         session_id: sid.clone(),
@@ -2407,10 +2507,11 @@ impl ChatRepo for SqliteRepos {
 
     async fn session_type(&self, session_id: &str) -> Result<String, String> {
         let session_id = session_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
-                "SELECT session_type FROM chat_sessions WHERE id = ?1",
-                params![session_id],
+                "SELECT session_type FROM chat_sessions WHERE id = ?1 AND tenant_id = ?2",
+                params![session_id, tenant_id],
                 |row| row.get::<_, String>(0),
             )
             .err_str()
@@ -2423,15 +2524,16 @@ impl ChatRepo for SqliteRepos {
         session_id: &str,
     ) -> Result<Vec<MessageReactionRow>, String> {
         let session_id = session_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let mut stmt = conn
                 .prepare(
                     "SELECT id, message_id, emoji, created_at FROM message_reactions \
-                     WHERE session_id = ?1 ORDER BY created_at ASC",
+                     WHERE session_id = ?1 AND tenant_id = ?2 ORDER BY created_at ASC",
                 )
                 .err_str()?;
             let rows: Vec<MessageReactionRow> = stmt
-                .query_map(params![session_id], |row| {
+                .query_map(params![session_id, tenant_id], |row| {
                     Ok(MessageReactionRow {
                         id: row.get(0)?,
                         message_id: row.get(1)?,
@@ -2449,10 +2551,11 @@ impl ChatRepo for SqliteRepos {
 
     async fn token_usage(&self, session_id: &str) -> Result<ChatSessionTokenUsage, String> {
         let session_id = session_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
-                "SELECT last_input_tokens, agent_id FROM chat_sessions WHERE id = ?1",
-                params![session_id],
+                "SELECT last_input_tokens, agent_id FROM chat_sessions WHERE id = ?1 AND tenant_id = ?2",
+                params![session_id, tenant_id],
                 |row| {
                     Ok(ChatSessionTokenUsage {
                         last_input_tokens: row.get(0)?,
@@ -2521,11 +2624,75 @@ fn map_work_item_comment_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkIt
 fn resolve_work_item_target_column(
     conn: &rusqlite::Connection,
     project_id: &str,
+    tenant_id: &str,
     board_id: Option<&str>,
     column_id: Option<&str>,
     status: Option<&str>,
 ) -> Result<ProjectBoardColumn, String> {
-    resolve_board_column_sync(conn, project_id, board_id, column_id, status)
+    if let Some(column_id) = column_id {
+        let column = conn
+            .query_row(
+                &format!(
+                    "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns \
+                     WHERE id = ?1 AND tenant_id = ?2"
+                ),
+                params![column_id, tenant_id],
+                map_project_board_column_row,
+            )
+            .optional()
+            .err_str()?
+            .ok_or_else(|| format!("board column '{}' not found", column_id))?;
+        if column.project_id != project_id {
+            return Err(format!(
+                "board column '{}' does not belong to project '{}'",
+                column_id, project_id
+            ));
+        }
+        if let Some(expected_board) = board_id {
+            if column.board_id != expected_board {
+                return Err(format!(
+                    "board column '{}' does not belong to board '{}'",
+                    column_id, expected_board
+                ));
+            }
+        }
+        if let Some(status) = status {
+            validate_board_role(Some(status))?;
+            if let Some(role) = column.role.as_deref() {
+                if role != status {
+                    return Err(format!(
+                        "board column '{}' has role '{}' which does not match status '{}'",
+                        column_id, role, status
+                    ));
+                }
+            }
+        }
+        return Ok(column);
+    }
+
+    if let Some(status) = status {
+        validate_board_role(Some(status))?;
+        if let Some(column) =
+            get_work_item_column_by_role(conn, project_id, tenant_id, board_id, status)?
+        {
+            return Ok(column);
+        }
+        return Err(format!(
+            "project '{}' has no board column for role '{}'",
+            project_id, status
+        ));
+    }
+
+    if let Some(default_column) =
+        get_work_item_default_column(conn, project_id, tenant_id, board_id)?
+    {
+        return Ok(default_column);
+    }
+
+    list_work_item_board_columns(conn, project_id, tenant_id, board_id)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("project '{}' has no board columns", project_id))
 }
 
 fn resolve_work_item_create_status(
@@ -2549,12 +2716,13 @@ fn resolve_work_item_move_status(column: &ProjectBoardColumn, current_status: &s
 fn resolve_work_item_next_column(
     conn: &rusqlite::Connection,
     project_id: &str,
+    tenant_id: &str,
     board_id: Option<&str>,
     current_column_id: Option<&str>,
 ) -> Result<ProjectBoardColumn, String> {
     let current_column_id = current_column_id
         .ok_or_else(|| "work_item: item is not currently in a board column".to_string())?;
-    let columns = list_project_board_columns_sync(conn, project_id, board_id)?;
+    let columns = list_work_item_board_columns(conn, project_id, tenant_id, board_id)?;
     let current_index = columns
         .iter()
         .position(|column| column.id == current_column_id)
@@ -2570,6 +2738,142 @@ fn resolve_work_item_next_column(
         .ok_or_else(|| "work_item: item is already in the last board column".to_string())
 }
 
+fn get_work_item_default_board_id(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    tenant_id: &str,
+) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT id FROM project_boards \
+         WHERE project_id = ?1 AND tenant_id = ?2 AND is_default = 1 LIMIT 1",
+        params![project_id, tenant_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .err_str()
+}
+
+fn effective_work_item_board_id(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    tenant_id: &str,
+    board_id: Option<&str>,
+) -> Result<Option<String>, String> {
+    match board_id {
+        Some(id) => Ok(Some(id.to_string())),
+        None => get_work_item_default_board_id(conn, project_id, tenant_id),
+    }
+}
+
+fn get_work_item_default_column(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    tenant_id: &str,
+    board_id: Option<&str>,
+) -> Result<Option<ProjectBoardColumn>, String> {
+    match effective_work_item_board_id(conn, project_id, tenant_id, board_id)? {
+        Some(board) => conn
+            .query_row(
+                &format!(
+                    "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns \
+                     WHERE project_id = ?1 AND board_id = ?2 AND tenant_id = ?3 AND is_default = 1 LIMIT 1"
+                ),
+                params![project_id, board, tenant_id],
+                map_project_board_column_row,
+            )
+            .optional()
+            .err_str(),
+        None => conn
+            .query_row(
+                &format!(
+                    "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns \
+                     WHERE project_id = ?1 AND tenant_id = ?2 AND is_default = 1 LIMIT 1"
+                ),
+                params![project_id, tenant_id],
+                map_project_board_column_row,
+            )
+            .optional()
+            .err_str(),
+    }
+}
+
+fn get_work_item_column_by_role(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    tenant_id: &str,
+    board_id: Option<&str>,
+    role: &str,
+) -> Result<Option<ProjectBoardColumn>, String> {
+    match effective_work_item_board_id(conn, project_id, tenant_id, board_id)? {
+        Some(board) => conn
+            .query_row(
+                &format!(
+                    "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns \
+                     WHERE project_id = ?1 AND board_id = ?2 AND tenant_id = ?3 AND role = ?4 \
+                     ORDER BY position ASC LIMIT 1"
+                ),
+                params![project_id, board, tenant_id, role],
+                map_project_board_column_row,
+            )
+            .optional()
+            .err_str(),
+        None => conn
+            .query_row(
+                &format!(
+                    "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns \
+                     WHERE project_id = ?1 AND tenant_id = ?2 AND role = ?3 \
+                     ORDER BY position ASC LIMIT 1"
+                ),
+                params![project_id, tenant_id, role],
+                map_project_board_column_row,
+            )
+            .optional()
+            .err_str(),
+    }
+}
+
+fn list_work_item_board_columns(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    tenant_id: &str,
+    board_id: Option<&str>,
+) -> Result<Vec<ProjectBoardColumn>, String> {
+    let effective_board_id = effective_work_item_board_id(conn, project_id, tenant_id, board_id)?;
+    let (sql, bound): (String, Vec<Box<dyn rusqlite::ToSql>>) = match effective_board_id {
+        Some(board) => (
+            format!(
+                "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns \
+                 WHERE project_id = ?1 AND board_id = ?2 AND tenant_id = ?3 \
+                 ORDER BY position ASC, created_at ASC"
+            ),
+            vec![
+                Box::new(project_id.to_string()),
+                Box::new(board),
+                Box::new(tenant_id.to_string()),
+            ],
+        ),
+        None => (
+            format!(
+                "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns \
+                 WHERE project_id = ?1 AND tenant_id = ?2 \
+                 ORDER BY position ASC, created_at ASC"
+            ),
+            vec![
+                Box::new(project_id.to_string()),
+                Box::new(tenant_id.to_string()),
+            ],
+        ),
+    };
+    let mut stmt = conn.prepare(&sql).err_str()?;
+    let refs: Vec<&dyn rusqlite::ToSql> = bound.iter().map(|p| p.as_ref()).collect();
+    let rows = stmt
+        .query_map(refs.as_slice(), map_project_board_column_row)
+        .err_str()?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
 #[async_trait]
 impl WorkItemRepo for SqliteRepos {
     async fn list(
@@ -2578,6 +2882,7 @@ impl WorkItemRepo for SqliteRepos {
         board_id: Option<String>,
     ) -> Result<Vec<WorkItem>, String> {
         let project_id = project_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             // Order by column-or-status grouping then by board position so the
             // kanban view's lane-by-lane render is just iteration over the
@@ -2586,18 +2891,18 @@ impl WorkItemRepo for SqliteRepos {
                 Some(b) => (
                     format!(
                         "SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items \
-                         WHERE project_id = ?1 AND board_id = ?2 \
+                         WHERE project_id = ?1 AND board_id = ?2 AND tenant_id = ?3 \
                          ORDER BY COALESCE(column_id, status), position ASC"
                     ),
-                    vec![Box::new(project_id), Box::new(b)],
+                    vec![Box::new(project_id), Box::new(b), Box::new(tenant_id)],
                 ),
                 None => (
                     format!(
                         "SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items \
-                         WHERE project_id = ?1 \
+                         WHERE project_id = ?1 AND tenant_id = ?2 \
                          ORDER BY COALESCE(column_id, status), position ASC"
                     ),
-                    vec![Box::new(project_id)],
+                    vec![Box::new(project_id), Box::new(tenant_id)],
                 ),
             };
             let mut stmt = conn.prepare(&sql).err_str()?;
@@ -2614,10 +2919,11 @@ impl WorkItemRepo for SqliteRepos {
 
     async fn get(&self, id: &str) -> Result<WorkItem, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
-                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
-                params![id],
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1 AND tenant_id = ?2"),
+                params![id, tenant_id],
                 map_work_item_repo_row,
             )
             .err_str()
@@ -2627,10 +2933,11 @@ impl WorkItemRepo for SqliteRepos {
 
     async fn lookup_project_id(&self, id: &str) -> Result<String, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
-                "SELECT project_id FROM work_items WHERE id = ?1",
-                params![id],
+                "SELECT project_id FROM work_items WHERE id = ?1 AND tenant_id = ?2",
+                params![id, tenant_id],
                 |row| row.get::<_, String>(0),
             )
             .optional()
@@ -2649,6 +2956,7 @@ impl WorkItemRepo for SqliteRepos {
             let column = resolve_work_item_target_column(
                 conn,
                 &payload.project_id,
+                &tenant_id,
                 payload.board_id.as_deref(),
                 payload.column_id.as_deref(),
                 payload.status.as_deref(),
@@ -2662,8 +2970,8 @@ impl WorkItemRepo for SqliteRepos {
                 None => {
                     let max: Option<f64> = conn
                         .query_row(
-                            "SELECT MAX(position) FROM work_items WHERE project_id = ?1 AND column_id = ?2",
-                            params![&payload.project_id, &column_id],
+                            "SELECT MAX(position) FROM work_items WHERE project_id = ?1 AND column_id = ?2 AND tenant_id = ?3",
+                            params![&payload.project_id, &column_id, &tenant_id],
                             |row| row.get(0),
                         )
                         .optional()
@@ -2725,8 +3033,8 @@ impl WorkItemRepo for SqliteRepos {
             )?;
 
             conn.query_row(
-                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
-                params![&id],
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1 AND tenant_id = ?2"),
+                params![&id, &tenant_id],
                 map_work_item_repo_row,
             )
             .err_str()
@@ -2736,12 +3044,13 @@ impl WorkItemRepo for SqliteRepos {
 
     async fn update(&self, id: &str, payload: UpdateWorkItem) -> Result<WorkItem, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             let before: WorkItem = conn
                 .query_row(
-                    &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
-                    params![&id],
+                    &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1 AND tenant_id = ?2"),
+                    params![&id, &tenant_id],
                     map_work_item_repo_row,
                 )
                 .err_str()?;
@@ -2753,8 +3062,8 @@ impl WorkItemRepo for SqliteRepos {
                 }
                 if title != &before.title {
                     conn.execute(
-                        "UPDATE work_items SET title = ?1, updated_at = ?2 WHERE id = ?3",
-                        params![title, &now, &id],
+                        "UPDATE work_items SET title = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                        params![title, &now, &id, &tenant_id],
                     )
                     .err_str()?;
                     insert_event(
@@ -2770,8 +3079,8 @@ impl WorkItemRepo for SqliteRepos {
                 let before_desc = before.description.clone().unwrap_or_default();
                 if description != &before_desc {
                     conn.execute(
-                        "UPDATE work_items SET description = ?1, updated_at = ?2 WHERE id = ?3",
-                        params![description, &now, &id],
+                        "UPDATE work_items SET description = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                        params![description, &now, &id, &tenant_id],
                     )
                     .err_str()?;
                     insert_event(
@@ -2786,8 +3095,8 @@ impl WorkItemRepo for SqliteRepos {
             if let Some(kind) = &payload.kind {
                 if kind != &before.kind {
                     conn.execute(
-                        "UPDATE work_items SET kind = ?1, updated_at = ?2 WHERE id = ?3",
-                        params![kind, &now, &id],
+                        "UPDATE work_items SET kind = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                        params![kind, &now, &id, &tenant_id],
                     )
                     .err_str()?;
                     insert_event(
@@ -2803,14 +3112,15 @@ impl WorkItemRepo for SqliteRepos {
                 let resolved_column = resolve_work_item_target_column(
                     conn,
                     &project_id,
+                    &tenant_id,
                     None,
                     Some(column_id),
                     None,
                 )?;
                 if Some(resolved_column.id.as_str()) != before.column_id.as_deref() {
                     conn.execute(
-                        "UPDATE work_items SET column_id = ?1, updated_at = ?2 WHERE id = ?3",
-                        params![&resolved_column.id, &now, &id],
+                        "UPDATE work_items SET column_id = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                        params![&resolved_column.id, &now, &id, &tenant_id],
                     )
                     .err_str()?;
                     insert_event(
@@ -2829,8 +3139,8 @@ impl WorkItemRepo for SqliteRepos {
             if let Some(priority) = payload.priority {
                 if priority != before.priority {
                     conn.execute(
-                        "UPDATE work_items SET priority = ?1, updated_at = ?2 WHERE id = ?3",
-                        params![priority, &now, &id],
+                        "UPDATE work_items SET priority = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                        params![priority, &now, &id, &tenant_id],
                     )
                     .err_str()?;
                     insert_event(
@@ -2846,8 +3156,8 @@ impl WorkItemRepo for SqliteRepos {
                 if labels != &before.labels {
                     let labels_json = serde_json::to_string(labels).err_str()?;
                     conn.execute(
-                        "UPDATE work_items SET labels = ?1, updated_at = ?2 WHERE id = ?3",
-                        params![labels_json, &now, &id],
+                        "UPDATE work_items SET labels = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                        params![labels_json, &now, &id, &tenant_id],
                     )
                     .err_str()?;
                     insert_event(
@@ -2862,15 +3172,15 @@ impl WorkItemRepo for SqliteRepos {
             if let Some(metadata) = &payload.metadata {
                 let metadata_json = serde_json::to_string(metadata).err_str()?;
                 conn.execute(
-                    "UPDATE work_items SET metadata = ?1, updated_at = ?2 WHERE id = ?3",
-                    params![metadata_json, &now, &id],
+                    "UPDATE work_items SET metadata = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                    params![metadata_json, &now, &id, &tenant_id],
                 )
                 .err_str()?;
             }
 
             conn.query_row(
-                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
-                params![&id],
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1 AND tenant_id = ?2"),
+                params![&id, &tenant_id],
                 map_work_item_repo_row,
             )
             .err_str()
@@ -2880,9 +3190,13 @@ impl WorkItemRepo for SqliteRepos {
 
     async fn delete(&self, id: &str) -> Result<(), String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
-            conn.execute("DELETE FROM work_items WHERE id = ?1", params![id])
-                .err_str()?;
+            conn.execute(
+                "DELETE FROM work_items WHERE id = ?1 AND tenant_id = ?2",
+                params![id, tenant_id],
+            )
+            .err_str()?;
             Ok(())
         })
         .await
@@ -2891,18 +3205,20 @@ impl WorkItemRepo for SqliteRepos {
     async fn claim(&self, id: &str, agent_id: &str) -> Result<WorkItem, String> {
         let id = id.to_string();
         let agent_id = agent_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             let before: WorkItem = conn
                 .query_row(
-                    &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
-                    params![&id],
+                    &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1 AND tenant_id = ?2"),
+                    params![&id, &tenant_id],
                     map_work_item_repo_row,
                 )
                 .err_str()?;
             let column = resolve_work_item_target_column(
                 conn,
                 &before.project_id,
+                &tenant_id,
                 before.board_id.as_deref(),
                 None,
                 Some("in_progress"),
@@ -2920,8 +3236,8 @@ impl WorkItemRepo for SqliteRepos {
                         blocked_reason = NULL,
                         started_at = COALESCE(started_at, ?4),
                         updated_at = ?4
-                  WHERE id = ?5",
-                params![&agent_id, &column_id, &status, &now, &id],
+                  WHERE id = ?5 AND tenant_id = ?6",
+                params![&agent_id, &column_id, &status, &now, &id, &tenant_id],
             )
             .err_str()?;
 
@@ -2953,8 +3269,8 @@ impl WorkItemRepo for SqliteRepos {
             }
 
             conn.query_row(
-                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
-                params![&id],
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1 AND tenant_id = ?2"),
+                params![&id, &tenant_id],
                 map_work_item_repo_row,
             )
             .err_str()
@@ -2969,12 +3285,13 @@ impl WorkItemRepo for SqliteRepos {
         position: Option<f64>,
     ) -> Result<WorkItem, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             let before: WorkItem = conn
                 .query_row(
-                    &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
-                    params![&id],
+                    &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1 AND tenant_id = ?2"),
+                    params![&id, &tenant_id],
                     map_work_item_repo_row,
                 )
                 .err_str()?;
@@ -2982,6 +3299,7 @@ impl WorkItemRepo for SqliteRepos {
                 Some(column_id) => resolve_work_item_target_column(
                     conn,
                     &before.project_id,
+                    &tenant_id,
                     before.board_id.as_deref(),
                     Some(column_id),
                     None,
@@ -2989,6 +3307,7 @@ impl WorkItemRepo for SqliteRepos {
                 None => resolve_work_item_next_column(
                     conn,
                     &before.project_id,
+                    &tenant_id,
                     before.board_id.as_deref(),
                     before.column_id.as_deref(),
                 )?,
@@ -3000,8 +3319,8 @@ impl WorkItemRepo for SqliteRepos {
                 let reason_ok: bool = conn
                     .query_row(
                         "SELECT blocked_reason IS NOT NULL AND length(blocked_reason) > 0
-                           FROM work_items WHERE id = ?1",
-                        params![&id],
+                           FROM work_items WHERE id = ?1 AND tenant_id = ?2",
+                        params![&id, &tenant_id],
                         |row| row.get(0),
                     )
                     .err_str()?;
@@ -3023,8 +3342,8 @@ impl WorkItemRepo for SqliteRepos {
                     } else {
                         let max: Option<f64> = conn
                             .query_row(
-                                "SELECT MAX(position) FROM work_items WHERE project_id = ?1 AND column_id = ?2",
-                                params![&before.project_id, &column_id],
+                                "SELECT MAX(position) FROM work_items WHERE project_id = ?1 AND column_id = ?2 AND tenant_id = ?3",
+                                params![&before.project_id, &column_id, &tenant_id],
                                 |row| row.get(0),
                             )
                             .optional()
@@ -3060,10 +3379,13 @@ impl WorkItemRepo for SqliteRepos {
                         completed_at = {},
                         blocked_reason = {},
                         updated_at = ?5
-                  WHERE id = ?4",
+                  WHERE id = ?4 AND tenant_id = ?6",
                 started_at_expr, completed_at_expr, blocked_reason_expr
             );
-            conn.execute(&sql, params![&column_id, &status, position, &id, &now])
+            conn.execute(
+                &sql,
+                params![&column_id, &status, position, &id, &now, &tenant_id],
+            )
                 .err_str()?;
 
             if before.column_id.as_deref() != Some(column_id.as_str()) {
@@ -3101,8 +3423,8 @@ impl WorkItemRepo for SqliteRepos {
             }
 
             conn.query_row(
-                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
-                params![&id],
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1 AND tenant_id = ?2"),
+                params![&id, &tenant_id],
                 map_work_item_repo_row,
             )
             .err_str()
@@ -3119,11 +3441,13 @@ impl WorkItemRepo for SqliteRepos {
         ordered_ids: Vec<String>,
     ) -> Result<(), String> {
         let project_id = project_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn_mut(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             let resolved_column_id = resolve_work_item_target_column(
                 conn,
                 &project_id,
+                &tenant_id,
                 board_id.as_deref(),
                 column_id.as_deref(),
                 status.as_deref(),
@@ -3135,8 +3459,15 @@ impl WorkItemRepo for SqliteRepos {
                 tx.execute(
                     "UPDATE work_items
                         SET position = ?1, updated_at = ?2
-                      WHERE id = ?3 AND project_id = ?4 AND column_id = ?5",
-                    params![pos, &now, item_id, &project_id, &resolved_column_id],
+                      WHERE id = ?3 AND project_id = ?4 AND column_id = ?5 AND tenant_id = ?6",
+                    params![
+                        pos,
+                        &now,
+                        item_id,
+                        &project_id,
+                        &resolved_column_id,
+                        &tenant_id
+                    ],
                 )
                 .err_str()?;
             }
@@ -3151,18 +3482,20 @@ impl WorkItemRepo for SqliteRepos {
             return Err("work_item: blocked_reason must be non-empty".into());
         }
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             let (project_id, board_id): (String, Option<String>) = conn
                 .query_row(
-                    "SELECT project_id, board_id FROM work_items WHERE id = ?1",
-                    params![&id],
+                    "SELECT project_id, board_id FROM work_items WHERE id = ?1 AND tenant_id = ?2",
+                    params![&id, &tenant_id],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .err_str()?;
             let column = resolve_work_item_target_column(
                 conn,
                 &project_id,
+                &tenant_id,
                 board_id.as_deref(),
                 None,
                 Some("blocked"),
@@ -3172,8 +3505,8 @@ impl WorkItemRepo for SqliteRepos {
             conn.execute(
                 "UPDATE work_items
                     SET column_id = ?1, status = ?2, blocked_reason = ?3, updated_at = ?4
-                  WHERE id = ?5",
-                params![&column_id, &status, &reason, &now, &id],
+                  WHERE id = ?5 AND tenant_id = ?6",
+                params![&column_id, &status, &reason, &now, &id, &tenant_id],
             )
             .err_str()?;
             insert_event(
@@ -3184,8 +3517,8 @@ impl WorkItemRepo for SqliteRepos {
                 serde_json::json!({ "reason": reason }),
             )?;
             conn.query_row(
-                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
-                params![&id],
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1 AND tenant_id = ?2"),
+                params![&id, &tenant_id],
                 map_work_item_repo_row,
             )
             .err_str()
@@ -3195,18 +3528,20 @@ impl WorkItemRepo for SqliteRepos {
 
     async fn unblock(&self, id: &str, status: String) -> Result<WorkItem, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             let (project_id, board_id): (String, Option<String>) = conn
                 .query_row(
-                    "SELECT project_id, board_id FROM work_items WHERE id = ?1",
-                    params![&id],
+                    "SELECT project_id, board_id FROM work_items WHERE id = ?1 AND tenant_id = ?2",
+                    params![&id, &tenant_id],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .err_str()?;
             let column = resolve_work_item_target_column(
                 conn,
                 &project_id,
+                &tenant_id,
                 board_id.as_deref(),
                 None,
                 Some(&status),
@@ -3219,8 +3554,8 @@ impl WorkItemRepo for SqliteRepos {
                         status = ?2,
                         blocked_reason = NULL,
                         updated_at = ?3
-                  WHERE id = ?4",
-                params![&column_id, &resolved_status, &now, &id],
+                  WHERE id = ?4 AND tenant_id = ?5",
+                params![&column_id, &resolved_status, &now, &id, &tenant_id],
             )
             .err_str()?;
             insert_event(
@@ -3231,8 +3566,8 @@ impl WorkItemRepo for SqliteRepos {
                 serde_json::json!({ "toStatus": resolved_status }),
             )?;
             conn.query_row(
-                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
-                params![&id],
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1 AND tenant_id = ?2"),
+                params![&id, &tenant_id],
                 map_work_item_repo_row,
             )
             .err_str()
@@ -3242,18 +3577,20 @@ impl WorkItemRepo for SqliteRepos {
 
     async fn complete(&self, id: &str) -> Result<WorkItem, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             let (project_id, board_id): (String, Option<String>) = conn
                 .query_row(
-                    "SELECT project_id, board_id FROM work_items WHERE id = ?1",
-                    params![&id],
+                    "SELECT project_id, board_id FROM work_items WHERE id = ?1 AND tenant_id = ?2",
+                    params![&id, &tenant_id],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .err_str()?;
             let column = resolve_work_item_target_column(
                 conn,
                 &project_id,
+                &tenant_id,
                 board_id.as_deref(),
                 None,
                 Some("done"),
@@ -3267,8 +3604,8 @@ impl WorkItemRepo for SqliteRepos {
                         completed_at = ?3,
                         blocked_reason = NULL,
                         updated_at = ?3
-                  WHERE id = ?4",
-                params![&column_id, &status, &now, &id],
+                  WHERE id = ?4 AND tenant_id = ?5",
+                params![&column_id, &status, &now, &id, &tenant_id],
             )
             .err_str()?;
             insert_event(
@@ -3279,8 +3616,8 @@ impl WorkItemRepo for SqliteRepos {
                 serde_json::json!({ "via": "complete" }),
             )?;
             conn.query_row(
-                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
-                params![&id],
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1 AND tenant_id = ?2"),
+                params![&id, &tenant_id],
                 map_work_item_repo_row,
             )
             .err_str()
@@ -3290,14 +3627,15 @@ impl WorkItemRepo for SqliteRepos {
 
     async fn list_comments(&self, work_item_id: &str) -> Result<Vec<WorkItemComment>, String> {
         let work_item_id = work_item_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let sql = format!(
                 "SELECT {WORK_ITEM_COMMENT_REPO_COLUMNS} FROM work_item_comments \
-                 WHERE work_item_id = ?1 ORDER BY created_at ASC"
+                 WHERE work_item_id = ?1 AND tenant_id = ?2 ORDER BY created_at ASC"
             );
             let mut stmt = conn.prepare(&sql).err_str()?;
             let rows: Vec<WorkItemComment> = stmt
-                .query_map(params![work_item_id], map_work_item_comment_row)
+                .query_map(params![work_item_id, tenant_id], map_work_item_comment_row)
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -3356,9 +3694,9 @@ impl WorkItemRepo for SqliteRepos {
             )?;
             conn.query_row(
                 &format!(
-                    "SELECT {WORK_ITEM_COMMENT_REPO_COLUMNS} FROM work_item_comments WHERE id = ?1"
+                    "SELECT {WORK_ITEM_COMMENT_REPO_COLUMNS} FROM work_item_comments WHERE id = ?1 AND tenant_id = ?2"
                 ),
-                params![&id],
+                params![&id, &tenant_id],
                 map_work_item_comment_row,
             )
             .err_str()
@@ -3371,19 +3709,20 @@ impl WorkItemRepo for SqliteRepos {
             return Err("work_item_comment: body must be non-empty".into());
         }
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             conn.execute(
-                "UPDATE work_item_comments SET body = ?1, updated_at = ?2 WHERE id = ?3",
-                params![&body, &now, &id],
+                "UPDATE work_item_comments SET body = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                params![&body, &now, &id, &tenant_id],
             )
             .err_str()?;
             let comment: WorkItemComment = conn
                 .query_row(
                     &format!(
-                        "SELECT {WORK_ITEM_COMMENT_REPO_COLUMNS} FROM work_item_comments WHERE id = ?1"
+                        "SELECT {WORK_ITEM_COMMENT_REPO_COLUMNS} FROM work_item_comments WHERE id = ?1 AND tenant_id = ?2"
                     ),
-                    params![&id],
+                    params![&id, &tenant_id],
                     map_work_item_comment_row,
                 )
                 .err_str()?;
@@ -3401,17 +3740,21 @@ impl WorkItemRepo for SqliteRepos {
 
     async fn delete_comment(&self, id: &str) -> Result<(), String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let work_item_id: Option<String> = conn
                 .query_row(
-                    "SELECT work_item_id FROM work_item_comments WHERE id = ?1",
-                    params![&id],
+                    "SELECT work_item_id FROM work_item_comments WHERE id = ?1 AND tenant_id = ?2",
+                    params![&id, &tenant_id],
                     |row| row.get(0),
                 )
                 .optional()
                 .err_str()?;
-            conn.execute("DELETE FROM work_item_comments WHERE id = ?1", params![&id])
-                .err_str()?;
+            conn.execute(
+                "DELETE FROM work_item_comments WHERE id = ?1 AND tenant_id = ?2",
+                params![&id, &tenant_id],
+            )
+            .err_str()?;
             if let Some(wid) = work_item_id {
                 insert_event(
                     conn,
@@ -3809,6 +4152,7 @@ fn ensure_project_workflow_can_enable_or_run(
 fn sync_project_workflow_schedule(
     conn: &rusqlite::Connection,
     workflow_id: &str,
+    tenant_id: &str,
     enabled: bool,
     trigger_kind: &str,
     trigger_config: &serde_json::Value,
@@ -3817,8 +4161,8 @@ fn sync_project_workflow_schedule(
     let schedule_id = format!("workflow-schedule-{}", workflow_id);
     if !enabled || trigger_kind != "schedule" {
         conn.execute(
-            "DELETE FROM schedules WHERE workflow_id = ?1",
-            params![workflow_id],
+            "DELETE FROM schedules WHERE workflow_id = ?1 AND tenant_id = ?2",
+            params![workflow_id, tenant_id],
         )
         .err_str()?;
         return Ok(());
@@ -3832,10 +4176,10 @@ fn sync_project_workflow_schedule(
     conn.execute(
         "INSERT OR REPLACE INTO schedules (
             id, task_id, workflow_id, target_kind, kind, config, enabled,
-            next_run_at, last_run_at, created_at, updated_at
+            next_run_at, last_run_at, created_at, updated_at, tenant_id
          ) VALUES (?1, NULL, ?2, 'workflow', 'recurring', ?3, 1, ?4, NULL,
-                   COALESCE((SELECT created_at FROM schedules WHERE id = ?1), ?5), ?5)",
-        params![schedule_id, workflow_id, config_json, next_run_at, now],
+                   COALESCE((SELECT created_at FROM schedules WHERE id = ?1 AND tenant_id = ?6), ?5), ?5, ?6)",
+        params![schedule_id, workflow_id, config_json, next_run_at, now, tenant_id],
     )
     .err_str()?;
 
@@ -3846,15 +4190,19 @@ fn sync_project_workflow_schedule(
 impl ProjectWorkflowRepo for SqliteRepos {
     async fn list(&self, project_id: &str, limit: i64) -> Result<Vec<ProjectWorkflow>, String> {
         let project_id = project_id.to_string();
+        let tenant_id = self.tenant_id();
         let limit = limit.clamp(1, 200);
         self.with_conn(move |conn| {
             let sql = format!(
                 "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows \
-                 WHERE project_id = ?1 ORDER BY name ASC LIMIT ?2"
+                 WHERE project_id = ?1 AND tenant_id = ?2 ORDER BY name ASC LIMIT ?3"
             );
             let mut stmt = conn.prepare(&sql).err_str()?;
             let rows: Vec<ProjectWorkflow> = stmt
-                .query_map(params![project_id, limit], map_project_workflow_row)
+                .query_map(
+                    params![project_id, tenant_id, limit],
+                    map_project_workflow_row,
+                )
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -3865,10 +4213,11 @@ impl ProjectWorkflowRepo for SqliteRepos {
 
     async fn get(&self, id: &str) -> Result<ProjectWorkflow, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
-                &format!("SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1"),
-                params![id],
+                &format!("SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1 AND tenant_id = ?2"),
+                params![id, tenant_id],
                 map_project_workflow_row,
             )
             .err_str()
@@ -3911,14 +4260,22 @@ impl ProjectWorkflowRepo for SqliteRepos {
             )
             .err_str()?;
 
-            sync_project_workflow_schedule(&tx, &id, false, &trigger_kind, &trigger_config, &now)?;
+            sync_project_workflow_schedule(
+                &tx,
+                &id,
+                &tenant_id,
+                false,
+                &trigger_kind,
+                &trigger_config,
+                &now,
+            )?;
 
             let item = tx
                 .query_row(
                     &format!(
-                        "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1"
+                        "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1 AND tenant_id = ?2"
                     ),
-                    params![&id],
+                    params![&id, &tenant_id],
                     map_project_workflow_row,
                 )
                 .err_str()?;
@@ -3934,6 +4291,7 @@ impl ProjectWorkflowRepo for SqliteRepos {
         payload: UpdateProjectWorkflow,
     ) -> Result<ProjectWorkflow, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn_mut(move |conn| {
             let tx = conn.transaction().err_str()?;
             let now = chrono::Utc::now().to_rfc3339();
@@ -3941,9 +4299,9 @@ impl ProjectWorkflowRepo for SqliteRepos {
             let current = tx
                 .query_row(
                     &format!(
-                        "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1"
+                        "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1 AND tenant_id = ?2"
                     ),
-                    params![&id],
+                    params![&id, &tenant_id],
                     map_project_workflow_row,
                 )
                 .err_str()?;
@@ -3953,15 +4311,15 @@ impl ProjectWorkflowRepo for SqliteRepos {
                     return Err("workflow: name must be non-empty".into());
                 }
                 tx.execute(
-                    "UPDATE project_workflows SET name = ?1, updated_at = ?2 WHERE id = ?3",
-                    params![name, &now, &id],
+                    "UPDATE project_workflows SET name = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                    params![name, &now, &id, &tenant_id],
                 )
                 .err_str()?;
             }
             if let Some(description) = &payload.description {
                 tx.execute(
-                    "UPDATE project_workflows SET description = ?1, updated_at = ?2 WHERE id = ?3",
-                    params![description, &now, &id],
+                    "UPDATE project_workflows SET description = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                    params![description, &now, &id, &tenant_id],
                 )
                 .err_str()?;
             }
@@ -3979,8 +4337,8 @@ impl ProjectWorkflowRepo for SqliteRepos {
                 tx.execute(
                     "UPDATE project_workflows
                         SET graph = ?1, version = version + 1, updated_at = ?2
-                      WHERE id = ?3",
-                    params![json, &now, &id],
+                      WHERE id = ?3 AND tenant_id = ?4",
+                    params![json, &now, &id, &tenant_id],
                 )
                 .err_str()?;
                 Some(graph)
@@ -3999,13 +4357,14 @@ impl ProjectWorkflowRepo for SqliteRepos {
             );
             let trigger_config_json = serde_json::to_string(&trigger_config).err_str()?;
             tx.execute(
-                "UPDATE project_workflows SET trigger_kind = ?1, trigger_config = ?2, updated_at = ?3 WHERE id = ?4",
-                params![&trigger_kind, trigger_config_json, &now, &id],
+                "UPDATE project_workflows SET trigger_kind = ?1, trigger_config = ?2, updated_at = ?3 WHERE id = ?4 AND tenant_id = ?5",
+                params![&trigger_kind, trigger_config_json, &now, &id, &tenant_id],
             )
             .err_str()?;
             sync_project_workflow_schedule(
                 &tx,
                 &current.id,
+                &tenant_id,
                 current.enabled,
                 &trigger_kind,
                 &trigger_config,
@@ -4015,9 +4374,9 @@ impl ProjectWorkflowRepo for SqliteRepos {
             let item = tx
                 .query_row(
                     &format!(
-                        "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1"
+                        "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1 AND tenant_id = ?2"
                     ),
-                    params![&id],
+                    params![&id, &tenant_id],
                     map_project_workflow_row,
                 )
                 .err_str()?;
@@ -4029,16 +4388,17 @@ impl ProjectWorkflowRepo for SqliteRepos {
 
     async fn delete(&self, id: &str) -> Result<(), String> {
         let workflow_id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn_mut(move |conn| {
             let tx = conn.transaction().err_str()?;
             tx.execute(
-                "DELETE FROM schedules WHERE workflow_id = ?1",
-                params![&workflow_id],
+                "DELETE FROM schedules WHERE workflow_id = ?1 AND tenant_id = ?2",
+                params![&workflow_id, &tenant_id],
             )
             .err_str()?;
             tx.execute(
-                "DELETE FROM project_workflows WHERE id = ?1",
-                params![&workflow_id],
+                "DELETE FROM project_workflows WHERE id = ?1 AND tenant_id = ?2",
+                params![&workflow_id, &tenant_id],
             )
             .err_str()?;
             tx.commit().err_str()?;
@@ -4049,14 +4409,15 @@ impl ProjectWorkflowRepo for SqliteRepos {
 
     async fn set_enabled(&self, id: &str, enabled: bool) -> Result<ProjectWorkflow, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn_mut(move |conn| {
             let tx = conn.transaction().err_str()?;
             let current = tx
                 .query_row(
                     &format!(
-                        "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1"
+                        "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1 AND tenant_id = ?2"
                     ),
-                    params![&id],
+                    params![&id, &tenant_id],
                     map_project_workflow_row,
                 )
                 .err_str()?;
@@ -4067,13 +4428,14 @@ impl ProjectWorkflowRepo for SqliteRepos {
             let now = chrono::Utc::now().to_rfc3339();
             let flag: i64 = if enabled { 1 } else { 0 };
             tx.execute(
-                "UPDATE project_workflows SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
-                params![flag, &now, &id],
+                "UPDATE project_workflows SET enabled = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                params![flag, &now, &id, &tenant_id],
             )
             .err_str()?;
             sync_project_workflow_schedule(
                 &tx,
                 &current.id,
+                &tenant_id,
                 enabled,
                 &current.trigger_kind,
                 &current.trigger_config,
@@ -4082,9 +4444,9 @@ impl ProjectWorkflowRepo for SqliteRepos {
             let item = tx
                 .query_row(
                     &format!(
-                        "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1"
+                        "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1 AND tenant_id = ?2"
                     ),
-                    params![&id],
+                    params![&id, &tenant_id],
                     map_project_workflow_row,
                 )
                 .err_str()?;
@@ -4096,10 +4458,11 @@ impl ProjectWorkflowRepo for SqliteRepos {
 
     async fn lookup_project_id(&self, workflow_id: &str) -> Result<String, String> {
         let workflow_id = workflow_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
-                "SELECT project_id FROM project_workflows WHERE id = ?1",
-                params![workflow_id],
+                "SELECT project_id FROM project_workflows WHERE id = ?1 AND tenant_id = ?2",
+                params![workflow_id, tenant_id],
                 |row| row.get::<_, String>(0),
             )
             .map_err(|e| format!("workflow: not found ({})", e))
@@ -4109,6 +4472,7 @@ impl ProjectWorkflowRepo for SqliteRepos {
 
     async fn lookup_run_scope(&self, run_id: &str) -> Result<(String, String), String> {
         let run_id = run_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             // Joined on `project_workflows.id = workflow_runs.workflow_id` so
             // the dispatcher can scope events to the owning project without
@@ -4116,9 +4480,9 @@ impl ProjectWorkflowRepo for SqliteRepos {
             conn.query_row(
                 "SELECT wr.workflow_id, pw.project_id
                  FROM workflow_runs wr
-                 INNER JOIN project_workflows pw ON pw.id = wr.workflow_id
-                 WHERE wr.id = ?1",
-                params![run_id],
+                 INNER JOIN project_workflows pw ON pw.id = wr.workflow_id AND pw.tenant_id = wr.tenant_id
+                 WHERE wr.id = ?1 AND wr.tenant_id = ?2",
+                params![run_id, tenant_id],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .map_err(|e| format!("workflow run not found ({})", e))
@@ -4159,6 +4523,7 @@ impl ProjectBoardColumnRepo for SqliteRepos {
         board_id: Option<String>,
     ) -> Result<Vec<ProjectBoardColumn>, String> {
         let project_id = project_id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             // When no board_id is given, fall back to the project's default
             // board so the kanban surface always has a sensible default
@@ -4168,8 +4533,8 @@ impl ProjectBoardColumnRepo for SqliteRepos {
                 None => conn
                     .query_row(
                         "SELECT id FROM project_boards \
-                         WHERE project_id = ?1 AND is_default = 1 LIMIT 1",
-                        params![project_id],
+                         WHERE project_id = ?1 AND tenant_id = ?2 AND is_default = 1 LIMIT 1",
+                        params![project_id, tenant_id],
                         |row| row.get::<_, String>(0),
                     )
                     .optional()
@@ -4180,18 +4545,18 @@ impl ProjectBoardColumnRepo for SqliteRepos {
                 Some(b) => (
                     format!(
                         "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns \
-                         WHERE project_id = ?1 AND board_id = ?2 \
+                         WHERE project_id = ?1 AND board_id = ?2 AND tenant_id = ?3 \
                          ORDER BY position ASC, created_at ASC"
                     ),
-                    vec![Box::new(project_id), Box::new(b)],
+                    vec![Box::new(project_id), Box::new(b), Box::new(tenant_id)],
                 ),
                 None => (
                     format!(
                         "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns \
-                         WHERE project_id = ?1 \
+                         WHERE project_id = ?1 AND tenant_id = ?2 \
                          ORDER BY position ASC, created_at ASC"
                     ),
-                    vec![Box::new(project_id)],
+                    vec![Box::new(project_id), Box::new(tenant_id)],
                 ),
             };
             let mut stmt = conn.prepare(&sql).err_str()?;
@@ -4208,12 +4573,13 @@ impl ProjectBoardColumnRepo for SqliteRepos {
 
     async fn get(&self, id: &str) -> Result<Option<ProjectBoardColumn>, String> {
         let id = id.to_string();
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
                 &format!(
-                    "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns WHERE id = ?1"
+                    "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns WHERE id = ?1 AND tenant_id = ?2"
                 ),
-                params![id],
+                params![id, tenant_id],
                 map_project_board_column_row,
             )
             .optional()

@@ -276,7 +276,10 @@ impl ToolHandler for SpawnSubAgentsTool {
                     for sid in &ids {
                         let state: Option<String> = conn
                             .query_row(
-                                "SELECT execution_state FROM chat_sessions WHERE id = ?1",
+                                "SELECT execution_state
+                                   FROM chat_sessions
+                                  WHERE id = ?1
+                                    AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
                                 rusqlite::params![sid],
                                 |row| row.get(0),
                             )
@@ -333,7 +336,10 @@ impl ToolHandler for SpawnSubAgentsTool {
                     }
                 };
                 conn.query_row(
-                    "SELECT COALESCE(execution_state, 'failure'), finish_summary, terminal_error FROM chat_sessions WHERE id = ?1",
+                    "SELECT COALESCE(execution_state, 'failure'), finish_summary, terminal_error
+                       FROM chat_sessions
+                      WHERE id = ?1
+                        AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
                     rusqlite::params![sid],
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )

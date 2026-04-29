@@ -640,7 +640,10 @@ async fn execute_agent_loop_internal(
         if persist_run_metadata {
             if let Ok(conn) = db.get() {
                 let _ = conn.execute(
-                    "UPDATE runs SET metadata = json_set(COALESCE(metadata, '{}'), '$.finish_summary', ?1) WHERE id = ?2",
+                    "UPDATE runs
+                        SET metadata = json_set(COALESCE(metadata, '{}'), '$.finish_summary', ?1)
+                      WHERE id = ?2
+                        AND tenant_id = COALESCE((SELECT tenant_id FROM runs WHERE id = ?2), 'local')",
                     rusqlite::params![summary, run_id],
                 );
             }
@@ -1148,7 +1151,12 @@ pub async fn run_pulse(
         let session_id: String = conn
           .query_row(
             "SELECT id FROM chat_sessions
-             WHERE agent_id = ?1 AND project_id = ?2 AND session_type = 'pulse'",
+             WHERE agent_id = ?1
+               AND project_id = ?2
+               AND session_type = 'pulse'
+               AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2),
+                                        (SELECT tenant_id FROM agents WHERE id = ?1),
+                                        'local')",
             rusqlite::params![aid, pid_str],
             |row| row.get(0)
           )
@@ -1178,7 +1186,10 @@ pub async fn run_pulse(
 
         conn
           .execute(
-            "UPDATE chat_sessions SET updated_at = ?1, session_type = 'pulse', execution_state = 'running' WHERE id = ?2",
+            "UPDATE chat_sessions
+                SET updated_at = ?1, session_type = 'pulse', execution_state = 'running'
+              WHERE id = ?2
+                AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local')",
             rusqlite::params![now, session_id]
           )
           .map_err(|e| e.to_string())?;
@@ -1354,7 +1365,10 @@ pub async fn run_pulse(
           "chat_session_id": session_id,
         });
         let _ = conn.execute(
-            "UPDATE runs SET metadata = ?1 WHERE id = ?2",
+            "UPDATE runs
+                SET metadata = ?1
+              WHERE id = ?2
+                AND tenant_id = COALESCE((SELECT tenant_id FROM runs WHERE id = ?2), 'local')",
             rusqlite::params![metadata.to_string(), run_id],
         );
     }
@@ -1462,7 +1476,10 @@ fn update_run_metadata(
             }
         });
         let _ = conn.execute(
-            "UPDATE runs SET metadata = ?1 WHERE id = ?2",
+            "UPDATE runs
+                SET metadata = ?1
+              WHERE id = ?2
+                AND tenant_id = COALESCE((SELECT tenant_id FROM runs WHERE id = ?2), 'local')",
             rusqlite::params![metadata.to_string(), run_id],
         );
     }

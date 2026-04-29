@@ -83,7 +83,12 @@ impl ToolHandler for ReactToMessageTool {
             let conn = pool.get().map_err(|e| e.to_string())?;
             let exists: bool = conn
                 .query_row(
-                    "SELECT COUNT(*) > 0 FROM chat_messages WHERE id = ?1 AND session_id = ?2 AND role = 'user'",
+                    "SELECT COUNT(*) > 0
+                       FROM chat_messages
+                      WHERE id = ?1
+                        AND session_id = ?2
+                        AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local')
+                        AND role = 'user'",
                     rusqlite::params![msg_id, sid],
                     |row| row.get(0),
                 )
@@ -96,8 +101,8 @@ impl ToolHandler for ReactToMessageTool {
             }
             let changes = conn
                 .execute(
-                    "INSERT OR IGNORE INTO message_reactions (id, message_id, session_id, emoji, created_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT OR IGNORE INTO message_reactions (id, message_id, session_id, emoji, created_at, tenant_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?3), 'local'))",
                     rusqlite::params![rid, msg_id, sid, emoji_str, now_clone],
                 )
                 .map_err(|e| e.to_string())?;

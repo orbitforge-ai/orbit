@@ -261,7 +261,10 @@ async fn latest_message_timestamp(db: &DbPool, session_id: &str) -> Result<Optio
     tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.query_row(
-            "SELECT MAX(created_at) FROM chat_messages WHERE session_id = ?1",
+            "SELECT MAX(created_at)
+               FROM chat_messages
+              WHERE session_id = ?1
+                AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
             rusqlite::params![session_id],
             |row| row.get(0),
         )
@@ -284,7 +287,9 @@ async fn next_user_message_after(
         let mut sql = String::from(
             "SELECT id, content, created_at
              FROM chat_messages
-             WHERE session_id = ?1 AND role = 'user'",
+             WHERE session_id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')
+               AND role = 'user'",
         );
         if anchor.is_some() {
             sql.push_str(" AND created_at > ?2");

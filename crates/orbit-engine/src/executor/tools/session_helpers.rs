@@ -70,8 +70,9 @@ pub async fn load_owned_session(
                         chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
                         project_id, worktree_name, worktree_branch, worktree_path, last_input_tokens
                  FROM chat_sessions
-                 WHERE id = ?1",
-                rusqlite::params![session_id],
+                 WHERE id = ?1
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local')",
+                rusqlite::params![session_id, agent_id],
                 |row| {
                     Ok(SessionToolSession {
                         session: ChatSession {
@@ -131,6 +132,7 @@ pub async fn list_session_messages(
                    SELECT id, role, content, created_at, is_compacted
                    FROM chat_messages
                    WHERE session_id = ?1
+                     AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')
                    ORDER BY created_at DESC
                    LIMIT ?2 OFFSET ?3
                  ) sub
@@ -176,7 +178,8 @@ pub async fn session_message_stats(
                 SUM(CASE WHEN is_compacted = 1 THEN 1 ELSE 0 END) AS compacted_count,
                 MAX(created_at) AS last_message_at
              FROM chat_messages
-             WHERE session_id = ?1",
+             WHERE session_id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
             rusqlite::params![session_id],
             |row| {
                 Ok(SessionMessageStats {
@@ -219,19 +222,21 @@ pub async fn list_owned_sessions(
                 (
                   SELECT content
                   FROM chat_messages cm
-                  WHERE cm.session_id = cs.id
+                  WHERE cm.session_id = cs.id AND cm.tenant_id = cs.tenant_id
                   ORDER BY cm.created_at DESC
                   LIMIT 1
                 ) AS last_content,
                 (
                   SELECT created_at
                   FROM chat_messages cm
-                  WHERE cm.session_id = cs.id
+                  WHERE cm.session_id = cs.id AND cm.tenant_id = cs.tenant_id
                   ORDER BY cm.created_at DESC
                   LIMIT 1
                 ) AS last_message_at
              FROM chat_sessions cs
-             WHERE cs.agent_id = ?1 AND cs.archived = 0",
+             WHERE cs.agent_id = ?1
+               AND cs.tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?1), 'local')
+               AND cs.archived = 0",
         );
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(agent_id)];
 
