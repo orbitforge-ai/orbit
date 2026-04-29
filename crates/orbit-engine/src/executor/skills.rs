@@ -614,12 +614,13 @@ pub fn upsert_active_skill(
 ) -> Result<(), String> {
     let conn = db.get().map_err(|e| e.to_string())?;
     conn.execute(
-        "INSERT INTO active_session_skills (session_id, skill_name, instructions, source_path, activated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+        "INSERT INTO active_session_skills (session_id, skill_name, instructions, source_path, activated_at, tenant_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local'))
          ON CONFLICT(session_id, skill_name) DO UPDATE SET
            instructions = excluded.instructions,
            source_path = excluded.source_path,
-           activated_at = excluded.activated_at",
+           activated_at = excluded.activated_at,
+           tenant_id = excluded.tenant_id",
         params![
             session_id,
             skill_name,
@@ -1223,14 +1224,14 @@ Bad
             let conn = db.get().expect("db connection");
             let now = chrono::Utc::now().to_rfc3339();
             conn.execute(
-                "INSERT INTO agents (id, name, description, state, max_concurrent_runs, created_at, updated_at)
-                 VALUES (?1, ?2, NULL, 'idle', 1, ?3, ?3)",
+                "INSERT INTO agents (id, name, description, state, max_concurrent_runs, created_at, updated_at, tenant_id)
+                 VALUES (?1, ?2, NULL, 'idle', 1, ?3, ?3, 'local')",
                 rusqlite::params!["agent-1", "Agent 1", now],
             )
             .expect("agent fixture should persist");
             conn.execute(
-                "INSERT INTO chat_sessions (id, agent_id, title, archived, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, 0, ?4, ?4)",
+                "INSERT INTO chat_sessions (id, agent_id, title, archived, created_at, updated_at, tenant_id)
+                 VALUES (?1, ?2, ?3, 0, ?4, ?4, COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local'))",
                 rusqlite::params!["session-1", "agent-1", "Session 1", now],
             )
             .expect("session fixture should persist");

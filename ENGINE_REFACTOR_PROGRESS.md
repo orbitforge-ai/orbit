@@ -81,9 +81,9 @@ Per-file remaining `DbPool` references (lower = closer to fully migrated). Read-
 ### B.4 `tenant_id` column
 
 - `[done]` Migration 31 adds `tenant_id TEXT NOT NULL DEFAULT 'local'` to all tables.
-- `[wip]` `RepoCtx { tenant_id }` added; `SqliteRepos::new` defaults to `'local'`, `with_tenant`/`with_ctx` allow explicit context, and repo-owned `sqlite.rs` inserts now write `tenant_id` explicitly.
-- `[wip]` Parent-derived raw inserts now write `tenant_id`: work-item events, project board scaffolding/columns, chat messages/sessions, runs, bus messages, workflow run rows/steps, compaction summaries, memory extraction logs, agent tasks/conversations, channel sessions, plugin entities/relations.
-- `[next]` Finish remaining raw inserts that still rely on DB defaults (mostly bootstrap/test/scaffolding paths and project/task creation helpers), then add tenant predicates to read/update/delete paths before shared Postgres/RLS work.
+- `[done]` `RepoCtx { tenant_id }` added; `SqliteRepos::new` defaults to `'local'`, `with_tenant`/`with_ctx` allow explicit context, and repo-owned `sqlite.rs` inserts write `tenant_id` explicitly.
+- `[done]` All `INSERT INTO` SQL blocks under `crates/orbit-engine/src` now write `tenant_id` explicitly, either from `RepoCtx`, a parent row (`projects`, `agents`, `tasks`, `chat_sessions`, etc.), or `'local'` for bootstrap/test scaffolding.
+- `[next]` Add tenant predicates to read/update/delete paths as part of shared Postgres/RLS hardening; per-tenant SQLite remains covered by write-time tenant attribution.
 
 ### B.5 PostgreSQL backend (Phase C — unblocked)
 

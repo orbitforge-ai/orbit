@@ -391,16 +391,16 @@ mod tests {
         let graph = serde_json::to_string(&workflow.graph).unwrap();
         let trigger_config = workflow.trigger_config.to_string();
         conn.execute(
-            "INSERT INTO projects (id, name, description, created_at, updated_at)
-             VALUES (?1, ?2, NULL, ?3, ?3)",
+            "INSERT INTO projects (id, name, description, created_at, updated_at, tenant_id)
+             VALUES (?1, ?2, NULL, ?3, ?3, 'local')",
             rusqlite::params![workflow.project_id, "Test Project", workflow.created_at],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO project_workflows
-                (id, project_id, name, description, enabled, graph, trigger_kind, trigger_config, version, created_at, updated_at)
+                (id, project_id, name, description, enabled, graph, trigger_kind, trigger_config, version, created_at, updated_at, tenant_id)
              VALUES
-                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
             rusqlite::params![
                 workflow.id,
                 workflow.project_id,

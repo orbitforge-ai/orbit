@@ -67,8 +67,8 @@ pub(crate) async fn filter_unseen_items(
 
             tx.execute(
                 "INSERT INTO workflow_seen_items (
-                    id, workflow_id, node_id, source_key, fingerprint, created_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    id, workflow_id, node_id, source_key, fingerprint, created_at, tenant_id
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE((SELECT tenant_id FROM project_workflows WHERE id = ?2), 'local'))",
                 rusqlite::params![
                     Ulid::new().to_string(),
                     workflow_id,
@@ -107,16 +107,16 @@ mod tests {
         let conn = db.get().unwrap();
         let now = "2024-01-01T00:00:00Z";
         conn.execute(
-            "INSERT INTO projects (id, name, description, created_at, updated_at)
-             VALUES (?1, ?2, NULL, ?3, ?3)",
+            "INSERT INTO projects (id, name, description, created_at, updated_at, tenant_id)
+             VALUES (?1, ?2, NULL, ?3, ?3, 'local')",
             rusqlite::params!["project-1", "Test Project", now],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO project_workflows
-                (id, project_id, name, description, enabled, graph, trigger_kind, trigger_config, version, created_at, updated_at)
+                (id, project_id, name, description, enabled, graph, trigger_kind, trigger_config, version, created_at, updated_at, tenant_id)
              VALUES
-                (?1, ?2, ?3, NULL, 1, ?4, 'manual', '{}', 1, ?5, ?5)",
+                (?1, ?2, ?3, NULL, 1, ?4, 'manual', '{}', 1, ?5, ?5, COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
             rusqlite::params![
                 workflow_id,
                 "project-1",

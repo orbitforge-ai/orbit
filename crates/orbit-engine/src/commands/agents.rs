@@ -221,8 +221,8 @@ async fn create_agent_inner(payload: CreateAgent, app: &AppContext) -> Result<Ag
         let max_runs = payload.max_concurrent_runs.unwrap_or(5);
 
         conn.execute(
-            "INSERT INTO agents (id, name, description, state, max_concurrent_runs, created_at, updated_at)
-             VALUES (?1, ?2, ?3, 'idle', ?4, ?5, ?5)",
+            "INSERT INTO agents (id, name, description, state, max_concurrent_runs, created_at, updated_at, tenant_id)
+             VALUES (?1, ?2, ?3, 'idle', ?4, ?5, ?5, 'local')",
             rusqlite::params![id, payload.name, payload.description, max_runs, now],
         )
         .map_err(|e| e.to_string())?;

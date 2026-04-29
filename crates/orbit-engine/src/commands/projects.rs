@@ -95,8 +95,8 @@ async fn create_project_inner(payload: CreateProject, app: &AppContext) -> Resul
 
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO projects (id, name, description, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?4)",
+            "INSERT INTO projects (id, name, description, created_at, updated_at, tenant_id)
+             VALUES (?1, ?2, ?3, ?4, ?4, 'local')",
             rusqlite::params![id, payload.name, payload.description, now],
         )
         .map_err(|e| e.to_string())?;

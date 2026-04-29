@@ -264,8 +264,8 @@ fn backfill_default_project_boards(
         let prefix = derive_default_board_prefix(conn, &project_id, &project_name)?;
 
         conn.execute(
-            "INSERT INTO project_boards (id, project_id, name, prefix, position, is_default, created_at, updated_at)
-             VALUES (?1, ?2, 'Default', ?3, 1024.0, 1, ?4, ?4)",
+            "INSERT INTO project_boards (id, project_id, name, prefix, position, is_default, created_at, updated_at, tenant_id)
+             VALUES (?1, ?2, 'Default', ?3, 1024.0, 1, ?4, ?4, COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
             params![board_id, project_id, prefix, now],
         )?;
 
