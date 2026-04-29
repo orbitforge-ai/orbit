@@ -25,29 +25,13 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Database
 #
-# Phase B introduces sqlx alongside the existing r2d2/rusqlite layer. Both
-# pools coexist during the migration: r2d2 keeps the existing query layer
-# alive while we move aggregate-by-aggregate onto sqlx + repo traits. Once
-# every command uses sqlx, the rusqlite/r2d2 deps can be removed.
-rusqlite = { version = "0.39", features = ["bundled"] }
-r2d2 = "0.8"
-r2d2_sqlite = "0.33"
-#
-# Note: sqlx's `sqlite` driver links the same `sqlite3` native library as
-# rusqlite's `bundled` feature, and Cargo allows only one `links = "sqlite3"`
-# package in the graph. Until rusqlite is removed we run sqlx with
-# Postgres only; SQLite repository impls keep using rusqlite. Once every
-# aggregate is on the repo trait and rusqlite is dropped, switch sqlx on
-# for both backends.
-# Note: sqlx's `chrono` / `uuid` / `json` umbrella-level features each
-# transitively pull `sqlx-sqlite` in 0.8.x even when the `sqlite` driver is
-# disabled, which conflicts with rusqlite's bundled `libsqlite3-sys`. Until
-# rusqlite is removed, we skip those features and convert types manually
-# (timestamps as RFC3339 strings, JSON as `serde_json::Value` via TEXT, etc.).
+# Phase B.6 moves the local SQLite path onto SQLx. Runtime queries stay
+# string-based so local development and CI do not need an offline query cache.
 sqlx = { version = "0.8.6", default-features = false, features = [
     "runtime-tokio",
     "tls-rustls",
     "postgres",
+    "sqlite",
 ] }
 
 # Async runtime

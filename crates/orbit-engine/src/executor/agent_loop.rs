@@ -724,7 +724,7 @@ pub async fn run_agent_loop(
     })
 }
 
-pub async fn run_agent_loop_for_workflow(
+pub(crate) async fn run_agent_loop_for_workflow(
     run_id: &str,
     agent_id: &str,
     cfg: &AgentLoopConfig,

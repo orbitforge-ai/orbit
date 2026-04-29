@@ -36,7 +36,8 @@ const MIGRATION_30: &str = include_str!("migrations/0030_work_item_events.sql");
 const MIGRATION_31: &str = include_str!("migrations/0031_tenant_id.sql");
 
 /// Newtype wrapper — stored as Tauri managed state.
-/// r2d2::Pool is Arc-based internally: cheap to clone.
+/// The compatibility `Pool` wraps `sqlx::SqlitePool`, which is Arc-based
+/// internally and cheap to clone.
 #[derive(Clone)]
 pub struct DbPool(pub Pool<SqliteConnectionManager>);
 
@@ -244,49 +245,44 @@ fn backfill_default_project_boards(
     let now = chrono::Utc::now().to_rfc3339();
 
     let mut project_stmt = conn.prepare(
-        "SELECT p.id, p.name, p.tenant_id
+        "SELECT p.id, p.name
            FROM projects p
           WHERE NOT EXISTS (
               SELECT 1 FROM project_boards b
                WHERE b.project_id = p.id
-                 AND b.tenant_id = p.tenant_id
                  AND b.is_default = 1
           )",
     )?;
-    let projects: Vec<(String, String, String)> = project_stmt
+    let projects: Vec<(String, String)> = project_stmt
         .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?
         .filter_map(|r| r.ok())
         .collect();
     drop(project_stmt);
 
-    for (project_id, project_name, tenant_id) in projects {
+    for (project_id, project_name) in projects {
         let board_id = Ulid::new().to_string();
-        let prefix = derive_default_board_prefix(conn, &project_id, &tenant_id, &project_name)?;
+        let prefix = derive_default_board_prefix(conn, &project_id, &project_name)?;
 
         conn.execute(
-            "INSERT INTO project_boards (id, project_id, name, prefix, position, is_default, created_at, updated_at, tenant_id)
-             VALUES (?1, ?2, 'Default', ?3, 1024.0, 1, ?4, ?4, ?5)",
-            params![board_id, project_id, prefix, now, tenant_id],
+            "INSERT INTO project_boards (id, project_id, name, prefix, position, is_default, created_at, updated_at)
+             VALUES (?1, ?2, 'Default', ?3, 1024.0, 1, ?4, ?4)",
+            params![board_id, project_id, prefix, now],
         )?;
 
         conn.execute(
             "UPDATE project_board_columns
                 SET board_id = ?1
-              WHERE project_id = ?2 AND tenant_id = ?3 AND board_id IS NULL",
-            params![board_id, project_id, tenant_id],
+              WHERE project_id = ?2 AND board_id IS NULL",
+            params![board_id, project_id],
         )?;
 
         conn.execute(
             "UPDATE work_items
                 SET board_id = ?1
-              WHERE project_id = ?2 AND tenant_id = ?3 AND board_id IS NULL",
-            params![board_id, project_id, tenant_id],
+              WHERE project_id = ?2 AND board_id IS NULL",
+            params![board_id, project_id],
         )?;
     }
 
@@ -296,7 +292,6 @@ fn backfill_default_project_boards(
 fn derive_default_board_prefix(
     conn: &rusqlite::Connection,
     project_id: &str,
-    tenant_id: &str,
     project_name: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     use rusqlite::params;
@@ -325,9 +320,9 @@ fn derive_default_board_prefix(
         let taken: bool = conn.query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM project_boards
-                 WHERE project_id = ?1 AND tenant_id = ?2 AND prefix = ?3
+                 WHERE project_id = ?1 AND prefix = ?2
              )",
-            params![project_id, tenant_id, candidate],
+            params![project_id, candidate],
             |row| row.get(0),
         )?;
         if !taken {

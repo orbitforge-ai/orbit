@@ -1,6 +1,6 @@
 # Phase Progress — Engine extraction + per-backend repo traits
 
-Source plan: `/Users/matwaroff/.claude/plans/quirky-jingling-candy.md`
+Source plan: [`/Users/matwaroff/.claude/plans/quirky-jingling-candy.md`](/Users/matwaroff/.claude/plans/quirky-jingling-candy.md)
 Council edits: `/Users/matwaroff/.claude/plans/please-review-this-plan-elegant-meteor.md`
 
 This is a living index of what's done in Phase B so work can be split across agents without overlap. Update it as you finish slices. Keep entries terse — one line each.
@@ -100,7 +100,10 @@ Follow-on after B.5:
 
 ### B.6 Sqlx swap on the SQLite path
 
-- `[deferred]` Drop rusqlite/r2d2; rewrite `SqliteRepos` on `sqlx::SqlitePool`. Multi-day rewrite blocked by ~40 files outside `commands/` that hold `DbPool` directly (executor, scheduler, triggers, workflows, plugins, app_context). Not blocking Phase C.
+- `[done]` Removed external `rusqlite`, `r2d2`, and `r2d2_sqlite` dependencies from the engine/desktop crates; `sqlx` now enables the SQLite driver.
+- `[done]` `DbPool` now resolves to an SQLx-backed compatibility pool, so `SqliteRepos` and remaining direct `DbPool` callers run on `sqlx::SqlitePool` without linking a second SQLite driver.
+- `[done]` Added `sqlite_compat` facade for the legacy sync-style query surface while follow-on slices migrate the remaining direct `DbPool` call sites to native repo methods.
+- `[done]` B.6 verification sweep: `cargo fmt --check`, `git diff --check`, `cargo check --workspace`, `cargo build -p orbit-server`, `cargo test -p orbit-engine --tests --no-run`, `cargo test -p orbit-engine workflows:: -- --nocapture`, and `cargo test -p orbit-engine active_skills_round_trip_through_db_state -- --nocapture` pass.
 
 ---
 

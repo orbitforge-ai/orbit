@@ -1,10 +1,9 @@
-//! SQLite-backed `Repos` impl built on the existing rusqlite/r2d2 pool.
+//! SQLite-backed `Repos` impl built on the local SQLx SQLite pool.
 //!
-//! Until rusqlite is removed, this is what every desktop and per-tenant-VM
-//! deployment runs. Queries are lifted verbatim from the original
-//! `commands/{tasks,…}.rs` so behaviour is identical — the only architectural
-//! change is that they're reachable through the `Repos` trait instead of via
-//! `tauri::State<DbPool>`.
+//! Desktop and per-tenant-VM deployments use this backend. Queries are lifted
+//! from the original `commands/{tasks,...}.rs` so behaviour stays familiar;
+//! the architectural change is that they're reachable through the `Repos`
+//! trait instead of via `tauri::State<DbPool>`.
 
 use async_trait::async_trait;
 use rusqlite::{params, OptionalExtension};
@@ -52,11 +51,10 @@ use crate::scheduler::converter::{next_n_runs, to_cron};
 
 // ── Boilerplate-killers ─────────────────────────────────────────────────────
 //
-// Every rusqlite call ends up doing the same dance: borrow a connection from
-// the pool inside a `spawn_blocking`, surface the errors as `String`, and
-// hand the connection to a closure. The two helpers below encapsulate that
-// dance so each repo method can read as just its query — and any aggregate
-// that lands later can be implemented in a few lines instead of fifteen.
+// Every legacy-style SQLite call ends up doing the same dance: borrow a
+// connection facade from the SQLx pool inside a `spawn_blocking`, surface the
+// errors as `String`, and hand the connection to a closure. The two helpers
+// below encapsulate that dance so each repo method can read as just its query.
 
 /// Convert any error type that implements `Display` into the `String` shape
 /// the repo trait surface uses. Saves the recurring `.map_err(|e| e.to_string())`.
@@ -93,9 +91,10 @@ impl SqliteRepos {
         self.ctx.tenant_id.clone()
     }
 
-    /// Run a closure on a pooled rusqlite `Connection` from a blocking-task
-    /// thread. Closure failures (any `Display`-able error) are surfaced as
-    /// `String`. Use this for read paths and single-statement writes.
+    /// Run a closure on a pooled SQLite `Connection` facade from a
+    /// blocking-task thread. Closure failures (any `Display`-able error) are
+    /// surfaced as `String`. Use this for read paths and single-statement
+    /// writes.
     async fn with_conn<T, F>(&self, f: F) -> Result<T, String>
     where
         T: Send + 'static,
@@ -1192,15 +1191,14 @@ impl RunRepo for SqliteRepos {
 
             // Helper that appends a `AND <col> = ?N` clause and pushes the
             // value, keeping the SQL/params in lockstep.
-            let mut push_eq =
-                |col: &str,
-                 val: Box<dyn rusqlite::ToSql>,
-                 sql: &mut String,
-                 b: &mut Vec<Box<dyn rusqlite::ToSql>>| {
-                    let n = b.len() + 1;
-                    sql.push_str(&format!(" AND {col} = ?{n}"));
-                    b.push(val);
-                };
+            let push_eq = |col: &str,
+                           val: Box<dyn rusqlite::ToSql>,
+                           sql: &mut String,
+                           b: &mut Vec<Box<dyn rusqlite::ToSql>>| {
+                let n = b.len() + 1;
+                sql.push_str(&format!(" AND {col} = ?{n}"));
+                b.push(val);
+            };
 
             if let Some(tid) = filter.task_id {
                 push_eq("r.task_id", Box::new(tid), &mut sql, &mut bound);

@@ -45,7 +45,7 @@ pub(crate) async fn filter_unseen_items(
     let node_id = node_id.to_string();
     let source_key = source_key.to_string();
     tokio::task::spawn_blocking(move || -> Result<Vec<Value>, String> {
-        let mut conn = pool.get().map_err(|e| e.to_string())?;
+        let conn = pool.get().map_err(|e| e.to_string())?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let now = Utc::now().to_rfc3339();
         let mut unseen = Vec::new();

@@ -6,9 +6,6 @@ pub enum OrbitError {
     #[error("Database error: {0}")]
     Db(#[from] rusqlite::Error),
 
-    #[error("Connection pool error: {0}")]
-    Pool(#[from] r2d2::Error),
-
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 

@@ -520,7 +520,7 @@ async fn perform_compaction_inner(
 
     let est = estimated_tokens;
     let updated_at = tokio::task::spawn_blocking(move || -> Result<String, String> {
-        let mut conn = pool.get().map_err(|e| e.to_string())?;
+        let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
 
         // Begin transaction — all writes succeed or none do

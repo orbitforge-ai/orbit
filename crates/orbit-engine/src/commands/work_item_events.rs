@@ -101,8 +101,6 @@ pub async fn list_work_item_events(
 }
 
 mod http {
-    use super::*;
-
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Args {

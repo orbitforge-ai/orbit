@@ -13,6 +13,10 @@
 //! registration. Runtime emission and optional Tauri access are carried behind
 //! `runtime_host::RuntimeHost`.
 
+extern crate self as r2d2;
+extern crate self as r2d2_sqlite;
+extern crate self as rusqlite;
+
 pub mod app_context;
 pub mod auth;
 pub mod commands;
@@ -26,8 +30,18 @@ pub mod plugins;
 pub mod runtime_host;
 pub mod scheduler;
 pub mod shim;
+pub mod sqlite_compat;
 pub mod triggers;
 pub mod workflows;
+
+pub use sqlite_compat::{
+    params_from_iter, Connection, Error, OptionalExtension, Pool, PoolBuilder, PooledConnection,
+    Result, Row, SqliteConnectionManager, Statement, ToSql, Transaction,
+};
+
+pub mod types {
+    pub use crate::sqlite_compat::ToSql;
+}
 
 use std::path::PathBuf;
 

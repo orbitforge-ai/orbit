@@ -421,7 +421,7 @@ pub fn load_skill_instructions(
     load_skill(agent_id, skill_name, disabled_skills).map(|loaded| loaded.instructions)
 }
 
-pub fn load_skill(
+pub(crate) fn load_skill(
     agent_id: &str,
     skill_name: &str,
     disabled_skills: &[String],

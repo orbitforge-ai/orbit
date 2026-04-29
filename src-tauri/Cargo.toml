@@ -32,19 +32,11 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # claude-cli / codex-cli LLM providers (cloud builds drop them).
 orbit-engine = { path = "../crates/orbit-engine", features = ["desktop"] }
 
-# Database
-rusqlite = { version = "0.39", features = ["bundled"] }
-r2d2 = "0.8"
-r2d2_sqlite = "0.33"
-
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
 # Cloud sync — uuid for device identity
 uuid = { version = "1", features = ["v4"] }
-# Note: sqlx (PostgreSQL) will be added when cloud DB queries are implemented,
-# at which point rusqlite/r2d2_sqlite will be removed to avoid the sqlite3 link conflict.
-
 # Scheduling
 tokio-cron-scheduler = { version = "0.15.1", features = ["signal"] }
 

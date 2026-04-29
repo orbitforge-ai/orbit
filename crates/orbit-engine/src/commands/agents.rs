@@ -314,7 +314,7 @@ async fn update_agent_inner(
     let pool = app.db.0.clone();
     let (agent, previous_agent_id, role_id): (Agent, Option<String>, Option<String>) =
         tokio::task::spawn_blocking(move || -> Result<(Agent, Option<String>, Option<String>), String> {
-        let mut conn = pool.get().map_err(|e| e.to_string())?;
+        let conn = pool.get().map_err(|e| e.to_string())?;
         let now = chrono::Utc::now().to_rfc3339();
         let tenant_id = conn
             .query_row(

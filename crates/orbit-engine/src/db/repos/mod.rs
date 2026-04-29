@@ -3,17 +3,18 @@
 //! Every database-touching command will eventually call these traits instead
 //! of holding a `DbPool` directly. Two backends:
 //!
-//! * `sqlite::SqliteRepos` (this crate) — wraps the existing rusqlite/r2d2
-//!   pool. Used by the desktop app, the standalone server in single-tenant
-//!   mode, and per-tenant Fly Machines on the paid SaaS tier.
+//! * `sqlite::SqliteRepos` (this crate) — wraps the local SQLx SQLite pool.
+//!   Used by the desktop app, the standalone server in single-tenant mode,
+//!   and per-tenant Fly Machines on the paid SaaS tier.
 //! * `postgres::PgRepos` (added in Phase C) — wraps a sqlx `PgPool`. Used by
 //!   the shared multi-tenant runtime tier (free SaaS), with row-level
 //!   security scoped on every connection by tenant_id.
 //!
 //! Aggregate-by-aggregate migration: the trait surface here grows as
 //! `commands/{tasks,agents,runs,…}` are switched over from direct `DbPool`
-//! access. Once nothing references `DbPool` directly, rusqlite/r2d2 are
-//! removed and `SqliteRepos` is rewritten on top of `sqlx::SqlitePool`.
+//! access. The local SQLite pool now runs through SQLx; the remaining direct
+//! `DbPool` call sites use a small compatibility facade until they move to
+//! native repo methods.
 
 pub mod postgres;
 pub mod sqlite;
@@ -21,9 +22,7 @@ pub mod sqlite;
 use async_trait::async_trait;
 
 use crate::models::agent::{Agent, CreateAgent, UpdateAgent};
-use crate::models::bus::{
-    BusMessage, BusSubscription, BusThreadMessage, CreateBusSubscription, PaginatedBusThread,
-};
+use crate::models::bus::{BusMessage, BusSubscription, CreateBusSubscription, PaginatedBusThread};
 use crate::models::chat::{
     ChatMessageRows, ChatSession, ChatSessionMeta, ChatSessionTokenUsage, MessageReactionRow,
     SessionExecutionStatus,

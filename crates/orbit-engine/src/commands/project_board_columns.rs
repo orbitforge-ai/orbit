@@ -827,7 +827,7 @@ async fn delete_project_board_column_inner(
     let pool = app.db.0.clone();
     let deleted_id = id.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let mut conn = pool.get().map_err(|e| e.to_string())?;
+        let conn = pool.get().map_err(|e| e.to_string())?;
         let existing = get_column_by_id_sync(&conn, &id)?
             .ok_or_else(|| format!("board column '{}' not found", id))?;
         ensure_expected_revision(
@@ -954,7 +954,7 @@ async fn reorder_project_board_columns_inner(
     let pool = app.db.0.clone();
     let columns =
         tokio::task::spawn_blocking(move || -> Result<Vec<ProjectBoardColumn>, String> {
-            let mut conn = pool.get().map_err(|e| e.to_string())?;
+            let conn = pool.get().map_err(|e| e.to_string())?;
             ensure_expected_revision(&conn, &project_id, payload.expected_revision.as_deref())?;
             let board = resolve_board_sync(&conn, &project_id, payload.board_id.as_deref())?;
             let existing = list_project_board_columns_sync(&conn, &project_id, Some(&board.id))?;
