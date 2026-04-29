@@ -11,8 +11,10 @@ use rusqlite::{params, OptionalExtension};
 use ulid::Ulid;
 
 use crate::db::repos::{
-    AgentRepo, BusMessageRepo, BusSubscriptionRepo, ProjectBoardRepo, ProjectRepo, Repos,
-    RunListFilter, RunRepo, ScheduleRepo, TaskRepo, UserRepo, WorkItemEventRepo, WorkflowRunRepo,
+    AgentRepo, BusMessageRepo, BusSubscriptionRepo, ChatRepo, ChatSessionListFilter,
+    ProjectBoardColumnRepo, ProjectBoardRepo, ProjectRepo, ProjectWorkflowRepo, Repos,
+    RunListFilter, RunRepo, ScheduleRepo, TaskRepo, UserRepo, WorkItemEventRepo, WorkItemRepo,
+    WorkflowRunRepo,
 };
 use crate::db::DbPool;
 use crate::executor::workspace;
@@ -20,14 +22,22 @@ use crate::models::agent::{Agent, CreateAgent, UpdateAgent};
 use crate::models::bus::{
     BusMessage, BusSubscription, BusThreadMessage, CreateBusSubscription, PaginatedBusThread,
 };
+use crate::models::chat::{
+    ChatMessageRow, ChatMessageRows, ChatSession, ChatSessionMeta, ChatSessionTokenUsage,
+    MessageReactionRow, SessionExecutionStatus,
+};
 use crate::models::project::{CreateProject, Project, ProjectSummary, UpdateProject};
 use crate::models::project_board::{
     CreateProjectBoard, DeleteProjectBoard, ProjectBoard, UpdateProjectBoard,
 };
+use crate::models::project_board_column::ProjectBoardColumn;
+use crate::models::project_workflow::ProjectWorkflow;
 use crate::models::run::{Run, RunSummary};
 use crate::models::schedule::{CreateSchedule, RecurringConfig, Schedule};
 use crate::models::task::{CreateTask, Task, UpdateTask};
 use crate::models::user::User;
+use crate::models::work_item::WorkItem;
+use crate::models::work_item_comment::WorkItemComment;
 use crate::models::work_item_event::WorkItemEvent;
 use crate::models::workflow_run::{WorkflowRun, WorkflowRunSummary, WorkflowRunWithSteps};
 use crate::scheduler::converter::{next_n_runs, to_cron};
@@ -107,7 +117,16 @@ impl Repos for SqliteRepos {
     fn bus_subscriptions(&self) -> &dyn BusSubscriptionRepo {
         self
     }
+    fn chat(&self) -> &dyn ChatRepo {
+        self
+    }
+    fn project_board_columns(&self) -> &dyn ProjectBoardColumnRepo {
+        self
+    }
     fn project_boards(&self) -> &dyn ProjectBoardRepo {
+        self
+    }
+    fn project_workflows(&self) -> &dyn ProjectWorkflowRepo {
         self
     }
     fn projects(&self) -> &dyn ProjectRepo {
@@ -123,6 +142,9 @@ impl Repos for SqliteRepos {
         self
     }
     fn users(&self) -> &dyn UserRepo {
+        self
+    }
+    fn work_items(&self) -> &dyn WorkItemRepo {
         self
     }
     fn work_item_events(&self) -> &dyn WorkItemEventRepo {
@@ -1753,6 +1775,602 @@ impl BusSubscriptionRepo for SqliteRepos {
             conn.execute("DELETE FROM bus_subscriptions WHERE id = ?1", params![id])
                 .err_str()?;
             Ok(())
+        })
+        .await
+    }
+}
+
+// ── Chat ────────────────────────────────────────────────────────────────────
+//
+// Read-only at the trait surface. Sessions are joined with bus_messages /
+// agents / parent chat_sessions so the inbox UI can render "from agent X via
+// session Y" subtitles in one round-trip.
+
+const CHAT_SESSION_SELECT: &str = "SELECT cs.id, cs.agent_id, cs.title, cs.archived, cs.session_type, cs.parent_session_id, cs.source_bus_message_id,
+                cs.chain_depth, cs.execution_state, cs.finish_summary, cs.terminal_error,
+                bm.from_agent_id, a.name,
+                src.id, src.title,
+                cs.created_at, cs.updated_at, cs.project_id,
+                cs.worktree_name, cs.worktree_branch, cs.worktree_path
+         FROM chat_sessions cs
+         LEFT JOIN bus_messages bm ON bm.id = cs.source_bus_message_id
+         LEFT JOIN agents a ON a.id = bm.from_agent_id
+         LEFT JOIN chat_sessions src ON src.id = bm.from_session_id";
+
+fn map_chat_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatSession> {
+    Ok(ChatSession {
+        id: row.get(0)?,
+        agent_id: row.get(1)?,
+        title: row.get(2)?,
+        archived: row.get::<_, bool>(3)?,
+        session_type: row.get(4)?,
+        parent_session_id: row.get(5)?,
+        source_bus_message_id: row.get(6)?,
+        chain_depth: row.get(7)?,
+        execution_state: row.get(8)?,
+        finish_summary: row.get(9)?,
+        terminal_error: row.get(10)?,
+        source_agent_id: row.get(11)?,
+        source_agent_name: row.get(12)?,
+        source_session_id: row.get(13)?,
+        source_session_title: row.get(14)?,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
+        project_id: row.get(17)?,
+        worktree_name: row.get(18)?,
+        worktree_branch: row.get(19)?,
+        worktree_path: row.get(20)?,
+    })
+}
+
+fn map_chat_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatMessageRow> {
+    Ok(ChatMessageRow {
+        id: row.get(0)?,
+        role: row.get(1)?,
+        content_json: row.get(2)?,
+        created_at: row.get(3)?,
+        is_compacted: row.get::<_, bool>(4)?,
+    })
+}
+
+#[async_trait]
+impl ChatRepo for SqliteRepos {
+    async fn list_sessions(
+        &self,
+        filter: ChatSessionListFilter,
+    ) -> Result<Vec<ChatSession>, String> {
+        self.with_conn(move |conn| {
+            // Filters compose dynamically: agent_id is mandatory (?1),
+            // optional project_id pinning + optional session_type IN-list
+            // append after with sequential placeholders.
+            let mut sql = format!("{CHAT_SESSION_SELECT} WHERE cs.agent_id = ?1");
+            let mut bound: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(filter.agent_id)];
+
+            if !filter.include_archived {
+                sql.push_str(" AND cs.archived = 0");
+            }
+            if let Some(pid) = filter.project_id {
+                let n = bound.len() + 1;
+                sql.push_str(&format!(" AND cs.project_id = ?{n}"));
+                bound.push(Box::new(pid));
+            }
+            if !filter.session_types.is_empty() {
+                let start = bound.len() + 1;
+                let placeholders = (0..filter.session_types.len())
+                    .map(|i| format!("?{}", start + i))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                sql.push_str(&format!(" AND cs.session_type IN ({placeholders})"));
+                for t in filter.session_types {
+                    bound.push(Box::new(t));
+                }
+            }
+            sql.push_str(" ORDER BY cs.updated_at DESC");
+
+            let mut stmt = conn.prepare(&sql).err_str()?;
+            let refs: Vec<&dyn rusqlite::ToSql> = bound.iter().map(|p| p.as_ref()).collect();
+            let rows: Vec<ChatSession> = stmt
+                .query_map(refs.as_slice(), map_chat_session_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn get_messages(
+        &self,
+        session_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<ChatMessageRows, String> {
+        let session_id = session_id.to_string();
+        self.with_conn(move |conn| {
+            let total_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM chat_messages WHERE session_id = ?1",
+                    params![session_id],
+                    |row| row.get(0),
+                )
+                .err_str()?;
+
+            // Two SQL shapes: paginated (limit > 0) reverses then re-orders so
+            // the latest N appear ascending; unpaginated streams the whole
+            // session in chronological order.
+            let messages: Vec<ChatMessageRow> = if limit > 0 {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, role, content, created_at, is_compacted FROM (
+                           SELECT id, role, content, created_at, is_compacted
+                           FROM chat_messages WHERE session_id = ?1
+                           ORDER BY created_at DESC
+                           LIMIT ?2 OFFSET ?3
+                         ) sub ORDER BY created_at ASC",
+                    )
+                    .err_str()?;
+                let rows: Vec<ChatMessageRow> = stmt
+                    .query_map(params![session_id, limit, offset], map_chat_message_row)
+                    .err_str()?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                rows
+            } else {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, role, content, created_at, is_compacted FROM chat_messages
+                         WHERE session_id = ?1 ORDER BY created_at ASC",
+                    )
+                    .err_str()?;
+                let rows: Vec<ChatMessageRow> = stmt
+                    .query_map(params![session_id], map_chat_message_row)
+                    .err_str()?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                rows
+            };
+
+            let has_more = limit > 0 && (offset + limit) < total_count;
+            Ok(ChatMessageRows {
+                messages,
+                total_count,
+                has_more,
+            })
+        })
+        .await
+    }
+
+    async fn session_meta(&self, session_id: &str) -> Result<ChatSessionMeta, String> {
+        let session_id = session_id.to_string();
+        self.with_conn(move |conn| {
+            let sid = session_id.clone();
+            conn.query_row(
+                "SELECT cs.agent_id, cs.project_id, p.name
+                 FROM chat_sessions cs
+                 LEFT JOIN projects p ON p.id = cs.project_id
+                 WHERE cs.id = ?1",
+                params![session_id],
+                |row| {
+                    Ok(ChatSessionMeta {
+                        session_id: sid.clone(),
+                        agent_id: row.get(0)?,
+                        project_id: row.get(1)?,
+                        project_name: row.get(2)?,
+                    })
+                },
+            )
+            .err_str()
+        })
+        .await
+    }
+
+    async fn session_execution(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionExecutionStatus, String> {
+        let session_id = session_id.to_string();
+        self.with_conn(move |conn| {
+            let sid = session_id.clone();
+            conn.query_row(
+                "SELECT execution_state, finish_summary, terminal_error \
+                 FROM chat_sessions WHERE id = ?1",
+                params![session_id],
+                |row| {
+                    Ok(SessionExecutionStatus {
+                        session_id: sid.clone(),
+                        execution_state: row.get(0)?,
+                        finish_summary: row.get(1)?,
+                        terminal_error: row.get(2)?,
+                    })
+                },
+            )
+            .err_str()
+        })
+        .await
+    }
+
+    async fn session_type(&self, session_id: &str) -> Result<String, String> {
+        let session_id = session_id.to_string();
+        self.with_conn(move |conn| {
+            conn.query_row(
+                "SELECT session_type FROM chat_sessions WHERE id = ?1",
+                params![session_id],
+                |row| row.get::<_, String>(0),
+            )
+            .err_str()
+        })
+        .await
+    }
+
+    async fn list_message_reactions(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<MessageReactionRow>, String> {
+        let session_id = session_id.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, message_id, emoji, created_at FROM message_reactions \
+                     WHERE session_id = ?1 ORDER BY created_at ASC",
+                )
+                .err_str()?;
+            let rows: Vec<MessageReactionRow> = stmt
+                .query_map(params![session_id], |row| {
+                    Ok(MessageReactionRow {
+                        id: row.get(0)?,
+                        message_id: row.get(1)?,
+                        emoji: row.get(2)?,
+                        created_at: row.get(3)?,
+                    })
+                })
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn token_usage(&self, session_id: &str) -> Result<ChatSessionTokenUsage, String> {
+        let session_id = session_id.to_string();
+        self.with_conn(move |conn| {
+            conn.query_row(
+                "SELECT last_input_tokens, agent_id FROM chat_sessions WHERE id = ?1",
+                params![session_id],
+                |row| {
+                    Ok(ChatSessionTokenUsage {
+                        last_input_tokens: row.get(0)?,
+                        agent_id: row.get(1)?,
+                    })
+                },
+            )
+            .map_err(|e| format!("session not found: {}", e))
+        })
+        .await
+    }
+}
+
+// ── Work items ──────────────────────────────────────────────────────────────
+//
+// Read-only at the trait surface — see `commands/work_items.rs` for the
+// `*_with_db` write helpers that still drive cross-table event inserts.
+
+const WORK_ITEM_REPO_COLUMNS: &str =
+    "id, project_id, board_id, title, description, kind, column_id, status, priority,
+     assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
+     labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at";
+
+fn map_work_item_repo_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkItem> {
+    let labels_json: String = row.get(13)?;
+    let metadata_json: String = row.get(14)?;
+    Ok(WorkItem {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        board_id: row.get(2)?,
+        title: row.get(3)?,
+        description: row.get(4)?,
+        kind: row.get(5)?,
+        column_id: row.get(6)?,
+        status: row.get(7)?,
+        priority: row.get(8)?,
+        assignee_agent_id: row.get(9)?,
+        created_by_agent_id: row.get(10)?,
+        parent_work_item_id: row.get(11)?,
+        position: row.get(12)?,
+        labels: serde_json::from_str(&labels_json).unwrap_or_default(),
+        metadata: serde_json::from_str(&metadata_json).unwrap_or_else(|_| serde_json::json!({})),
+        blocked_reason: row.get(15)?,
+        started_at: row.get(16)?,
+        completed_at: row.get(17)?,
+        created_at: row.get(18)?,
+        updated_at: row.get(19)?,
+    })
+}
+
+const WORK_ITEM_COMMENT_REPO_COLUMNS: &str =
+    "id, work_item_id, author_kind, author_agent_id, body, created_at, updated_at";
+
+fn map_work_item_comment_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkItemComment> {
+    Ok(WorkItemComment {
+        id: row.get(0)?,
+        work_item_id: row.get(1)?,
+        author_kind: row.get(2)?,
+        author_agent_id: row.get(3)?,
+        body: row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+    })
+}
+
+#[async_trait]
+impl WorkItemRepo for SqliteRepos {
+    async fn list(
+        &self,
+        project_id: &str,
+        board_id: Option<String>,
+    ) -> Result<Vec<WorkItem>, String> {
+        let project_id = project_id.to_string();
+        self.with_conn(move |conn| {
+            // Order by column-or-status grouping then by board position so the
+            // kanban view's lane-by-lane render is just iteration over the
+            // result set.
+            let (sql, bound): (String, Vec<Box<dyn rusqlite::ToSql>>) = match board_id {
+                Some(b) => (
+                    format!(
+                        "SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items \
+                         WHERE project_id = ?1 AND board_id = ?2 \
+                         ORDER BY COALESCE(column_id, status), position ASC"
+                    ),
+                    vec![Box::new(project_id), Box::new(b)],
+                ),
+                None => (
+                    format!(
+                        "SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items \
+                         WHERE project_id = ?1 \
+                         ORDER BY COALESCE(column_id, status), position ASC"
+                    ),
+                    vec![Box::new(project_id)],
+                ),
+            };
+            let mut stmt = conn.prepare(&sql).err_str()?;
+            let refs: Vec<&dyn rusqlite::ToSql> = bound.iter().map(|p| p.as_ref()).collect();
+            let rows: Vec<WorkItem> = stmt
+                .query_map(refs.as_slice(), map_work_item_repo_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn get(&self, id: &str) -> Result<WorkItem, String> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            conn.query_row(
+                &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1"),
+                params![id],
+                map_work_item_repo_row,
+            )
+            .err_str()
+        })
+        .await
+    }
+
+    async fn list_comments(&self, work_item_id: &str) -> Result<Vec<WorkItemComment>, String> {
+        let work_item_id = work_item_id.to_string();
+        self.with_conn(move |conn| {
+            let sql = format!(
+                "SELECT {WORK_ITEM_COMMENT_REPO_COLUMNS} FROM work_item_comments \
+                 WHERE work_item_id = ?1 ORDER BY created_at ASC"
+            );
+            let mut stmt = conn.prepare(&sql).err_str()?;
+            let rows: Vec<WorkItemComment> = stmt
+                .query_map(params![work_item_id], map_work_item_comment_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+}
+
+// ── Project workflows ───────────────────────────────────────────────────────
+//
+// Read-only at the trait surface. Writes (create / update / delete /
+// set-enabled) go through `*_with_db` helpers because they involve graph
+// normalisation, trigger reconciliation, and a transactional graph swap.
+
+const PROJECT_WORKFLOW_COLUMNS: &str = "id, project_id, name, description, enabled, graph,
+        trigger_kind, trigger_config, version, created_at, updated_at";
+
+fn map_project_workflow_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectWorkflow> {
+    let enabled: i64 = row.get(4)?;
+    let graph_json: String = row.get(5)?;
+    let trigger_config_json: String = row.get(7)?;
+    Ok(ProjectWorkflow {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        name: row.get(2)?,
+        description: row.get(3)?,
+        enabled: enabled != 0,
+        graph: serde_json::from_str(&graph_json).unwrap_or_default(),
+        trigger_kind: row.get(6)?,
+        trigger_config: serde_json::from_str(&trigger_config_json)
+            .unwrap_or_else(|_| serde_json::json!({})),
+        version: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+    })
+}
+
+#[async_trait]
+impl ProjectWorkflowRepo for SqliteRepos {
+    async fn list(
+        &self,
+        project_id: &str,
+        limit: i64,
+    ) -> Result<Vec<ProjectWorkflow>, String> {
+        let project_id = project_id.to_string();
+        let limit = limit.clamp(1, 200);
+        self.with_conn(move |conn| {
+            let sql = format!(
+                "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows \
+                 WHERE project_id = ?1 ORDER BY name ASC LIMIT ?2"
+            );
+            let mut stmt = conn.prepare(&sql).err_str()?;
+            let rows: Vec<ProjectWorkflow> = stmt
+                .query_map(params![project_id, limit], map_project_workflow_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn get(&self, id: &str) -> Result<ProjectWorkflow, String> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            conn.query_row(
+                &format!(
+                    "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = ?1"
+                ),
+                params![id],
+                map_project_workflow_row,
+            )
+            .err_str()
+        })
+        .await
+    }
+
+    async fn lookup_project_id(&self, workflow_id: &str) -> Result<String, String> {
+        let workflow_id = workflow_id.to_string();
+        self.with_conn(move |conn| {
+            conn.query_row(
+                "SELECT project_id FROM project_workflows WHERE id = ?1",
+                params![workflow_id],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|e| format!("workflow: not found ({})", e))
+        })
+        .await
+    }
+
+    async fn lookup_run_scope(&self, run_id: &str) -> Result<(String, String), String> {
+        let run_id = run_id.to_string();
+        self.with_conn(move |conn| {
+            // Joined on `project_workflows.id = workflow_runs.workflow_id` so
+            // the dispatcher can scope events to the owning project without
+            // a follow-up query.
+            conn.query_row(
+                "SELECT wr.workflow_id, pw.project_id
+                 FROM workflow_runs wr
+                 INNER JOIN project_workflows pw ON pw.id = wr.workflow_id
+                 WHERE wr.id = ?1",
+                params![run_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .map_err(|e| format!("workflow run not found ({})", e))
+        })
+        .await
+    }
+}
+
+// ── Project board columns ──────────────────────────────────────────────────
+//
+// Read-only at the trait surface. Writes (create / update / delete with
+// re-parent) stay in `commands/project_board_columns.rs` because they
+// involve default-column promotion, optimistic-concurrency `expected_revision`
+// checks, and cross-table re-parenting.
+
+const PROJECT_BOARD_COLUMN_COLUMNS: &str =
+    "id, project_id, board_id, name, role, is_default, position, created_at, updated_at";
+
+fn map_project_board_column_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<ProjectBoardColumn> {
+    Ok(ProjectBoardColumn {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        board_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+        name: row.get(3)?,
+        role: row.get(4)?,
+        is_default: row.get::<_, bool>(5)?,
+        position: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
+}
+
+#[async_trait]
+impl ProjectBoardColumnRepo for SqliteRepos {
+    async fn list(
+        &self,
+        project_id: &str,
+        board_id: Option<String>,
+    ) -> Result<Vec<ProjectBoardColumn>, String> {
+        let project_id = project_id.to_string();
+        self.with_conn(move |conn| {
+            // When no board_id is given, fall back to the project's default
+            // board so the kanban surface always has a sensible default
+            // viewport even before the user has explicitly picked one.
+            let effective_board_id: Option<String> = match board_id {
+                Some(b) => Some(b),
+                None => conn
+                    .query_row(
+                        "SELECT id FROM project_boards \
+                         WHERE project_id = ?1 AND is_default = 1 LIMIT 1",
+                        params![project_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                    .err_str()?,
+            };
+
+            let (sql, bound): (String, Vec<Box<dyn rusqlite::ToSql>>) = match effective_board_id {
+                Some(b) => (
+                    format!(
+                        "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns \
+                         WHERE project_id = ?1 AND board_id = ?2 \
+                         ORDER BY position ASC, created_at ASC"
+                    ),
+                    vec![Box::new(project_id), Box::new(b)],
+                ),
+                None => (
+                    format!(
+                        "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns \
+                         WHERE project_id = ?1 \
+                         ORDER BY position ASC, created_at ASC"
+                    ),
+                    vec![Box::new(project_id)],
+                ),
+            };
+            let mut stmt = conn.prepare(&sql).err_str()?;
+            let refs: Vec<&dyn rusqlite::ToSql> = bound.iter().map(|p| p.as_ref()).collect();
+            let rows: Vec<ProjectBoardColumn> = stmt
+                .query_map(refs.as_slice(), map_project_board_column_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<ProjectBoardColumn>, String> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            conn.query_row(
+                &format!(
+                    "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns WHERE id = ?1"
+                ),
+                params![id],
+                map_project_board_column_row,
+            )
+            .optional()
+            .err_str()
         })
         .await
     }

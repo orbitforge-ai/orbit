@@ -934,17 +934,17 @@ pub async fn set_project_workflow_enabled_with_db(
 #[tauri::command]
 pub async fn list_project_workflows(
     project_id: String,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, crate::app_context::AppContext>,
 ) -> Result<Vec<ProjectWorkflow>, String> {
-    list_project_workflows_with_db(db.inner(), &project_id, None).await
+    app.repos.project_workflows().list(&project_id, 100).await
 }
 
 #[tauri::command]
 pub async fn get_project_workflow(
     id: String,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, crate::app_context::AppContext>,
 ) -> Result<ProjectWorkflow, String> {
-    get_project_workflow_with_db(db.inner(), &id).await
+    app.repos.project_workflows().get(&id).await
 }
 
 #[tauri::command]
@@ -1022,15 +1022,13 @@ mod http {
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("list_project_workflows", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: ProjectIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = list_project_workflows(a.project_id, app.state::<DbPool>()).await?;
+            let r = ctx.repos.project_workflows().list(&a.project_id, 100).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("get_project_workflow", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = get_project_workflow(a.id, app.state::<DbPool>()).await?;
+            let r = ctx.repos.project_workflows().get(&a.id).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("create_project_workflow", |ctx, args| async move {

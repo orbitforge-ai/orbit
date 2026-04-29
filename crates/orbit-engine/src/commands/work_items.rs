@@ -966,14 +966,17 @@ pub fn fetch_work_item_project(
 pub async fn list_work_items(
     project_id: String,
     board_id: Option<String>,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, crate::app_context::AppContext>,
 ) -> Result<Vec<WorkItem>, String> {
-    list_work_items_with_db(db.inner(), project_id, board_id).await
+    app.repos.work_items().list(&project_id, board_id).await
 }
 
 #[tauri::command]
-pub async fn get_work_item(id: String, db: tauri::State<'_, DbPool>) -> Result<WorkItem, String> {
-    get_work_item_with_db(db.inner(), id).await
+pub async fn get_work_item(
+    id: String,
+    app: tauri::State<'_, crate::app_context::AppContext>,
+) -> Result<WorkItem, String> {
+    app.repos.work_items().get(&id).await
 }
 
 #[tauri::command]
@@ -1116,9 +1119,9 @@ pub async fn complete_work_item(
 #[tauri::command]
 pub async fn list_work_item_comments(
     work_item_id: String,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, crate::app_context::AppContext>,
 ) -> Result<Vec<WorkItemComment>, String> {
-    list_work_item_comments_with_db(db.inner(), work_item_id).await
+    app.repos.work_items().list_comments(&work_item_id).await
 }
 
 #[tauri::command]
@@ -1270,15 +1273,13 @@ mod http {
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("list_work_items", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: ListArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = list_work_items(a.project_id, a.board_id, app.state::<DbPool>()).await?;
+            let r = ctx.repos.work_items().list(&a.project_id, a.board_id).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("get_work_item", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = get_work_item(a.id, app.state::<DbPool>()).await?;
+            let r = ctx.repos.work_items().get(&a.id).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("create_work_item", |ctx, args| async move {
@@ -1330,9 +1331,8 @@ mod http {
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("list_work_item_comments", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: WorkItemIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = list_work_item_comments(a.work_item_id, app.state::<DbPool>()).await?;
+            let r = ctx.repos.work_items().list_comments(&a.work_item_id).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("create_work_item_comment", |ctx, args| async move {

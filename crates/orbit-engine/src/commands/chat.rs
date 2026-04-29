@@ -5,8 +5,10 @@ use tauri::Manager;
 use tracing::{debug, info, warn};
 use ulid::Ulid;
 
+use crate::app_context::AppContext;
 use crate::auth::{AuthMode, AuthState};
 use crate::db::cloud::CloudClientState;
+use crate::db::repos::ChatSessionListFilter;
 use crate::db::DbPool;
 use crate::events::emitter::{
     emit_agent_iteration, emit_agent_tool_result, emit_chat_context_update,
@@ -165,90 +167,24 @@ fn activate_skill_mentions_for_session(
 
 // ─── Session CRUD ───────────────────────────────────────────────────────────
 
+/// Transport-agnostic helper retained for callers that already hold an
+/// `AppContext`. The shim adapter and Tauri command both delegate here.
 pub async fn list_chat_sessions_impl(
     agent_id: String,
     include_archived: Option<bool>,
     session_types: Option<Vec<String>>,
     project_id: Option<String>,
-    db: &DbPool,
+    app: &AppContext,
 ) -> Result<Vec<ChatSession>, String> {
-    let pool = db.0.clone();
-    let show_archived = include_archived.unwrap_or(false);
-    let session_types = session_types.unwrap_or_default();
-
-    tokio::task
-    ::spawn_blocking(move || {
-      let conn = pool.get().map_err(|e| e.to_string())?;
-      let mut sql = String::from(
-        "SELECT cs.id, cs.agent_id, cs.title, cs.archived, cs.session_type, cs.parent_session_id, cs.source_bus_message_id,
-                cs.chain_depth, cs.execution_state, cs.finish_summary, cs.terminal_error,
-                bm.from_agent_id, a.name,
-                src.id, src.title,
-                cs.created_at, cs.updated_at, cs.project_id,
-                cs.worktree_name, cs.worktree_branch, cs.worktree_path
-             FROM chat_sessions cs
-             LEFT JOIN bus_messages bm ON bm.id = cs.source_bus_message_id
-             LEFT JOIN agents a ON a.id = bm.from_agent_id
-             LEFT JOIN chat_sessions src ON src.id = bm.from_session_id
-             WHERE cs.agent_id = ?1"
-      );
-      let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(agent_id)];
-      if !show_archived {
-        sql.push_str(" AND cs.archived = 0");
-      }
-      if let Some(pid) = project_id {
-        let idx = params.len() + 1;
-        sql.push_str(&format!(" AND cs.project_id = ?{}", idx));
-        params.push(Box::new(pid));
-      }
-      if !session_types.is_empty() {
-        let start_idx = params.len() + 1;
-        let placeholders = (0..session_types.len())
-          .map(|i| format!("?{}", start_idx + i))
-          .collect::<Vec<_>>()
-          .join(", ");
-        sql.push_str(&format!(" AND cs.session_type IN ({})", placeholders));
-        for session_type in session_types {
-          params.push(Box::new(session_type));
-        }
-      }
-      sql.push_str(" ORDER BY cs.updated_at DESC");
-
-      let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-      let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-      let sessions = stmt
-        .query_map(params_refs.as_slice(), |row| {
-          Ok(ChatSession {
-            id: row.get(0)?,
-            agent_id: row.get(1)?,
-            title: row.get(2)?,
-            archived: row.get::<_, bool>(3)?,
-            session_type: row.get(4)?,
-            parent_session_id: row.get(5)?,
-            source_bus_message_id: row.get(6)?,
-            chain_depth: row.get(7)?,
-            execution_state: row.get(8)?,
-            finish_summary: row.get(9)?,
-            terminal_error: row.get(10)?,
-            source_agent_id: row.get(11)?,
-            source_agent_name: row.get(12)?,
-            source_session_id: row.get(13)?,
-            source_session_title: row.get(14)?,
-            created_at: row.get(15)?,
-            updated_at: row.get(16)?,
-            project_id: row.get(17)?,
-            worktree_name: row.get(18)?,
-            worktree_branch: row.get(19)?,
-            worktree_path: row.get(20)?,
-          })
+    app.repos
+        .chat()
+        .list_sessions(ChatSessionListFilter {
+            agent_id,
+            include_archived: include_archived.unwrap_or(false),
+            session_types: session_types.unwrap_or_default(),
+            project_id,
         })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
-
-      Ok(sessions)
-    }).await
-    .map_err(|e| e.to_string())?
+        .await
 }
 
 #[tauri::command]
@@ -257,9 +193,10 @@ pub async fn list_chat_sessions(
     include_archived: Option<bool>,
     session_types: Option<Vec<String>>,
     project_id: Option<String>,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<Vec<ChatSession>, String> {
-    list_chat_sessions_impl(agent_id, include_archived, session_types, project_id, db.inner()).await
+    list_chat_sessions_impl(agent_id, include_archived, session_types, project_id, app.inner())
+        .await
 }
 
 #[tauri::command]
@@ -657,116 +594,42 @@ fn sanitize_history_for_provider(messages: &[ChatMessage]) -> Vec<ChatMessage> {
     sanitized
 }
 
+/// Hydrate the repo's `ChatMessageRow` (raw stored JSON) into the typed
+/// `ChatMessageWithMeta` shape the UI consumes. Parsing failures yield an
+/// empty content vec so the rest of the session still renders.
+fn hydrate_chat_message_row(
+    row: crate::models::chat::ChatMessageRow,
+) -> ChatMessageWithMeta {
+    let content: Vec<ContentBlock> =
+        serde_json::from_str(&row.content_json).unwrap_or_default();
+    ChatMessageWithMeta {
+        id: Some(row.id),
+        role: row.role,
+        content,
+        created_at: row.created_at,
+        is_compacted: row.is_compacted,
+    }
+}
+
 #[tauri::command]
 pub async fn get_chat_messages(
     session_id: String,
     limit: Option<i64>,
     offset: Option<i64>,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<PaginatedChatMessages, String> {
-    let pool = db.0.clone();
-
-    tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-
-        let total_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM chat_messages WHERE session_id = ?1",
-                rusqlite::params![session_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-
-        let limit_val = limit.unwrap_or(0);
-        let offset_val = offset.unwrap_or(0);
-
-        let messages: Vec<ChatMessageWithMeta> = if limit_val > 0 {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT id, role, content, created_at, is_compacted FROM (
-               SELECT id, role, content, created_at, is_compacted
-               FROM chat_messages WHERE session_id = ?1
-               ORDER BY created_at DESC
-               LIMIT ?2 OFFSET ?3
-             ) sub ORDER BY created_at ASC",
-                )
-                .map_err(|e| e.to_string())?;
-
-            let rows: Vec<ChatMessageWithMeta> = stmt
-                .query_map(
-                    rusqlite::params![session_id, limit_val, offset_val],
-                    |row| {
-                        let id: String = row.get(0)?;
-                        let role: String = row.get(1)?;
-                        let content_json: String = row.get(2)?;
-                        let created_at: Option<String> = row.get(3)?;
-                        let is_compacted: bool = row.get(4)?;
-                        Ok((id, role, content_json, created_at, is_compacted))
-                    },
-                )
-                .map_err(|e| e.to_string())?
-                .filter_map(|r| r.ok())
-                .map(|(id, role, content_json, created_at, is_compacted)| {
-                    let content: Vec<ContentBlock> =
-                        serde_json::from_str(&content_json).unwrap_or_default();
-                    ChatMessageWithMeta {
-                        id: Some(id),
-                        role,
-                        content,
-                        created_at,
-                        is_compacted,
-                    }
-                })
-                .collect();
-            rows
-        } else {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT id, role, content, created_at, is_compacted FROM chat_messages
-                   WHERE session_id = ?1 ORDER BY created_at ASC",
-                )
-                .map_err(|e| e.to_string())?;
-
-            let rows: Vec<ChatMessageWithMeta> = stmt
-                .query_map(rusqlite::params![session_id], |row| {
-                    let id: String = row.get(0)?;
-                    let role: String = row.get(1)?;
-                    let content_json: String = row.get(2)?;
-                    let created_at: Option<String> = row.get(3)?;
-                    let is_compacted: bool = row.get(4)?;
-                    Ok((id, role, content_json, created_at, is_compacted))
-                })
-                .map_err(|e| e.to_string())?
-                .filter_map(|r| r.ok())
-                .map(|(id, role, content_json, created_at, is_compacted)| {
-                    let content: Vec<ContentBlock> =
-                        serde_json::from_str(&content_json).unwrap_or_default();
-                    ChatMessageWithMeta {
-                        id: Some(id),
-                        role,
-                        content,
-                        created_at,
-                        is_compacted,
-                    }
-                })
-                .collect();
-            rows
-        };
-
-        let has_more = if limit_val > 0 {
-            (offset_val + limit_val) < total_count
-        } else {
-            false
-        };
-
-        Ok(PaginatedChatMessages {
-            messages,
-            total_count,
-            has_more,
-        })
+    let limit_val = limit.unwrap_or(0);
+    let offset_val = offset.unwrap_or(0);
+    let rows = app
+        .repos
+        .chat()
+        .get_messages(&session_id, limit_val, offset_val)
+        .await?;
+    Ok(PaginatedChatMessages {
+        messages: rows.messages.into_iter().map(hydrate_chat_message_row).collect(),
+        total_count: rows.total_count,
+        has_more: rows.has_more,
     })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 // ─── Send message (streaming) ───────────────────────────────────────────────
@@ -1586,108 +1449,44 @@ async fn do_llm_chat(
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionExecutionStatus {
-    pub session_id: String,
-    pub execution_state: Option<String>,
-    pub finish_summary: Option<String>,
-    pub terminal_error: Option<String>,
-}
+// `SessionExecutionStatus` and `ChatSessionMeta` are defined in
+// `models/chat.rs` so the repo trait can return them. Re-imported below.
+use crate::models::chat::{ChatSessionMeta, SessionExecutionStatus};
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChatSessionMeta {
-    pub session_id: String,
-    pub agent_id: String,
-    pub project_id: Option<String>,
-    pub project_name: Option<String>,
-}
 
 pub async fn get_chat_session_meta_impl(
     session_id: String,
-    db: &DbPool,
+    app: &AppContext,
 ) -> Result<ChatSessionMeta, String> {
-    let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let sid = session_id.clone();
-        conn.query_row(
-            "SELECT cs.agent_id, cs.project_id, p.name
-             FROM chat_sessions cs
-             LEFT JOIN projects p ON p.id = cs.project_id
-             WHERE cs.id = ?1",
-            rusqlite::params![session_id],
-            |row| {
-                Ok(ChatSessionMeta {
-                    session_id: sid.clone(),
-                    agent_id: row.get(0)?,
-                    project_id: row.get(1)?,
-                    project_name: row.get(2)?,
-                })
-            },
-        )
-        .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    app.repos.chat().session_meta(&session_id).await
 }
 
 #[tauri::command]
 pub async fn get_chat_session_meta(
     session_id: String,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<ChatSessionMeta, String> {
-    get_chat_session_meta_impl(session_id, db.inner()).await
+    get_chat_session_meta_impl(session_id, app.inner()).await
 }
 
 #[tauri::command]
 pub async fn get_session_execution(
     session_id: String,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<SessionExecutionStatus, String> {
-    let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let sid = session_id.clone();
-        conn.query_row(
-      "SELECT execution_state, finish_summary, terminal_error FROM chat_sessions WHERE id = ?1",
-      rusqlite::params![session_id],
-      |row| {
-        Ok(SessionExecutionStatus {
-          session_id: sid.clone(),
-          execution_state: row.get(0)?,
-          finish_summary: row.get(1)?,
-          terminal_error: row.get(2)?,
-        })
-      },
-    ).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    app.repos.chat().session_execution(&session_id).await
 }
 
 #[tauri::command]
 pub async fn cancel_agent_session(
     session_id: String,
+    app: tauri::State<'_, AppContext>,
     db: tauri::State<'_, DbPool>,
     session_registry: tauri::State<'_, SessionExecutionRegistry>,
     user_question_registry: tauri::State<'_, UserQuestionRegistry>,
 ) -> Result<(), String> {
-    let pool = db.0.clone();
-    let sid = session_id.clone();
-    let session_type: String = tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT session_type FROM chat_sessions WHERE id = ?1",
-            rusqlite::params![sid],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
+    // Reject cancels against session types that don't run an agent loop.
+    let session_type = app.repos.chat().session_type(&session_id).await?;
     if !can_cancel_chat_session(&session_type) {
         return Err(
             "only user_chat, bus_message, sub_agent, and pulse sessions can be cancelled"
@@ -1697,6 +1496,8 @@ pub async fn cancel_agent_session(
 
     session_registry.cancel(&session_id).await;
     user_question_registry.cancel_for_session(&session_id).await;
+    // Updating the persisted execution state still goes through
+    // `session_agent` because it also nudges the run loop and emits events.
     let db_pool = DbPool(db.0.clone());
     session_agent::update_session_execution_state(
         &db_pool,
@@ -1738,27 +1539,11 @@ pub struct ChatModelOverride {
 pub async fn get_context_usage(
     session_id: String,
     model_override: Option<ChatModelOverride>,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<ContextUsage, String> {
-    let pool = db.0.clone();
-
-    let (last_input_tokens, agent_id) = tokio::task::spawn_blocking({
-        let pool = pool.clone();
-        let sid = session_id.clone();
-        move || -> Result<(Option<u32>, String), String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
-            let row: (Option<u32>, String) = conn
-                .query_row(
-                    "SELECT last_input_tokens, agent_id FROM chat_sessions WHERE id = ?1",
-                    rusqlite::params![sid],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .map_err(|e| format!("session not found: {}", e))?;
-            Ok(row)
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let usage = app.repos.chat().token_usage(&session_id).await?;
+    let last_input_tokens = usage.last_input_tokens;
+    let agent_id = usage.agent_id;
 
     let mut ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
     if let Some(model_override) = model_override {
@@ -1851,46 +1636,16 @@ pub async fn compact_chat_session(
 }
 
 // ─── Message reactions ──────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MessageReactionRow {
-    pub id: String,
-    pub message_id: String,
-    pub emoji: String,
-    pub created_at: String,
-}
+// `MessageReactionRow` is defined in `models/chat.rs` so the repo trait can
+// return it. Re-imported below.
+use crate::models::chat::MessageReactionRow;
 
 #[tauri::command]
 pub async fn get_message_reactions(
     session_id: String,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<Vec<MessageReactionRow>, String> {
-    let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, message_id, emoji, created_at FROM message_reactions
-                 WHERE session_id = ?1 ORDER BY created_at ASC",
-            )
-            .map_err(|e| e.to_string())?;
-        let rows: Vec<MessageReactionRow> = stmt
-            .query_map(rusqlite::params![session_id], |row| {
-                Ok(MessageReactionRow {
-                    id: row.get(0)?,
-                    message_id: row.get(1)?,
-                    emoji: row.get(2)?,
-                    created_at: row.get(3)?,
-                })
-            })
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    app.repos.chat().list_message_reactions(&session_id).await
 }
 
 // ─── SendChatMessage response ───────────────────────────────────────────────
@@ -1963,7 +1718,16 @@ mod http {
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("list_chat_sessions", |ctx, args| async move {
             let a: ListSessionsArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = list_chat_sessions_impl(a.agent_id, a.include_archived, a.session_types, a.project_id, &ctx.db).await?;
+            let r = ctx
+                .repos
+                .chat()
+                .list_sessions(ChatSessionListFilter {
+                    agent_id: a.agent_id,
+                    include_archived: a.include_archived.unwrap_or(false),
+                    session_types: a.session_types.unwrap_or_default(),
+                    project_id: a.project_id,
+                })
+                .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("create_chat_session", |ctx, args| async move {
@@ -1997,9 +1761,19 @@ mod http {
             Ok(serde_json::Value::Null)
         });
         reg.register("get_chat_messages", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: GetMessagesArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = get_chat_messages(a.session_id, a.limit, a.offset, app.state::<DbPool>()).await?;
+            let limit = a.limit.unwrap_or(0);
+            let offset = a.offset.unwrap_or(0);
+            let rows = ctx
+                .repos
+                .chat()
+                .get_messages(&a.session_id, limit, offset)
+                .await?;
+            let r = PaginatedChatMessages {
+                messages: rows.messages.into_iter().map(hydrate_chat_message_row).collect(),
+                total_count: rows.total_count,
+                has_more: rows.has_more,
+            };
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("send_chat_message", |ctx, args| async move {
@@ -2029,26 +1803,36 @@ mod http {
             Ok(serde_json::Value::Null)
         });
         reg.register("get_session_execution", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: SessionIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = get_session_execution(a.session_id, app.state::<DbPool>()).await?;
+            let r = ctx.repos.chat().session_execution(&a.session_id).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("get_chat_session_meta", |ctx, args| async move {
             let a: SessionIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = get_chat_session_meta_impl(a.session_id, &ctx.db).await?;
+            let r = ctx.repos.chat().session_meta(&a.session_id).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("cancel_agent_session", |ctx, args| async move {
             let app = ctx.app()?;
             let a: SessionIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            cancel_agent_session(a.session_id, app.state::<DbPool>(), app.state::<SessionExecutionRegistry>(), app.state::<UserQuestionRegistry>()).await?;
+            // Cancel still needs DbPool because the executor-side state
+            // update is rusqlite-backed; the pre-flight session-type check
+            // goes through the repo trait.
+            cancel_agent_session(
+                a.session_id,
+                app.state::<AppContext>(),
+                app.state::<DbPool>(),
+                app.state::<SessionExecutionRegistry>(),
+                app.state::<UserQuestionRegistry>(),
+            )
+            .await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("get_context_usage", |ctx, args| async move {
             let app = ctx.app()?;
             let a: ContextUsageArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = get_context_usage(a.session_id, a.model_override, app.state::<DbPool>()).await?;
+            let r = get_context_usage(a.session_id, a.model_override, app.state::<AppContext>())
+                .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("compact_chat_session", |ctx, args| async move {
@@ -2065,9 +1849,8 @@ mod http {
             Ok(serde_json::Value::Null)
         });
         reg.register("get_message_reactions", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: SessionIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = get_message_reactions(a.session_id, app.state::<DbPool>()).await?;
+            let r = ctx.repos.chat().list_message_reactions(&a.session_id).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
     }

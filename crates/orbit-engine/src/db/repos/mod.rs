@@ -23,12 +23,20 @@ use crate::models::agent::{Agent, CreateAgent, UpdateAgent};
 use crate::models::bus::{
     BusMessage, BusSubscription, BusThreadMessage, CreateBusSubscription, PaginatedBusThread,
 };
+use crate::models::chat::{
+    ChatMessageRows, ChatSession, ChatSessionMeta, ChatSessionTokenUsage, MessageReactionRow,
+    SessionExecutionStatus,
+};
 use crate::models::project::{CreateProject, Project, ProjectSummary, UpdateProject};
 use crate::models::project_board::ProjectBoard;
+use crate::models::project_board_column::ProjectBoardColumn;
+use crate::models::project_workflow::ProjectWorkflow;
 use crate::models::run::{Run, RunSummary};
 use crate::models::schedule::{CreateSchedule, Schedule};
 use crate::models::task::{CreateTask, Task, UpdateTask};
 use crate::models::user::User;
+use crate::models::work_item::WorkItem;
+use crate::models::work_item_comment::WorkItemComment;
 use crate::models::work_item_event::WorkItemEvent;
 use crate::models::workflow_run::WorkflowRun;
 
@@ -37,12 +45,16 @@ pub trait Repos: Send + Sync {
     fn agents(&self) -> &dyn AgentRepo;
     fn bus_messages(&self) -> &dyn BusMessageRepo;
     fn bus_subscriptions(&self) -> &dyn BusSubscriptionRepo;
+    fn chat(&self) -> &dyn ChatRepo;
+    fn project_board_columns(&self) -> &dyn ProjectBoardColumnRepo;
     fn project_boards(&self) -> &dyn ProjectBoardRepo;
+    fn project_workflows(&self) -> &dyn ProjectWorkflowRepo;
     fn projects(&self) -> &dyn ProjectRepo;
     fn runs(&self) -> &dyn RunRepo;
     fn schedules(&self) -> &dyn ScheduleRepo;
     fn tasks(&self) -> &dyn TaskRepo;
     fn users(&self) -> &dyn UserRepo;
+    fn work_items(&self) -> &dyn WorkItemRepo;
     fn work_item_events(&self) -> &dyn WorkItemEventRepo;
     fn workflow_runs(&self) -> &dyn WorkflowRunRepo;
 }
@@ -130,6 +142,59 @@ pub trait RunRepo: Send + Sync {
     async fn log_path(&self, run_id: &str) -> Result<Option<String>, String>;
 }
 
+/// Project board columns (kanban lanes inside a board). Read-only at the
+/// trait surface — writes are entangled with default-column promotion,
+/// optimistic-concurrency revision checks, and cross-table re-parenting on
+/// delete, so they stay as Tauri command bodies in
+/// `commands/project_board_columns.rs`. The legacy `*_sync` helpers there
+/// are still called from inside transactions in other modules and stay too.
+#[async_trait]
+pub trait ProjectBoardColumnRepo: Send + Sync {
+    /// Lists columns for a project, optionally narrowed to a single board.
+    /// When `board_id` is None, falls back to the project's default board.
+    async fn list(
+        &self,
+        project_id: &str,
+        board_id: Option<String>,
+    ) -> Result<Vec<ProjectBoardColumn>, String>;
+    async fn get(&self, id: &str) -> Result<Option<ProjectBoardColumn>, String>;
+}
+
+/// Project workflows (the visual graph editor's workflow definitions).
+/// Read-only at the trait surface — write paths involve graph normalization,
+/// trigger reconciliation, and a transactional graph swap; they stay as
+/// `*_with_db` helpers in `commands/project_workflows.rs` for now.
+#[async_trait]
+pub trait ProjectWorkflowRepo: Send + Sync {
+    async fn list(
+        &self,
+        project_id: &str,
+        limit: i64,
+    ) -> Result<Vec<ProjectWorkflow>, String>;
+    async fn get(&self, id: &str) -> Result<ProjectWorkflow, String>;
+    /// Project-id of the project that owns the given workflow.
+    async fn lookup_project_id(&self, workflow_id: &str) -> Result<String, String>;
+    /// Joined `(workflow_id, project_id)` for a `workflow_runs` row — the
+    /// run-loop dispatcher uses this to scope event emission.
+    async fn lookup_run_scope(&self, run_id: &str) -> Result<(String, String), String>;
+}
+
+/// Work items aggregate (kanban cards). Read-only at the trait surface
+/// because the write paths are entangled with `work_item_events` insertion
+/// across tables and are also called from agent tools as
+/// `*_with_db` helpers in `commands/work_items.rs`. Once the executor
+/// switches to the trait surface, mutations land here too.
+#[async_trait]
+pub trait WorkItemRepo: Send + Sync {
+    async fn list(
+        &self,
+        project_id: &str,
+        board_id: Option<String>,
+    ) -> Result<Vec<WorkItem>, String>;
+    async fn get(&self, id: &str) -> Result<WorkItem, String>;
+    async fn list_comments(&self, work_item_id: &str) -> Result<Vec<WorkItemComment>, String>;
+}
+
 /// Work item events. List is the only command-surface call; appending events
 /// happens inside larger transactions in `commands/work_items.rs` so callers
 /// keep using `insert_event` against a raw `&Connection` for now.
@@ -159,6 +224,54 @@ pub trait WorkflowRunRepo: Send + Sync {
         run_id: &str,
     ) -> Result<crate::models::workflow_run::WorkflowRunWithSteps, String>;
     async fn cancel(&self, run_id: &str) -> Result<(), String>;
+}
+
+/// Filter knobs for `ChatRepo::list_sessions`.
+#[derive(Default, Clone, Debug)]
+pub struct ChatSessionListFilter {
+    pub agent_id: String,
+    pub include_archived: bool,
+    /// Empty vec means "all session types".
+    pub session_types: Vec<String>,
+    pub project_id: Option<String>,
+}
+
+/// Chat aggregate. Read-only at the repo trait surface — write paths live in
+/// `commands/chat.rs` because they're entangled with the streaming executor,
+/// session-execution registry, and worktree lifecycle. Once that machinery
+/// has its own boundary, mutations land here too.
+#[async_trait]
+pub trait ChatRepo: Send + Sync {
+    async fn list_sessions(
+        &self,
+        filter: ChatSessionListFilter,
+    ) -> Result<Vec<ChatSession>, String>;
+
+    /// Returns paginated message rows. `limit = 0` means "all messages".
+    /// The repo returns the raw stored content JSON; the caller decodes it
+    /// into the typed `ContentBlock` shape the UI uses.
+    async fn get_messages(
+        &self,
+        session_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<ChatMessageRows, String>;
+
+    async fn session_meta(&self, session_id: &str) -> Result<ChatSessionMeta, String>;
+    async fn session_execution(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionExecutionStatus, String>;
+    /// Convenience lookup used by `cancel_agent_session` to reject cancels
+    /// against session types that don't run an agent loop.
+    async fn session_type(&self, session_id: &str) -> Result<String, String>;
+    async fn list_message_reactions(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<MessageReactionRow>, String>;
+    /// Last-input-tokens + agent_id, joined so the UI can compute the
+    /// remaining-context-window percentage in one round-trip.
+    async fn token_usage(&self, session_id: &str) -> Result<ChatSessionTokenUsage, String>;
 }
 
 /// Inter-agent message bus — read surface only at the repo trait. The fan-out
