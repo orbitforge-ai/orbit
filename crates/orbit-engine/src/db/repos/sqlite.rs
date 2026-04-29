@@ -10,14 +10,26 @@ use async_trait::async_trait;
 use rusqlite::{params, OptionalExtension};
 use ulid::Ulid;
 
-use crate::db::repos::{AgentRepo, ProjectRepo, Repos, ScheduleRepo, TaskRepo, UserRepo};
+use crate::db::repos::{
+    AgentRepo, BusMessageRepo, BusSubscriptionRepo, ProjectBoardRepo, ProjectRepo, Repos,
+    RunListFilter, RunRepo, ScheduleRepo, TaskRepo, UserRepo, WorkItemEventRepo, WorkflowRunRepo,
+};
 use crate::db::DbPool;
 use crate::executor::workspace;
 use crate::models::agent::{Agent, CreateAgent, UpdateAgent};
+use crate::models::bus::{
+    BusMessage, BusSubscription, BusThreadMessage, CreateBusSubscription, PaginatedBusThread,
+};
 use crate::models::project::{CreateProject, Project, ProjectSummary, UpdateProject};
+use crate::models::project_board::{
+    CreateProjectBoard, DeleteProjectBoard, ProjectBoard, UpdateProjectBoard,
+};
+use crate::models::run::{Run, RunSummary};
 use crate::models::schedule::{CreateSchedule, RecurringConfig, Schedule};
 use crate::models::task::{CreateTask, Task, UpdateTask};
 use crate::models::user::User;
+use crate::models::work_item_event::WorkItemEvent;
+use crate::models::workflow_run::{WorkflowRun, WorkflowRunSummary, WorkflowRunWithSteps};
 use crate::scheduler::converter::{next_n_runs, to_cron};
 
 // ── Boilerplate-killers ─────────────────────────────────────────────────────
@@ -89,7 +101,19 @@ impl Repos for SqliteRepos {
     fn agents(&self) -> &dyn AgentRepo {
         self
     }
+    fn bus_messages(&self) -> &dyn BusMessageRepo {
+        self
+    }
+    fn bus_subscriptions(&self) -> &dyn BusSubscriptionRepo {
+        self
+    }
+    fn project_boards(&self) -> &dyn ProjectBoardRepo {
+        self
+    }
     fn projects(&self) -> &dyn ProjectRepo {
+        self
+    }
+    fn runs(&self) -> &dyn RunRepo {
         self
     }
     fn schedules(&self) -> &dyn ScheduleRepo {
@@ -99,6 +123,12 @@ impl Repos for SqliteRepos {
         self
     }
     fn users(&self) -> &dyn UserRepo {
+        self
+    }
+    fn work_item_events(&self) -> &dyn WorkItemEventRepo {
+        self
+    }
+    fn workflow_runs(&self) -> &dyn WorkflowRunRepo {
         self
     }
 }
@@ -648,73 +678,71 @@ fn map_schedule_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Schedule> {
 #[async_trait]
 impl ScheduleRepo for SqliteRepos {
     async fn list(&self) -> Result<Vec<Schedule>, String> {
-        let pool = self.pool.0.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<Schedule>, String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
-            let sql = format!("SELECT {SCHEDULE_COLUMNS} FROM schedules ORDER BY created_at DESC");
-            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-            let schedules = stmt
+        self.with_conn(|conn| {
+            // Newest-first matches the dashboard ordering.
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {SCHEDULE_COLUMNS} FROM schedules ORDER BY created_at DESC"
+                ))
+                .err_str()?;
+            let rows: Vec<Schedule> = stmt
                 .query_map([], map_schedule_row)
-                .map_err(|e| e.to_string())?
+                .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
-            Ok(schedules)
+            Ok(rows)
         })
         .await
-        .map_err(|e| e.to_string())?
     }
 
     async fn list_for_task(&self, task_id: &str) -> Result<Vec<Schedule>, String> {
-        let pool = self.pool.0.clone();
         let task_id = task_id.to_string();
-        tokio::task::spawn_blocking(move || -> Result<Vec<Schedule>, String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
-            let sql = format!("SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE task_id = ?1");
-            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-            let schedules = stmt
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE task_id = ?1"
+                ))
+                .err_str()?;
+            let rows: Vec<Schedule> = stmt
                 .query_map(params![task_id], map_schedule_row)
-                .map_err(|e| e.to_string())?
+                .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
-            Ok(schedules)
+            Ok(rows)
         })
         .await
-        .map_err(|e| e.to_string())?
     }
 
     async fn list_for_workflow(&self, workflow_id: &str) -> Result<Vec<Schedule>, String> {
-        let pool = self.pool.0.clone();
         let workflow_id = workflow_id.to_string();
-        tokio::task::spawn_blocking(move || -> Result<Vec<Schedule>, String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
-            let sql = format!("SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE workflow_id = ?1");
-            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-            let schedules = stmt
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE workflow_id = ?1"
+                ))
+                .err_str()?;
+            let rows: Vec<Schedule> = stmt
                 .query_map(params![workflow_id], map_schedule_row)
-                .map_err(|e| e.to_string())?
+                .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
-            Ok(schedules)
+            Ok(rows)
         })
         .await
-        .map_err(|e| e.to_string())?
     }
 
     async fn create(&self, payload: CreateSchedule) -> Result<Schedule, String> {
-        let pool = self.pool.0.clone();
-        tokio::task::spawn_blocking(move || -> Result<Schedule, String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
+        self.with_conn(move |conn| {
             let id = Ulid::new().to_string();
             let now = chrono::Utc::now().to_rfc3339();
-            let config_str = serde_json::to_string(&payload.config).map_err(|e| e.to_string())?;
+            let config_str = serde_json::to_string(&payload.config).err_str()?;
 
+            // Validate target shape. A schedule must point at exactly one of
+            // {task, workflow} — never both, never neither.
             let target_kind = payload
                 .target_kind
                 .clone()
                 .unwrap_or_else(|| "task".to_string());
-            if target_kind != "task" && target_kind != "workflow" {
-                return Err(format!("invalid target_kind: {}", target_kind));
-            }
             match target_kind.as_str() {
                 "task" => {
                     if payload.task_id.is_none() || payload.workflow_id.is_some() {
@@ -726,9 +754,11 @@ impl ScheduleRepo for SqliteRepos {
                         return Err("workflow schedule requires workflow_id and no task_id".into());
                     }
                 }
-                _ => unreachable!(),
+                other => return Err(format!("invalid target_kind: {}", other)),
             }
 
+            // Recurring schedules pre-compute their first fire time so the
+            // cron worker doesn't have to parse on the hot path.
             let next_run_at = if payload.kind == "recurring" {
                 let cfg: RecurringConfig = serde_json::from_value(payload.config.clone())
                     .map_err(|e| format!("invalid recurring config: {}", e))?;
@@ -754,89 +784,85 @@ impl ScheduleRepo for SqliteRepos {
                     now
                 ],
             )
-            .map_err(|e| e.to_string())?;
+            .err_str()?;
 
-            let sql = format!("SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE id = ?1");
-            conn.query_row(&sql, params![id], map_schedule_row)
-                .map_err(|e| e.to_string())
+            conn.query_row(
+                &format!("SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE id = ?1"),
+                params![id],
+                map_schedule_row,
+            )
+            .err_str()
         })
         .await
-        .map_err(|e| e.to_string())?
     }
 
     async fn toggle(&self, id: &str, enabled: bool) -> Result<Schedule, String> {
-        let pool = self.pool.0.clone();
         let id = id.to_string();
-        tokio::task::spawn_blocking(move || -> Result<Schedule, String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
+        self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
             conn.execute(
                 "UPDATE schedules SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
                 params![enabled as i64, now, id],
             )
-            .map_err(|e| e.to_string())?;
-            let sql = format!("SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE id = ?1");
-            conn.query_row(&sql, params![id], map_schedule_row)
-                .map_err(|e| e.to_string())
+            .err_str()?;
+            conn.query_row(
+                &format!("SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE id = ?1"),
+                params![id],
+                map_schedule_row,
+            )
+            .err_str()
         })
         .await
-        .map_err(|e| e.to_string())?
     }
 
     async fn delete(&self, id: &str) -> Result<(), String> {
-        let pool = self.pool.0.clone();
         let id = id.to_string();
-        tokio::task::spawn_blocking(move || -> Result<(), String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
+        self.with_conn(move |conn| {
             conn.execute("DELETE FROM schedules WHERE id = ?1", params![id])
-                .map_err(|e| e.to_string())?;
+                .err_str()?;
             Ok(())
         })
         .await
-        .map_err(|e| e.to_string())?
     }
 }
 
 // ── Users ───────────────────────────────────────────────────────────────────
 
+fn map_user_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
+    Ok(User {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        is_default: row.get(2)?,
+        created_at: row.get(3)?,
+    })
+}
+
 #[async_trait]
 impl UserRepo for SqliteRepos {
     async fn list(&self) -> Result<Vec<User>, String> {
-        let pool = self.pool.0.clone();
-        tokio::task::spawn_blocking(move || -> Result<Vec<User>, String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
+        self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare("SELECT id, name, is_default, created_at FROM users ORDER BY created_at ASC")
-                .map_err(|e| e.to_string())?;
-            let users = stmt
-                .query_map([], |row| {
-                    Ok(User {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        is_default: row.get(2)?,
-                        created_at: row.get(3)?,
-                    })
-                })
-                .map_err(|e| e.to_string())?
+                .err_str()?;
+            let rows: Vec<User> = stmt
+                .query_map([], map_user_row)
+                .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();
-            Ok(users)
+            Ok(rows)
         })
         .await
-        .map_err(|e| e.to_string())?
     }
 
     async fn create(&self, name: String) -> Result<User, String> {
-        let pool = self.pool.0.clone();
-        tokio::task::spawn_blocking(move || -> Result<User, String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
+        self.with_conn(move |conn| {
             let id = Ulid::new().to_string();
             let now = chrono::Utc::now().to_rfc3339();
             conn.execute(
                 "INSERT INTO users (id, name, is_default, created_at) VALUES (?1, ?2, 0, ?3)",
                 params![id, name, now],
             )
-            .map_err(|e| e.to_string())?;
+            .err_str()?;
             Ok(User {
                 id,
                 name,
@@ -845,24 +871,889 @@ impl UserRepo for SqliteRepos {
             })
         })
         .await
-        .map_err(|e| e.to_string())?
     }
 
     async fn exists(&self, id: &str) -> Result<bool, String> {
-        let pool = self.pool.0.clone();
         let id = id.to_string();
-        tokio::task::spawn_blocking(move || -> Result<bool, String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
+        self.with_conn(move |conn| {
             let count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM users WHERE id = ?1",
                     params![id],
                     |row| row.get(0),
                 )
-                .map_err(|e| e.to_string())?;
+                .err_str()?;
             Ok(count > 0)
         })
         .await
-        .map_err(|e| e.to_string())?
+    }
+}
+
+// ── Runs ────────────────────────────────────────────────────────────────────
+//
+// Read-only at this layer. The "summary" SQL is shared between list / active /
+// sub-agent queries — only the WHERE / ORDER clauses differ. Centralising it
+// in `RUN_SUMMARY_SELECT` keeps the column ordering aligned with the row
+// mapper and removes the prior copy-pasted SELECT blocks.
+
+const RUN_SUMMARY_SELECT: &str =
+    "SELECT r.id, r.task_id, t.name as task_name, r.schedule_id,
+            r.agent_id, a.name as agent_name,
+            r.state, r.trigger, r.exit_code,
+            r.started_at, r.finished_at, r.duration_ms, r.retry_count, r.is_sub_agent,
+            r.created_at,
+            json_extract(r.metadata, '$.chat_session_id') as chat_session_id,
+            r.project_id
+     FROM runs r
+     LEFT JOIN tasks t ON t.id = r.task_id
+     LEFT JOIN agents a ON a.id = r.agent_id";
+
+fn map_run_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunSummary> {
+    Ok(RunSummary {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        task_name: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+        schedule_id: row.get(3)?,
+        agent_id: row.get(4)?,
+        agent_name: row.get(5)?,
+        state: row.get(6)?,
+        trigger: row.get(7)?,
+        exit_code: row.get(8)?,
+        started_at: row.get(9)?,
+        finished_at: row.get(10)?,
+        duration_ms: row.get(11)?,
+        retry_count: row.get(12)?,
+        is_sub_agent: row.get::<_, i64>(13)? != 0,
+        created_at: row.get(14)?,
+        chat_session_id: row.get(15)?,
+        // The two queries that don't have project_id in their SELECT use the
+        // 17-column shape; this is fine because the index is read positionally.
+        project_id: row.get::<_, Option<String>>(16).ok().flatten(),
+    })
+}
+
+#[async_trait]
+impl RunRepo for SqliteRepos {
+    async fn list(&self, filter: RunListFilter) -> Result<Vec<RunSummary>, String> {
+        self.with_conn(move |conn| {
+            // Limit / offset are bound positionally as ?1 / ?2 so the optional
+            // filters can append after them without renumbering.
+            let mut bound: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            bound.push(Box::new(filter.limit.unwrap_or(100)));
+            bound.push(Box::new(filter.offset.unwrap_or(0)));
+
+            let mut sql = format!("{} WHERE 1=1", RUN_SUMMARY_SELECT);
+
+            // Helper that appends a `AND <col> = ?N` clause and pushes the
+            // value, keeping the SQL/params in lockstep.
+            let mut push_eq = |col: &str, val: Box<dyn rusqlite::ToSql>, sql: &mut String, b: &mut Vec<Box<dyn rusqlite::ToSql>>| {
+                let n = b.len() + 1;
+                sql.push_str(&format!(" AND {col} = ?{n}"));
+                b.push(val);
+            };
+
+            if let Some(tid) = filter.task_id {
+                push_eq("r.task_id", Box::new(tid), &mut sql, &mut bound);
+            }
+            if let Some(state) = filter.state_filter {
+                if state != "all" {
+                    push_eq("r.state", Box::new(state), &mut sql, &mut bound);
+                }
+            }
+            if let Some(pid) = filter.project_id {
+                push_eq("r.project_id", Box::new(pid), &mut sql, &mut bound);
+            }
+
+            sql.push_str(" ORDER BY r.created_at DESC LIMIT ?1 OFFSET ?2");
+
+            let mut stmt = conn.prepare(&sql).err_str()?;
+            let refs: Vec<&dyn rusqlite::ToSql> = bound.iter().map(|p| p.as_ref()).collect();
+            let rows: Vec<RunSummary> = stmt
+                .query_map(refs.as_slice(), map_run_summary_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<Run>, String> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            conn.query_row(
+                "SELECT id, task_id, schedule_id, agent_id, state, trigger, exit_code, pid,
+                        log_path, started_at, finished_at, duration_ms, retry_count,
+                        parent_run_id, metadata, is_sub_agent, created_at, project_id
+                 FROM runs WHERE id = ?1",
+                params![id],
+                |row| {
+                    let meta_str: String = row.get(14)?;
+                    Ok(Run {
+                        id: row.get(0)?,
+                        task_id: row.get(1)?,
+                        schedule_id: row.get(2)?,
+                        agent_id: row.get(3)?,
+                        state: row.get(4)?,
+                        trigger: row.get(5)?,
+                        exit_code: row.get(6)?,
+                        pid: row.get(7)?,
+                        log_path: row.get(8)?,
+                        started_at: row.get(9)?,
+                        finished_at: row.get(10)?,
+                        duration_ms: row.get(11)?,
+                        retry_count: row.get(12)?,
+                        parent_run_id: row.get(13)?,
+                        metadata: serde_json::from_str(&meta_str)
+                            .unwrap_or(serde_json::Value::Null),
+                        is_sub_agent: row.get::<_, i64>(15)? != 0,
+                        created_at: row.get(16)?,
+                        project_id: row.get(17)?,
+                    })
+                },
+            )
+            .optional()
+            .err_str()
+        })
+        .await
+    }
+
+    async fn list_active(&self) -> Result<Vec<RunSummary>, String> {
+        self.with_conn(|conn| {
+            let sql = format!(
+                "{} WHERE r.state IN ('pending', 'queued', 'running') ORDER BY r.created_at DESC",
+                RUN_SUMMARY_SELECT
+            );
+            let mut stmt = conn.prepare(&sql).err_str()?;
+            let rows: Vec<RunSummary> = stmt
+                .query_map([], map_run_summary_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn list_sub_agents(&self, parent_run_id: &str) -> Result<Vec<RunSummary>, String> {
+        let parent = parent_run_id.to_string();
+        self.with_conn(move |conn| {
+            let sql = format!(
+                "{} WHERE r.parent_run_id = ?1 AND r.is_sub_agent = 1 ORDER BY r.created_at ASC",
+                RUN_SUMMARY_SELECT
+            );
+            let mut stmt = conn.prepare(&sql).err_str()?;
+            let rows: Vec<RunSummary> = stmt
+                .query_map(params![parent], map_run_summary_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn agent_conversation(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<serde_json::Value>, String> {
+        let run_id = run_id.to_string();
+        self.with_conn(move |conn| {
+            let raw: Option<String> = conn
+                .query_row(
+                    "SELECT messages FROM agent_conversations WHERE run_id = ?1",
+                    params![run_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .err_str()?;
+            match raw {
+                Some(s) => Ok(Some(serde_json::from_str(&s).err_str()?)),
+                None => Ok(None),
+            }
+        })
+        .await
+    }
+
+    async fn log_path(&self, run_id: &str) -> Result<Option<String>, String> {
+        let run_id = run_id.to_string();
+        self.with_conn(move |conn| {
+            conn.query_row(
+                "SELECT log_path FROM runs WHERE id = ?1",
+                params![run_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(|opt| opt.flatten())
+            .err_str()
+        })
+        .await
+    }
+}
+
+// ── Work item events ────────────────────────────────────────────────────────
+
+const WORK_ITEM_EVENT_COLUMNS: &str =
+    "id, work_item_id, actor_kind, actor_agent_id, kind, payload_json, created_at";
+
+fn map_work_item_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkItemEvent> {
+    let payload_json: String = row.get(5)?;
+    Ok(WorkItemEvent {
+        id: row.get(0)?,
+        work_item_id: row.get(1)?,
+        actor_kind: row.get(2)?,
+        actor_agent_id: row.get(3)?,
+        kind: row.get(4)?,
+        payload: serde_json::from_str(&payload_json).unwrap_or_else(|_| serde_json::json!({})),
+        created_at: row.get(6)?,
+    })
+}
+
+#[async_trait]
+impl WorkItemEventRepo for SqliteRepos {
+    async fn list(&self, work_item_id: &str) -> Result<Vec<WorkItemEvent>, String> {
+        let work_item_id = work_item_id.to_string();
+        self.with_conn(move |conn| {
+            // Chronological order; ULID id breaks ties for events created in
+            // the same second.
+            let sql = format!(
+                "SELECT {WORK_ITEM_EVENT_COLUMNS} FROM work_item_events
+                 WHERE work_item_id = ?1
+                 ORDER BY created_at ASC, id ASC"
+            );
+            let mut stmt = conn.prepare(&sql).err_str()?;
+            let rows: Vec<WorkItemEvent> = stmt
+                .query_map(params![work_item_id], map_work_item_event_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+}
+
+// ── Workflow runs ───────────────────────────────────────────────────────────
+//
+// Thin wrapper: the heavy lifting still lives in `workflows::orchestrator` /
+// `workflows::store` because cancel-with-side-effects needs the orchestrator's
+// run-loop hooks. This impl just hides the `DbPool` from command code so the
+// trait surface stays consistent.
+
+#[async_trait]
+impl WorkflowRunRepo for SqliteRepos {
+    async fn list_for_workflow(
+        &self,
+        workflow_id: &str,
+        limit: i64,
+    ) -> Result<Vec<WorkflowRun>, String> {
+        let pool = DbPool(self.pool.0.clone());
+        let workflow_id = workflow_id.to_string();
+        let limit = limit.clamp(1, 200);
+        tokio::task::spawn_blocking(move || {
+            crate::workflows::orchestrator::list_runs_for_workflow(&pool, &workflow_id, limit)
+        })
+        .await
+        .err_str()?
+    }
+
+    async fn list_for_project(
+        &self,
+        project_id: &str,
+        limit: i64,
+    ) -> Result<Vec<WorkflowRunSummary>, String> {
+        let pool = DbPool(self.pool.0.clone());
+        let project_id = project_id.to_string();
+        let limit = limit.clamp(1, 200);
+        tokio::task::spawn_blocking(move || {
+            crate::workflows::store::list_runs_for_project(&pool, &project_id, limit)
+        })
+        .await
+        .err_str()?
+    }
+
+    async fn get_with_steps(&self, run_id: &str) -> Result<WorkflowRunWithSteps, String> {
+        let pool = DbPool(self.pool.0.clone());
+        let run_id = run_id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<WorkflowRunWithSteps, String> {
+            let (run, steps) = crate::workflows::orchestrator::load_run_with_steps(&pool, &run_id)?;
+            Ok(WorkflowRunWithSteps { run, steps })
+        })
+        .await
+        .err_str()?
+    }
+
+    async fn cancel(&self, run_id: &str) -> Result<(), String> {
+        let pool = DbPool(self.pool.0.clone());
+        let run_id = run_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            crate::workflows::orchestrator::cancel_run(&pool, &run_id)
+        })
+        .await
+        .err_str()?
+    }
+}
+
+// ── Project boards ──────────────────────────────────────────────────────────
+
+const PROJECT_BOARD_COLUMNS: &str =
+    "id, project_id, name, prefix, position, is_default, created_at, updated_at";
+
+fn map_project_board_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectBoard> {
+    Ok(ProjectBoard {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        name: row.get(2)?,
+        prefix: row.get(3)?,
+        position: row.get(4)?,
+        is_default: row.get::<_, bool>(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+    })
+}
+
+fn validate_board_prefix(prefix: &str) -> Result<(), String> {
+    let trimmed = prefix.trim();
+    if trimmed.len() < 2 || trimmed.len() > 8 {
+        return Err("board prefix must be 2 to 8 characters long".into());
+    }
+    if !trimmed.chars().all(|c| c.is_ascii_uppercase()) {
+        return Err("board prefix must contain only uppercase letters A–Z".into());
+    }
+    Ok(())
+}
+
+#[async_trait]
+impl ProjectBoardRepo for SqliteRepos {
+    async fn list(&self, project_id: &str) -> Result<Vec<ProjectBoard>, String> {
+        let project_id = project_id.to_string();
+        self.with_conn(move |conn| {
+            // Default board first, then explicit position, then creation order.
+            let sql = format!(
+                "SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards \
+                 WHERE project_id = ?1 \
+                 ORDER BY is_default DESC, position ASC, created_at ASC"
+            );
+            let mut stmt = conn.prepare(&sql).err_str()?;
+            let rows: Vec<ProjectBoard> = stmt
+                .query_map(params![project_id], map_project_board_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<ProjectBoard>, String> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            conn.query_row(
+                &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1"),
+                params![id],
+                map_project_board_row,
+            )
+            .optional()
+            .err_str()
+        })
+        .await
+    }
+
+    async fn create(&self, payload: CreateProjectBoard) -> Result<ProjectBoard, String> {
+        validate_board_prefix(&payload.prefix)?;
+        self.with_conn(move |conn| {
+            let name = payload.name.trim();
+            if name.is_empty() {
+                return Err("board name must be non-empty".into());
+            }
+            let prefix = payload.prefix.trim().to_string();
+
+            // Prefix uniqueness is per-project, mirroring board names in
+            // tools like Linear/Jira.
+            let prefix_taken: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM project_boards WHERE project_id = ?1 AND prefix = ?2)",
+                    params![payload.project_id, prefix],
+                    |row| row.get(0),
+                )
+                .err_str()?;
+            if prefix_taken {
+                return Err(format!(
+                    "a board with prefix '{}' already exists in this project",
+                    prefix
+                ));
+            }
+
+            let now = chrono::Utc::now().to_rfc3339();
+            let id = Ulid::new().to_string();
+
+            // Floating-point position lets us insert between siblings without
+            // renumbering everyone — large step gives plenty of headroom.
+            let next_position: f64 = conn
+                .query_row(
+                    "SELECT COALESCE(MAX(position), 0) FROM project_boards WHERE project_id = ?1",
+                    params![payload.project_id],
+                    |row| row.get(0),
+                )
+                .err_str()?;
+            let position = next_position + 1024.0;
+
+            conn.execute(
+                "INSERT INTO project_boards (id, project_id, name, prefix, position, is_default, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6)",
+                params![id, payload.project_id, name, prefix, position, now],
+            )
+            .err_str()?;
+
+            conn.query_row(
+                &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1"),
+                params![id],
+                map_project_board_row,
+            )
+            .err_str()
+        })
+        .await
+    }
+
+    async fn update(
+        &self,
+        id: &str,
+        payload: UpdateProjectBoard,
+    ) -> Result<ProjectBoard, String> {
+        if let Some(prefix) = payload.prefix.as_deref() {
+            validate_board_prefix(prefix)?;
+        }
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            let existing: ProjectBoard = conn
+                .query_row(
+                    &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1"),
+                    params![id],
+                    map_project_board_row,
+                )
+                .optional()
+                .err_str()?
+                .ok_or_else(|| format!("board '{}' not found", id))?;
+            let now = chrono::Utc::now().to_rfc3339();
+
+            if let Some(name) = payload.name.as_deref() {
+                let name = name.trim();
+                if name.is_empty() {
+                    return Err("board name must be non-empty".into());
+                }
+                conn.execute(
+                    "UPDATE project_boards SET name = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![name, now, id],
+                )
+                .err_str()?;
+            }
+            if let Some(prefix) = payload.prefix.as_deref() {
+                let prefix = prefix.trim().to_string();
+                if prefix != existing.prefix {
+                    let taken: bool = conn
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM project_boards WHERE project_id = ?1 AND prefix = ?2 AND id != ?3)",
+                            params![existing.project_id, prefix, id],
+                            |row| row.get(0),
+                        )
+                        .err_str()?;
+                    if taken {
+                        return Err(format!(
+                            "a board with prefix '{}' already exists in this project",
+                            prefix
+                        ));
+                    }
+                    conn.execute(
+                        "UPDATE project_boards SET prefix = ?1, updated_at = ?2 WHERE id = ?3",
+                        params![prefix, now, id],
+                    )
+                    .err_str()?;
+                }
+            }
+
+            conn.query_row(
+                &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1"),
+                params![id],
+                map_project_board_row,
+            )
+            .err_str()
+        })
+        .await
+    }
+
+    async fn delete(&self, id: &str, payload: DeleteProjectBoard) -> Result<(), String> {
+        let id = id.to_string();
+        self.with_conn_mut(move |conn| {
+            // Re-fetch existing inside the same transaction so we can rely on
+            // the project_id / is_default state being consistent.
+            let existing: ProjectBoard = conn
+                .query_row(
+                    &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1"),
+                    params![id],
+                    map_project_board_row,
+                )
+                .optional()
+                .err_str()?
+                .ok_or_else(|| format!("board '{}' not found", id))?;
+
+            // We can't delete the only board — every project must have ≥1.
+            let siblings: Vec<ProjectBoard> = {
+                let sql = format!(
+                    "SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards \
+                     WHERE project_id = ?1 \
+                     ORDER BY is_default DESC, position ASC, created_at ASC"
+                );
+                let mut stmt = conn.prepare(&sql).err_str()?;
+                let rows: Vec<ProjectBoard> = stmt
+                    .query_map(params![existing.project_id], map_project_board_row)
+                    .err_str()?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                rows
+            };
+            if siblings.len() <= 1 {
+                return Err("cannot delete the last remaining board".into());
+            }
+
+            // If this board has work items, the caller must either pick a
+            // destination board to re-parent them into, or pass `force = true`
+            // (which deletes everything via FK cascade).
+            let item_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM work_items WHERE board_id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .err_str()?;
+
+            let destination = match payload.destination_board_id.as_deref() {
+                Some(dest_id) => {
+                    let dest: ProjectBoard = conn
+                        .query_row(
+                            &format!(
+                                "SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1"
+                            ),
+                            params![dest_id],
+                            map_project_board_row,
+                        )
+                        .optional()
+                        .err_str()?
+                        .ok_or_else(|| format!("destination board '{}' not found", dest_id))?;
+                    if dest.project_id != existing.project_id {
+                        return Err(
+                            "destination board belongs to a different project".into(),
+                        );
+                    }
+                    if dest.id == existing.id {
+                        return Err(
+                            "destination board must be different from the board being deleted"
+                                .into(),
+                        );
+                    }
+                    Some(dest)
+                }
+                None => None,
+            };
+
+            if item_count > 0 && destination.is_none() && !payload.force.unwrap_or(false) {
+                return Err(
+                    "choose a destination board before deleting a board that has items".into(),
+                );
+            }
+
+            let now = chrono::Utc::now().to_rfc3339();
+            let tx = conn.transaction().err_str()?;
+
+            if let Some(destination) = destination.as_ref() {
+                // Re-parent every column and work item to the destination.
+                tx.execute(
+                    "UPDATE project_board_columns SET board_id = ?1, updated_at = ?2 WHERE board_id = ?3",
+                    params![destination.id, now, id],
+                )
+                .err_str()?;
+                tx.execute(
+                    "UPDATE work_items SET board_id = ?1, updated_at = ?2 WHERE board_id = ?3",
+                    params![destination.id, now, id],
+                )
+                .err_str()?;
+            }
+
+            // If we're deleting the default board, promote a sibling first so
+            // the partial unique index on (project_id, is_default) stays valid.
+            if existing.is_default {
+                let next_default = siblings
+                    .iter()
+                    .find(|b| b.id != id)
+                    .ok_or_else(|| "expected at least one remaining board".to_string())?;
+                tx.execute(
+                    "UPDATE project_boards SET is_default = 0, updated_at = ?1 WHERE id = ?2",
+                    params![now, id],
+                )
+                .err_str()?;
+                tx.execute(
+                    "UPDATE project_boards SET is_default = 1, updated_at = ?1 WHERE id = ?2",
+                    params![now, next_default.id],
+                )
+                .err_str()?;
+            }
+
+            tx.execute("DELETE FROM project_boards WHERE id = ?1", params![id])
+                .err_str()?;
+            tx.commit().err_str()?;
+            Ok(())
+        })
+        .await
+    }
+}
+
+// ── Bus messages ────────────────────────────────────────────────────────────
+
+const BUS_MESSAGE_COLUMNS: &str =
+    "id, from_agent_id, from_run_id, from_session_id, to_agent_id, to_run_id, to_session_id, \
+     kind, event_type, payload, status, created_at";
+
+fn map_bus_message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BusMessage> {
+    let payload_str: String = row.get(9)?;
+    Ok(BusMessage {
+        id: row.get(0)?,
+        from_agent_id: row.get(1)?,
+        from_run_id: row.get(2)?,
+        from_session_id: row.get(3)?,
+        to_agent_id: row.get(4)?,
+        to_run_id: row.get(5)?,
+        to_session_id: row.get(6)?,
+        kind: row.get(7)?,
+        event_type: row.get(8)?,
+        payload: serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null),
+        status: row.get(10)?,
+        created_at: row.get(11)?,
+    })
+}
+
+#[async_trait]
+impl BusMessageRepo for SqliteRepos {
+    async fn list(
+        &self,
+        agent_id: Option<String>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<BusMessage>, String> {
+        self.with_conn(move |conn| {
+            // Two SQL shapes: filtered by agent (sender or recipient) vs. all.
+            // Building both with the same column projection so the row mapper
+            // doesn't need to vary.
+            let (sql, bound): (String, Vec<Box<dyn rusqlite::ToSql>>) = match agent_id {
+                Some(aid) => (
+                    format!(
+                        "SELECT {BUS_MESSAGE_COLUMNS} FROM bus_messages \
+                         WHERE from_agent_id = ?1 OR to_agent_id = ?1 \
+                         ORDER BY created_at DESC LIMIT ?2 OFFSET ?3"
+                    ),
+                    vec![Box::new(aid), Box::new(limit), Box::new(offset)],
+                ),
+                None => (
+                    format!(
+                        "SELECT {BUS_MESSAGE_COLUMNS} FROM bus_messages \
+                         ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
+                    ),
+                    vec![Box::new(limit), Box::new(offset)],
+                ),
+            };
+            let mut stmt = conn.prepare(&sql).err_str()?;
+            let refs: Vec<&dyn rusqlite::ToSql> = bound.iter().map(|p| p.as_ref()).collect();
+            let rows: Vec<BusMessage> = stmt
+                .query_map(refs.as_slice(), map_bus_message_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn thread_for_agent(
+        &self,
+        agent_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<PaginatedBusThread, String> {
+        let agent_id = agent_id.to_string();
+        self.with_conn(move |conn| {
+            let total_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM bus_messages WHERE to_agent_id = ?1",
+                    params![agent_id],
+                    |row| row.get(0),
+                )
+                .err_str()?;
+
+            // Joined view: each message is annotated with the run/session it
+            // triggered, so the inbox UI can render status without N+1 calls.
+            let mut stmt = conn
+                .prepare(
+                    "SELECT bm.id, bm.from_agent_id, COALESCE(a.name, bm.from_agent_id), bm.to_agent_id, bm.kind,
+                            bm.payload, bm.status, bm.created_at,
+                            bm.to_run_id, r.state, json_extract(r.metadata, '$.finish_summary'),
+                            bm.to_session_id, cs.execution_state, cs.finish_summary
+                     FROM bus_messages bm
+                     LEFT JOIN agents a ON a.id = bm.from_agent_id
+                     LEFT JOIN runs r ON r.id = bm.to_run_id
+                     LEFT JOIN chat_sessions cs ON cs.id = bm.to_session_id
+                     WHERE bm.to_agent_id = ?1
+                     ORDER BY bm.created_at DESC
+                     LIMIT ?2 OFFSET ?3",
+                )
+                .err_str()?;
+
+            let messages: Vec<BusThreadMessage> = stmt
+                .query_map(params![agent_id, limit, offset], |row| {
+                    let payload_str: String = row.get(5)?;
+                    Ok(BusThreadMessage {
+                        id: row.get(0)?,
+                        from_agent_id: row.get(1)?,
+                        from_agent_name: row.get(2)?,
+                        to_agent_id: row.get(3)?,
+                        kind: row.get(4)?,
+                        // Bus payload may be stringly-typed (legacy senders) — fall
+                        // back to wrapping it in a JSON string if parsing fails.
+                        payload: serde_json::from_str(&payload_str)
+                            .unwrap_or_else(|_| serde_json::Value::String(payload_str.clone())),
+                        status: row.get(6)?,
+                        created_at: row.get(7)?,
+                        triggered_run_id: row.get(8)?,
+                        triggered_run_state: row.get(9)?,
+                        triggered_run_summary: row.get(10)?,
+                        triggered_session_id: row.get(11)?,
+                        triggered_session_state: row.get(12)?,
+                        triggered_session_summary: row.get(13)?,
+                    })
+                })
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            let has_more = (offset + limit) < total_count;
+            Ok(PaginatedBusThread {
+                messages,
+                total_count,
+                has_more,
+            })
+        })
+        .await
+    }
+}
+
+// ── Bus subscriptions ───────────────────────────────────────────────────────
+
+const BUS_SUBSCRIPTION_COLUMNS: &str =
+    "id, subscriber_agent_id, source_agent_id, event_type, task_id, payload_template, \
+     enabled, max_chain_depth, created_at, updated_at";
+
+fn map_bus_subscription_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BusSubscription> {
+    Ok(BusSubscription {
+        id: row.get(0)?,
+        subscriber_agent_id: row.get(1)?,
+        source_agent_id: row.get(2)?,
+        event_type: row.get(3)?,
+        task_id: row.get(4)?,
+        payload_template: row.get(5)?,
+        enabled: row.get(6)?,
+        max_chain_depth: row.get(7)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
+    })
+}
+
+#[async_trait]
+impl BusSubscriptionRepo for SqliteRepos {
+    async fn list(&self, agent_id: Option<String>) -> Result<Vec<BusSubscription>, String> {
+        self.with_conn(move |conn| {
+            let (sql, bound): (String, Vec<Box<dyn rusqlite::ToSql>>) = match agent_id {
+                Some(aid) => (
+                    format!(
+                        "SELECT {BUS_SUBSCRIPTION_COLUMNS} FROM bus_subscriptions \
+                         WHERE subscriber_agent_id = ?1 OR source_agent_id = ?1 \
+                         ORDER BY created_at DESC"
+                    ),
+                    vec![Box::new(aid)],
+                ),
+                None => (
+                    format!(
+                        "SELECT {BUS_SUBSCRIPTION_COLUMNS} FROM bus_subscriptions \
+                         ORDER BY created_at DESC"
+                    ),
+                    vec![],
+                ),
+            };
+            let mut stmt = conn.prepare(&sql).err_str()?;
+            let refs: Vec<&dyn rusqlite::ToSql> = bound.iter().map(|p| p.as_ref()).collect();
+            let rows: Vec<BusSubscription> = stmt
+                .query_map(refs.as_slice(), map_bus_subscription_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn create(&self, payload: CreateBusSubscription) -> Result<BusSubscription, String> {
+        self.with_conn(move |conn| {
+            let id = Ulid::new().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO bus_subscriptions (id, subscriber_agent_id, source_agent_id, event_type, task_id, payload_template, enabled, max_chain_depth, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?8)",
+                params![
+                    id,
+                    payload.subscriber_agent_id,
+                    payload.source_agent_id,
+                    payload.event_type,
+                    payload.task_id,
+                    payload.payload_template,
+                    payload.max_chain_depth,
+                    now,
+                ],
+            )
+            .err_str()?;
+
+            Ok(BusSubscription {
+                id,
+                subscriber_agent_id: payload.subscriber_agent_id,
+                source_agent_id: payload.source_agent_id,
+                event_type: payload.event_type,
+                task_id: payload.task_id,
+                payload_template: payload.payload_template,
+                enabled: true,
+                max_chain_depth: payload.max_chain_depth,
+                created_at: now.clone(),
+                updated_at: now,
+            })
+        })
+        .await
+    }
+
+    async fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), String> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "UPDATE bus_subscriptions SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
+                params![enabled, now, id],
+            )
+            .err_str()?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn delete(&self, id: &str) -> Result<(), String> {
+        let id = id.to_string();
+        self.with_conn(move |conn| {
+            conn.execute("DELETE FROM bus_subscriptions WHERE id = ?1", params![id])
+                .err_str()?;
+            Ok(())
+        })
+        .await
     }
 }

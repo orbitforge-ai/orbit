@@ -1,4 +1,12 @@
-use crate::db::DbPool;
+//! Work-item activity feed.
+//!
+//! Read path goes through `WorkItemEventRepo` like every other aggregate.
+//! Append path is special: events are inserted as part of larger
+//! transactions (when a work item is created, edited, commented on, etc.),
+//! so callers in `commands/work_items.rs` keep using the `insert_event`
+//! helper below against a raw `&Connection` they already hold open.
+
+use crate::app_context::AppContext;
 use crate::models::work_item_event::WorkItemEvent;
 use rusqlite::{params, Connection};
 use ulid::Ulid;
@@ -50,9 +58,9 @@ impl<'a> Actor<'a> {
 
 // ── Insert helper used by other command modules ──────────────────────────────
 
-/// Append an event row. Callers build the payload with `serde_json::json!(...)`.
-/// Returns the event id; errors propagate as `String` to match the surrounding
-/// command style.
+/// Append an event row inside an existing transaction. Callers build the
+/// payload with `serde_json::json!(...)`. Returns the event id; errors
+/// propagate as `String` to match the surrounding command style.
 pub fn insert_event(
     conn: &Connection,
     work_item_id: &str,
@@ -82,66 +90,29 @@ pub fn insert_event(
     Ok(id)
 }
 
-// ── Row mapper / columns ─────────────────────────────────────────────────────
-
-const EVENT_COLUMNS: &str =
-    "id, work_item_id, actor_kind, actor_agent_id, kind, payload_json, created_at";
-
-fn map_event(row: &rusqlite::Row) -> rusqlite::Result<WorkItemEvent> {
-    let payload_json: String = row.get(5)?;
-    Ok(WorkItemEvent {
-        id: row.get(0)?,
-        work_item_id: row.get(1)?,
-        actor_kind: row.get(2)?,
-        actor_agent_id: row.get(3)?,
-        kind: row.get(4)?,
-        payload: serde_json::from_str(&payload_json).unwrap_or_else(|_| serde_json::json!({})),
-        created_at: row.get(6)?,
-    })
-}
-
 // ── Public command ────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn list_work_item_events(
     work_item_id: String,
-    db: tauri::State<'_, DbPool>,
+    app: tauri::State<'_, AppContext>,
 ) -> Result<Vec<WorkItemEvent>, String> {
-    let pool = db.0.clone();
-    tokio::task::spawn_blocking(move || -> Result<Vec<WorkItemEvent>, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let sql = format!(
-            "SELECT {} FROM work_item_events
-             WHERE work_item_id = ?1
-             ORDER BY created_at ASC, id ASC",
-            EVENT_COLUMNS
-        );
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let events = stmt
-            .query_map(params![work_item_id], map_event)
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(events)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    app.repos.work_item_events().list(&work_item_id).await
 }
 
 mod http {
-    use tauri::Manager;
     use super::*;
-    use crate::db::DbPool;
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
-    struct Args { work_item_id: String }
+    struct Args {
+        work_item_id: String,
+    }
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("list_work_item_events", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: Args = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = list_work_item_events(a.work_item_id, app.state::<DbPool>()).await?;
+            let r = ctx.repos.work_item_events().list(&a.work_item_id).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
     }
