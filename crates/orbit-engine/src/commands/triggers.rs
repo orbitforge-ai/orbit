@@ -34,9 +34,9 @@ async fn set_agent_listen_bindings_inner(
     workspace::save_agent_config(&agent_id, &cfg).map_err(|e| e.to_string())?;
 
     let manager = app.plugins.clone();
-    let db = app.db.clone();
+    let repos = app.repos.clone();
     tauri::async_runtime::spawn(async move {
-        subscriptions::reconcile_all_for_manager(&manager, &db).await;
+        subscriptions::reconcile_all_for_manager_with_repos(&manager, repos).await;
     });
     Ok(())
 }

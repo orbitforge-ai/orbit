@@ -4648,6 +4648,26 @@ impl ProjectWorkflowRepo for SqliteRepos {
         .await
     }
 
+    async fn list_enabled_triggers(&self) -> Result<Vec<ProjectWorkflow>, String> {
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows
+                     WHERE enabled = 1 AND trigger_kind LIKE 'trigger.%' AND tenant_id = ?1
+                     ORDER BY updated_at DESC"
+                ))
+                .err_str()?;
+            let rows: Vec<ProjectWorkflow> = stmt
+                .query_map(params![tenant_id], map_project_workflow_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
     async fn create(&self, payload: CreateProjectWorkflow) -> Result<ProjectWorkflow, String> {
         let tenant_id = self.tenant_id();
         self.with_conn_mut(move |conn| {

@@ -204,7 +204,7 @@ pub fn run() {
                 Arc::new(db::repos::sqlite::SqliteRepos::new(db_pool.clone()));
             let app_ctx = app_context::AppContext::new(
                 db_pool.clone(),
-                repos,
+                repos.clone(),
                 app.state::<AuthState>().inner().clone(),
                 app.state::<CloudClientState>().inner().clone(),
                 app.state::<ActiveUser>().inner().clone(),
@@ -217,7 +217,7 @@ pub fn run() {
                 app.state::<executor::mcp_server::McpServerHandle>()
                     .inner()
                     .clone(),
-                plugin_manager,
+                plugin_manager.clone(),
                 app.state::<Option<memory_service::MemoryServiceState>>()
                     .inner()
                     .clone(),
@@ -252,10 +252,11 @@ pub fn run() {
             // plugin. Runs in the background so startup is not blocked by
             // plugin subprocess spin-up.
             {
-                let handle = app.handle().clone();
-                let db = db_pool.clone();
+                let manager = plugin_manager.clone();
+                let repos = repos.clone();
                 tauri::async_runtime::spawn(async move {
-                    triggers::subscriptions::reconcile_all(&handle, &db).await;
+                    triggers::subscriptions::reconcile_all_for_manager_with_repos(&manager, repos)
+                        .await;
                 });
             }
 

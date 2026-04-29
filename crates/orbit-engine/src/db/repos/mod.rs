@@ -252,6 +252,7 @@ pub trait ProjectBoardColumnRepo: Send + Sync {
 #[async_trait]
 pub trait ProjectWorkflowRepo: Send + Sync {
     async fn list(&self, project_id: &str, limit: i64) -> Result<Vec<ProjectWorkflow>, String>;
+    async fn list_enabled_triggers(&self) -> Result<Vec<ProjectWorkflow>, String>;
     async fn get(&self, id: &str) -> Result<ProjectWorkflow, String>;
     async fn create(&self, payload: CreateProjectWorkflow) -> Result<ProjectWorkflow, String>;
     async fn update(

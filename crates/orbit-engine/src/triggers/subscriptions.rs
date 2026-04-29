@@ -17,6 +17,7 @@ use serde_json::json;
 use tauri::AppHandle;
 use tracing::{info, warn};
 
+use crate::db::repos::{sqlite::SqliteRepos, Repos};
 use crate::db::DbPool;
 use crate::executor::workspace;
 use crate::plugins::manifest::PluginManifest;
@@ -39,7 +40,15 @@ pub async fn reconcile_all(app: &AppHandle, db: &DbPool) {
 /// manager. This keeps command/shim paths from needing a live Tauri handle
 /// just to reconcile trigger subscriptions.
 pub async fn reconcile_all_for_manager(manager: &Arc<PluginManager>, db: &DbPool) {
-    let desired = compute_desired(db);
+    let repos: Arc<dyn Repos> = Arc::new(SqliteRepos::new(db.clone()));
+    reconcile_all_for_manager_with_repos(manager, repos).await;
+}
+
+pub async fn reconcile_all_for_manager_with_repos(
+    manager: &Arc<PluginManager>,
+    repos: Arc<dyn Repos>,
+) {
+    let desired = compute_desired(repos.as_ref()).await;
 
     let mut plugin_ids: BTreeSet<String> = desired.keys().cloned().collect();
     // Also visit enabled plugins that currently have *no* desired
@@ -74,73 +83,68 @@ pub async fn reconcile_plugin_for_manager(
     db: &DbPool,
     plugin_id: &str,
 ) {
-    let desired = compute_desired(db);
+    let repos: Arc<dyn Repos> = Arc::new(SqliteRepos::new(db.clone()));
+    reconcile_plugin_for_manager_with_repos(manager, repos, plugin_id).await;
+}
+
+pub async fn reconcile_plugin_for_manager_with_repos(
+    manager: &Arc<PluginManager>,
+    repos: Arc<dyn Repos>,
+    plugin_id: &str,
+) {
+    let desired = compute_desired(repos.as_ref()).await;
     let subs = desired.get(plugin_id).cloned().unwrap_or_default();
     if let Err(e) = apply_for_plugin(manager, plugin_id, &subs).await {
         warn!(plugin_id, error = %e, "reconcile: apply failed");
     }
 }
 
-fn compute_desired(db: &DbPool) -> std::collections::BTreeMap<String, BTreeSet<Subscription>> {
+async fn compute_desired(
+    repos: &dyn Repos,
+) -> std::collections::BTreeMap<String, BTreeSet<Subscription>> {
     let mut out: std::collections::BTreeMap<String, BTreeSet<Subscription>> =
         std::collections::BTreeMap::new();
 
     // Agent listen_bindings.
-    if let Ok(conn) = db.0.get() {
-        if let Ok(mut stmt) = conn.prepare("SELECT id FROM agents WHERE tenant_id = 'local'") {
-            let rows = stmt
-                .query_map([], |row| row.get::<_, String>(0))
-                .ok()
-                .map(|iter| iter.filter_map(|r| r.ok()).collect::<Vec<_>>())
-                .unwrap_or_default();
-            for agent_id in rows {
-                let Ok(cfg) = workspace::load_agent_config(&agent_id) else {
-                    continue;
-                };
-                for binding in cfg.listen_bindings {
-                    out.entry(binding.plugin_id)
-                        .or_default()
-                        .insert(Subscription {
-                            channel_id: binding.provider_channel_id,
-                            thread_id: binding.provider_thread_id,
-                        });
-                }
+    if let Ok(agents) = repos.agents().list().await {
+        for agent in agents {
+            let Ok(cfg) = workspace::load_agent_config(&agent.id) else {
+                continue;
+            };
+            for binding in cfg.listen_bindings {
+                out.entry(binding.plugin_id)
+                    .or_default()
+                    .insert(Subscription {
+                        channel_id: binding.provider_channel_id,
+                        thread_id: binding.provider_thread_id,
+                    });
             }
         }
     }
 
     // Enabled workflow triggers — `trigger_kind` starts with
     // `trigger.<slug>.` and the config supplies channelId/threadId.
-    if let Ok(conn) = db.0.get() {
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT trigger_kind, trigger_config FROM project_workflows \
-             WHERE enabled = 1 AND trigger_kind LIKE 'trigger.%' AND tenant_id = 'local'",
-        ) {
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })
-                .ok()
-                .map(|iter| iter.filter_map(|r| r.ok()).collect::<Vec<_>>())
-                .unwrap_or_default();
-            for (kind, config_json) in rows {
-                let Some(plugin_id) = plugin_id_from_trigger_kind(&kind) else {
-                    continue;
-                };
-                let cfg: serde_json::Value =
-                    serde_json::from_str(&config_json).unwrap_or(json!({}));
-                let Some(channel_id) = cfg.get("channelId").and_then(|v| v.as_str()) else {
-                    continue;
-                };
-                let thread_id = cfg
-                    .get("threadId")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string);
-                out.entry(plugin_id).or_default().insert(Subscription {
-                    channel_id: channel_id.to_string(),
-                    thread_id,
-                });
-            }
+    if let Ok(workflows) = repos.project_workflows().list_enabled_triggers().await {
+        for workflow in workflows {
+            let Some(plugin_id) = plugin_id_from_trigger_kind(&workflow.trigger_kind) else {
+                continue;
+            };
+            let Some(channel_id) = workflow
+                .trigger_config
+                .get("channelId")
+                .and_then(|v| v.as_str())
+            else {
+                continue;
+            };
+            let thread_id = workflow
+                .trigger_config
+                .get("threadId")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            out.entry(plugin_id).or_default().insert(Subscription {
+                channel_id: channel_id.to_string(),
+                thread_id,
+            });
         }
     }
 

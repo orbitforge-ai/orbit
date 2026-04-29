@@ -366,8 +366,12 @@ async fn reload_plugin_inner(plugin_id: String, app: &AppContext) -> Result<(), 
     // A reload replaces the subprocess; its in-memory subscription set is
     // empty until we re-apply it. Without this, a listening agent stops
     // matching inbound messages after any reload (secret save, dev edit, etc.).
-    crate::triggers::subscriptions::reconcile_plugin_for_manager(&manager, &app.db, &plugin_id)
-        .await;
+    crate::triggers::subscriptions::reconcile_plugin_for_manager_with_repos(
+        &manager,
+        app.repos.clone(),
+        &plugin_id,
+    )
+    .await;
     Ok(())
 }
 
@@ -380,7 +384,11 @@ async fn reload_all_plugins_inner(app: &AppContext) -> Result<(), String> {
     let tauri_app = app.app()?.clone();
     let manager = app.plugins.clone();
     manager.reload_all(&tauri_app)?;
-    crate::triggers::subscriptions::reconcile_all_for_manager(&manager, &app.db).await;
+    crate::triggers::subscriptions::reconcile_all_for_manager_with_repos(
+        &manager,
+        app.repos.clone(),
+    )
+    .await;
     Ok(())
 }
 
@@ -464,8 +472,12 @@ async fn set_plugin_secret_inner(
     if let Some(tauri_app) = app.runtime.app_handle() {
         let _ = manager.reload(&tauri_app, &plugin_id);
     }
-    crate::triggers::subscriptions::reconcile_plugin_for_manager(&manager, &app.db, &plugin_id)
-        .await;
+    crate::triggers::subscriptions::reconcile_plugin_for_manager_with_repos(
+        &manager,
+        app.repos.clone(),
+        &plugin_id,
+    )
+    .await;
     Ok(())
 }
 
@@ -488,8 +500,12 @@ async fn delete_plugin_secret_inner(
     if let Some(tauri_app) = app.runtime.app_handle() {
         let _ = manager.reload(&tauri_app, &plugin_id);
     }
-    crate::triggers::subscriptions::reconcile_plugin_for_manager(&manager, &app.db, &plugin_id)
-        .await;
+    crate::triggers::subscriptions::reconcile_plugin_for_manager_with_repos(
+        &manager,
+        app.repos.clone(),
+        &plugin_id,
+    )
+    .await;
     Ok(())
 }
 

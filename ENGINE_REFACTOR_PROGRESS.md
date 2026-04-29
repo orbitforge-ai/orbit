@@ -44,6 +44,7 @@ Status: `[done]` for the repo-backed command surface listed below. The original-
 - `[done]` Write paths migrated:
   - `AgentRepo::create_basic`, `set_model_config`, `update_basic`, `delete`, `next_available_id`
   - `ProjectRepo::create_basic`, `update`, `delete`, `add_agent`, `remove_agent`
+  - `ProjectWorkflowRepo::list_enabled_triggers`
   - `RunRepo::cancel`
   - `RunRepo::create_scheduled_task_run`, `recover_orphans`
   - `ScheduleRepo::create`, `toggle`, `delete`, due/recompute listing, schedule advancement helpers
@@ -99,7 +100,7 @@ Per-file remaining direct `DbPool` command arguments are zero. Audit note: this 
 - `[done]` Phase C schema/runtime slice: consolidated Postgres migration lives under `crates/orbit-engine/src/db/migrations/postgres/`, creates the current tenant-bearing schema, forces RLS on every table, and grants the default-deny `application_role`.
 - `[done]` `orbit_server` selects `PgRepos` only when `ORBIT_DB_BACKEND=postgres`, uses `ORBIT_POSTGRES_URL` (or `DATABASE_URL` fallback after explicit opt-in), requires `ORBIT_TENANT_ID`, and requires `ORBIT_POSTGRES_MIGRATIONS_URL` when `ORBIT_APPLY_POSTGRES_MIGRATIONS=1`.
 - `[done]` Online migration story, PgBouncer/session-pool requirement, migration test harness command, and EXPLAIN baseline list are documented in `docs/ops/postgres-phase-c.md`.
-- `[partial]` Original Phase C is not fully complete: executor, plugin, remaining workflow node internals, trigger bindings, and workspace internals still run through local SQLite engine state; Postgres currently covers repo-backed command surfaces, workflow run persistence, seen-items dedupe, and scheduler state helpers.
+- `[partial]` Original Phase C is not fully complete: executor, plugin execution internals, trigger dispatch matching, remaining workflow node internals, and workspace internals still run through local SQLite engine state; Postgres currently covers repo-backed command surfaces, workflow run persistence, seen-items dedupe, scheduler state helpers, and trigger subscription reconciliation.
 
 ### B.6 Sqlx swap on the SQLite path
 
@@ -113,7 +114,8 @@ Per-file remaining direct `DbPool` command arguments are zero. Audit note: this 
 - `[done]` Workflow run persistence sub-slice: orchestrator start/status/step writes now flow through `WorkflowRunRepo` for SQLite/Postgres while preserving orchestrator-owned event emission.
 - `[done]` Workflow seen-items sub-slice: feed/http dedupe now flows through `WorkflowSeenItemRepo` for SQLite/Postgres while the pure fingerprinting helper stays in workflow runtime code.
 - `[done]` Scheduler state sub-slice: due schedule polling, schedule advancement/recompute, scheduled task run creation, run orphan recovery, and workflow-run orphan recovery now flow through repo traits. Headless cloud scheduler activation still waits on the executor repo path so task execution state does not split across backends.
-- `[next]` Full Postgres engine path: move executor, plugins, remaining workflow node internals, trigger bindings, scheduled task execution handoff, and workspace/session internals off direct local SQLite calls or define an explicit local-runtime boundary.
+- `[done]` Trigger subscription reconciler sub-slice: desired subscription computation now gets agent rows and enabled workflow triggers through repo traits. Agent `listen_bindings` remain local workspace config by design.
+- `[next]` Full Postgres engine path: move executor, plugins, trigger dispatch matching, remaining workflow node internals, scheduled task execution handoff, and workspace/session internals off direct local SQLite calls or define an explicit local-runtime boundary.
 - `[next]` Live RLS integration: run `ORBIT_TEST_POSTGRES_URL=... ORBIT_TEST_POSTGRES_APPLY_MIGRATIONS=1 cargo test -p orbit-engine --test pg_repos_rls -- --ignored --nocapture`.
 - `[next]` Local desktop smoke: verify Tauri desktop still boots, lists Projects, starts a chat/session, and can create/update local agents/projects/work items.
 - `[next]` Headless local smoke: boot `orbit-server` with only `ORBIT_DATA_DIR`, verify it uses SQLite, loads the UI, and lists Projects.

@@ -2763,6 +2763,22 @@ impl ProjectWorkflowRepo for PgRepos {
             .map_err(db_err)
     }
 
+    async fn list_enabled_triggers(&self) -> Result<Vec<ProjectWorkflow>, String> {
+        let rows = sqlx::query(&format!(
+            "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows
+             WHERE enabled = true AND trigger_kind LIKE 'trigger.%' AND tenant_id = $1
+             ORDER BY updated_at DESC"
+        ))
+        .bind(self.tenant_id())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        rows.iter()
+            .map(map_project_workflow_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_err)
+    }
+
     async fn get(&self, id: &str) -> Result<ProjectWorkflow, String> {
         let row = sqlx::query(&format!(
             "SELECT {PROJECT_WORKFLOW_COLUMNS} FROM project_workflows WHERE id = $1 AND tenant_id = $2"
