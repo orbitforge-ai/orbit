@@ -1164,6 +1164,39 @@ impl ScheduleRepo for PgRepos {
             .map_err(db_err)
     }
 
+    async fn list_due(&self, now: &str) -> Result<Vec<Schedule>, String> {
+        let rows = sqlx::query(&format!(
+            "SELECT {SCHEDULE_COLUMNS} FROM schedules
+             WHERE enabled = true AND next_run_at <= $1 AND tenant_id = $2"
+        ))
+        .bind(now)
+        .bind(self.tenant_id())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        rows.iter()
+            .map(map_schedule_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_err)
+    }
+
+    async fn list_needing_recompute(&self, now: &str) -> Result<Vec<Schedule>, String> {
+        let rows = sqlx::query(&format!(
+            "SELECT {SCHEDULE_COLUMNS} FROM schedules
+             WHERE enabled = true AND tenant_id = $1
+               AND (next_run_at IS NULL OR next_run_at < $2)"
+        ))
+        .bind(self.tenant_id())
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        rows.iter()
+            .map(map_schedule_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_err)
+    }
+
     async fn create(&self, payload: CreateSchedule) -> Result<Schedule, String> {
         let tenant_id = self.tenant_id();
         let id = Ulid::new().to_string();
@@ -1221,6 +1254,76 @@ impl ScheduleRepo for PgRepos {
         .await
         .map_err(db_err)?;
         fetch_schedule(&self.pool, id, &tenant_id).await
+    }
+
+    async fn mark_recurring_fired(
+        &self,
+        id: &str,
+        next_run_at: Option<&str>,
+        fired_at: &str,
+    ) -> Result<(), String> {
+        sqlx::query(
+            "UPDATE schedules
+             SET next_run_at = $1, last_run_at = $2, updated_at = $2
+             WHERE id = $3 AND tenant_id = $4",
+        )
+        .bind(next_run_at)
+        .bind(fired_at)
+        .bind(id)
+        .bind(self.tenant_id())
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn mark_one_shot_fired(&self, id: &str, fired_at: &str) -> Result<(), String> {
+        sqlx::query(
+            "UPDATE schedules
+             SET enabled = false, last_run_at = $1, next_run_at = NULL, updated_at = $1
+             WHERE id = $2 AND tenant_id = $3",
+        )
+        .bind(fired_at)
+        .bind(id)
+        .bind(self.tenant_id())
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn set_next_run_at(
+        &self,
+        id: &str,
+        next_run_at: &str,
+        updated_at: &str,
+    ) -> Result<(), String> {
+        sqlx::query(
+            "UPDATE schedules SET next_run_at = $1, updated_at = $2
+             WHERE id = $3 AND tenant_id = $4",
+        )
+        .bind(next_run_at)
+        .bind(updated_at)
+        .bind(id)
+        .bind(self.tenant_id())
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn disable_missed_one_shot(&self, id: &str, updated_at: &str) -> Result<(), String> {
+        sqlx::query(
+            "UPDATE schedules SET enabled = false, next_run_at = NULL, updated_at = $1
+             WHERE id = $2 AND tenant_id = $3",
+        )
+        .bind(updated_at)
+        .bind(id)
+        .bind(self.tenant_id())
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
     }
 
     async fn delete(&self, id: &str) -> Result<(), String> {
@@ -1416,6 +1519,50 @@ impl RunRepo for PgRepos {
         )
         .bind(now())
         .bind(run_id)
+        .bind(self.tenant_id())
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn create_scheduled_task_run(
+        &self,
+        run_id: &str,
+        task: &Task,
+        schedule_id: &str,
+        log_path: &str,
+        created_at: &str,
+    ) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger,
+                               log_path, retry_count, metadata, created_at, tenant_id)
+             VALUES ($1,$2,$3,$4,'pending','scheduled',$5,0,'{}',$6,$7)",
+        )
+        .bind(run_id)
+        .bind(&task.id)
+        .bind(schedule_id)
+        .bind(&task.agent_id)
+        .bind(log_path)
+        .bind(created_at)
+        .bind(self.tenant_id())
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn recover_orphans(
+        &self,
+        finished_at: &str,
+        metadata: serde_json::Value,
+    ) -> Result<(), String> {
+        sqlx::query(
+            "UPDATE runs SET state = 'failure', finished_at = $1, metadata = $2
+             WHERE state IN ('running','queued') AND tenant_id = $3",
+        )
+        .bind(finished_at)
+        .bind(json_string(&metadata)?)
         .bind(self.tenant_id())
         .execute(&self.pool)
         .await
@@ -3007,6 +3154,33 @@ impl WorkflowRunRepo for PgRepos {
         )
         .bind(completed_at)
         .bind(run_id)
+        .bind(&tenant_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn recover_orphans(&self, error: &str, completed_at: &str) -> Result<(), String> {
+        let tenant_id = self.tenant_id();
+        sqlx::query(
+            "UPDATE workflow_runs
+             SET status = 'failed', error = $1, completed_at = $2
+             WHERE status IN ('queued','running') AND tenant_id = $3",
+        )
+        .bind(error)
+        .bind(completed_at)
+        .bind(&tenant_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        sqlx::query(
+            "UPDATE workflow_run_steps
+             SET status = 'failed', error = COALESCE(error, $1), completed_at = $2
+             WHERE status IN ('queued','running') AND tenant_id = $3",
+        )
+        .bind(error)
+        .bind(completed_at)
         .bind(&tenant_id)
         .execute(&self.pool)
         .await

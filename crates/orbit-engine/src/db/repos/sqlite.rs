@@ -968,6 +968,47 @@ impl ScheduleRepo for SqliteRepos {
         .await
     }
 
+    async fn list_due(&self, now: &str) -> Result<Vec<Schedule>, String> {
+        let now = now.to_string();
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {SCHEDULE_COLUMNS} FROM schedules
+                     WHERE enabled = 1 AND next_run_at <= ?1 AND tenant_id = ?2"
+                ))
+                .err_str()?;
+            let rows: Vec<Schedule> = stmt
+                .query_map(params![now, tenant_id], map_schedule_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn list_needing_recompute(&self, now: &str) -> Result<Vec<Schedule>, String> {
+        let now = now.to_string();
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {SCHEDULE_COLUMNS} FROM schedules
+                     WHERE enabled = 1 AND tenant_id = ?1
+                       AND (next_run_at IS NULL OR next_run_at < ?2)"
+                ))
+                .err_str()?;
+            let rows: Vec<Schedule> = stmt
+                .query_map(params![tenant_id, now], map_schedule_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
     async fn create(&self, payload: CreateSchedule) -> Result<Schedule, String> {
         let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
@@ -1051,6 +1092,84 @@ impl ScheduleRepo for SqliteRepos {
                 map_schedule_row,
             )
             .err_str()
+        })
+        .await
+    }
+
+    async fn mark_recurring_fired(
+        &self,
+        id: &str,
+        next_run_at: Option<&str>,
+        fired_at: &str,
+    ) -> Result<(), String> {
+        let id = id.to_string();
+        let next_run_at = next_run_at.map(String::from);
+        let fired_at = fired_at.to_string();
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "UPDATE schedules
+                 SET next_run_at = ?1, last_run_at = ?2, updated_at = ?2
+                 WHERE id = ?3 AND tenant_id = ?4",
+                params![next_run_at, fired_at, id, tenant_id],
+            )
+            .err_str()?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn mark_one_shot_fired(&self, id: &str, fired_at: &str) -> Result<(), String> {
+        let id = id.to_string();
+        let fired_at = fired_at.to_string();
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "UPDATE schedules
+                 SET enabled = 0, last_run_at = ?1, next_run_at = NULL, updated_at = ?1
+                 WHERE id = ?2 AND tenant_id = ?3",
+                params![fired_at, id, tenant_id],
+            )
+            .err_str()?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn set_next_run_at(
+        &self,
+        id: &str,
+        next_run_at: &str,
+        updated_at: &str,
+    ) -> Result<(), String> {
+        let id = id.to_string();
+        let next_run_at = next_run_at.to_string();
+        let updated_at = updated_at.to_string();
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "UPDATE schedules SET next_run_at = ?1, updated_at = ?2
+                 WHERE id = ?3 AND tenant_id = ?4",
+                params![next_run_at, updated_at, id, tenant_id],
+            )
+            .err_str()?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn disable_missed_one_shot(&self, id: &str, updated_at: &str) -> Result<(), String> {
+        let id = id.to_string();
+        let updated_at = updated_at.to_string();
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "UPDATE schedules SET enabled = 0, next_run_at = NULL, updated_at = ?1
+                 WHERE id = ?2 AND tenant_id = ?3",
+                params![updated_at, id, tenant_id],
+            )
+            .err_str()?;
+            Ok(())
         })
         .await
     }
@@ -1362,6 +1481,62 @@ impl RunRepo for SqliteRepos {
         })
         .await
     }
+
+    async fn create_scheduled_task_run(
+        &self,
+        run_id: &str,
+        task: &Task,
+        schedule_id: &str,
+        log_path: &str,
+        created_at: &str,
+    ) -> Result<(), String> {
+        let tenant_id = self.tenant_id();
+        let run_id = run_id.to_string();
+        let task_id = task.id.clone();
+        let agent_id = task.agent_id.clone();
+        let schedule_id = schedule_id.to_string();
+        let log_path = log_path.to_string();
+        let created_at = created_at.to_string();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger,
+                                   log_path, retry_count, metadata, created_at, tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, 'pending', 'scheduled', ?5, 0, '{}', ?6, ?7)",
+                params![
+                    run_id,
+                    task_id,
+                    schedule_id,
+                    agent_id,
+                    log_path,
+                    created_at,
+                    tenant_id,
+                ],
+            )
+            .err_str()?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn recover_orphans(
+        &self,
+        finished_at: &str,
+        metadata: serde_json::Value,
+    ) -> Result<(), String> {
+        let tenant_id = self.tenant_id();
+        let finished_at = finished_at.to_string();
+        let metadata = serde_json::to_string(&metadata).err_str()?;
+        self.with_conn(move |conn| {
+            conn.execute(
+                "UPDATE runs SET state = 'failure', finished_at = ?1, metadata = ?2
+                 WHERE state IN ('running', 'queued') AND tenant_id = ?3",
+                params![finished_at, metadata, tenant_id],
+            )
+            .err_str()?;
+            Ok(())
+        })
+        .await
+    }
 }
 
 // ── Work item events ────────────────────────────────────────────────────────
@@ -1658,6 +1833,30 @@ impl WorkflowRunRepo for SqliteRepos {
         })
         .await
         .err_str()?
+    }
+
+    async fn recover_orphans(&self, error: &str, completed_at: &str) -> Result<(), String> {
+        let error = error.to_string();
+        let completed_at = completed_at.to_string();
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "UPDATE workflow_runs
+                 SET status = 'failed', error = ?1, completed_at = ?2
+                 WHERE status IN ('queued', 'running') AND tenant_id = ?3",
+                params![error, completed_at, tenant_id],
+            )
+            .err_str()?;
+            conn.execute(
+                "UPDATE workflow_run_steps
+                 SET status = 'failed', error = COALESCE(error, ?1), completed_at = ?2
+                 WHERE status IN ('queued', 'running') AND tenant_id = ?3",
+                params![error, completed_at, tenant_id],
+            )
+            .err_str()?;
+            Ok(())
+        })
+        .await
     }
 }
 

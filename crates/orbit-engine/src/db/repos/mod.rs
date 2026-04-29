@@ -150,8 +150,24 @@ pub trait ScheduleRepo: Send + Sync {
     async fn list(&self) -> Result<Vec<Schedule>, String>;
     async fn list_for_task(&self, task_id: &str) -> Result<Vec<Schedule>, String>;
     async fn list_for_workflow(&self, workflow_id: &str) -> Result<Vec<Schedule>, String>;
+    async fn list_due(&self, now: &str) -> Result<Vec<Schedule>, String>;
+    async fn list_needing_recompute(&self, now: &str) -> Result<Vec<Schedule>, String>;
     async fn create(&self, payload: CreateSchedule) -> Result<Schedule, String>;
     async fn toggle(&self, id: &str, enabled: bool) -> Result<Schedule, String>;
+    async fn mark_recurring_fired(
+        &self,
+        id: &str,
+        next_run_at: Option<&str>,
+        fired_at: &str,
+    ) -> Result<(), String>;
+    async fn mark_one_shot_fired(&self, id: &str, fired_at: &str) -> Result<(), String>;
+    async fn set_next_run_at(
+        &self,
+        id: &str,
+        next_run_at: &str,
+        updated_at: &str,
+    ) -> Result<(), String>;
+    async fn disable_missed_one_shot(&self, id: &str, updated_at: &str) -> Result<(), String>;
     async fn delete(&self, id: &str) -> Result<(), String>;
 }
 
@@ -199,6 +215,19 @@ pub trait RunRepo: Send + Sync {
     /// the run has already terminated. The actual process kill is handled by
     /// the executor — this just persists the state transition.
     async fn cancel(&self, run_id: &str) -> Result<(), String>;
+    async fn create_scheduled_task_run(
+        &self,
+        run_id: &str,
+        task: &Task,
+        schedule_id: &str,
+        log_path: &str,
+        created_at: &str,
+    ) -> Result<(), String>;
+    async fn recover_orphans(
+        &self,
+        finished_at: &str,
+        metadata: serde_json::Value,
+    ) -> Result<(), String>;
 }
 
 /// Project board columns (kanban lanes inside a board). Read-only at the
@@ -344,6 +373,7 @@ pub trait WorkflowRunRepo: Send + Sync {
         run_id: &str,
     ) -> Result<crate::models::workflow_run::WorkflowRunWithSteps, String>;
     async fn cancel(&self, run_id: &str) -> Result<(), String>;
+    async fn recover_orphans(&self, error: &str, completed_at: &str) -> Result<(), String>;
 }
 
 /// Workflow-level dedupe state used by feed/http nodes.
