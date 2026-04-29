@@ -775,8 +775,8 @@ async fn schedule_retry_if_needed(
     );
 
     let result = conn.execute(
-    "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, parent_run_id, metadata, created_at)
-         VALUES (?1, ?2, ?3, ?4, 'pending', 'retry', ?5, ?6, ?7, '{}', ?8)",
+    "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, parent_run_id, metadata, created_at, tenant_id)
+         VALUES (?1, ?2, ?3, ?4, 'pending', 'retry', ?5, ?6, ?7, '{}', ?8, COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2), 'local'))",
     rusqlite::params![
       retry_run_id,
       req.task.id,
@@ -1066,14 +1066,14 @@ async fn evaluate_bus_subscriptions(
       let conn = pool.get().map_err(|e| e.to_string())?;
 
       conn.execute(
-        "INSERT INTO bus_messages (id, from_agent_id, from_run_id, to_agent_id, to_run_id, kind, event_type, payload, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'event', ?6, '{}', 'delivered', ?7)",
+        "INSERT INTO bus_messages (id, from_agent_id, from_run_id, to_agent_id, to_run_id, kind, event_type, payload, status, created_at, tenant_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'event', ?6, '{}', 'delivered', ?7, COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local'))",
         rusqlite::params![msg_id_c, agent_id_str, run_id_str, subscriber_id, new_run_id_c, event_type_c, now_c],
       ).map_err(|e| e.to_string())?;
 
       conn.execute(
-        "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, parent_run_id, metadata, chain_depth, source_bus_message_id, created_at)
-         VALUES (?1, ?2, NULL, ?3, 'pending', 'bus', ?4, 0, NULL, '{}', ?5, ?6, ?7)",
+        "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, parent_run_id, metadata, chain_depth, source_bus_message_id, created_at, tenant_id)
+         VALUES (?1, ?2, NULL, ?3, 'pending', 'bus', ?4, 0, NULL, '{}', ?5, ?6, ?7, COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2), 'local'))",
         rusqlite::params![new_run_id_c, task_id_c, subscriber_id, log_path, next_depth, msg_id_c, now_c],
       ).map_err(|e| e.to_string())?;
 

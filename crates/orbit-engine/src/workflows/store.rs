@@ -97,8 +97,8 @@ pub(crate) async fn insert_run(
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.execute(
             "INSERT INTO workflow_runs (id, workflow_id, workflow_version, graph_snapshot,
-                                        trigger_kind, trigger_data, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                                        trigger_kind, trigger_data, status, created_at, tenant_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE((SELECT tenant_id FROM project_workflows WHERE id = ?2), 'local'))",
             rusqlite::params![
                 id_clone,
                 workflow_id,
@@ -237,8 +237,8 @@ pub(crate) async fn insert_step(
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.execute(
             "INSERT INTO workflow_run_steps (id, run_id, node_id, node_type, status, input,
-                                              started_at, sequence)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                                              started_at, sequence, tenant_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE((SELECT tenant_id FROM workflow_runs WHERE id = ?2), 'local'))",
             rusqlite::params![
                 step_id, run_id, node_id, node_type, status, input_str, started_at, sequence,
             ],

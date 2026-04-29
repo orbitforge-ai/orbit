@@ -187,8 +187,8 @@ async fn update_pulse_inner(
         } else {
             let tid = Ulid::new().to_string();
             conn.execute(
-                "INSERT INTO tasks (id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, project_id, enabled, created_at, updated_at)
-                 VALUES (?1, ?2, 'Automated pulse schedule', 'agent_loop', ?3, 7200, 0, 60, 'skip', '[\"pulse\"]', ?4, ?5, 1, ?6, ?6)",
+                "INSERT INTO tasks (id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, project_id, enabled, created_at, updated_at, tenant_id)
+                 VALUES (?1, ?2, 'Automated pulse schedule', 'agent_loop', ?3, 7200, 0, 60, 'skip', '[\"pulse\"]', ?4, ?5, 1, ?6, ?6, COALESCE((SELECT tenant_id FROM agents WHERE id = ?4), 'local'))",
                 rusqlite::params![
                     tid,
                     task_name,
@@ -233,8 +233,8 @@ async fn update_pulse_inner(
         } else {
             let sid = Ulid::new().to_string();
             conn.execute(
-                "INSERT INTO schedules (id, task_id, kind, config, enabled, next_run_at, created_at, updated_at)
-                 VALUES (?1, ?2, 'recurring', ?3, ?4, ?5, ?6, ?6)",
+                "INSERT INTO schedules (id, task_id, kind, config, enabled, next_run_at, created_at, updated_at, tenant_id)
+                 VALUES (?1, ?2, 'recurring', ?3, ?4, ?5, ?6, ?6, COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2), 'local'))",
                 rusqlite::params![sid, task_id, sched_config_str, enabled as i64, next_run_at, now],
             )
             .map_err(|e| e.to_string())?;
@@ -254,8 +254,8 @@ async fn update_pulse_inner(
                 let _ = conn.execute(
                     "INSERT INTO chat_sessions (
                        id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
-                       chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at, project_id
-                     ) VALUES (?1, ?2, 'Pulse', 0, 'pulse', NULL, NULL, 0, NULL, NULL, NULL, ?3, ?3, ?4)",
+                       chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at, project_id, tenant_id
+                     ) VALUES (?1, ?2, 'Pulse', 0, 'pulse', NULL, NULL, 0, NULL, NULL, NULL, ?3, ?3, ?4, COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local'))",
                     rusqlite::params![sid, aid, now, pid],
                 );
                 sid

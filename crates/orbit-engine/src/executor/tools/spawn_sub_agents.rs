@@ -165,8 +165,8 @@ impl ToolHandler for SpawnSubAgentsTool {
                     "INSERT INTO chat_sessions (
                        id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
                        chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
-                       allow_sub_agents, worktree_name, worktree_branch, worktree_path
-                     ) VALUES (?1, ?2, ?3, 0, 'sub_agent', ?4, NULL, ?5, 'queued', NULL, NULL, ?6, ?6, 0, ?7, ?8, ?9)",
+                       allow_sub_agents, worktree_name, worktree_branch, worktree_path, tenant_id
+                     ) VALUES (?1, ?2, ?3, 0, 'sub_agent', ?4, NULL, ?5, 'queued', NULL, NULL, ?6, ?6, 0, ?7, ?8, ?9, COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local'))",
                     rusqlite::params![
                         session_id,
                         agent_id,
@@ -189,8 +189,8 @@ impl ToolHandler for SpawnSubAgentsTool {
                 })])
                 .map_err(|e| e.to_string())?;
                 conn.execute(
-                    "INSERT INTO chat_messages (id, session_id, role, content, created_at)
-                     VALUES (?1, ?2, 'user', ?3, ?4)",
+                    "INSERT INTO chat_messages (id, session_id, role, content, created_at, tenant_id)
+                     VALUES (?1, ?2, 'user', ?3, ?4, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local'))",
                     rusqlite::params![ulid::Ulid::new().to_string(), session_id, user_content, now],
                 )
                 .map_err(|e| e.to_string())?;

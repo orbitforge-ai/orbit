@@ -645,8 +645,8 @@ pub async fn save_chat_message(
         let now = chrono::Utc::now().to_rfc3339();
 
         conn.execute(
-            "INSERT INTO chat_messages (id, session_id, role, content, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO chat_messages (id, session_id, role, content, created_at, tenant_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local'))",
             rusqlite::params![msg_id, sid, role, content_json, now],
         )
         .map_err(|e| e.to_string())?;
@@ -889,8 +889,8 @@ async fn extract_session_memories(
         let _ = tokio::task::spawn_blocking(move || {
       if let Ok(conn) = pool.get() {
         let _ = conn.execute(
-          "INSERT INTO memory_extraction_log (id, session_id, agent_id, memories_extracted, status, created_at)
-           VALUES (?1, ?2, ?3, 0, 'running', ?4)",
+          "INSERT INTO memory_extraction_log (id, session_id, agent_id, memories_extracted, status, created_at, tenant_id)
+           VALUES (?1, ?2, ?3, 0, 'running', ?4, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local'))",
           rusqlite::params![log_id, sid, aid, now],
         );
       }

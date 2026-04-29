@@ -65,8 +65,8 @@ pub fn create(
 
     conn.execute(
         "INSERT INTO plugin_entities (id, plugin_id, entity_type, project_id, data,
-                                       created_by_agent_id, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+                                       created_by_agent_id, created_at, updated_at, tenant_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, COALESCE((SELECT tenant_id FROM projects WHERE id = ?4), (SELECT tenant_id FROM agents WHERE id = ?6), 'local'))",
         rusqlite::params![
             id,
             plugin_id,
@@ -194,8 +194,8 @@ pub fn link(
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO plugin_entity_relations
-            (id, from_kind, from_type, from_id, to_kind, to_type, to_id, relation, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            (id, from_kind, from_type, from_id, to_kind, to_type, to_id, relation, created_at, tenant_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, COALESCE((SELECT tenant_id FROM plugin_entities WHERE id = ?4), (SELECT tenant_id FROM plugin_entities WHERE id = ?7), 'local'))
          ON CONFLICT(from_id, to_id, relation) DO NOTHING",
         rusqlite::params![
             id, from_kind, from_type, from_id, to_kind, to_type, to_id, relation, now

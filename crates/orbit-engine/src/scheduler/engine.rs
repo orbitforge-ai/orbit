@@ -112,8 +112,8 @@ impl SchedulerEngine {
 
                     conn.execute(
                         "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger,
-                                           log_path, retry_count, metadata, created_at)
-                         VALUES (?1, ?2, ?3, ?4, 'pending', 'scheduled', ?5, 0, '{}', ?6)",
+                                           log_path, retry_count, metadata, created_at, tenant_id)
+                         VALUES (?1, ?2, ?3, ?4, 'pending', 'scheduled', ?5, 0, '{}', ?6, COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2), 'local'))",
                         rusqlite::params![
                             run_id,
                             task_id,

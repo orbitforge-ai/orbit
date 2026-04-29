@@ -263,8 +263,8 @@ async fn create_agent_task(
         conn.execute(
             "INSERT INTO agent_tasks (
                 id, session_id, agent_id, subject, description, status, active_form,
-                blocked_by, metadata, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, '{}', ?8, ?8)",
+                blocked_by, metadata, created_at, updated_at, tenant_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, '{}', ?8, ?8, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local'))",
             rusqlite::params![
                 task_id,
                 session_id,

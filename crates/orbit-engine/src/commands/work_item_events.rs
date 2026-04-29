@@ -74,8 +74,8 @@ pub fn insert_event(
     let payload_json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO work_item_events (
-            id, work_item_id, actor_kind, actor_agent_id, kind, payload_json, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            id, work_item_id, actor_kind, actor_agent_id, kind, payload_json, created_at, tenant_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, COALESCE((SELECT tenant_id FROM work_items WHERE id = ?2), 'local'))",
         params![
             id,
             work_item_id,

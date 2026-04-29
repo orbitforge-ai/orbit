@@ -129,8 +129,8 @@ pub async fn create_session_with_initial_message(
             "INSERT INTO chat_sessions (
                id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
                chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
-               allow_sub_agents, worktree_name, worktree_branch, worktree_path
-             ) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, 'queued', NULL, NULL, ?8, ?8, ?9, ?10, ?11, ?12)",
+               allow_sub_agents, worktree_name, worktree_branch, worktree_path, tenant_id
+             ) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, 'queued', NULL, NULL, ?8, ?8, ?9, ?10, ?11, ?12, COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local'))",
             rusqlite::params![
                 &session_id_for_db,
                 &agent_id,
@@ -156,8 +156,8 @@ pub async fn create_session_with_initial_message(
         })])
         .map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO chat_messages (id, session_id, role, content, created_at)
-             VALUES (?1, ?2, 'user', ?3, ?4)",
+            "INSERT INTO chat_messages (id, session_id, role, content, created_at, tenant_id)
+             VALUES (?1, ?2, 'user', ?3, ?4, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local'))",
             rusqlite::params![
                 Ulid::new().to_string(),
                 &session_id_for_db,
@@ -297,8 +297,8 @@ pub async fn record_bus_message(
         conn.execute(
             "INSERT INTO bus_messages (
                id, from_agent_id, from_run_id, from_session_id, to_agent_id, to_run_id, to_session_id,
-               kind, payload, status, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, 'direct', ?7, 'delivered', ?8)",
+               kind, payload, status, created_at, tenant_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, 'direct', ?7, 'delivered', ?8, COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local'))",
             rusqlite::params![
                 &message_id_for_db,
                 &from_agent_id_for_db,

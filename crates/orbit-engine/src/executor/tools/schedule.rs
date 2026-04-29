@@ -566,8 +566,8 @@ async fn set_pulse_config(
                     "INSERT INTO tasks (
                         id, name, description, kind, config, max_duration_seconds,
                         max_retries, retry_delay_seconds, concurrency_policy, tags,
-                        agent_id, project_id, enabled, created_at, updated_at
-                    ) VALUES (?1, ?2, 'Automated pulse schedule', 'agent_loop', ?3, 7200, 0, 60, 'skip', '[\"pulse\"]', ?4, ?5, 1, ?6, ?6)",
+                        agent_id, project_id, enabled, created_at, updated_at, tenant_id
+                    ) VALUES (?1, ?2, 'Automated pulse schedule', 'agent_loop', ?3, 7200, 0, 60, 'skip', '[\"pulse\"]', ?4, ?5, 1, ?6, ?6, COALESCE((SELECT tenant_id FROM agents WHERE id = ?4), 'local'))",
                     rusqlite::params![
                         task_id,
                         task_name,
@@ -613,8 +613,8 @@ async fn set_pulse_config(
                 let schedule_id = Ulid::new().to_string();
                 conn.execute(
                     "INSERT INTO schedules (
-                        id, task_id, kind, config, enabled, next_run_at, created_at, updated_at
-                     ) VALUES (?1, ?2, 'recurring', ?3, ?4, ?5, ?6, ?6)",
+                        id, task_id, kind, config, enabled, next_run_at, created_at, updated_at, tenant_id
+                     ) VALUES (?1, ?2, 'recurring', ?3, ?4, ?5, ?6, ?6, COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2), 'local'))",
                     rusqlite::params![
                         schedule_id,
                         task_id.clone(),
@@ -652,8 +652,8 @@ async fn set_pulse_config(
                     "INSERT INTO chat_sessions (
                         id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
                         chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
-                        project_id, worktree_name, worktree_branch, worktree_path
-                     ) VALUES (?1, ?2, 'Pulse', 0, 'pulse', NULL, NULL, 0, NULL, NULL, NULL, ?3, ?3, ?4, NULL, NULL, NULL)",
+                        project_id, worktree_name, worktree_branch, worktree_path, tenant_id
+                     ) VALUES (?1, ?2, 'Pulse', 0, 'pulse', NULL, NULL, 0, NULL, NULL, NULL, ?3, ?3, ?4, NULL, NULL, NULL, COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local'))",
                     rusqlite::params![session_id, agent_id.clone(), now, project_id_str.clone()],
                 )
                 .map_err(|e| e.to_string())?;
@@ -742,8 +742,8 @@ async fn trigger_pulse_run(
         let conn = pool.get().map_err(|e| e.to_string())?;
         conn.execute(
             "INSERT INTO runs (
-                id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, metadata, project_id, created_at
-             ) VALUES (?1, ?2, ?3, ?4, 'pending', 'manual', ?5, 0, '{}', ?6, ?7)",
+                id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, metadata, project_id, created_at, tenant_id
+             ) VALUES (?1, ?2, ?3, ?4, 'pending', 'manual', ?5, 0, '{}', ?6, ?7, COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2), 'local'))",
             rusqlite::params![
                 run_id_for_db,
                 task_id,
@@ -956,8 +956,8 @@ async fn insert_schedule_record(
         let config_str = serde_json::to_string(&config).map_err(|e| e.to_string())?;
         conn.execute(
             "INSERT INTO schedules (id, task_id, workflow_id, target_kind, kind, config, enabled,
-                                    next_run_at, created_at, updated_at)
-             VALUES (?1, ?2, NULL, 'task', ?3, ?4, ?5, ?6, ?7, ?7)",
+                                    next_run_at, created_at, updated_at, tenant_id)
+             VALUES (?1, ?2, NULL, 'task', ?3, ?4, ?5, ?6, ?7, ?7, COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2), 'local'))",
             rusqlite::params![id, task_id, kind, config_str, enabled, next_run_at, now],
         )
         .map_err(|e| e.to_string())?;

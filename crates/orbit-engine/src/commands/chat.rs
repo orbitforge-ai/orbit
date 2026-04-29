@@ -566,8 +566,8 @@ pub async fn send_chat_message(
             let content_json = serde_json::to_string(&uc).map_err(|e| e.to_string())?;
 
             conn.execute(
-                "INSERT INTO chat_messages (id, session_id, role, content, created_at)
-                 VALUES (?1, ?2, 'user', ?3, ?4)",
+                "INSERT INTO chat_messages (id, session_id, role, content, created_at, tenant_id)
+                 VALUES (?1, ?2, 'user', ?3, ?4, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local'))",
                 rusqlite::params![msg_id, sid, content_json, now],
             )
             .map_err(|e| e.to_string())?;

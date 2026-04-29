@@ -160,8 +160,8 @@ async fn trigger_task_inner(task_id: String, app: &AppContext) -> Result<String,
 
       conn
         .execute(
-          "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, metadata, project_id, created_at)
-             VALUES (?1, ?2, NULL, ?3, 'pending', 'manual', ?4, 0, '{}', ?5, ?6)",
+          "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, metadata, project_id, created_at, tenant_id)
+             VALUES (?1, ?2, NULL, ?3, 'pending', 'manual', ?4, 0, '{}', ?5, ?6, COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2), 'local'))",
           rusqlite::params![run_id, task_id, task.agent_id, log_path, task.project_id, now]
         )
         .map_err(|e| e.to_string())?;

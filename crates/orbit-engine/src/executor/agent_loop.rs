@@ -821,8 +821,8 @@ async fn create_workflow_loop_session(
             "INSERT INTO chat_sessions (
                id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
                chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
-               project_id, allow_sub_agents, worktree_name, worktree_branch, worktree_path
-             ) VALUES (?1, ?2, ?3, 0, 'workflow', NULL, NULL, 0, 'running', NULL, NULL, ?4, ?4, ?5, 1, NULL, NULL, NULL)",
+               project_id, allow_sub_agents, worktree_name, worktree_branch, worktree_path, tenant_id
+             ) VALUES (?1, ?2, ?3, 0, 'workflow', NULL, NULL, 0, 'running', NULL, NULL, ?4, ?4, ?5, 1, NULL, NULL, NULL, COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local'))",
             rusqlite::params![
                 session_id_for_db,
                 agent_id,
@@ -839,8 +839,8 @@ async fn create_workflow_loop_session(
         })])
         .map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO chat_messages (id, session_id, role, content, created_at)
-             VALUES (?1, ?2, 'user', ?3, ?4)",
+            "INSERT INTO chat_messages (id, session_id, role, content, created_at, tenant_id)
+             VALUES (?1, ?2, 'user', ?3, ?4, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local'))",
             rusqlite::params![
                 ulid::Ulid::new().to_string(),
                 session_id_for_db,
@@ -1157,8 +1157,8 @@ pub async fn run_pulse(
             let _ = conn.execute(
               "INSERT INTO chat_sessions (
                  id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
-                 chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at, project_id
-               ) VALUES (?1, ?2, 'Pulse', 0, 'pulse', NULL, NULL, 0, 'running', NULL, NULL, ?3, ?3, ?4)",
+                 chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at, project_id, tenant_id
+               ) VALUES (?1, ?2, 'Pulse', 0, 'pulse', NULL, NULL, 0, 'running', NULL, NULL, ?3, ?3, ?4, COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local'))",
               rusqlite::params![sid, aid, now, pid_str]
             );
             sid
@@ -1170,8 +1170,8 @@ pub async fn run_pulse(
 
         conn
           .execute(
-            "INSERT INTO chat_messages (id, session_id, role, content, created_at)
-                 VALUES (?1, ?2, 'user', ?3, ?4)",
+            "INSERT INTO chat_messages (id, session_id, role, content, created_at, tenant_id)
+                 VALUES (?1, ?2, 'user', ?3, ?4, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local'))",
             rusqlite::params![msg_id, session_id, content_json, now]
           )
           .map_err(|e| e.to_string())?;
@@ -1481,8 +1481,8 @@ fn save_conversation_to_db(
         let id = ulid::Ulid::new().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         let _ = conn.execute(
-      "INSERT INTO agent_conversations (id, agent_id, run_id, messages, total_input_tokens, total_output_tokens, iterations, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+      "INSERT INTO agent_conversations (id, agent_id, run_id, messages, total_input_tokens, total_output_tokens, iterations, created_at, updated_at, tenant_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local'))",
       rusqlite::params![
         id,
         agent_id,

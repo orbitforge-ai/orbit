@@ -154,8 +154,8 @@ impl ToolHandler for SendMessageTool {
                     "INSERT INTO chat_sessions (
                        id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
                        chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
-                       allow_sub_agents, worktree_name, worktree_branch, worktree_path
-                     ) VALUES (?1, ?2, ?3, 0, 'bus_message', NULL, NULL, ?4, 'queued', NULL, NULL, ?5, ?5, 1, ?6, ?7, ?8)",
+                       allow_sub_agents, worktree_name, worktree_branch, worktree_path, tenant_id
+                     ) VALUES (?1, ?2, ?3, 0, 'bus_message', NULL, NULL, ?4, 'queued', NULL, NULL, ?5, ?5, 1, ?6, ?7, ?8, COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local'))",
                     rusqlite::params![
                         new_session_id,
                         to_agent_id,
@@ -181,8 +181,8 @@ impl ToolHandler for SendMessageTool {
                 })])
                 .map_err(|e| e.to_string())?;
                 conn.execute(
-                    "INSERT INTO chat_messages (id, session_id, role, content, created_at)
-                     VALUES (?1, ?2, 'user', ?3, ?4)",
+                    "INSERT INTO chat_messages (id, session_id, role, content, created_at, tenant_id)
+                     VALUES (?1, ?2, 'user', ?3, ?4, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local'))",
                     rusqlite::params![ulid::Ulid::new().to_string(), new_session_id, user_content, now],
                 )
                 .map_err(|e| e.to_string())?;
@@ -190,8 +190,8 @@ impl ToolHandler for SendMessageTool {
                 conn.execute(
                     "INSERT INTO bus_messages (
                        id, from_agent_id, from_run_id, from_session_id, to_agent_id, to_run_id, to_session_id,
-                       kind, payload, status, created_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, 'direct', ?7, 'delivered', ?8)",
+                       kind, payload, status, created_at, tenant_id
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, 'direct', ?7, 'delivered', ?8, COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local'))",
                     rusqlite::params![msg_id, from_agent, from_run, from_session, to_agent_id, new_session_id, payload_str, now],
                 )
                 .map_err(|e| e.to_string())?;

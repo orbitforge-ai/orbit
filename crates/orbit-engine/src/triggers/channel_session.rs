@@ -54,8 +54,8 @@ pub async fn resolve_session_id(
             "INSERT INTO chat_sessions (
                  id, agent_id, title, archived, session_type, parent_session_id,
                  source_bus_message_id, chain_depth, execution_state,
-                 finish_summary, terminal_error, created_at, updated_at
-               ) VALUES (?1, ?2, ?3, 0, 'channel', NULL, NULL, 0, NULL, NULL, NULL, ?4, ?4)",
+                 finish_summary, terminal_error, created_at, updated_at, tenant_id
+               ) VALUES (?1, ?2, ?3, 0, 'channel', NULL, NULL, 0, NULL, NULL, NULL, ?4, ?4, COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local'))",
             rusqlite::params![session_id, agent_id, title, now],
         )
         .map_err(|e| format!("insert chat_sessions: {}", e))?;
@@ -63,8 +63,8 @@ pub async fn resolve_session_id(
         conn.execute(
             "INSERT INTO channel_sessions (
                  agent_id, plugin_id, provider_channel_id, provider_thread_id,
-                 session_id, created_at, updated_at
-               ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                 session_id, created_at, updated_at, tenant_id
+               ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?5), 'local'))",
             rusqlite::params![agent_id, plugin_id, channel_id, thread_id, session_id, now],
         )
         .map_err(|e| format!("insert channel_sessions: {}", e))?;

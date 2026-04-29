@@ -82,7 +82,8 @@ Per-file remaining `DbPool` references (lower = closer to fully migrated). Read-
 
 - `[done]` Migration 31 adds `tenant_id TEXT NOT NULL DEFAULT 'local'` to all tables.
 - `[wip]` `RepoCtx { tenant_id }` added; `SqliteRepos::new` defaults to `'local'`, `with_tenant`/`with_ctx` allow explicit context, and repo-owned `sqlite.rs` inserts now write `tenant_id` explicitly.
-- `[next]` Finish tenant scoping outside repo-owned SQLite inserts: raw executor/workflow/plugin inserts still rely on DB defaults, and read/update/delete filters still need tenant predicates before shared Postgres/RLS work.
+- `[wip]` Parent-derived raw inserts now write `tenant_id`: work-item events, project board scaffolding/columns, chat messages/sessions, runs, bus messages, workflow run rows/steps, compaction summaries, memory extraction logs, agent tasks/conversations, channel sessions, plugin entities/relations.
+- `[next]` Finish remaining raw inserts that still rely on DB defaults (mostly bootstrap/test/scaffolding paths and project/task creation helpers), then add tenant predicates to read/update/delete paths before shared Postgres/RLS work.
 
 ### B.5 PostgreSQL backend (Phase C — unblocked)
 

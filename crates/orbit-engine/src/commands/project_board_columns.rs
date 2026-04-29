@@ -185,8 +185,8 @@ pub fn ensure_project_board_columns(
         None => {
             let board_id = Ulid::new().to_string();
             conn.execute(
-                "INSERT INTO project_boards (id, project_id, name, prefix, position, is_default, created_at, updated_at)
-                 VALUES (?1, ?2, 'Default', 'MAIN', 1024.0, 1, ?3, ?3)",
+                "INSERT INTO project_boards (id, project_id, name, prefix, position, is_default, created_at, updated_at, tenant_id)
+                 VALUES (?1, ?2, 'Default', 'MAIN', 1024.0, 1, ?3, ?3, COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
                 params![board_id, project_id, created_at],
             )
             .map_err(|e| e.to_string())?;
@@ -199,8 +199,8 @@ pub fn ensure_project_board_columns(
     for (idx, column) in board_preset_columns(preset_id).into_iter().enumerate() {
         conn.execute(
             "INSERT INTO project_board_columns (
-                id, project_id, board_id, name, status, role, is_default, position, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+                id, project_id, board_id, name, status, role, is_default, position, created_at, updated_at, tenant_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
             params![
                 format!(
                     "col_{}_{}",
@@ -621,8 +621,8 @@ async fn create_project_board_column_inner(
         }
         conn.execute(
             "INSERT INTO project_board_columns (
-                id, project_id, board_id, name, status, role, is_default, position, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+                id, project_id, board_id, name, status, role, is_default, position, created_at, updated_at, tenant_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
             params![
                 id,
                 payload.project_id,

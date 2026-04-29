@@ -152,8 +152,8 @@ async fn trigger_agent_loop_inner(
         // Create ephemeral task
         conn
           .execute(
-            "INSERT INTO tasks (id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, enabled, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, 'agent_loop', ?4, 7200, 0, 60, 'allow', '[]', ?5, 1, ?6, ?6)",
+            "INSERT INTO tasks (id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, enabled, created_at, updated_at, tenant_id)
+                 VALUES (?1, ?2, ?3, 'agent_loop', ?4, 7200, 0, 60, 'allow', '[]', ?5, 1, ?6, ?6, COALESCE((SELECT tenant_id FROM agents WHERE id = ?5), 'local'))",
             rusqlite::params![
               task_id,
               format!("Agent loop: {}", &goal.chars().take(60).collect::<String>()),
@@ -174,8 +174,8 @@ async fn trigger_agent_loop_inner(
         // Create run record
         conn
           .execute(
-            "INSERT INTO runs (id, task_id, agent_id, state, trigger, log_path, retry_count, metadata, created_at)
-                 VALUES (?1, ?2, ?3, 'pending', 'manual', ?4, 0, '{}', ?5)",
+            "INSERT INTO runs (id, task_id, agent_id, state, trigger, log_path, retry_count, metadata, created_at, tenant_id)
+                 VALUES (?1, ?2, ?3, 'pending', 'manual', ?4, 0, '{}', ?5, COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2), 'local'))",
             rusqlite::params![run_id, task_id, agent_id, log_path, now]
           )
           .map_err(|e| e.to_string())?;

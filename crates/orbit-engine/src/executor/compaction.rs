@@ -514,8 +514,8 @@ async fn perform_compaction_inner(
         let tx = conn.transaction().map_err(|e| e.to_string())?;
 
         tx.execute(
-            "INSERT INTO chat_messages (id, session_id, role, content, created_at, token_count, is_compacted)
-             VALUES (?1, ?2, 'assistant', ?3, ?4, ?5, 0)",
+            "INSERT INTO chat_messages (id, session_id, role, content, created_at, token_count, is_compacted, tenant_id)
+             VALUES (?1, ?2, 'assistant', ?3, ?4, ?5, 0, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local'))",
             rusqlite::params![
                 summary_msg_id,
                 sid,
@@ -545,8 +545,8 @@ async fn perform_compaction_inner(
 
         // Record compaction — store NULL for original_token_count (Bug 2)
         tx.execute(
-            "INSERT INTO chat_compaction_summaries (id, session_id, summary_message_id, compacted_message_ids, original_token_count, summary_token_count, created_at)
-             VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)",
+            "INSERT INTO chat_compaction_summaries (id, session_id, summary_message_id, compacted_message_ids, original_token_count, summary_token_count, created_at, tenant_id)
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local'))",
             rusqlite::params![
                 compaction_id,
                 sid,
@@ -622,8 +622,8 @@ async fn perform_compaction_inner(
                     let _ = tokio::task::spawn_blocking(move || {
                         if let Ok(conn) = pool.get() {
                             let _ = conn.execute(
-                                "INSERT INTO memory_extraction_log (id, session_id, agent_id, memories_extracted, status, created_at)
-                                 VALUES (?1, ?2, ?3, 0, 'running', ?4)",
+                                "INSERT INTO memory_extraction_log (id, session_id, agent_id, memories_extracted, status, created_at, tenant_id)
+                                 VALUES (?1, ?2, ?3, 0, 'running', ?4, COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?2), 'local'))",
                                 rusqlite::params![log_id, sid, aid, now],
                             );
                         }
