@@ -38,9 +38,8 @@ pub struct AppContext {
     /// keep working. Removed once nothing references it.
     pub db: DbPool,
     /// Aggregate-scoped trait facade over the data layer. Backed by either
-    /// `db::repos::sqlite::SqliteRepos` (rusqlite, single-tenant or
-    /// per-tenant SQLite) or, in Phase C, `db::repos::postgres::PgRepos`
-    /// (sqlx, shared multi-tenant runtime).
+    /// `db::repos::sqlite::SqliteRepos` (local or per-tenant SQLite) or
+    /// `db::repos::postgres::PgRepos` (optional shared-runtime Postgres).
     pub repos: Arc<dyn Repos>,
     pub auth: AuthState,
     pub cloud: CloudClientState,

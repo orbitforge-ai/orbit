@@ -7,14 +7,15 @@
 //!   Used by the desktop app, the standalone server in single-tenant mode,
 //!   and per-tenant Fly Machines on the paid SaaS tier.
 //! * `postgres::PgRepos` (added in Phase C) — wraps a sqlx `PgPool`. Used by
-//!   the shared multi-tenant runtime tier (free SaaS), with row-level
-//!   security scoped on every connection by tenant_id.
+//!   the optional shared multi-tenant runtime tier (free SaaS), with row-level
+//!   security scoped on every connection by tenant_id. Local SQLite remains
+//!   the default engine state.
 //!
 //! Aggregate-by-aggregate migration: the trait surface here grows as
 //! `commands/{tasks,agents,runs,…}` are switched over from direct `DbPool`
-//! access. The local SQLite pool now runs through SQLx; the remaining direct
-//! `DbPool` call sites use a small compatibility facade until they move to
-//! native repo methods.
+//! access. The local SQLite pool now runs through SQLx; remaining direct
+//! `DbPool` call sites use a compatibility facade until executor, scheduler,
+//! plugin, and workflow internals move to native backend abstractions.
 
 pub mod postgres;
 pub mod sqlite;

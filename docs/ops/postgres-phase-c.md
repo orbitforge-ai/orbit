@@ -1,22 +1,23 @@
 # Postgres Phase C Runbook
 
-Phase C adds a shared-runtime Postgres backend for repo-backed command paths.
-The current headless server still keeps a local SQLite pool for executor,
-scheduler, plugin, and workspace internals that have not moved fully behind
-repo traits.
+Phase C adds an optional shared-runtime Postgres backend for repo-backed command
+paths. Local mode remains the default and primary runtime: desktop and the
+headless server use SQLite unless Postgres is explicitly selected.
 
 ## Runtime Modes
 
-SQLite remains the default:
+SQLite/local mode is the default:
 
 ```sh
 cargo run -p orbit-server
 ```
 
-Postgres backs the repo facade when `DATABASE_URL` is a Postgres URL:
+Ambient `DATABASE_URL` values do not change the backend. Postgres backs the repo
+facade only when the Orbit backend switch is set:
 
 ```sh
-export DATABASE_URL=postgres://orbit_owner:...@localhost:5432/orbit
+export ORBIT_DB_BACKEND=postgres
+export ORBIT_POSTGRES_URL=postgres://orbit_app:...@localhost:5432/orbit
 export ORBIT_TENANT_ID=tenant_dev
 cargo run -p orbit-server
 ```
@@ -24,12 +25,16 @@ cargo run -p orbit-server
 Apply the schema/RLS bootstrap explicitly:
 
 ```sh
+export ORBIT_DB_BACKEND=postgres
+export ORBIT_POSTGRES_URL=postgres://orbit_app:...@localhost:5432/orbit
+export ORBIT_TENANT_ID=tenant_dev
 export ORBIT_POSTGRES_MIGRATIONS_URL=postgres://orbit_owner:...@localhost:5432/orbit
 ORBIT_APPLY_POSTGRES_MIGRATIONS=1 cargo run -p orbit-server
 ```
 
-Use a schema-owner URL for migration application. Use an application user that
-inherits `application_role` for traffic:
+`ORBIT_POSTGRES_MIGRATIONS_URL` is required when migration application is
+enabled. Use a schema-owner URL for migration application. Use an application
+user that inherits `application_role` for traffic:
 
 ```sql
 CREATE USER orbit_app WITH PASSWORD '...';
@@ -40,6 +45,18 @@ Each pool connection sets `app.tenant_id` at connect time. This matches the
 current per-tenant repo pool model. Phase D JWT work should move request-scoped
 traffic to transaction-local `SET LOCAL app.tenant_id = <jwt tenant>` once the
 shim carries an authenticated session into every repo call.
+
+## Local Mode Contract
+
+- Desktop and default `orbit-server` mode use SQLite under the Orbit data dir.
+- Local workspaces, installed plugins, logs, dev tokens, and agent files remain
+  under that data dir.
+- Cloud sync is optional and no-ops when no cloud client is configured.
+- Postgres is an accessory deployment backend and never runs unless
+  `ORBIT_DB_BACKEND=postgres` is set.
+- The current Postgres path covers repo-backed command surfaces; executor,
+  scheduler, plugin, and workspace internals still use local SQLite engine
+  state until those subsystems are moved behind repo/native backend traits.
 
 ## RLS Contract
 
