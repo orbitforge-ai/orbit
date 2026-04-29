@@ -44,6 +44,28 @@ use crate::models::work_item_comment::{CommentAuthor, WorkItemComment};
 use crate::models::work_item_event::WorkItemEvent;
 use crate::models::workflow_run::WorkflowRun;
 
+/// Request/repository context shared across aggregate repos.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoCtx {
+    pub tenant_id: String,
+}
+
+impl Default for RepoCtx {
+    fn default() -> Self {
+        Self {
+            tenant_id: "local".to_string(),
+        }
+    }
+}
+
+impl RepoCtx {
+    pub fn new(tenant_id: impl Into<String>) -> Self {
+        Self {
+            tenant_id: tenant_id.into(),
+        }
+    }
+}
+
 /// Top-level repository facade. The concrete impl picks the backend.
 pub trait Repos: Send + Sync {
     fn agents(&self) -> &dyn AgentRepo;
@@ -331,6 +353,19 @@ pub trait ChatRepo: Send + Sync {
     async fn archive_session(&self, session_id: &str) -> Result<String, String>;
     async fn unarchive_session(&self, session_id: &str) -> Result<String, String>;
     async fn delete_session(&self, session_id: &str) -> Result<(), String>;
+    async fn append_message(
+        &self,
+        session_id: &str,
+        role: &str,
+        content_json: String,
+    ) -> Result<(String, String), String>;
+    async fn upsert_active_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+        instructions: &str,
+        source_path: Option<String>,
+    ) -> Result<(), String>;
 
     async fn session_meta(&self, session_id: &str) -> Result<ChatSessionMeta, String>;
     async fn session_execution(&self, session_id: &str) -> Result<SessionExecutionStatus, String>;

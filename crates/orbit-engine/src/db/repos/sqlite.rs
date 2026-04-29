@@ -17,7 +17,7 @@ use crate::commands::project_board_columns::{
 use crate::commands::work_item_events::{event_kind, insert_event, Actor};
 use crate::db::repos::{
     AgentRepo, BusMessageRepo, BusSubscriptionRepo, ChatRepo, ChatSessionListFilter,
-    ProjectBoardColumnRepo, ProjectBoardRepo, ProjectRepo, ProjectWorkflowRepo, Repos,
+    ProjectBoardColumnRepo, ProjectBoardRepo, ProjectRepo, ProjectWorkflowRepo, RepoCtx, Repos,
     RunListFilter, RunRepo, ScheduleRepo, TaskRepo, UserRepo, WorkItemEventRepo, WorkItemRepo,
     WorkflowRunRepo,
 };
@@ -75,11 +75,24 @@ impl<T, E: std::fmt::Display> IntoStringErr<T> for Result<T, E> {
 #[derive(Clone)]
 pub struct SqliteRepos {
     pool: DbPool,
+    ctx: RepoCtx,
 }
 
 impl SqliteRepos {
     pub fn new(pool: DbPool) -> Self {
-        Self { pool }
+        Self::with_ctx(pool, RepoCtx::default())
+    }
+
+    pub fn with_tenant(pool: DbPool, tenant_id: impl Into<String>) -> Self {
+        Self::with_ctx(pool, RepoCtx::new(tenant_id))
+    }
+
+    pub fn with_ctx(pool: DbPool, ctx: RepoCtx) -> Self {
+        Self { pool, ctx }
+    }
+
+    fn tenant_id(&self) -> String {
+        self.ctx.tenant_id.clone()
     }
 
     /// Run a closure on a pooled rusqlite `Connection` from a blocking-task
@@ -226,6 +239,7 @@ impl TaskRepo for SqliteRepos {
     }
 
     async fn create(&self, payload: CreateTask) -> Result<Task, String> {
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             // Default scalars stay close to where the row is built so future
             // schema additions can be wired in one place.
@@ -244,8 +258,8 @@ impl TaskRepo for SqliteRepos {
             conn.execute(
                 "INSERT INTO tasks (id, name, description, kind, config, max_duration_seconds,
                                     max_retries, retry_delay_seconds, concurrency_policy, tags,
-                                    agent_id, enabled, created_at, updated_at, project_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?12, ?13)",
+                                    agent_id, enabled, created_at, updated_at, project_id, tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?12, ?13, ?14)",
                 params![
                     id,
                     payload.name,
@@ -259,7 +273,8 @@ impl TaskRepo for SqliteRepos {
                     tags_str,
                     agent_id,
                     now,
-                    payload.project_id
+                    payload.project_id,
+                    tenant_id
                 ],
             )
             .err_str()?;
@@ -411,6 +426,7 @@ impl AgentRepo for SqliteRepos {
     }
 
     async fn create_basic(&self, payload: CreateAgent) -> Result<Agent, String> {
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             // Slug-style ID derived from the agent's display name; collisions
             // get a numeric suffix.
@@ -419,9 +435,9 @@ impl AgentRepo for SqliteRepos {
             let max_runs = payload.max_concurrent_runs.unwrap_or(5);
 
             conn.execute(
-                "INSERT INTO agents (id, name, description, state, max_concurrent_runs, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, 'idle', ?4, ?5, ?5)",
-                params![id, payload.name, payload.description, max_runs, now],
+                "INSERT INTO agents (id, name, description, state, max_concurrent_runs, created_at, updated_at, tenant_id)
+                 VALUES (?1, ?2, ?3, 'idle', ?4, ?5, ?5, ?6)",
+                params![id, payload.name, payload.description, max_runs, now, tenant_id],
             )
             .err_str()?;
 
@@ -609,6 +625,7 @@ impl ProjectRepo for SqliteRepos {
     }
 
     async fn create_basic(&self, payload: CreateProject) -> Result<Project, String> {
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             // Slug + collision-resolving suffix, same shape as agent IDs.
             let base_slug = workspace::slugify(&payload.name);
@@ -634,9 +651,9 @@ impl ProjectRepo for SqliteRepos {
 
             let now = chrono::Utc::now().to_rfc3339();
             conn.execute(
-                "INSERT INTO projects (id, name, description, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?4)",
-                params![id, payload.name, payload.description, now],
+                "INSERT INTO projects (id, name, description, created_at, updated_at, tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
+                params![id, payload.name, payload.description, now, tenant_id],
             )
             .err_str()?;
 
@@ -915,6 +932,7 @@ impl ScheduleRepo for SqliteRepos {
     }
 
     async fn create(&self, payload: CreateSchedule) -> Result<Schedule, String> {
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let id = Ulid::new().to_string();
             let now = chrono::Utc::now().to_rfc3339();
@@ -954,8 +972,8 @@ impl ScheduleRepo for SqliteRepos {
 
             conn.execute(
                 "INSERT INTO schedules (id, task_id, workflow_id, target_kind, kind, config, enabled,
-                                        next_run_at, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?8)",
+                                        next_run_at, created_at, updated_at, tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?8, ?9)",
                 params![
                     id,
                     payload.task_id,
@@ -964,7 +982,8 @@ impl ScheduleRepo for SqliteRepos {
                     payload.kind,
                     config_str,
                     next_run_at,
-                    now
+                    now,
+                    tenant_id
                 ],
             )
             .err_str()?;
@@ -1040,12 +1059,13 @@ impl UserRepo for SqliteRepos {
     }
 
     async fn create(&self, name: String) -> Result<User, String> {
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let id = Ulid::new().to_string();
             let now = chrono::Utc::now().to_rfc3339();
             conn.execute(
-                "INSERT INTO users (id, name, is_default, created_at) VALUES (?1, ?2, 0, ?3)",
-                params![id, name, now],
+                "INSERT INTO users (id, name, is_default, created_at, tenant_id) VALUES (?1, ?2, 0, ?3, ?4)",
+                params![id, name, now, tenant_id],
             )
             .err_str()?;
             Ok(User {
@@ -1463,6 +1483,7 @@ impl ProjectBoardRepo for SqliteRepos {
 
     async fn create(&self, payload: CreateProjectBoard) -> Result<ProjectBoard, String> {
         validate_board_prefix(&payload.prefix)?;
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let name = payload.name.trim();
             if name.is_empty() {
@@ -1501,9 +1522,9 @@ impl ProjectBoardRepo for SqliteRepos {
             let position = next_position + 1024.0;
 
             conn.execute(
-                "INSERT INTO project_boards (id, project_id, name, prefix, position, is_default, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6)",
-                params![id, payload.project_id, name, prefix, position, now],
+                "INSERT INTO project_boards (id, project_id, name, prefix, position, is_default, created_at, updated_at, tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6, ?7)",
+                params![id, payload.project_id, name, prefix, position, now, tenant_id],
             )
             .err_str()?;
 
@@ -1896,12 +1917,13 @@ impl BusSubscriptionRepo for SqliteRepos {
     }
 
     async fn create(&self, payload: CreateBusSubscription) -> Result<BusSubscription, String> {
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let id = Ulid::new().to_string();
             let now = chrono::Utc::now().to_rfc3339();
             conn.execute(
-                "INSERT INTO bus_subscriptions (id, subscriber_agent_id, source_agent_id, event_type, task_id, payload_template, enabled, max_chain_depth, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?8)",
+                "INSERT INTO bus_subscriptions (id, subscriber_agent_id, source_agent_id, event_type, task_id, payload_template, enabled, max_chain_depth, created_at, updated_at, tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?8, ?9)",
                 params![
                     id,
                     payload.subscriber_agent_id,
@@ -1911,6 +1933,7 @@ impl BusSubscriptionRepo for SqliteRepos {
                     payload.payload_template,
                     payload.max_chain_depth,
                     now,
+                    tenant_id,
                 ],
             )
             .err_str()?;
@@ -2123,6 +2146,7 @@ impl ChatRepo for SqliteRepos {
         session_type: Option<String>,
         project_id: Option<String>,
     ) -> Result<ChatSession, String> {
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let id = Ulid::new().to_string();
             let now = chrono::Utc::now().to_rfc3339();
@@ -2132,9 +2156,9 @@ impl ChatRepo for SqliteRepos {
             conn.execute(
                 "INSERT INTO chat_sessions (
                     id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
-                    chain_depth, execution_state, finish_summary, terminal_error, project_id, created_at, updated_at
-                 ) VALUES (?1, ?2, ?3, 0, ?4, NULL, NULL, 0, NULL, NULL, NULL, ?5, ?6, ?6)",
-                params![&id, &agent_id, &title, &session_type, &project_id, &now],
+                    chain_depth, execution_state, finish_summary, terminal_error, project_id, created_at, updated_at, tenant_id
+                 ) VALUES (?1, ?2, ?3, 0, ?4, NULL, NULL, 0, NULL, NULL, NULL, ?5, ?6, ?6, ?7)",
+                params![&id, &agent_id, &title, &session_type, &project_id, &now, &tenant_id],
             )
             .err_str()?;
 
@@ -2262,6 +2286,72 @@ impl ChatRepo for SqliteRepos {
             conn.execute(
                 "DELETE FROM chat_sessions WHERE id = ?1",
                 params![session_id],
+            )
+            .err_str()?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn append_message(
+        &self,
+        session_id: &str,
+        role: &str,
+        content_json: String,
+    ) -> Result<(String, String), String> {
+        let tenant_id = self.tenant_id();
+        let session_id = session_id.to_string();
+        let role = role.to_string();
+        self.with_conn(move |conn| {
+            let msg_id = Ulid::new().to_string();
+            let now = chrono::Utc::now().to_rfc3339();
+
+            conn.execute(
+                "INSERT INTO chat_messages (id, session_id, role, content, created_at, tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![&msg_id, &session_id, &role, &content_json, &now, &tenant_id],
+            )
+            .err_str()?;
+
+            conn.execute(
+                "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
+                params![&now, &session_id],
+            )
+            .err_str()?;
+
+            Ok((msg_id, now))
+        })
+        .await
+    }
+
+    async fn upsert_active_skill(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+        instructions: &str,
+        source_path: Option<String>,
+    ) -> Result<(), String> {
+        let tenant_id = self.tenant_id();
+        let session_id = session_id.to_string();
+        let skill_name = skill_name.to_string();
+        let instructions = instructions.to_string();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "INSERT INTO active_session_skills (session_id, skill_name, instructions, source_path, activated_at, tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(session_id, skill_name) DO UPDATE SET
+                   instructions = excluded.instructions,
+                   source_path = excluded.source_path,
+                   activated_at = excluded.activated_at,
+                   tenant_id = excluded.tenant_id",
+                params![
+                    session_id,
+                    skill_name,
+                    instructions,
+                    source_path,
+                    chrono::Utc::now().to_rfc3339(),
+                    tenant_id
+                ],
             )
             .err_str()?;
             Ok(())
@@ -2551,6 +2641,7 @@ impl WorkItemRepo for SqliteRepos {
     }
 
     async fn create(&self, payload: CreateWorkItem) -> Result<WorkItem, String> {
+        let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let id = Ulid::new().to_string();
             let now = chrono::Utc::now().to_rfc3339();
@@ -2595,8 +2686,8 @@ impl WorkItemRepo for SqliteRepos {
                 "INSERT INTO work_items (
                     id, project_id, board_id, title, description, kind, column_id, status, priority,
                     assignee_agent_id, created_by_agent_id, parent_work_item_id, position,
-                    labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at
-                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,NULL,NULL,NULL,?16,?16)",
+                    labels, metadata, blocked_reason, started_at, completed_at, created_at, updated_at, tenant_id
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,NULL,NULL,NULL,?16,?16,?17)",
                 params![
                     &id,
                     &payload.project_id,
@@ -2614,6 +2705,7 @@ impl WorkItemRepo for SqliteRepos {
                     labels_json,
                     metadata_json,
                     &now,
+                    &tenant_id,
                 ],
             )
             .err_str()?;
@@ -3223,6 +3315,7 @@ impl WorkItemRepo for SqliteRepos {
         if body.trim().is_empty() {
             return Err("work_item_comment: body must be non-empty".into());
         }
+        let tenant_id = self.tenant_id();
         let work_item_id = work_item_id.to_string();
         self.with_conn(move |conn| {
             let id = Ulid::new().to_string();
@@ -3233,15 +3326,16 @@ impl WorkItemRepo for SqliteRepos {
             };
             conn.execute(
                 "INSERT INTO work_item_comments (
-                    id, work_item_id, author_kind, author_agent_id, body, created_at, updated_at
-                 ) VALUES (?1,?2,?3,?4,?5,?6,?6)",
+                    id, work_item_id, author_kind, author_agent_id, body, created_at, updated_at, tenant_id
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?6,?7)",
                 params![
                     &id,
                     &work_item_id,
                     author_kind,
                     &author_agent_id,
                     &body,
-                    &now
+                    &now,
+                    &tenant_id
                 ],
             )
             .err_str()?;
@@ -3783,6 +3877,7 @@ impl ProjectWorkflowRepo for SqliteRepos {
     }
 
     async fn create(&self, payload: CreateProjectWorkflow) -> Result<ProjectWorkflow, String> {
+        let tenant_id = self.tenant_id();
         self.with_conn_mut(move |conn| {
             let graph = payload.graph.unwrap_or_default();
             let (graph, trigger_kind, trigger_config) = prepare_project_workflow_for_write(
@@ -3800,8 +3895,8 @@ impl ProjectWorkflowRepo for SqliteRepos {
             tx.execute(
                 "INSERT INTO project_workflows (
                     id, project_id, name, description, enabled, graph,
-                    trigger_kind, trigger_config, version, created_at, updated_at
-                 ) VALUES (?1,?2,?3,?4,0,?5,?6,?7,1,?8,?8)",
+                    trigger_kind, trigger_config, version, created_at, updated_at, tenant_id
+                 ) VALUES (?1,?2,?3,?4,0,?5,?6,?7,1,?8,?8,?9)",
                 params![
                     &id,
                     &payload.project_id,
@@ -3811,6 +3906,7 @@ impl ProjectWorkflowRepo for SqliteRepos {
                     &trigger_kind,
                     trigger_config_json,
                     &now,
+                    &tenant_id,
                 ],
             )
             .err_str()?;

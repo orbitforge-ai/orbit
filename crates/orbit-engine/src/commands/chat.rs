@@ -6,19 +6,15 @@ use tracing::{debug, info, warn};
 use ulid::Ulid;
 
 use crate::app_context::AppContext;
-use crate::auth::{AuthMode, AuthState};
-use crate::db::cloud::CloudClientState;
-use crate::db::repos::ChatSessionListFilter;
-use crate::db::DbPool;
+use crate::auth::AuthMode;
+use crate::db::repos::{ChatRepo, ChatSessionListFilter};
 use crate::events::emitter::{
     emit_agent_iteration, emit_agent_tool_result, emit_chat_context_update,
 };
 use crate::executor::agent_tools::ToolExecutionContext;
 use crate::executor::compaction;
 use crate::executor::context::{self, ContextMode, ContextRequest};
-use crate::executor::engine::{
-    AgentSemaphores, ExecutorTx, SessionExecutionRegistry, UserQuestionRegistry,
-};
+use crate::executor::engine::{AgentSemaphores, SessionExecutionRegistry, UserQuestionRegistry};
 use crate::executor::keychain;
 use crate::executor::llm_provider::{self, ChatMessage, ContentBlock, LlmConfig};
 use crate::executor::memory::MemoryClient;
@@ -27,7 +23,6 @@ use crate::executor::session_agent;
 use crate::executor::session_worktree;
 use crate::executor::skills;
 use crate::executor::workspace;
-use crate::memory_service::MemoryServiceState;
 use crate::models::chat::ChatSession;
 
 const MAX_TOKENS_PER_CALL: u32 = 4096;
@@ -43,31 +38,18 @@ fn can_cancel_chat_session(session_type: &str) -> bool {
 
 async fn is_chat_session_cancelled(
     session_id: &str,
-    db: &DbPool,
+    chat_repo: &dyn ChatRepo,
     session_registry: &SessionExecutionRegistry,
 ) -> bool {
     if session_registry.is_cancelled(session_id).await {
         return true;
     }
 
-    let pool = db.0.clone();
-    let session_id = session_id.to_string();
-    tokio::task::spawn_blocking(move || -> bool {
-        let conn = match pool.get() {
-            Ok(conn) => conn,
-            Err(_) => return false,
-        };
-        let state: Option<String> = conn
-            .query_row(
-                "SELECT execution_state FROM chat_sessions WHERE id = ?1",
-                rusqlite::params![session_id],
-                |row| row.get(0),
-            )
-            .ok();
-        matches!(state.as_deref(), Some("cancelled"))
-    })
-    .await
-    .unwrap_or(false)
+    chat_repo
+        .session_execution(session_id)
+        .await
+        .map(|status| matches!(status.execution_state.as_deref(), Some("cancelled")))
+        .unwrap_or(false)
 }
 
 async fn chat_streaming_with_cancellation(
@@ -79,7 +61,7 @@ async fn chat_streaming_with_cancellation(
     stream_id: &str,
     iteration: u32,
     session_id: &str,
-    db: &DbPool,
+    chat_repo: &dyn ChatRepo,
     session_registry: &SessionExecutionRegistry,
 ) -> Result<llm_provider::LlmResponse, String> {
     let stream_future = provider.chat_streaming(config, messages, tools, app, stream_id, iteration);
@@ -93,7 +75,7 @@ async fn chat_streaming_with_cancellation(
         tokio::select! {
             response = &mut stream_future => return response,
             _ = cancellation_poll.tick() => {
-                if is_chat_session_cancelled(session_id, db, session_registry).await {
+                if is_chat_session_cancelled(session_id, chat_repo, session_registry).await {
                     return Err("cancelled".to_string());
                 }
             }
@@ -126,8 +108,8 @@ fn extract_skill_mentions(blocks: &[ContentBlock]) -> Vec<String> {
     seen.into_iter().collect()
 }
 
-fn activate_skill_mentions_for_session(
-    db: &DbPool,
+async fn activate_skill_mentions_for_session(
+    chat_repo: &dyn ChatRepo,
     session_id: &str,
     agent_id: &str,
     disabled_skills: &[String],
@@ -142,13 +124,17 @@ fn activate_skill_mentions_for_session(
     for skill_name in mentioned_skill_names {
         match skills::load_skill(agent_id, &skill_name, disabled_skills) {
             Ok(loaded_skill) => {
-                skills::upsert_active_skill(
-                    db,
-                    session_id,
-                    &skill_name,
-                    &loaded_skill.instructions,
-                    loaded_skill.metadata.source_path.as_deref(),
-                )?;
+                chat_repo
+                    .upsert_active_skill(
+                        session_id,
+                        &skill_name,
+                        &loaded_skill.instructions,
+                        loaded_skill
+                            .metadata
+                            .source_path
+                            .map(|path| path.to_string_lossy().to_string()),
+                    )
+                    .await?;
                 activated.push(skill_name);
             }
             Err(err) => {
@@ -513,16 +499,9 @@ pub async fn send_chat_message(
     content: String, // JSON-serialized Vec<ContentBlock>
     model_override: Option<ChatModelOverride>,
     app: tauri::AppHandle,
-    db: tauri::State<'_, DbPool>,
-    executor_tx: tauri::State<'_, ExecutorTx>,
-    agent_semaphores: tauri::State<'_, AgentSemaphores>,
-    session_registry: tauri::State<'_, SessionExecutionRegistry>,
-    permission_registry: tauri::State<'_, PermissionRegistry>,
-    user_question_registry: tauri::State<'_, UserQuestionRegistry>,
-    memory_state: tauri::State<'_, Option<MemoryServiceState>>,
-    auth: tauri::State<'_, AuthState>,
-    cloud: tauri::State<'_, CloudClientState>,
+    ctx: tauri::State<'_, AppContext>,
 ) -> Result<SendChatMessageResponse, String> {
+    let db = ctx.db.clone();
     let pool = db.0.clone();
     let stream_id = format!("chat:{}", session_id);
     let stream_id_ret = stream_id.clone();
@@ -532,7 +511,7 @@ pub async fn send_chat_message(
         serde_json::from_str(&content).map_err(|e| format!("invalid content: {}", e))?;
 
     // Grab the cloud client before the blocking task so we can sync the user message afterwards
-    let cloud_client = cloud.get();
+    let cloud_client = ctx.cloud.get();
 
     // Load session + history in blocking task
     let loaded = {
@@ -652,7 +631,7 @@ pub async fn send_chat_message(
         user_msg_content_json,
     } = loaded;
 
-    let db_bg = DbPool(pool.clone());
+    let db_bg = db.clone();
 
     // Sync the initial user message to Supabase (was missing — only SQLite was written above)
     if let Some(client) = cloud_client.clone() {
@@ -684,7 +663,7 @@ pub async fn send_chat_message(
         });
     }
 
-    session_registry.clear_cancelled(&session_id).await;
+    ctx.sessions.clear_cancelled(&session_id).await;
 
     if let Err(err) =
         session_agent::update_session_execution_state(&db_bg, &session_id, "running", None, None)
@@ -698,7 +677,7 @@ pub async fn send_chat_message(
     }
 
     // Resolve memory user_id from auth state
-    let memory_user_id = match auth.get().await {
+    let memory_user_id = match ctx.auth.get().await {
         AuthMode::Cloud(session) => session.user_id,
         _ => "default_user".to_string(),
     };
@@ -706,13 +685,14 @@ pub async fn send_chat_message(
     // Spawn the LLM call on a background task so the command returns immediately
     let sid_bg = session_id.clone();
     let session_type_bg = session_type.clone();
-    let etx = executor_tx.0.clone();
-    let semaphores = agent_semaphores.inner().clone();
-    let registry = session_registry.inner().clone();
-    let perm_registry = permission_registry.inner().clone();
-    let question_registry = user_question_registry.inner().clone();
-    let mem_client = memory_state.as_ref().map(|s| s.client.clone());
+    let etx = ctx.executor_tx.0.clone();
+    let semaphores = ctx.agent_semaphores.clone();
+    let registry = ctx.sessions.clone();
+    let perm_registry = ctx.permissions.clone();
+    let question_registry = ctx.user_questions.clone();
+    let mem_client = ctx.memory.as_ref().map(|s| s.client.clone());
     let model_override_bg = model_override.clone();
+    let app_ctx = ctx.inner().clone();
 
     tauri::async_runtime::spawn(async move {
         if let Err(e) = do_llm_chat(
@@ -720,7 +700,7 @@ pub async fn send_chat_message(
             history,
             &stream_id,
             &app,
-            &db_bg,
+            app_ctx.clone(),
             &sid_bg,
             &etx,
             chain_depth,
@@ -748,7 +728,7 @@ pub async fn send_chat_message(
                     ),
                 }];
                 if let Err(save_err) = save_chat_message(
-                    &db_bg.0,
+                    app_ctx.repos.chat(),
                     &sid_bg,
                     "assistant",
                     &error_message,
@@ -774,43 +754,19 @@ const MAX_CHAT_TOOL_ITERATIONS: u32 = 10;
 
 /// Save a chat message to the DB.
 async fn save_chat_message(
-    pool: &r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>,
+    chat_repo: &dyn ChatRepo,
     session_id: &str,
     role: &str,
     content: &[ContentBlock],
     cloud: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<(), String> {
-    let pool = pool.clone();
-    let sid = session_id.to_string();
-    let role = role.to_string();
     let content_json = serde_json::to_string(content).map_err(|e| e.to_string())?;
-
     let content_json_clone = content_json.clone();
-    let sid_clone = sid.clone();
-    let role_clone = role.clone();
-
-    let (msg_id, now) = tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let msg_id = Ulid::new().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
-
-        conn.execute(
-            "INSERT INTO chat_messages (id, session_id, role, content, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![msg_id, sid, role, content_json, now],
-        )
-        .map_err(|e| e.to_string())?;
-
-        conn.execute(
-            "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2",
-            rusqlite::params![now, sid],
-        )
-        .map_err(|e| e.to_string())?;
-
-        Ok((msg_id, now))
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let sid_clone = session_id.to_string();
+    let role_clone = role.to_string();
+    let (msg_id, now) = chat_repo
+        .append_message(session_id, role, content_json)
+        .await?;
 
     if let Some(client) = cloud {
         tokio::spawn(async move {
@@ -832,7 +788,7 @@ async fn do_llm_chat(
     messages: Vec<ChatMessage>,
     stream_id: &str,
     app: &tauri::AppHandle,
-    db: &DbPool,
+    app_ctx: AppContext,
     session_id: &str,
     executor_tx: &tokio::sync::mpsc::UnboundedSender<crate::executor::engine::RunRequest>,
     chain_depth: i64,
@@ -846,6 +802,8 @@ async fn do_llm_chat(
     model_override: Option<&ChatModelOverride>,
     cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
 ) -> Result<(), String> {
+    let db = &app_ctx.db;
+    let repos = app_ctx.repos.clone();
     // Load agent config
     let mut ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
     if let Some(model_override) = model_override {
@@ -864,12 +822,13 @@ async fn do_llm_chat(
         .map(|message| message.content.as_slice())
     {
         let activated_skill_names = activate_skill_mentions_for_session(
-            db,
+            repos.chat(),
             session_id,
             agent_id,
             &ws_config.disabled_skills,
             latest_user_blocks,
-        )?;
+        )
+        .await?;
         if !activated_skill_names.is_empty() {
             info!(
                 session_id = session_id,
@@ -879,9 +838,14 @@ async fn do_llm_chat(
         }
     }
 
-    let chat_project_id = session_worktree::load_session_project_id(db, session_id).await?;
+    let chat_project_id = repos.chat().session_meta(session_id).await?.project_id;
     if let Some(pid) = chat_project_id.as_deref() {
-        crate::executor::project_scope::assert_agent_in_project(db, pid, agent_id).await?;
+        if !repos.projects().agent_in_project(pid, agent_id).await? {
+            return Err(format!(
+                "agent '{}' is not a member of project '{}'",
+                agent_id, pid
+            ));
+        }
         if let Err(e) = workspace::init_project_workspace(pid) {
             warn!(project_id = pid, "failed to init project workspace: {}", e);
         }
@@ -977,7 +941,7 @@ async fn do_llm_chat(
             break;
         }
 
-        if is_chat_session_cancelled(session_id, db, &session_registry).await {
+        if is_chat_session_cancelled(session_id, repos.chat(), &session_registry).await {
             return Err("cancelled".to_string());
         }
 
@@ -1008,7 +972,7 @@ async fn do_llm_chat(
             stream_id,
             iteration,
             session_id,
-            db,
+            repos.chat(),
             &session_registry,
         )
         .await?;
@@ -1016,13 +980,13 @@ async fn do_llm_chat(
         cumulative_input_tokens += response.usage.input_tokens;
         cumulative_output_tokens += response.usage.output_tokens;
 
-        if is_chat_session_cancelled(session_id, db, &session_registry).await {
+        if is_chat_session_cancelled(session_id, repos.chat(), &session_registry).await {
             return Err("cancelled".to_string());
         }
 
         // Save assistant response to DB
         save_chat_message(
-            &pool,
+            repos.chat(),
             session_id,
             "assistant",
             &response.content,
@@ -1073,7 +1037,7 @@ async fn do_llm_chat(
 
                 if !tool_error_results.is_empty() {
                     save_chat_message(
-                        &pool,
+                        repos.chat(),
                         session_id,
                         "user",
                         &tool_error_results,
@@ -1110,7 +1074,9 @@ async fn do_llm_chat(
 
                 for block in &response.content {
                     if let ContentBlock::ToolUse { id, name, input } = block {
-                        if is_chat_session_cancelled(session_id, db, &session_registry).await {
+                        if is_chat_session_cancelled(session_id, repos.chat(), &session_registry)
+                            .await
+                        {
                             return Err("cancelled".to_string());
                         }
 
@@ -1167,7 +1133,9 @@ async fn do_llm_chat(
                             }
                         }
 
-                        if is_chat_session_cancelled(session_id, db, &session_registry).await {
+                        if is_chat_session_cancelled(session_id, repos.chat(), &session_registry)
+                            .await
+                        {
                             return Err("cancelled".to_string());
                         }
                     }
@@ -1175,7 +1143,7 @@ async fn do_llm_chat(
 
                 // Save tool results to DB and add to conversation
                 save_chat_message(
-                    &pool,
+                    repos.chat(),
                     session_id,
                     "user",
                     &tool_results,
@@ -1250,7 +1218,7 @@ async fn do_llm_chat(
     let threshold = compaction::effective_threshold(&ws_config);
     if compaction::should_compact(cumulative_input_tokens, context_window, threshold) {
         // Circuit breaker: skip auto-compaction if too many recent failures
-        let db_check = DbPool(db.0.clone());
+        let db_check = db.clone();
         let circuit_open = compaction::is_circuit_open(&db_check, session_id).unwrap_or(false);
         if circuit_open {
             warn!(
@@ -1269,7 +1237,7 @@ async fn do_llm_chat(
             let session_id = session_id.to_string();
             let ws_config = ws_config.clone();
             let app = app.clone();
-            let db = DbPool(db.0.clone());
+            let db = db.clone();
             let compaction_user_id = memory_user_id.to_string();
             let compact_memory_client = memory_client.cloned();
             let compact_cloud_client = cloud_client.clone();
@@ -1353,9 +1321,6 @@ pub async fn get_session_execution(
 pub async fn cancel_agent_session(
     session_id: String,
     app: tauri::State<'_, AppContext>,
-    db: tauri::State<'_, DbPool>,
-    session_registry: tauri::State<'_, SessionExecutionRegistry>,
-    user_question_registry: tauri::State<'_, UserQuestionRegistry>,
 ) -> Result<(), String> {
     // Reject cancels against session types that don't run an agent loop.
     let session_type = app.repos.chat().session_type(&session_id).await?;
@@ -1366,13 +1331,12 @@ pub async fn cancel_agent_session(
         );
     }
 
-    session_registry.cancel(&session_id).await;
-    user_question_registry.cancel_for_session(&session_id).await;
+    app.sessions.cancel(&session_id).await;
+    app.user_questions.cancel_for_session(&session_id).await;
     // Updating the persisted execution state still goes through
     // `session_agent` because it also nudges the run loop and emits events.
-    let db_pool = DbPool(db.0.clone());
     session_agent::update_session_execution_state(
-        &db_pool,
+        &app.db,
         &session_id,
         "cancelled",
         None,
@@ -1444,29 +1408,9 @@ pub async fn get_context_usage(
 pub async fn compact_chat_session(
     session_id: String,
     app: tauri::AppHandle,
-    db: tauri::State<'_, DbPool>,
-    auth: tauri::State<'_, AuthState>,
-    cloud: tauri::State<'_, CloudClientState>,
-    memory_state: tauri::State<'_, Option<MemoryServiceState>>,
+    ctx: tauri::State<'_, AppContext>,
 ) -> Result<(), String> {
-    let pool = db.0.clone();
-
-    // Look up agent_id for this session
-    let agent_id: String = tokio::task::spawn_blocking({
-        let pool = pool.clone();
-        let sid = session_id.clone();
-        move || -> Result<String, String> {
-            let conn = pool.get().map_err(|e| e.to_string())?;
-            conn.query_row(
-                "SELECT agent_id FROM chat_sessions WHERE id = ?1",
-                rusqlite::params![sid],
-                |row| row.get(0),
-            )
-            .map_err(|e| format!("session not found: {}", e))
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let agent_id = ctx.repos.chat().session_meta(&session_id).await?.agent_id;
 
     let ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
     let provider_name = &ws_config.provider;
@@ -1474,15 +1418,15 @@ pub async fn compact_chat_session(
         .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
     let provider = llm_provider::create_provider(provider_name, api_key)?;
 
-    let memory_user_id = match auth.get().await {
+    let memory_user_id = match ctx.auth.get().await {
         AuthMode::Cloud(session) => session.user_id,
         _ => "default_user".to_string(),
     };
 
     // Manual compaction bypasses the circuit breaker intentionally
-    let mem_client = memory_state.as_ref().map(|s| s.client.clone());
-    let cloud_client = cloud.get();
-    let db_pool = DbPool(pool);
+    let mem_client = ctx.memory.as_ref().map(|s| s.client.clone());
+    let cloud_client = ctx.cloud.get();
+    let db_pool = ctx.db.clone();
     let outcome = compaction::perform_compaction(
         &agent_id,
         &session_id,
@@ -1531,14 +1475,6 @@ pub struct SendChatMessageResponse {
 
 mod http {
     use super::*;
-    use crate::auth::AuthState;
-    use crate::db::cloud::CloudClientState;
-    use crate::db::DbPool;
-    use crate::executor::engine::{
-        AgentSemaphores, ExecutorTx, SessionExecutionRegistry, UserQuestionRegistry,
-    };
-    use crate::executor::permissions::PermissionRegistry;
-    use crate::memory_service::MemoryServiceState;
     use tauri::Manager;
 
     #[derive(serde::Deserialize)]
@@ -1685,15 +1621,7 @@ mod http {
                 a.content,
                 a.model_override,
                 app.clone(),
-                app.state::<DbPool>(),
-                app.state::<ExecutorTx>(),
-                app.state::<AgentSemaphores>(),
-                app.state::<SessionExecutionRegistry>(),
-                app.state::<PermissionRegistry>(),
-                app.state::<UserQuestionRegistry>(),
-                app.state::<Option<MemoryServiceState>>(),
-                app.state::<AuthState>(),
-                app.state::<CloudClientState>(),
+                app.state::<AppContext>(),
             )
             .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
@@ -1722,17 +1650,7 @@ mod http {
         reg.register("cancel_agent_session", |ctx, args| async move {
             let app = ctx.app()?;
             let a: SessionIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            // Cancel still needs DbPool because the executor-side state
-            // update is rusqlite-backed; the pre-flight session-type check
-            // goes through the repo trait.
-            cancel_agent_session(
-                a.session_id,
-                app.state::<AppContext>(),
-                app.state::<DbPool>(),
-                app.state::<SessionExecutionRegistry>(),
-                app.state::<UserQuestionRegistry>(),
-            )
-            .await?;
+            cancel_agent_session(a.session_id, app.state::<AppContext>()).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("get_context_usage", |ctx, args| async move {
@@ -1745,15 +1663,7 @@ mod http {
         reg.register("compact_chat_session", |ctx, args| async move {
             let app = ctx.app()?;
             let a: SessionIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            compact_chat_session(
-                a.session_id,
-                app.clone(),
-                app.state::<DbPool>(),
-                app.state::<AuthState>(),
-                app.state::<CloudClientState>(),
-                app.state::<Option<MemoryServiceState>>(),
-            )
-            .await?;
+            compact_chat_session(a.session_id, app.clone(), app.state::<AppContext>()).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("get_message_reactions", |ctx, args| async move {

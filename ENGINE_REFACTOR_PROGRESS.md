@@ -51,7 +51,7 @@ Status: `[done]` for read paths and the write paths listed below. The trait itse
   - `BusSubscriptionRepo::create`, `set_enabled`, `delete`
   - `ProjectBoardRepo::create`, `update`, `delete` (cross-table re-parenting)
   - `WorkflowRunRepo::cancel`
-  - `ChatRepo::create_session`, `rename_session`, `archive_session`, `unarchive_session`, `delete_session`
+  - `ChatRepo::create_session`, `rename_session`, `archive_session`, `unarchive_session`, `delete_session`, `append_message`, `upsert_active_skill`
   - `WorkItemRepo::create`, `update`, `delete`, `claim`, `move_item`, `reorder`, `block`, `unblock`, `complete`, comment CRUD
 - `[next]` Coordinator-style writes that span aggregates or filesystem/cloud side effects can now migrate command signatures/adapters to `AppContext`. Keep the actual repo extraction scoped per command.
 
@@ -75,13 +75,14 @@ Per-file remaining `DbPool` references (lower = closer to fully migrated). Read-
 | `project_board_columns.rs` | 0 | `[done]` | Revision-checked CRUD uses `AppContext` db/cloud; transaction helpers remain local. |
 | `plugins.rs` | 0 | `[done]` | Entity DB reads + reload/secret reconciliation use `AppContext`; install/OAuth lifecycle still requires Tauri host. |
 | `project_workflows.rs` | 0 | `[done]` | Workflow CRUD/enable and tool read/scope paths use `ProjectWorkflowRepo`; cloud sync remains command/tool-side. |
-| `chat.rs` | 18 | `[blocked]` | Session CRUD now uses `ChatRepo`; remaining `DbPool` paths are streaming send/cancel/compact plus executor/worktree lifecycle helpers. |
+| `chat.rs` | 0 | `[done]` | Commands/adapters use `AppContext`; session CRUD/message append/skill activation/cancel polling use `ChatRepo`. Streaming internals still consume `AppContext.db` until executor/context APIs move to repos. |
 | `work_items.rs` | 0 | `[done]` | Commands, HTTP shim, executor tool, and workflow board node use `WorkItemRepo`; legacy `*_with_db` helpers removed. |
 
 ### B.4 `tenant_id` column
 
 - `[done]` Migration 31 adds `tenant_id TEXT NOT NULL DEFAULT 'local'` to all tables.
-- `[next]` Plumb tenant_id into trait methods (currently writes default to `'local'`). Touches every `INSERT` in `sqlite.rs` + adds a tenant context param to `Repos`. Design as `RepoCtx { tenant_id }` threaded through the facade.
+- `[wip]` `RepoCtx { tenant_id }` added; `SqliteRepos::new` defaults to `'local'`, `with_tenant`/`with_ctx` allow explicit context, and repo-owned `sqlite.rs` inserts now write `tenant_id` explicitly.
+- `[next]` Finish tenant scoping outside repo-owned SQLite inserts: raw executor/workflow/plugin inserts still rely on DB defaults, and read/update/delete filters still need tenant predicates before shared Postgres/RLS work.
 
 ### B.5 PostgreSQL backend (Phase C — unblocked)
 
