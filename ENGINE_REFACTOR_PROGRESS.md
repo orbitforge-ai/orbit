@@ -90,9 +90,13 @@ Per-file remaining `DbPool` references (lower = closer to fully migrated). Read-
 
 ### B.5 PostgreSQL backend (Phase C — unblocked)
 
-- `[next]` Implement `PgRepos` against the existing trait surface using `sqlx::PgPool`. Parallel-safe with B.3 work. Lives at `crates/orbit-engine/src/db/repos/postgres.rs`.
-- `[next]` RLS regression test: run every command twice with two tenants; assert no cross-leak.
-- `[blocked]` Online-migration story for shared multi-tenant Postgres. Comes after PgRepos boots.
+- `[done]` `PgRepos` implements the existing repo trait surface against `sqlx::PgPool`; all queries bind `RepoCtx.tenant_id`. Lives at `crates/orbit-engine/src/db/repos/postgres.rs`.
+- `[done]` RLS regression harness added at `crates/orbit-engine/tests/pg_repos_rls.rs`; run with `ORBIT_TEST_POSTGRES_URL=... cargo test -p orbit-engine --test pg_repos_rls -- --ignored`.
+- `[done]` B.5 verification sweep: `cargo fmt --check`, `git diff --check`, `cargo test -p orbit-engine --test pg_repos_rls --no-run`, `cargo check --workspace`, and `cargo build -p orbit-server` pass with the same pre-existing warnings listed in prior B.4 verification.
+
+Follow-on after B.5:
+
+- `[next]` Online-migration story for shared multi-tenant Postgres now that `PgRepos` boots.
 
 ### B.6 Sqlx swap on the SQLite path
 

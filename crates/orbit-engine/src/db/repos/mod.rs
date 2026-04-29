@@ -15,6 +15,7 @@
 //! access. Once nothing references `DbPool` directly, rusqlite/r2d2 are
 //! removed and `SqliteRepos` is rewritten on top of `sqlx::SqlitePool`.
 
+pub mod postgres;
 pub mod sqlite;
 
 use async_trait::async_trait;
