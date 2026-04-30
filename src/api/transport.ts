@@ -66,11 +66,12 @@ async function httpInvoke<T>(cmd: string, args?: object): Promise<T> {
 }
 
 function currentToken(): string | undefined {
+  if (DEV_TOKEN) return DEV_TOKEN;
   if (typeof window !== 'undefined') {
     const stored = window.localStorage?.getItem('orbit_access_token');
     if (stored) return stored;
   }
-  return DEV_TOKEN;
+  return undefined;
 }
 
 // ─── WebSocket listen ───────────────────────────────────────────────────────

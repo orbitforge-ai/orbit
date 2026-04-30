@@ -1,42 +1,46 @@
 [package]
-name = "orbit"
+name = "orbit-engine"
 version = "0.1.0"
-description = "Orbit – macOS automation platform"
-authors = ["orbitforge-ai"]
 edition = "2021"
-
-[lib]
-name = "orbit_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
-
-[build-dependencies]
-tauri-build = { version = "2", features = [] }
+description = "Orbit core engine: executor, scheduler, plugins, db, transport shim — independent of Tauri builder"
+publish = false
 
 [features]
-default = ["debug-mcp-bridge"]
-# Wraps the external `tauri-plugin-mcp-bridge` used by debugging agents.
-# Gated so release builds can opt out while keeping the dev debugging path intact.
-debug-mcp-bridge = ["dep:tauri-plugin-mcp-bridge"]
+default = []
+# Enables desktop-only providers and integrations (claude-cli, codex-cli).
+# Off by default so the standalone server crate can pull in `orbit-engine`
+# without those code paths.
+desktop = []
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "devtools"] }
-tauri-plugin-mcp-bridge = { version = "0.9.0", optional = true }
-tauri-plugin-opener = "2"
+# Tauri core types — engine still uses `tauri::AppHandle` (Option-wrapped in
+# AppContext) and `tauri::Emitter` from events/emitter.rs. This will be
+# refactored behind a trait in a later phase.
+tauri = { version = "2" }
+
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 semver = "1"
+jsonwebtoken = "9"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
-# Core engine — executor, scheduler, plugins, db, shim. Tauri-only
-# integrations stay in this crate. The `desktop` feature pulls in the
-# claude-cli / codex-cli LLM providers (cloud builds drop them).
-orbit-engine = { path = "../crates/orbit-engine", features = ["desktop"] }
+# Database
+#
+# Phase B.6 moves the local SQLite path onto SQLx. Runtime queries stay
+# string-based so local development and CI do not need an offline query cache.
+sqlx = { version = "0.8.6", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "sqlite",
+] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
 # Cloud sync — uuid for device identity
 uuid = { version = "1", features = ["v4"] }
+
 # Scheduling
 tokio-cron-scheduler = { version = "0.15.1", features = ["signal"] }
 
@@ -58,13 +62,10 @@ tower-http = { version = "0.5", default-features = false, features = ["cors"] }
 urlencoding = "2"
 
 # Embeds the production frontend bundle for release shim deployments.
-# Empty/absent dist/ at compile time is fine — embed just contributes zero
-# files and the static route falls through.
 rust-embed = { version = "8", features = ["mime-guess"] }
 which = "6"
 
-# Cross-platform pseudoterminal for the embedded terminal (TUI) — lets Orbit
-# run interactive CLIs (claude, codex, gemini, $SHELL) inside a chat panel.
+# Cross-platform pseudoterminal for the embedded terminal (TUI).
 portable-pty = "0.8"
 
 # Cron scheduling
@@ -82,9 +83,4 @@ sha2 = "0.10"
 walkdir = "2"
 
 # Logging
-tauri-plugin-log = "2"
 tracing = "0.1"
-tauri-plugin-dialog = "2"
-
-[dev-dependencies]
-tauri = { version = "2", features = ["test"] }

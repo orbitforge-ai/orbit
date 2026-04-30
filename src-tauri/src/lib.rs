@@ -1,17 +1,23 @@
-mod app_context;
-mod auth;
-mod commands;
-mod db;
-mod error;
-mod events;
-mod executor;
-mod memory_service;
-mod models;
-pub mod plugins;
-mod scheduler;
-mod shim;
-mod triggers;
-mod workflows;
+// Engine modules now live in the `orbit-engine` crate. Re-export them at
+// `crate::*` so existing `use crate::executor::…` paths inside command
+// handlers and the Tauri builder continue to resolve without a sweeping
+// rename.
+pub use orbit_engine::app_context;
+pub use orbit_engine::auth;
+pub use orbit_engine::commands;
+pub use orbit_engine::db;
+pub use orbit_engine::error;
+pub use orbit_engine::events;
+pub use orbit_engine::executor;
+pub use orbit_engine::memory_service;
+pub use orbit_engine::models;
+pub use orbit_engine::plugins;
+pub use orbit_engine::runtime_host;
+pub use orbit_engine::scheduler;
+pub use orbit_engine::shim;
+pub use orbit_engine::triggers;
+pub use orbit_engine::workflows;
+pub use orbit_engine::{data_dir, plugins_dir, RuntimeAppHandleState};
 
 use std::path::PathBuf;
 use tauri::menu::{Menu, MenuItem};
@@ -37,20 +43,8 @@ use tracing::info;
 use triggers::bindings::ProductionBindings;
 use triggers::dispatcher::Dispatcher;
 
-#[derive(Clone)]
-pub struct RuntimeAppHandleState(pub tauri::AppHandle);
-
-pub fn data_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".orbit")
-}
-
 fn log_dir() -> PathBuf {
     data_dir().join("logs")
-}
-
-pub fn plugins_dir() -> PathBuf {
-    plugins::plugins_dir()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -188,14 +182,21 @@ pub fn run() {
             // Reply-target registry used by the `message` tool to route a
             // trigger-spawned agent's reply back to the originating channel.
             app.manage(triggers::reply_registry::ReplyRegistry::new());
+            let runtime_host = runtime_host::tauri_host(app.handle().clone());
+            let repos: Arc<dyn db::repos::Repos> =
+                Arc::new(db::repos::sqlite::SqliteRepos::new(db_pool.clone()));
 
             // Trigger dispatcher — plugins emit inbound events via
             // `trigger.emit` on their per-plugin JSON-RPC socket. The
             // dispatcher must be installed on the core-api server *before*
             // the core-api sockets start accepting connections.
-            let dispatch_bindings = ProductionBindings::new(db_pool.clone(), app.handle().clone());
+            let dispatch_bindings = ProductionBindings::new_with_repos(
+                db_pool.clone(),
+                repos.clone(),
+                runtime_host.clone(),
+            );
             let dispatcher = Arc::new(Dispatcher::new(dispatch_bindings));
-            plugin_manager.core_api.set_dispatcher(dispatcher);
+            plugin_manager.set_core_api_dispatcher(dispatcher);
 
             plugin_manager.start_core_api_servers(db_pool.clone());
             plugins::oauth::spawn_loopback_listener(app.handle().clone(), plugin_manager.clone());
@@ -207,6 +208,7 @@ pub fn run() {
             // of the same managed state registered above.
             let app_ctx = app_context::AppContext::new(
                 db_pool.clone(),
+                repos.clone(),
                 app.state::<AuthState>().inner().clone(),
                 app.state::<CloudClientState>().inner().clone(),
                 app.state::<ActiveUser>().inner().clone(),
@@ -216,9 +218,13 @@ pub fn run() {
                 app.state::<PermissionRegistry>().inner().clone(),
                 app.state::<UserQuestionRegistry>().inner().clone(),
                 app.state::<BgProcessRegistry>().inner().clone(),
-                app.state::<executor::mcp_server::McpServerHandle>().inner().clone(),
-                plugin_manager,
-                app.state::<Option<memory_service::MemoryServiceState>>().inner().clone(),
+                app.state::<executor::mcp_server::McpServerHandle>()
+                    .inner()
+                    .clone(),
+                plugin_manager.clone(),
+                app.state::<Option<memory_service::MemoryServiceState>>()
+                    .inner()
+                    .clone(),
                 Some(app.handle().clone()),
             );
             let app_ctx_arc = std::sync::Arc::new(app_ctx.clone());
@@ -250,19 +256,21 @@ pub fn run() {
             // plugin. Runs in the background so startup is not blocked by
             // plugin subprocess spin-up.
             {
-                let handle = app.handle().clone();
-                let db = db_pool.clone();
+                let manager = plugin_manager.clone();
+                let repos = repos.clone();
                 tauri::async_runtime::spawn(async move {
-                    triggers::subscriptions::reconcile_all(&handle, &db).await;
+                    triggers::subscriptions::reconcile_all_for_manager_with_repos(&manager, repos)
+                        .await;
                 });
             }
 
             // Start execution engine (now takes tx clone for retry scheduling)
-            let engine = ExecutorEngine::new(
+            let engine = ExecutorEngine::new_with_repos(
                 db_pool.clone(),
+                repos.clone(),
                 executor_rx,
                 executor_tx.clone(),
-                app.handle().clone(),
+                runtime_host.clone(),
                 agent_semaphores,
                 session_registry.clone(),
                 permission_registry.clone(),
@@ -273,10 +281,11 @@ pub fn run() {
             tauri::async_runtime::spawn(async move { engine.run().await });
 
             // Start scheduler engine
-            let scheduler = SchedulerEngine::new(
+            let scheduler = SchedulerEngine::new_with_repos(
                 db_pool,
+                repos,
                 ExecutorTx(executor_tx),
-                app.handle().clone(),
+                runtime_host.clone(),
                 log_dir,
             );
             tauri::async_runtime::spawn(async move { scheduler.run().await });
