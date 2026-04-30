@@ -39,7 +39,7 @@ use crate::models::project_workflow::{
     CreateProjectWorkflow, ProjectWorkflow, RuleNode, UpdateProjectWorkflow, WorkflowEdge,
     WorkflowGraph, KNOWN_NODE_TYPES, RULE_OPERATORS,
 };
-use crate::models::run::{Run, RunSummary};
+use crate::models::run::{Run, RunState, RunSummary};
 use crate::models::schedule::{CreateSchedule, RecurringConfig, Schedule};
 use crate::models::task::{CreateTask, Task, UpdateTask};
 use crate::models::user::User;
@@ -1475,6 +1475,57 @@ impl RunRepo for SqliteRepos {
                 "UPDATE runs SET state = 'cancelled', finished_at = ?1 \
                  WHERE id = ?2 AND tenant_id = ?3 AND state IN ('pending', 'queued', 'running')",
                 params![now, run_id, tenant_id],
+            )
+            .err_str()?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn update_state(
+        &self,
+        run_id: &str,
+        state: &RunState,
+        exit_code: Option<i64>,
+        duration_ms: Option<i64>,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<(), String> {
+        let run_id = run_id.to_string();
+        let state = state.clone();
+        let metadata = metadata.map(|value| value.to_string());
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let finished_at = match state {
+                RunState::Success
+                | RunState::Failure
+                | RunState::TimedOut
+                | RunState::Cancelled => Some(now.clone()),
+                _ => None,
+            };
+            let started_at = match state {
+                RunState::Running => Some(now),
+                _ => None,
+            };
+            conn.execute(
+                "UPDATE runs SET
+                    state = ?1,
+                    exit_code = COALESCE(?2, exit_code),
+                    duration_ms = COALESCE(?3, duration_ms),
+                    started_at = COALESCE(?4, started_at),
+                    finished_at = COALESCE(?5, finished_at),
+                    metadata = COALESCE(?6, metadata)
+                 WHERE id = ?7 AND tenant_id = ?8",
+                params![
+                    state.as_str(),
+                    exit_code,
+                    duration_ms,
+                    started_at,
+                    finished_at,
+                    metadata,
+                    run_id,
+                    tenant_id,
+                ],
             )
             .err_str()?;
             Ok(())

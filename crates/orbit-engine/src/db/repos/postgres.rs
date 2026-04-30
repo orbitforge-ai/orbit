@@ -35,7 +35,7 @@ use crate::models::project_board_column::ProjectBoardColumn;
 use crate::models::project_workflow::{
     CreateProjectWorkflow, ProjectWorkflow, UpdateProjectWorkflow,
 };
-use crate::models::run::{Run, RunSummary};
+use crate::models::run::{Run, RunState, RunSummary};
 use crate::models::schedule::{CreateSchedule, RecurringConfig, Schedule};
 use crate::models::task::{CreateTask, Task, UpdateTask};
 use crate::models::user::User;
@@ -1518,6 +1518,50 @@ impl RunRepo for PgRepos {
              WHERE id = $2 AND tenant_id = $3 AND state IN ('pending','queued','running')",
         )
         .bind(now())
+        .bind(run_id)
+        .bind(self.tenant_id())
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn update_state(
+        &self,
+        run_id: &str,
+        state: &RunState,
+        exit_code: Option<i64>,
+        duration_ms: Option<i64>,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<(), String> {
+        let now = now();
+        let finished_at = match state {
+            RunState::Success | RunState::Failure | RunState::TimedOut | RunState::Cancelled => {
+                Some(now.clone())
+            }
+            _ => None,
+        };
+        let started_at = match state {
+            RunState::Running => Some(now),
+            _ => None,
+        };
+        let metadata = metadata.map(|value| json_string(&value)).transpose()?;
+        sqlx::query(
+            "UPDATE runs SET
+                state = $1,
+                exit_code = COALESCE($2, exit_code),
+                duration_ms = COALESCE($3, duration_ms),
+                started_at = COALESCE($4, started_at),
+                finished_at = COALESCE($5, finished_at),
+                metadata = COALESCE($6, metadata)
+             WHERE id = $7 AND tenant_id = $8",
+        )
+        .bind(state.as_str())
+        .bind(exit_code)
+        .bind(duration_ms)
+        .bind(started_at)
+        .bind(finished_at)
+        .bind(metadata)
         .bind(run_id)
         .bind(self.tenant_id())
         .execute(&self.pool)

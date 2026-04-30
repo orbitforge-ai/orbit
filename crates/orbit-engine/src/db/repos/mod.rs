@@ -36,7 +36,7 @@ use crate::models::project_board_column::ProjectBoardColumn;
 use crate::models::project_workflow::{
     CreateProjectWorkflow, ProjectWorkflow, UpdateProjectWorkflow,
 };
-use crate::models::run::{Run, RunSummary};
+use crate::models::run::{Run, RunState, RunSummary};
 use crate::models::schedule::{CreateSchedule, Schedule};
 use crate::models::task::{CreateTask, Task, UpdateTask};
 use crate::models::user::User;
@@ -198,10 +198,9 @@ pub struct RunListFilter {
     pub project_id: Option<String>,
 }
 
-/// Run aggregate. Read-only at the repo surface for now — write paths still
-/// live in `executor::engine` because they're entangled with process spawning,
-/// log file paths, and metadata mutation. Once the executor is decoupled,
-/// `start`/`finish`/`update_state` will land here too.
+/// Run aggregate. Process spawning and retry/bus orchestration still live in
+/// `executor::engine`, but state transitions and targeted run creation paths
+/// are moving here so backend selection stays explicit.
 #[async_trait]
 pub trait RunRepo: Send + Sync {
     async fn list(&self, filter: RunListFilter) -> Result<Vec<RunSummary>, String>;
@@ -215,6 +214,14 @@ pub trait RunRepo: Send + Sync {
     /// the run has already terminated. The actual process kill is handled by
     /// the executor — this just persists the state transition.
     async fn cancel(&self, run_id: &str) -> Result<(), String>;
+    async fn update_state(
+        &self,
+        run_id: &str,
+        state: &RunState,
+        exit_code: Option<i64>,
+        duration_ms: Option<i64>,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<(), String>;
     async fn create_scheduled_task_run(
         &self,
         run_id: &str,

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
 use tracing::{error, info, warn};
 
+use crate::db::repos::{sqlite::SqliteRepos, Repos};
 use crate::db::DbPool;
 use crate::events::emitter::{emit_bus_message_sent_to_host, emit_run_state_changed_to_host};
 use crate::executor::memory::MemoryClient;
@@ -80,7 +81,7 @@ impl ActiveRunRegistry {
     }
 
     /// Cancel all active runs for a given agent. Returns the run IDs that were cancelled.
-    pub async fn cancel_agent_runs(&self, agent_id: &str, db: &DbPool) -> Vec<String> {
+    pub async fn cancel_agent_runs(&self, agent_id: &str, repos: &dyn Repos) -> Vec<String> {
         let active = self.active_runs.lock().await;
         let run_ids: Vec<String> = active
             .get(agent_id)
@@ -95,10 +96,14 @@ impl ActiveRunRegistry {
         for run_id in &run_ids {
             if let Some(tx) = senders.remove(run_id) {
                 let _ = tx.send(());
-                // Mark as cancelled in DB immediately
-                let _ = mark_run_cancelled(db, run_id);
                 cancelled.push(run_id.clone());
             }
+        }
+        drop(senders);
+
+        // Mark as cancelled in DB immediately.
+        for run_id in &cancelled {
+            let _ = mark_run_cancelled(repos, run_id).await;
         }
 
         cancelled
@@ -286,6 +291,7 @@ impl UserQuestionRegistry {
 /// The background execution engine.
 pub struct ExecutorEngine {
     db: DbPool,
+    repos: Arc<dyn Repos>,
     rx: mpsc::UnboundedReceiver<RunRequest>,
     /// Clone of the sender so the engine can enqueue retry runs.
     tx: mpsc::UnboundedSender<RunRequest>,
@@ -315,8 +321,38 @@ impl ExecutorEngine {
         memory_client: Option<MemoryClient>,
         cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
     ) -> Self {
+        let repos: Arc<dyn Repos> = Arc::new(SqliteRepos::new(db.clone()));
+        Self::new_with_repos(
+            db,
+            repos,
+            rx,
+            tx,
+            host,
+            agent_semaphores,
+            session_registry,
+            permission_registry,
+            log_dir,
+            memory_client,
+            cloud_client,
+        )
+    }
+
+    pub fn new_with_repos(
+        db: DbPool,
+        repos: Arc<dyn Repos>,
+        rx: mpsc::UnboundedReceiver<RunRequest>,
+        tx: mpsc::UnboundedSender<RunRequest>,
+        host: RuntimeHostHandle,
+        agent_semaphores: AgentSemaphores,
+        session_registry: SessionExecutionRegistry,
+        permission_registry: PermissionRegistry,
+        log_dir: PathBuf,
+        memory_client: Option<MemoryClient>,
+        cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+    ) -> Self {
         Self {
             db,
+            repos,
             rx,
             tx,
             host,
@@ -347,6 +383,7 @@ impl ExecutorEngine {
                 .get_or_create(&agent_id, &self.db)
                 .await;
             let db = self.db.clone();
+            let repos = self.repos.clone();
             let host = self.host.clone();
             let log_dir = self.log_dir.clone();
             let registry = self.registry.clone();
@@ -369,6 +406,7 @@ impl ExecutorEngine {
                                 if let Err(e) = run_one(
                                     req.clone(),
                                     db.clone(),
+                                    repos.clone(),
                                     host.clone(),
                                     log_dir.clone(),
                                     cancel_rx,
@@ -404,7 +442,7 @@ impl ExecutorEngine {
                         }
                         Err(_) => {
                             warn!(run_id = req.run_id, "skipping run — agent at capacity");
-                            let _ = mark_run_skipped(&db, &req.run_id);
+                            let _ = mark_run_skipped(repos.as_ref(), &req.run_id).await;
                             emit_run_state_changed_to_host(
                                 host.as_ref(),
                                 &req.run_id,
@@ -416,7 +454,7 @@ impl ExecutorEngine {
                 }
                 "cancel_previous" => {
                     // Cancel currently active runs for this agent
-                    let cancelled = registry.cancel_agent_runs(&agent_id, &db).await;
+                    let cancelled = registry.cancel_agent_runs(&agent_id, repos.as_ref()).await;
                     for run_id in &cancelled {
                         emit_run_state_changed_to_host(
                             host.as_ref(),
@@ -438,6 +476,7 @@ impl ExecutorEngine {
                         if let Err(e) = run_one(
                             req.clone(),
                             db.clone(),
+                            repos.clone(),
                             host.clone(),
                             log_dir.clone(),
                             cancel_rx,
@@ -480,6 +519,7 @@ impl ExecutorEngine {
                         if let Err(e) = run_one(
                             req.clone(),
                             db.clone(),
+                            repos.clone(),
                             host.clone(),
                             log_dir.clone(),
                             cancel_rx,
@@ -521,6 +561,7 @@ impl ExecutorEngine {
 async fn run_one(
     req: RunRequest,
     db: DbPool,
+    repos: Arc<dyn Repos>,
     host: RuntimeHostHandle,
     log_dir: PathBuf,
     cancel: oneshot::Receiver<()>,
@@ -534,7 +575,15 @@ async fn run_one(
     let run_id = req.run_id.clone();
     let task = req.task;
 
-    update_run_state(&db, &run_id, &RunState::Running, None, None, None)?;
+    update_run_state(
+        repos.as_ref(),
+        &run_id,
+        &RunState::Running,
+        None,
+        None,
+        None,
+    )
+    .await?;
     emit_run_state_changed_to_host(
         host.as_ref(),
         &run_id,
@@ -674,13 +723,14 @@ async fn run_one(
             let next_state = transition(&RunState::Running, &event).unwrap_or(RunState::Failure);
 
             update_run_state(
-                &db,
+                repos.as_ref(),
                 &run_id,
                 &next_state,
-                Some(proc_result.exit_code),
+                Some(proc_result.exit_code as i64),
                 Some(proc_result.duration_ms),
                 None,
-            )?;
+            )
+            .await?;
 
             emit_run_state_changed_to_host(
                 host.as_ref(),
@@ -690,7 +740,15 @@ async fn run_one(
             );
         }
         Err(reason) if reason == "cancelled" => {
-            update_run_state(&db, &run_id, &RunState::Cancelled, Some(-1), None, None)?;
+            update_run_state(
+                repos.as_ref(),
+                &run_id,
+                &RunState::Cancelled,
+                Some(-1),
+                None,
+                None,
+            )
+            .await?;
             emit_run_state_changed_to_host(
                 host.as_ref(),
                 &run_id,
@@ -706,7 +764,15 @@ async fn run_one(
             };
 
             let metadata = serde_json::json!({ "error": reason });
-            update_run_state(&db, &run_id, &next_state, Some(-1), None, Some(metadata))?;
+            update_run_state(
+                repos.as_ref(),
+                &run_id,
+                &next_state,
+                Some(-1),
+                None,
+                Some(metadata),
+            )
+            .await?;
             emit_run_state_changed_to_host(
                 host.as_ref(),
                 &run_id,
@@ -821,82 +887,35 @@ async fn schedule_retry_if_needed(
     });
 }
 
-fn update_run_state(
-    db: &DbPool,
+async fn update_run_state(
+    repos: &dyn Repos,
     run_id: &str,
     state: &RunState,
-    exit_code: Option<i32>,
+    exit_code: Option<i64>,
     duration_ms: Option<i64>,
     metadata: Option<serde_json::Value>,
 ) -> Result<(), String> {
-    let conn = db.get().map_err(|e| e.to_string())?;
-    let now = chrono::Utc::now().to_rfc3339();
-
-    let finished_at = match state {
-        RunState::Success | RunState::Failure | RunState::TimedOut | RunState::Cancelled => {
-            Some(now.clone())
-        }
-        _ => None,
-    };
-
-    let started_at = match state {
-        RunState::Running => Some(now.clone()),
-        _ => None,
-    };
-
-    conn.execute(
-        "UPDATE runs SET
-            state = ?1,
-            exit_code = COALESCE(?2, exit_code),
-            duration_ms = COALESCE(?3, duration_ms),
-            started_at = COALESCE(?4, started_at),
-            finished_at = COALESCE(?5, finished_at),
-            metadata = COALESCE(?6, metadata)
-         WHERE id = ?7
-           AND tenant_id = COALESCE((SELECT tenant_id FROM runs WHERE id = ?7), 'local')",
-        rusqlite::params![
-            state.as_str(),
-            exit_code,
-            duration_ms,
-            started_at,
-            finished_at,
-            metadata.map(|m| m.to_string()),
-            run_id
-        ],
-    )
-    .map_err(|e| e.to_string())?;
-
-    Ok(())
+    repos
+        .runs()
+        .update_state(run_id, state, exit_code, duration_ms, metadata)
+        .await
 }
 
-fn mark_run_skipped(db: &DbPool, run_id: &str) -> Result<(), String> {
-    let conn = db.get().map_err(|e| e.to_string())?;
-    let now = chrono::Utc::now().to_rfc3339();
-    let metadata = serde_json::json!({ "skip_reason": "agent at capacity" }).to_string();
-    conn.execute(
-        "UPDATE runs
-            SET state = 'cancelled', finished_at = ?1, metadata = ?2
-          WHERE id = ?3
-            AND tenant_id = COALESCE((SELECT tenant_id FROM runs WHERE id = ?3), 'local')",
-        rusqlite::params![now, metadata, run_id],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+async fn mark_run_skipped(repos: &dyn Repos, run_id: &str) -> Result<(), String> {
+    repos
+        .runs()
+        .update_state(
+            run_id,
+            &RunState::Cancelled,
+            None,
+            None,
+            Some(serde_json::json!({ "skip_reason": "agent at capacity" })),
+        )
+        .await
 }
 
-fn mark_run_cancelled(db: &DbPool, run_id: &str) -> Result<(), String> {
-    let conn = db.get().map_err(|e| e.to_string())?;
-    let now = chrono::Utc::now().to_rfc3339();
-    conn.execute(
-        "UPDATE runs
-          SET state = 'cancelled', finished_at = ?1
-        WHERE id = ?2
-          AND tenant_id = COALESCE((SELECT tenant_id FROM runs WHERE id = ?2), 'local')
-          AND state IN ('pending', 'running', 'queued')",
-        rusqlite::params![now, run_id],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+async fn mark_run_cancelled(repos: &dyn Repos, run_id: &str) -> Result<(), String> {
+    repos.runs().cancel(run_id).await
 }
 
 fn update_agent_heartbeat(db: &DbPool, agent_id: &str) {
