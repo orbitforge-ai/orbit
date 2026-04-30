@@ -239,6 +239,21 @@ pub fn emit_agent_llm_chunk(app: &tauri::AppHandle, run_id: &str, delta: &str, i
     crate::shim::ws::broadcast("agent:llm_chunk", &payload);
 }
 
+pub fn emit_agent_llm_chunk_to_host(
+    host: &dyn RuntimeHost,
+    run_id: &str,
+    delta: &str,
+    iteration: u32,
+) {
+    let payload = AgentLlmChunkPayload {
+        run_id: run_id.to_string(),
+        delta: delta.to_string(),
+        iteration,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    emit_serialized(host, "agent:llm_chunk", &payload);
+}
+
 pub fn emit_agent_iteration(
     app: &tauri::AppHandle,
     run_id: &str,
@@ -261,6 +276,27 @@ pub fn emit_agent_iteration(
         warn!("failed to emit agent:iteration: {}", e);
     }
     crate::shim::ws::broadcast("agent:iteration", &payload);
+}
+
+pub fn emit_agent_iteration_to_host(
+    host: &dyn RuntimeHost,
+    run_id: &str,
+    iteration: u32,
+    action: &str,
+    tool_name: Option<&str>,
+    total_tokens: u32,
+    finish_summary: Option<&str>,
+) {
+    let payload = AgentIterationPayload {
+        run_id: run_id.to_string(),
+        iteration,
+        action: action.to_string(),
+        tool_name: tool_name.map(|s| s.to_string()),
+        total_tokens,
+        finish_summary: finish_summary.map(|s| s.to_string()),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    emit_serialized(host, "agent:iteration", &payload);
 }
 
 pub fn emit_agent_content_block(
@@ -329,6 +365,29 @@ pub fn emit_chat_context_update(
         warn!("failed to emit chat:context_update: {}", e);
     }
     crate::shim::ws::broadcast("chat:context_update", &payload);
+}
+
+pub fn emit_chat_context_update_to_host(
+    host: &dyn RuntimeHost,
+    session_id: &str,
+    input_tokens: u32,
+    output_tokens: u32,
+    context_window_size: u32,
+) {
+    let usage_percent = if context_window_size > 0 {
+        (input_tokens as f64 / context_window_size as f64) * 100.0
+    } else {
+        0.0
+    };
+    let payload = ChatContextUpdatePayload {
+        session_id: session_id.to_string(),
+        input_tokens,
+        output_tokens,
+        context_window_size,
+        usage_percent,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    emit_serialized(host, "chat:context_update", &payload);
 }
 
 pub fn emit_sub_agents_spawned(

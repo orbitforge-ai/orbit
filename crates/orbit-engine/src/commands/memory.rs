@@ -6,6 +6,12 @@ use crate::memory_service::MemoryServiceState;
 fn client(
     state: &tauri::State<'_, Option<MemoryServiceState>>,
 ) -> Result<crate::executor::memory::MemoryClient, String> {
+    client_from_option(state.inner())
+}
+
+fn client_from_option(
+    state: &Option<MemoryServiceState>,
+) -> Result<crate::executor::memory::MemoryClient, String> {
     state
         .as_ref()
         .map(|s| s.client.clone())
@@ -93,10 +99,6 @@ pub async fn get_memory_health(
 
 mod http {
     use super::*;
-    use crate::auth::AuthState;
-    use crate::commands::users::ActiveUser;
-    use crate::memory_service::MemoryServiceState;
-    use tauri::Manager;
 
     #[derive(serde::Deserialize, Default)]
     #[serde(default, rename_all = "camelCase")]
@@ -132,71 +134,60 @@ mod http {
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("search_memories", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: SearchArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = search_memories(
-                a.query,
-                a.memory_type,
-                a.limit,
-                app.state::<Option<MemoryServiceState>>(),
-                app.state::<ActiveUser>(),
-                app.state::<AuthState>(),
-            )
-            .await?;
+            let c = client_from_option(&ctx.memory)?;
+            let user_id = resolve_user_id(&ctx.auth, &ctx.active_user).await;
+            let r = c
+                .search_memories(
+                    &a.query,
+                    &user_id,
+                    a.memory_type.as_deref(),
+                    a.limit.unwrap_or(10).min(50),
+                )
+                .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("list_memories", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: ListArgs = if args.is_null() {
                 Default::default()
             } else {
                 serde_json::from_value(args).map_err(|e| e.to_string())?
             };
-            let r = list_memories(
-                a.memory_type,
-                a.limit,
-                a.offset,
-                app.state::<Option<MemoryServiceState>>(),
-                app.state::<ActiveUser>(),
-                app.state::<AuthState>(),
-            )
-            .await?;
+            let c = client_from_option(&ctx.memory)?;
+            let user_id = resolve_user_id(&ctx.auth, &ctx.active_user).await;
+            let r = c
+                .list_memories(
+                    &user_id,
+                    a.memory_type.as_deref(),
+                    a.limit.unwrap_or(50).min(200),
+                    a.offset.unwrap_or(0),
+                )
+                .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("add_memory", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: AddArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = add_memory(
-                a.text,
-                a.memory_type,
-                app.state::<Option<MemoryServiceState>>(),
-                app.state::<ActiveUser>(),
-                app.state::<AuthState>(),
-            )
-            .await?;
+            let c = client_from_option(&ctx.memory)?;
+            let user_id = resolve_user_id(&ctx.auth, &ctx.active_user).await;
+            let r = c
+                .add_memory(&a.text, &a.memory_type, &user_id, None)
+                .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("delete_memory", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: DeleteArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            delete_memory(a.memory_id, app.state::<Option<MemoryServiceState>>()).await?;
+            let c = client_from_option(&ctx.memory)?;
+            c.delete_memory(&a.memory_id).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("update_memory", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: UpdateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = update_memory(
-                a.memory_id,
-                a.text,
-                app.state::<Option<MemoryServiceState>>(),
-            )
-            .await?;
+            let c = client_from_option(&ctx.memory)?;
+            let r = c.update_memory(&a.memory_id, Some(&a.text), None).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("get_memory_health", |ctx, _args| async move {
-            let app = ctx.app()?;
-            let r = get_memory_health(app.state::<Option<MemoryServiceState>>()).await?;
-            Ok(serde_json::Value::Bool(r))
+            Ok(serde_json::Value::Bool(ctx.memory.is_some()))
         });
     }
 }

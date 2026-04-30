@@ -150,6 +150,10 @@ struct ResolverSurfaceActionItem {
 
 #[tauri::command]
 pub fn list_plugins(manager: State<'_, Arc<PluginManager>>) -> Vec<PluginSummary> {
+    list_plugins_inner(&manager)
+}
+
+fn list_plugins_inner(manager: &PluginManager) -> Vec<PluginSummary> {
     manager.list()
 }
 
@@ -158,7 +162,11 @@ pub fn get_plugin_manifest(
     plugin_id: String,
     manager: State<'_, Arc<PluginManager>>,
 ) -> Option<PluginManifest> {
-    manager.manifest(&plugin_id)
+    get_plugin_manifest_inner(&plugin_id, &manager)
+}
+
+fn get_plugin_manifest_inner(plugin_id: &str, manager: &PluginManager) -> Option<PluginManifest> {
+    manager.manifest(plugin_id)
 }
 
 #[tauri::command]
@@ -168,6 +176,15 @@ pub async fn plugin_call_tool(
     args: Option<Value>,
     _app: tauri::AppHandle,
     manager: State<'_, Arc<PluginManager>>,
+) -> Result<Value, String> {
+    plugin_call_tool_inner(plugin_id, tool_name, args, manager.inner().clone()).await
+}
+
+async fn plugin_call_tool_inner(
+    plugin_id: String,
+    tool_name: String,
+    args: Option<Value>,
+    manager: Arc<PluginManager>,
 ) -> Result<Value, String> {
     let manifest = manager
         .manifest(&plugin_id)
@@ -200,7 +217,14 @@ pub async fn list_plugin_surface_actions(
     path: Option<String>,
     manager: State<'_, Arc<PluginManager>>,
 ) -> Result<Vec<PluginSurfaceAction>, String> {
-    let manager = manager.inner().clone();
+    list_plugin_surface_actions_inner(surface, path, manager.inner().clone()).await
+}
+
+async fn list_plugin_surface_actions_inner(
+    surface: SurfaceActionSurface,
+    path: Option<String>,
+    manager: Arc<PluginManager>,
+) -> Result<Vec<PluginSurfaceAction>, String> {
     let manifests: Vec<_> = manager
         .list()
         .into_iter()
@@ -261,6 +285,25 @@ pub async fn run_plugin_surface_action(
     surface: SurfaceActionSurface,
     target: SurfaceActionTarget,
     manager: State<'_, Arc<PluginManager>>,
+) -> Result<Value, String> {
+    run_plugin_surface_action_inner(
+        plugin_id,
+        tool_name,
+        args,
+        surface,
+        target,
+        manager.inner().clone(),
+    )
+    .await
+}
+
+async fn run_plugin_surface_action_inner(
+    plugin_id: String,
+    tool_name: String,
+    args: Option<Value>,
+    surface: SurfaceActionSurface,
+    target: SurfaceActionTarget,
+    manager: Arc<PluginManager>,
 ) -> Result<Value, String> {
     let manifest = manager
         .manifest(&plugin_id)
@@ -513,6 +556,10 @@ async fn delete_plugin_secret_inner(
 pub fn list_plugin_secret_status(
     manager: State<'_, Arc<PluginManager>>,
 ) -> Vec<PluginSecretStatus> {
+    list_plugin_secret_status_inner(&manager)
+}
+
+fn list_plugin_secret_status_inner(manager: &PluginManager) -> Vec<PluginSecretStatus> {
     let mut out = Vec::new();
     for manifest in manager.manifests() {
         if manifest.secrets.is_empty() {
@@ -552,8 +599,16 @@ pub fn get_plugin_runtime_log(
     tail_lines: Option<u32>,
     manager: State<'_, Arc<PluginManager>>,
 ) -> String {
+    get_plugin_runtime_log_inner(&plugin_id, tail_lines, &manager)
+}
+
+fn get_plugin_runtime_log_inner(
+    plugin_id: &str,
+    tail_lines: Option<u32>,
+    manager: &PluginManager,
+) -> String {
     let n = tail_lines.unwrap_or(200) as usize;
-    manager.runtime.log_tail(&plugin_id, n)
+    manager.runtime.log_tail(plugin_id, n)
 }
 
 #[tauri::command]
@@ -601,6 +656,10 @@ fn get_plugin_entity_inner(
 
 #[tauri::command]
 pub fn list_plugin_oauth_status(manager: State<'_, Arc<PluginManager>>) -> Vec<PluginOAuthStatus> {
+    list_plugin_oauth_status_inner(&manager)
+}
+
+fn list_plugin_oauth_status_inner(manager: &PluginManager) -> Vec<PluginOAuthStatus> {
     let mut out = Vec::new();
     for manifest in manager.manifests() {
         if manifest.oauth_providers.is_empty() {
@@ -1103,49 +1162,36 @@ mod http {
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("list_plugins", |ctx, _args| async move {
-            let app = ctx.app()?;
-            let r = list_plugins(app.state::<Arc<PluginManager>>());
+            let r = list_plugins_inner(&ctx.plugins);
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("get_plugin_manifest", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: PluginIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = get_plugin_manifest(a.plugin_id, app.state::<Arc<PluginManager>>());
+            let r = get_plugin_manifest_inner(&a.plugin_id, &ctx.plugins);
             Ok(match r {
                 Some(v) => serde_json::to_value(v).map_err(|e| e.to_string())?,
                 None => Value::Null,
             })
         });
         reg.register("plugin_call_tool", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: CallToolArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            plugin_call_tool(
-                a.plugin_id,
-                a.tool_name,
-                a.args,
-                app.clone(),
-                app.state::<Arc<PluginManager>>(),
-            )
-            .await
+            plugin_call_tool_inner(a.plugin_id, a.tool_name, a.args, ctx.plugins.clone()).await
         });
         reg.register("list_plugin_surface_actions", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: SurfaceListArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
             let r =
-                list_plugin_surface_actions(a.surface, a.path, app.state::<Arc<PluginManager>>())
-                    .await?;
+                list_plugin_surface_actions_inner(a.surface, a.path, ctx.plugins.clone()).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("run_plugin_surface_action", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: RunSurfaceArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            run_plugin_surface_action(
+            run_plugin_surface_action_inner(
                 a.plugin_id,
                 a.tool_name,
                 a.args,
                 a.surface,
                 a.target,
-                app.state::<Arc<PluginManager>>(),
+                ctx.plugins.clone(),
             )
             .await
         });
@@ -1228,12 +1274,11 @@ mod http {
             Ok(Value::Null)
         });
         reg.register("get_plugin_runtime_log", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: RuntimeLogArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            Ok(Value::String(get_plugin_runtime_log(
-                a.plugin_id,
+            Ok(Value::String(get_plugin_runtime_log_inner(
+                &a.plugin_id,
                 a.tail_lines,
-                app.state::<Arc<PluginManager>>(),
+                &ctx.plugins,
             )))
         });
         reg.register("list_plugin_entities", |ctx, args| async move {
@@ -1257,8 +1302,7 @@ mod http {
             })
         });
         reg.register("list_plugin_oauth_status", |ctx, _args| async move {
-            let app = ctx.app()?;
-            let r = list_plugin_oauth_status(app.state::<Arc<PluginManager>>());
+            let r = list_plugin_oauth_status_inner(&ctx.plugins);
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("set_plugin_secret", |ctx, args| async move {
@@ -1272,8 +1316,7 @@ mod http {
             Ok(Value::Null)
         });
         reg.register("list_plugin_secret_status", |ctx, _args| async move {
-            let app = ctx.app()?;
-            let r = list_plugin_secret_status(app.state::<Arc<PluginManager>>());
+            let r = list_plugin_secret_status_inner(&ctx.plugins);
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
     }

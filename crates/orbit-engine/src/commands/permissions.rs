@@ -8,6 +8,14 @@ pub async fn respond_to_permission(
     response: String,
     registry: tauri::State<'_, PermissionRegistry>,
 ) -> Result<(), String> {
+    respond_to_permission_impl(request_id, response, registry.inner()).await
+}
+
+async fn respond_to_permission_impl(
+    request_id: String,
+    response: String,
+    registry: &PermissionRegistry,
+) -> Result<(), String> {
     let permission_response = match response.as_str() {
         "allow" => PermissionResponse::Allow,
         "always_allow" => PermissionResponse::AlwaysAllow,
@@ -62,8 +70,6 @@ pub async fn delete_permission_rule(
 
 mod http {
     use super::*;
-    use crate::executor::permissions::PermissionRegistry;
-    use tauri::Manager;
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -88,10 +94,8 @@ mod http {
 
     pub fn register(reg: &mut crate::shim::registry::Registry) {
         reg.register("respond_to_permission", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: RespondArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            respond_to_permission(a.request_id, a.response, app.state::<PermissionRegistry>())
-                .await?;
+            respond_to_permission_impl(a.request_id, a.response, &ctx.permissions).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("save_permission_rule", |_ctx, args| async move {

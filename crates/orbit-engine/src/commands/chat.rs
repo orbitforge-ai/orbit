@@ -9,7 +9,8 @@ use crate::app_context::AppContext;
 use crate::auth::AuthMode;
 use crate::db::repos::{ChatRepo, ChatSessionListFilter};
 use crate::events::emitter::{
-    emit_agent_iteration, emit_agent_tool_result, emit_chat_context_update,
+    emit_agent_iteration, emit_agent_iteration_to_host, emit_agent_llm_chunk_to_host,
+    emit_agent_tool_result, emit_chat_context_update, emit_chat_context_update_to_host,
 };
 use crate::executor::agent_tools::ToolExecutionContext;
 use crate::executor::compaction;
@@ -199,6 +200,16 @@ pub async fn create_chat_session(
     project_id: Option<String>,
     app: tauri::State<'_, AppContext>,
 ) -> Result<ChatSession, String> {
+    create_chat_session_impl(agent_id, title, session_type, project_id, app.inner()).await
+}
+
+pub async fn create_chat_session_impl(
+    agent_id: String,
+    title: Option<String>,
+    session_type: Option<String>,
+    project_id: Option<String>,
+    app: &AppContext,
+) -> Result<ChatSession, String> {
     if let Some(pid) = project_id.as_deref() {
         if !app
             .repos
@@ -237,6 +248,14 @@ pub async fn rename_chat_session(
     title: String,
     app: tauri::State<'_, AppContext>,
 ) -> Result<(), String> {
+    rename_chat_session_impl(session_id, title, app.inner()).await
+}
+
+pub async fn rename_chat_session_impl(
+    session_id: String,
+    title: String,
+    app: &AppContext,
+) -> Result<(), String> {
     let cloud = app.cloud.clone();
     let now = app
         .repos
@@ -263,6 +282,10 @@ pub async fn archive_chat_session(
     session_id: String,
     app: tauri::State<'_, AppContext>,
 ) -> Result<(), String> {
+    archive_chat_session_impl(session_id, app.inner()).await
+}
+
+pub async fn archive_chat_session_impl(session_id: String, app: &AppContext) -> Result<(), String> {
     let cloud = app.cloud.clone();
     let now = app.repos.chat().archive_session(&session_id).await?;
     if let Some(client) = cloud.get() {
@@ -284,6 +307,13 @@ pub async fn archive_chat_session(
 pub async fn unarchive_chat_session(
     session_id: String,
     app: tauri::State<'_, AppContext>,
+) -> Result<(), String> {
+    unarchive_chat_session_impl(session_id, app.inner()).await
+}
+
+pub async fn unarchive_chat_session_impl(
+    session_id: String,
+    app: &AppContext,
 ) -> Result<(), String> {
     let cloud = app.cloud.clone();
     let now = app.repos.chat().unarchive_session(&session_id).await?;
@@ -307,6 +337,10 @@ pub async fn delete_chat_session(
     session_id: String,
     app: tauri::State<'_, AppContext>,
 ) -> Result<(), String> {
+    delete_chat_session_impl(session_id, app.inner()).await
+}
+
+pub async fn delete_chat_session_impl(session_id: String, app: &AppContext) -> Result<(), String> {
     let cloud = app.cloud.clone();
     app.repos.chat().delete_session(&session_id).await?;
     if let Some(client) = cloud.get() {
@@ -500,6 +534,16 @@ pub async fn send_chat_message(
     model_override: Option<ChatModelOverride>,
     app: tauri::AppHandle,
     ctx: tauri::State<'_, AppContext>,
+) -> Result<SendChatMessageResponse, String> {
+    send_chat_message_impl(session_id, content, model_override, Some(app), ctx.inner()).await
+}
+
+pub async fn send_chat_message_impl(
+    session_id: String,
+    content: String, // JSON-serialized Vec<ContentBlock>
+    model_override: Option<ChatModelOverride>,
+    app: Option<tauri::AppHandle>,
+    ctx: &AppContext,
 ) -> Result<SendChatMessageResponse, String> {
     let db = ctx.db.clone();
     let pool = db.0.clone();
@@ -704,30 +748,49 @@ pub async fn send_chat_message(
     let question_registry = ctx.user_questions.clone();
     let mem_client = ctx.memory.as_ref().map(|s| s.client.clone());
     let model_override_bg = model_override.clone();
-    let app_ctx = ctx.inner().clone();
+    let app_ctx = ctx.clone();
+    let runtime = ctx.runtime.clone();
 
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = do_llm_chat(
-            &agent_id,
-            history,
-            &stream_id,
-            &app,
-            app_ctx.clone(),
-            &sid_bg,
-            &etx,
-            chain_depth,
-            &session_type_bg,
-            semaphores,
-            registry,
-            perm_registry,
-            question_registry,
-            mem_client.as_ref(),
-            &memory_user_id,
-            model_override_bg.as_ref(),
-            cloud_client.clone(),
-        )
-        .await
-        {
+    tokio::spawn(async move {
+        let result = if let Some(app) = app {
+            do_llm_chat(
+                &agent_id,
+                history,
+                &stream_id,
+                &app,
+                app_ctx.clone(),
+                &sid_bg,
+                &etx,
+                chain_depth,
+                &session_type_bg,
+                semaphores,
+                registry,
+                perm_registry,
+                question_registry,
+                mem_client.as_ref(),
+                &memory_user_id,
+                model_override_bg.as_ref(),
+                cloud_client.clone(),
+            )
+            .await
+        } else {
+            do_llm_chat_headless(
+                &agent_id,
+                history,
+                &stream_id,
+                app_ctx.clone(),
+                &sid_bg,
+                &session_type_bg,
+                registry,
+                mem_client.as_ref(),
+                &memory_user_id,
+                model_override_bg.as_ref(),
+                cloud_client.clone(),
+            )
+            .await
+        };
+
+        if let Err(e) = result {
             warn!("Chat LLM error: {}", e);
             if e == "cancelled" {
                 let _ = session_agent::finalize_cancelled_session(&db_bg, &sid_bg).await;
@@ -752,7 +815,15 @@ pub async fn send_chat_message(
                 }
             }
             // Emit finished with error info
-            emit_agent_iteration(&app, &stream_id, 1, "finished", None, 0, None);
+            emit_agent_iteration_to_host(
+                runtime.as_ref(),
+                &stream_id,
+                1,
+                "finished",
+                None,
+                0,
+                None,
+            );
         }
     });
 
@@ -792,6 +863,172 @@ async fn save_chat_message(
     }
 
     Ok(())
+}
+
+/// Browser/server chat path. It uses the host event bus instead of a Tauri
+/// AppHandle, and intentionally runs without tool calls until the tool layer
+/// is moved behind `RuntimeHost` too.
+async fn do_llm_chat_headless(
+    agent_id: &str,
+    messages: Vec<ChatMessage>,
+    stream_id: &str,
+    app_ctx: AppContext,
+    session_id: &str,
+    session_type: &str,
+    session_registry: SessionExecutionRegistry,
+    memory_client: Option<&MemoryClient>,
+    memory_user_id: &str,
+    model_override: Option<&ChatModelOverride>,
+    cloud_client: Option<std::sync::Arc<crate::db::cloud::SupabaseClient>>,
+) -> Result<(), String> {
+    let db = &app_ctx.db;
+    let repos = app_ctx.repos.clone();
+    let host = app_ctx.runtime.clone();
+
+    let mut ws_config = workspace::load_agent_config(agent_id).unwrap_or_default();
+    if let Some(model_override) = model_override {
+        ws_config.provider = model_override.provider.clone();
+        ws_config.model = model_override.model.clone();
+    }
+
+    let provider_name = &ws_config.provider;
+    if llm_provider::CLI_PROVIDERS.contains(&provider_name.as_str()) {
+        return Err(format!(
+            "Browser/headless chat cannot use the '{}' CLI provider yet. Select an HTTP API provider such as 'anthropic' or 'minimax' for browser testing.",
+            provider_name
+        ));
+    }
+    let api_key = keychain::retrieve_api_key(provider_name)
+        .map_err(|_| format!("No API key for provider '{}'", provider_name))?;
+
+    if let Some(latest_user_blocks) = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| message.content.as_slice())
+    {
+        let activated_skill_names = activate_skill_mentions_for_session(
+            repos.chat(),
+            session_id,
+            agent_id,
+            &ws_config.disabled_skills,
+            latest_user_blocks,
+        )
+        .await?;
+        if !activated_skill_names.is_empty() {
+            info!(
+                session_id = session_id,
+                skills = ?activated_skill_names,
+                "activated skills from browser chat mentions"
+            );
+        }
+    }
+
+    let chat_project_id = repos.chat().session_meta(session_id).await?.project_id;
+    if let Some(pid) = chat_project_id.as_deref() {
+        if !repos.projects().agent_in_project(pid, agent_id).await? {
+            return Err(format!(
+                "agent '{}' is not a member of project '{}'",
+                agent_id, pid
+            ));
+        }
+        if let Err(e) = workspace::init_project_workspace(pid) {
+            warn!(project_id = pid, "failed to init project workspace: {}", e);
+        }
+    }
+
+    let pipeline = context::default_pipeline(memory_client.cloned());
+    let ctx_request = ContextRequest {
+        agent_id: agent_id.to_string(),
+        mode: ContextMode::Chat,
+        session_id: Some(session_id.to_string()),
+        session_type: Some(session_type.to_string()),
+        project_id: chat_project_id,
+        goal: None,
+        ws_config: ws_config.clone(),
+        allowed_tools: Vec::new(),
+        existing_messages: Some(messages),
+        is_sub_agent: false,
+        allow_sub_agents: false,
+        chain_depth: 0,
+        user_id: memory_user_id.to_string(),
+    };
+    let snapshot = pipeline.build(&ctx_request, db).await?;
+    let messages = snapshot.messages;
+    let context_window = snapshot.token_budget.context_window;
+
+    let config = LlmConfig {
+        model: ws_config.model.clone(),
+        max_tokens: MAX_TOKENS_PER_CALL,
+        temperature: Some(ws_config.temperature),
+        system_prompt: snapshot.system_prompt,
+    };
+    let provider = llm_provider::create_provider(provider_name, api_key)?;
+
+    if is_chat_session_cancelled(session_id, repos.chat(), &session_registry).await {
+        return Err("cancelled".to_string());
+    }
+
+    emit_agent_iteration_to_host(host.as_ref(), stream_id, 1, "llm_call", None, 0, None);
+    let response = provider.chat_complete(&config, &messages, &[]).await?;
+
+    if is_chat_session_cancelled(session_id, repos.chat(), &session_registry).await {
+        return Err("cancelled".to_string());
+    }
+
+    for block in &response.content {
+        if let ContentBlock::Text { text } = block {
+            emit_agent_llm_chunk_to_host(host.as_ref(), stream_id, text, 1);
+        }
+    }
+
+    save_chat_message(
+        repos.chat(),
+        session_id,
+        "assistant",
+        &response.content,
+        cloud_client,
+    )
+    .await?;
+
+    let total_tokens = response.usage.input_tokens + response.usage.output_tokens;
+    emit_agent_iteration_to_host(
+        host.as_ref(),
+        stream_id,
+        1,
+        "finished",
+        None,
+        total_tokens,
+        None,
+    );
+    emit_chat_context_update_to_host(
+        host.as_ref(),
+        session_id,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        context_window,
+    );
+
+    {
+        let pool = db.0.clone();
+        let sid = session_id.to_string();
+        let input_tokens = response.usage.input_tokens;
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(conn) = pool.get() {
+                let now = chrono::Utc::now().to_rfc3339();
+                let _ = conn.execute(
+                    "UPDATE chat_sessions
+                        SET last_input_tokens = ?1, updated_at = ?2
+                      WHERE id = ?3
+                        AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?3), 'local')",
+                    rusqlite::params![input_tokens, now, sid],
+                );
+            }
+        })
+        .await;
+    }
+
+    session_agent::update_session_execution_state(db, session_id, "success", None, None).await
 }
 
 /// Perform the actual LLM streaming call with tool execution support.
@@ -1337,6 +1574,10 @@ pub async fn cancel_agent_session(
     session_id: String,
     app: tauri::State<'_, AppContext>,
 ) -> Result<(), String> {
+    cancel_agent_session_impl(session_id, app.inner()).await
+}
+
+async fn cancel_agent_session_impl(session_id: String, app: &AppContext) -> Result<(), String> {
     // Reject cancels against session types that don't run an agent loop.
     let session_type = app.repos.chat().session_type(&session_id).await?;
     if !can_cancel_chat_session(&session_type) {
@@ -1366,6 +1607,14 @@ pub async fn respond_to_user_question(
     response: String,
     registry: tauri::State<'_, UserQuestionRegistry>,
 ) -> Result<(), String> {
+    respond_to_user_question_impl(request_id, response, registry.inner()).await
+}
+
+async fn respond_to_user_question_impl(
+    request_id: String,
+    response: String,
+    registry: &UserQuestionRegistry,
+) -> Result<(), String> {
     registry.resolve(&request_id, response).await
 }
 
@@ -1391,6 +1640,14 @@ pub async fn get_context_usage(
     session_id: String,
     model_override: Option<ChatModelOverride>,
     app: tauri::State<'_, AppContext>,
+) -> Result<ContextUsage, String> {
+    get_context_usage_impl(session_id, model_override, app.inner()).await
+}
+
+async fn get_context_usage_impl(
+    session_id: String,
+    model_override: Option<ChatModelOverride>,
+    app: &AppContext,
 ) -> Result<ContextUsage, String> {
     let usage = app.repos.chat().token_usage(&session_id).await?;
     let last_input_tokens = usage.last_input_tokens;
@@ -1572,40 +1829,35 @@ mod http {
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("create_chat_session", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: CreateSessionArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = create_chat_session(
+            let r = create_chat_session_impl(
                 a.agent_id,
                 a.title,
                 a.session_type,
                 a.project_id,
-                app.state::<AppContext>(),
+                ctx.as_ref(),
             )
             .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("rename_chat_session", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: RenameArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            rename_chat_session(a.session_id, a.title, app.state::<AppContext>()).await?;
+            rename_chat_session_impl(a.session_id, a.title, ctx.as_ref()).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("archive_chat_session", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: SessionIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            archive_chat_session(a.session_id, app.state::<AppContext>()).await?;
+            archive_chat_session_impl(a.session_id, ctx.as_ref()).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("unarchive_chat_session", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: SessionIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            unarchive_chat_session(a.session_id, app.state::<AppContext>()).await?;
+            unarchive_chat_session_impl(a.session_id, ctx.as_ref()).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("delete_chat_session", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: SessionIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            delete_chat_session(a.session_id, app.state::<AppContext>()).await?;
+            delete_chat_session_impl(a.session_id, ctx.as_ref()).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("get_chat_messages", |ctx, args| async move {
@@ -1629,27 +1881,20 @@ mod http {
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("send_chat_message", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: SendMessageArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = send_chat_message(
+            let r = send_chat_message_impl(
                 a.session_id,
                 a.content,
                 a.model_override,
-                app.clone(),
-                app.state::<AppContext>(),
+                ctx.runtime.app_handle(),
+                ctx.as_ref(),
             )
             .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("respond_to_user_question", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: RespondQuestionArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            respond_to_user_question(
-                a.request_id,
-                a.response,
-                app.state::<UserQuestionRegistry>(),
-            )
-            .await?;
+            respond_to_user_question_impl(a.request_id, a.response, &ctx.user_questions).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("get_session_execution", |ctx, args| async move {
@@ -1663,16 +1908,13 @@ mod http {
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("cancel_agent_session", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: SessionIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            cancel_agent_session(a.session_id, app.state::<AppContext>()).await?;
+            cancel_agent_session_impl(a.session_id, ctx.as_ref()).await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("get_context_usage", |ctx, args| async move {
-            let app = ctx.app()?;
             let a: ContextUsageArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let r = get_context_usage(a.session_id, a.model_override, app.state::<AppContext>())
-                .await?;
+            let r = get_context_usage_impl(a.session_id, a.model_override, ctx.as_ref()).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("compact_chat_session", |ctx, args| async move {
