@@ -16,7 +16,9 @@ const host = process.env.TAURI_DEV_HOST;
  * surface a clear 401 from the shim.
  */
 function devTokenPlugin(): Plugin {
-  const tokenPath = path.join(os.homedir(), '.orbit', 'dev_token');
+  // @ts-expect-error process is a nodejs global
+  const dataDir = process.env.ORBIT_DATA_DIR || path.join(os.homedir(), '.orbit');
+  const tokenPath = path.join(dataDir, 'dev_token');
   return {
     name: 'orbit-dev-token',
     config() {
