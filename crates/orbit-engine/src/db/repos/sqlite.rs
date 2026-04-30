@@ -1611,6 +1611,74 @@ impl RunRepo for SqliteRepos {
         .await
     }
 
+    async fn create_bus_run(
+        &self,
+        run_id: &str,
+        task: &Task,
+        from_agent_id: &str,
+        source_run_id: &str,
+        subscriber_agent_id: &str,
+        event_type: &str,
+        message_id: &str,
+        log_path: &str,
+        chain_depth: i64,
+        created_at: &str,
+    ) -> Result<(), String> {
+        let tenant_id = self.tenant_id();
+        let run_id = run_id.to_string();
+        let task_id = task.id.clone();
+        let from_agent_id = from_agent_id.to_string();
+        let source_run_id = source_run_id.to_string();
+        let subscriber_agent_id = subscriber_agent_id.to_string();
+        let event_type = event_type.to_string();
+        let message_id = message_id.to_string();
+        let log_path = log_path.to_string();
+        let created_at = created_at.to_string();
+        self.with_conn_mut(move |conn| {
+            let tx = conn.transaction().err_str()?;
+            tx.execute(
+                "INSERT INTO bus_messages (id, from_agent_id, from_run_id, to_agent_id, to_run_id,
+                                           kind, event_type, payload, status, created_at, tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, NULL, 'event', ?5, '{}', 'delivered', ?6, ?7)",
+                params![
+                    message_id,
+                    from_agent_id,
+                    source_run_id,
+                    subscriber_agent_id,
+                    event_type,
+                    created_at,
+                    tenant_id,
+                ],
+            )
+            .err_str()?;
+            tx.execute(
+                "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path,
+                                   retry_count, parent_run_id, metadata, chain_depth,
+                                   source_bus_message_id, created_at, tenant_id)
+                 VALUES (?1, ?2, NULL, ?3, 'pending', 'bus', ?4, 0, NULL, '{}', ?5, ?6, ?7, ?8)",
+                params![
+                    run_id,
+                    task_id,
+                    subscriber_agent_id,
+                    log_path,
+                    chain_depth,
+                    message_id,
+                    created_at,
+                    tenant_id,
+                ],
+            )
+            .err_str()?;
+            tx.execute(
+                "UPDATE bus_messages SET to_run_id = ?1 WHERE id = ?2 AND tenant_id = ?3",
+                params![run_id, message_id, tenant_id],
+            )
+            .err_str()?;
+            tx.commit().err_str()?;
+            Ok(())
+        })
+        .await
+    }
+
     async fn recover_orphans(
         &self,
         finished_at: &str,
@@ -2506,6 +2574,33 @@ impl BusSubscriptionRepo for SqliteRepos {
             let refs: Vec<&dyn rusqlite::ToSql> = bound.iter().map(|p| p.as_ref()).collect();
             let rows: Vec<BusSubscription> = stmt
                 .query_map(refs.as_slice(), map_bus_subscription_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
+    async fn list_enabled_for_source(
+        &self,
+        source_agent_id: &str,
+    ) -> Result<Vec<BusSubscription>, String> {
+        let source_agent_id = source_agent_id.to_string();
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {BUS_SUBSCRIPTION_COLUMNS} FROM bus_subscriptions
+                     WHERE source_agent_id = ?1 AND enabled = 1 AND tenant_id = ?2
+                     ORDER BY created_at DESC"
+                ))
+                .err_str()?;
+            let rows: Vec<BusSubscription> = stmt
+                .query_map(
+                    params![source_agent_id, tenant_id],
+                    map_bus_subscription_row,
+                )
                 .err_str()?
                 .filter_map(|r| r.ok())
                 .collect();

@@ -240,6 +240,19 @@ pub trait RunRepo: Send + Sync {
         parent_run_id: &str,
         created_at: &str,
     ) -> Result<(), String>;
+    async fn create_bus_run(
+        &self,
+        run_id: &str,
+        task: &Task,
+        from_agent_id: &str,
+        source_run_id: &str,
+        subscriber_agent_id: &str,
+        event_type: &str,
+        message_id: &str,
+        log_path: &str,
+        chain_depth: i64,
+        created_at: &str,
+    ) -> Result<(), String>;
     async fn recover_orphans(
         &self,
         finished_at: &str,
@@ -509,6 +522,10 @@ pub trait BusMessageRepo: Send + Sync {
 #[async_trait]
 pub trait BusSubscriptionRepo: Send + Sync {
     async fn list(&self, agent_id: Option<String>) -> Result<Vec<BusSubscription>, String>;
+    async fn list_enabled_for_source(
+        &self,
+        source_agent_id: &str,
+    ) -> Result<Vec<BusSubscription>, String>;
     async fn create(&self, payload: CreateBusSubscription) -> Result<BusSubscription, String>;
     async fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), String>;
     async fn delete(&self, id: &str) -> Result<(), String>;

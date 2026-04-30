@@ -1627,6 +1627,68 @@ impl RunRepo for PgRepos {
         Ok(())
     }
 
+    async fn create_bus_run(
+        &self,
+        run_id: &str,
+        task: &Task,
+        from_agent_id: &str,
+        source_run_id: &str,
+        subscriber_agent_id: &str,
+        event_type: &str,
+        message_id: &str,
+        log_path: &str,
+        chain_depth: i64,
+        created_at: &str,
+    ) -> Result<(), String> {
+        let tenant_id = self.tenant_id();
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+
+        sqlx::query(
+            "INSERT INTO bus_messages (id, from_agent_id, from_run_id, to_agent_id, to_run_id,
+                                       kind, event_type, payload, status, created_at, tenant_id)
+             VALUES ($1,$2,$3,$4,NULL,'event',$5,'{}','delivered',$6,$7)",
+        )
+        .bind(message_id)
+        .bind(from_agent_id)
+        .bind(source_run_id)
+        .bind(subscriber_agent_id)
+        .bind(event_type)
+        .bind(created_at)
+        .bind(&tenant_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+
+        sqlx::query(
+            "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path,
+                               retry_count, parent_run_id, metadata, chain_depth,
+                               source_bus_message_id, created_at, tenant_id)
+             VALUES ($1,$2,NULL,$3,'pending','bus',$4,0,NULL,'{}',$5,$6,$7,$8)",
+        )
+        .bind(run_id)
+        .bind(&task.id)
+        .bind(subscriber_agent_id)
+        .bind(log_path)
+        .bind(chain_depth)
+        .bind(message_id)
+        .bind(created_at)
+        .bind(&tenant_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+
+        sqlx::query("UPDATE bus_messages SET to_run_id = $1 WHERE id = $2 AND tenant_id = $3")
+            .bind(run_id)
+            .bind(message_id)
+            .bind(&tenant_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+
+        tx.commit().await.map_err(db_err)?;
+        Ok(())
+    }
+
     async fn recover_orphans(
         &self,
         finished_at: &str,
@@ -1999,6 +2061,26 @@ impl BusSubscriptionRepo for PgRepos {
             .await
             .map_err(db_err)?
         };
+        rows.iter()
+            .map(map_bus_subscription_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_err)
+    }
+
+    async fn list_enabled_for_source(
+        &self,
+        source_agent_id: &str,
+    ) -> Result<Vec<BusSubscription>, String> {
+        let rows = sqlx::query(&format!(
+            "SELECT {BUS_SUBSCRIPTION_COLUMNS} FROM bus_subscriptions
+             WHERE source_agent_id = $1 AND enabled = true AND tenant_id = $2
+             ORDER BY created_at DESC"
+        ))
+        .bind(source_agent_id)
+        .bind(self.tenant_id())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
         rows.iter()
             .map(map_bus_subscription_row)
             .collect::<Result<Vec<_>, _>>()

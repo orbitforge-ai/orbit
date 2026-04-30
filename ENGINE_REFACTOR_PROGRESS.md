@@ -47,11 +47,11 @@ Status: `[done]` for the repo-backed command surface listed below. The original-
   - `ProjectWorkflowRepo::list_enabled_triggers`
   - `RunRepo::cancel`
   - `RunRepo::update_state`
-  - `RunRepo::create_scheduled_task_run`, `create_retry_run`, `recover_orphans`
+  - `RunRepo::create_scheduled_task_run`, `create_retry_run`, `create_bus_run`, `recover_orphans`
   - `ScheduleRepo::create`, `toggle`, `delete`, due/recompute listing, schedule advancement helpers
   - `TaskRepo::create`, `update`, `delete`
   - `UserRepo::create`
-  - `BusSubscriptionRepo::create`, `set_enabled`, `delete`
+  - `BusSubscriptionRepo::list_enabled_for_source`, `create`, `set_enabled`, `delete`
   - `ProjectBoardRepo::create`, `update`, `delete` (cross-table re-parenting)
   - `WorkflowRunRepo::cancel`
   - `WorkflowRunRepo::create_run`, `update_status`, `insert_step`, `finish_step`, `recover_orphans`
@@ -101,7 +101,7 @@ Per-file remaining direct `DbPool` command arguments are zero. Audit note: this 
 - `[done]` Phase C schema/runtime slice: consolidated Postgres migration lives under `crates/orbit-engine/src/db/migrations/postgres/`, creates the current tenant-bearing schema, forces RLS on every table, and grants the default-deny `application_role`.
 - `[done]` `orbit_server` selects `PgRepos` only when `ORBIT_DB_BACKEND=postgres`, uses `ORBIT_POSTGRES_URL` (or `DATABASE_URL` fallback after explicit opt-in), requires `ORBIT_TENANT_ID`, and requires `ORBIT_POSTGRES_MIGRATIONS_URL` when `ORBIT_APPLY_POSTGRES_MIGRATIONS=1`.
 - `[done]` Online migration story, PgBouncer/session-pool requirement, migration test harness command, and EXPLAIN baseline list are documented in `docs/ops/postgres-phase-c.md`.
-- `[partial]` Original Phase C is not fully complete: executor bus orchestration, plugin execution internals, trigger-to-agent execution handoff, remaining workflow node internals, and workspace internals still run through local SQLite engine state; Postgres currently covers repo-backed command surfaces, workflow run persistence, seen-items dedupe, scheduler state helpers, executor run state/retry transitions, trigger subscription reconciliation, trigger dispatch matching, and trigger-to-workflow execution handoff.
+- `[partial]` Original Phase C is not fully complete: plugin execution internals, trigger-to-agent execution handoff, remaining workflow node internals, and workspace internals still run through local SQLite engine state; Postgres currently covers repo-backed command surfaces, workflow run persistence, seen-items dedupe, scheduler state helpers, executor run state/retry/bus transitions, trigger subscription reconciliation, trigger dispatch matching, and trigger-to-workflow execution handoff.
 
 ### B.6 Sqlx swap on the SQLite path
 
@@ -118,9 +118,10 @@ Per-file remaining direct `DbPool` command arguments are zero. Audit note: this 
 - `[done]` Trigger subscription reconciler sub-slice: desired subscription computation now gets agent rows and enabled workflow triggers through repo traits. Agent `listen_bindings` remain local workspace config by design.
 - `[done]` Trigger dispatch matching sub-slice: inbound `trigger.emit` dispatch now awaits repo-backed agent/workflow matching before emitting workflow events or spawning desktop agent runs. Workflow execution handoff remains event-only.
 - `[done]` Trigger-to-workflow execution sub-slice: matched inbound workflow triggers now start `WorkflowOrchestrator` runs with the normalized trigger payload while preserving the existing `trigger:workflow` event signal.
-- `[done]` Executor run-state sub-slice: executor running/success/failure/timed-out/cancelled/skipped transitions now persist through `RunRepo::update_state`/`cancel` while retry creation and bus-triggered run creation remain local runtime paths.
+- `[done]` Executor run-state sub-slice: executor running/success/failure/timed-out/cancelled/skipped transitions now persist through `RunRepo::update_state`/`cancel` while retry and bus-triggered run creation moved in follow-on slices.
 - `[done]` Executor retry sub-slice: retry eligibility reads the prior run through `RunRepo::get`, and retry run rows are created through `RunRepo::create_retry_run`.
-- `[next]` Full Postgres engine path: move executor bus orchestration, plugins, trigger-to-agent execution handoff, remaining workflow node internals, scheduled task execution handoff, and workspace/session internals off direct local SQLite calls or define an explicit local-runtime boundary.
+- `[done]` Executor bus orchestration sub-slice: terminal run lookup, enabled subscription lookup, target task lookup, bus message creation, and bus-triggered run creation now flow through `RunRepo`, `TaskRepo`, and `BusSubscriptionRepo`.
+- `[next]` Full Postgres engine path: move plugins, trigger-to-agent execution handoff, remaining workflow node internals, scheduled task execution handoff, and workspace/session internals off direct local SQLite calls or define an explicit local-runtime boundary.
 - `[next]` Live RLS integration: run `ORBIT_TEST_POSTGRES_URL=... ORBIT_TEST_POSTGRES_APPLY_MIGRATIONS=1 cargo test -p orbit-engine --test pg_repos_rls -- --ignored --nocapture`.
 - `[next]` Local desktop smoke: verify Tauri desktop still boots, lists Projects, starts a chat/session, and can create/update local agents/projects/work items.
 - `[next]` Headless local smoke: boot `orbit-server` with only `ORBIT_DATA_DIR`, verify it uses SQLite, loads the UI, and lists Projects.
