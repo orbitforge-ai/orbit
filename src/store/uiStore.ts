@@ -82,6 +82,7 @@ interface UiStore {
   selectTask: (id: string | null) => void;
   editTask: (id: string) => void;
   selectAgent: (id: string) => void;
+  clearSelectedAgent: () => void;
   selectProject: (id: string | null) => void;
   openWorkflowEditor: (workflowId: string) => void;
   closeWorkflowEditor: () => void;
@@ -129,6 +130,18 @@ export const useUiStore = create<UiStore>((set) => ({
       localStorage.setItem('orbit:lastAgentId', id);
     } catch {}
     set({ selectedAgentId: id, screen: 'agents', settingsOpen: false });
+  },
+  clearSelectedAgent: () => {
+    try {
+      localStorage.setItem('orbit:lastScreen', 'agents');
+      localStorage.removeItem('orbit:lastAgentId');
+    } catch {}
+    set({
+      selectedAgentId: null,
+      pendingChatSessionId: null,
+      screen: 'agents',
+      settingsOpen: false,
+    });
   },
   openAgentChat: (agentId, sessionId = null) => {
     try {

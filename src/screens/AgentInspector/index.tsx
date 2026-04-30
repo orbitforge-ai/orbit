@@ -14,6 +14,7 @@ import {
   Save,
   Settings,
   Sparkles,
+  Trash2,
   X,
   Zap,
 } from 'lucide-react';
@@ -45,6 +46,8 @@ import {
 } from '../../lib/agentRoles';
 import { AgentRoleSelect } from './Header/AgentRoleSelect';
 import { WorkspacePathChip } from '../../components/WorkspacePathChip';
+import { confirm } from '../../lib/dialog';
+import { toast } from '../../store/toastStore';
 
 type ActivityItem =
   | { key: string; kind: 'session'; timestamp: number; session: ChatSession }
@@ -161,11 +164,18 @@ function NewAgentView() {
 
 function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) {
   const agent = agents.find((a) => a.id === agentId);
-  const { agentTab, setAgentTab, pendingChatSessionId, clearPendingChatSession, selectAgent } =
-    useUiStore();
+  const {
+    agentTab,
+    setAgentTab,
+    pendingChatSessionId,
+    clearPendingChatSession,
+    selectAgent,
+    clearSelectedAgent,
+  } = useUiStore();
   const [showRunDialog, setShowRunDialog] = useState(false);
   const [viewingRunId, setViewingRunId] = useState<string | null>(null);
   const [chatSidebarCollapsed, setChatSidebarCollapsed] = useState(false);
+  const [deletingAgent, setDeletingAgent] = useState(false);
   const queryClient = useQueryClient();
 
   const [dirtyTabs, setDirtyTabs] = useState<Record<string, boolean>>({});
@@ -259,6 +269,42 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
       handleOpenSession(run.chatSessionId);
     } else {
       setViewingRunId(run.id);
+    }
+  }
+
+  async function handleDeleteAgent() {
+    if (!agent || agentId === 'default' || deletingAgent) return;
+
+    const approved = await confirm(`Delete agent "${agent.name}"? This cannot be undone.`, {
+      title: 'Delete agent',
+      kind: 'warning',
+    });
+    if (!approved) return;
+
+    setDeletingAgent(true);
+    try {
+      await agentsApi.delete(agentId);
+      queryClient.setQueryData<Agent[]>(['agents'], (old = []) =>
+        old.filter((cachedAgent) => cachedAgent.id !== agentId)
+      );
+      queryClient.setQueryData<Record<string, string>>(['agent-role-ids'], (old = {}) => {
+        const next = { ...old };
+        delete next[agentId];
+        return next;
+      });
+      queryClient.removeQueries({ queryKey: ['agent-config', agentId] });
+      queryClient.removeQueries({ queryKey: ['chat-sessions', agentId] });
+      queryClient.removeQueries({ queryKey: ['runs', 'agent', agentId] });
+      queryClient.removeQueries({ queryKey: ['workspace', agentId] });
+      queryClient.removeQueries({ queryKey: ['sidebar-agent-workspace-path', agentId] });
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['active-runs'] });
+      clearSelectedAgent();
+      toast.success(`Deleted ${agent.name}`);
+    } catch (error) {
+      setDeletingAgent(false);
+      toast.error('Failed to delete agent', error);
     }
   }
 
@@ -478,6 +524,18 @@ function AgentDetail({ agentId, agents }: { agentId: string; agents: Agent[] }) 
             >
               <Play size={12} /> Run Agent
             </button>
+
+            {agentId !== 'default' && (
+              <button
+                onClick={handleDeleteAgent}
+                disabled={deletingAgent}
+                className="rounded-lg border border-red-400/30 bg-red-400/10 p-2 text-red-300 transition-colors hover:border-red-400/50 hover:bg-red-400/15 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-50"
+                title={deletingAgent ? 'Deleting agent' : 'Delete agent'}
+                aria-label={deletingAgent ? 'Deleting agent' : `Delete ${agent.name}`}
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
           </div>
         </div>
 
