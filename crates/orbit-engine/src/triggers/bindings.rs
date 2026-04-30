@@ -2,8 +2,8 @@
 //!
 //! Resolves which agents and workflows should fire for an inbound event by
 //! reading persisted state through repos plus per-agent `config.json`
-//! listen_bindings. The actual *execution* side still emits events for
-//! workflows while agent runs use the desktop runtime hook.
+//! listen_bindings. Workflow matches start the workflow orchestrator; agent
+//! matches use the desktop runtime hook.
 
 use std::sync::Arc;
 
@@ -16,22 +16,24 @@ use crate::executor::workspace;
 use crate::models::channel_binding::ChannelBinding;
 use crate::models::trigger_event::TriggerEventPayload;
 use crate::runtime_host::RuntimeHostHandle;
+use crate::workflows::WorkflowOrchestrator;
 
 use super::dispatcher::DispatchBindings;
 
 pub struct ProductionBindings {
+    db: DbPool,
     repos: Arc<dyn Repos>,
     host: RuntimeHostHandle,
 }
 
 impl ProductionBindings {
     pub fn new(db: DbPool, host: RuntimeHostHandle) -> Arc<Self> {
-        let repos: Arc<dyn Repos> = Arc::new(SqliteRepos::new(db));
-        Self::new_with_repos(repos, host)
+        let repos: Arc<dyn Repos> = Arc::new(SqliteRepos::new(db.clone()));
+        Self::new_with_repos(db, repos, host)
     }
 
-    pub fn new_with_repos(repos: Arc<dyn Repos>, host: RuntimeHostHandle) -> Arc<Self> {
-        Arc::new(Self { repos, host })
+    pub fn new_with_repos(db: DbPool, repos: Arc<dyn Repos>, host: RuntimeHostHandle) -> Arc<Self> {
+        Arc::new(Self { db, repos, host })
     }
 }
 
@@ -91,8 +93,8 @@ impl DispatchBindings for ProductionBindings {
     }
 
     fn run_workflow_from_event(&self, workflow_id: &str, event: &TriggerEventPayload) {
-        // Phase 1: surface as a Tauri event. The workflow orchestrator
-        // integration (`run_from_trigger_event`) lands in the next slice.
+        // Preserve the UI/event-log signal, then start the actual workflow
+        // run on the runtime orchestrator.
         self.host.emit_json(
             "trigger:workflow",
             json!({
@@ -100,10 +102,43 @@ impl DispatchBindings for ProductionBindings {
                 "event": event,
             }),
         );
+        let orchestrator = WorkflowOrchestrator::new_with_repos(
+            self.db.clone(),
+            self.repos.clone(),
+            self.host.clone(),
+        );
+        let workflow_id = workflow_id.to_string();
+        let workflow_id_for_task = workflow_id.clone();
+        let trigger_kind = event.kind.clone();
+        let trigger_kind_for_task = trigger_kind.clone();
+        let trigger_data = serde_json::to_value(event).unwrap_or_else(|_| json!({}));
+        tokio::spawn(async move {
+            match orchestrator
+                .start_run(
+                    workflow_id_for_task.clone(),
+                    &trigger_kind_for_task,
+                    trigger_data,
+                )
+                .await
+            {
+                Ok(run) => tracing::info!(
+                    run_id = run.id,
+                    workflow_id = workflow_id_for_task,
+                    trigger_kind = trigger_kind_for_task,
+                    "trigger dispatch → workflow run started"
+                ),
+                Err(error) => tracing::warn!(
+                    workflow_id = workflow_id_for_task,
+                    trigger_kind = trigger_kind_for_task,
+                    error = %error,
+                    "trigger dispatch → workflow run failed to start"
+                ),
+            }
+        });
         tracing::info!(
             workflow_id,
             event_id = %event.event_id,
-            "trigger dispatch → workflow (awaiting orchestrator wiring)"
+            "trigger dispatch → workflow"
         );
     }
 

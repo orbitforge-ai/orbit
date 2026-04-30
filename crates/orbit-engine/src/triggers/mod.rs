@@ -12,10 +12,9 @@
 //!   3. The dispatcher dedupes by `eventId` and fans out to matching
 //!      workflows and matching per-agent `listen_bindings`.
 //!
-//! The actual workflow/agent invocation is delegated to the orchestrator and
-//! agent runner respectively (see `DispatchBindings`). Those wirings land in
-//! follow-up slices; for now the dispatcher ships the fan-out + dedupe
-//! primitive and logs matched targets.
+//! Workflow invocation is delegated to the orchestrator and agent invocation
+//! to the agent runner (see `DispatchBindings`), keeping the dispatcher itself
+//! as the fan-out + dedupe primitive.
 
 pub mod bindings;
 pub mod channel_session;

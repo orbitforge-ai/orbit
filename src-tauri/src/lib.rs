@@ -190,8 +190,11 @@ pub fn run() {
             // `trigger.emit` on their per-plugin JSON-RPC socket. The
             // dispatcher must be installed on the core-api server *before*
             // the core-api sockets start accepting connections.
-            let dispatch_bindings =
-                ProductionBindings::new_with_repos(repos.clone(), runtime_host.clone());
+            let dispatch_bindings = ProductionBindings::new_with_repos(
+                db_pool.clone(),
+                repos.clone(),
+                runtime_host.clone(),
+            );
             let dispatcher = Arc::new(Dispatcher::new(dispatch_bindings));
             plugin_manager.set_core_api_dispatcher(dispatcher);
 
