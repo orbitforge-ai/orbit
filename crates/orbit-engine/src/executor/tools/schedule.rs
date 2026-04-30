@@ -770,6 +770,10 @@ async fn trigger_pulse_run(
         .executor_tx
         .as_ref()
         .ok_or("schedule: executor channel not available")?;
+    let repos = ctx
+        .repos
+        .as_ref()
+        .ok_or("schedule: repository facade not available")?;
     let pulse = get_pulse_config(db, &ctx.agent_id, project_id).await?;
     let task_id = pulse
         .task_id
@@ -779,38 +783,22 @@ async fn trigger_pulse_run(
     let task = load_owned_task(db, &ctx.agent_id, &task_id).await?.task;
     let run_id = Ulid::new().to_string();
     let now = chrono::Utc::now().to_rfc3339();
-    let pool = db.0.clone();
     let log_path = format!(
         "{}/logs/{}.log",
         crate::data_dir().to_string_lossy(),
         run_id
     );
 
-    let run_id_for_db = run_id.clone();
-    let schedule_id = pulse.schedule_id.clone();
-    let agent_id = ctx.agent_id.clone();
-    let project_id = task.project_id.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        conn.execute(
-            "INSERT INTO runs (
-                id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, metadata, project_id, created_at, tenant_id
-             ) VALUES (?1, ?2, ?3, ?4, 'pending', 'manual', ?5, 0, '{}', ?6, ?7, COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2), 'local'))",
-            rusqlite::params![
-                run_id_for_db,
-                task_id,
-                schedule_id,
-                agent_id,
-                log_path,
-                project_id,
-                now
-            ],
+    repos
+        .runs()
+        .create_manual_run(
+            &run_id,
+            &task,
+            pulse.schedule_id.as_deref(),
+            &log_path,
+            &now,
         )
-        .map_err(|e| e.to_string())?;
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+        .await?;
 
     executor_tx
         .send(RunRequest {

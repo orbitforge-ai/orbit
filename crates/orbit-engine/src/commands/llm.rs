@@ -7,7 +7,7 @@ use crate::executor::cli_common;
 use crate::executor::engine::RunRequest;
 use crate::executor::keychain;
 use crate::executor::llm_provider::is_cli_provider;
-use crate::models::task::Task;
+use crate::models::task::CreateTask;
 
 #[tauri::command]
 pub async fn set_api_key(
@@ -134,88 +134,38 @@ async fn trigger_agent_loop_inner(
     goal: String,
     app: &AppContext,
 ) -> Result<String, String> {
-    let pool = app.db.0.clone();
     let tx = app.executor_tx.0.clone();
 
-    let (task, run_id, _log_path) = tokio::task
-    ::spawn_blocking(
-      move || -> Result<(Task, String, String), String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
-        let now = chrono::Utc::now().to_rfc3339();
-        let task_id = Ulid::new().to_string();
-        let run_id = Ulid::new().to_string();
+    let task = app
+        .repos
+        .tasks()
+        .create(CreateTask {
+            name: format!("Agent loop: {}", &goal.chars().take(60).collect::<String>()),
+            description: Some(goal.clone()),
+            kind: "agent_loop".to_string(),
+            config: serde_json::json!({ "goal": goal }),
+            max_duration_seconds: Some(7200),
+            max_retries: Some(0),
+            retry_delay_seconds: Some(60),
+            concurrency_policy: Some("allow".to_string()),
+            tags: Some(Vec::new()),
+            agent_id: Some(agent_id),
+            project_id: None,
+        })
+        .await?;
 
-        let config = serde_json::json!({
-                "goal": goal,
-            });
+    let run_id = Ulid::new().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let log_path = format!(
+        "{}/.orbit/logs/{}.log",
+        std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
+        run_id
+    );
 
-        // Create ephemeral task
-        conn
-          .execute(
-            "INSERT INTO tasks (id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, enabled, created_at, updated_at, tenant_id)
-                 VALUES (?1, ?2, ?3, 'agent_loop', ?4, 7200, 0, 60, 'allow', '[]', ?5, 1, ?6, ?6, COALESCE((SELECT tenant_id FROM agents WHERE id = ?5), 'local'))",
-            rusqlite::params![
-              task_id,
-              format!("Agent loop: {}", &goal.chars().take(60).collect::<String>()),
-              Some(&goal),
-              config.to_string(),
-              agent_id,
-              now
-            ]
-          )
-          .map_err(|e| e.to_string())?;
-
-        let log_path = format!(
-          "{}/.orbit/logs/{}.log",
-          std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
-          run_id
-        );
-
-        // Create run record
-        conn
-          .execute(
-            "INSERT INTO runs (id, task_id, agent_id, state, trigger, log_path, retry_count, metadata, created_at, tenant_id)
-                 VALUES (?1, ?2, ?3, 'pending', 'manual', ?4, 0, '{}', ?5, COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2), 'local'))",
-            rusqlite::params![run_id, task_id, agent_id, log_path, now]
-          )
-          .map_err(|e| e.to_string())?;
-
-        // Load task back for the RunRequest
-        let task = conn
-          .query_row(
-            "SELECT id, name, description, kind, config, max_duration_seconds, max_retries, retry_delay_seconds, concurrency_policy, tags, agent_id, enabled, created_at, updated_at, project_id
-                     FROM tasks
-                    WHERE id = ?1
-                      AND tenant_id = COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local')",
-            rusqlite::params![task_id, agent_id],
-            |row| {
-              let tags_str: String = row.get(9)?;
-              let config_str: String = row.get(4)?;
-              Ok(Task {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                description: row.get(2)?,
-                kind: row.get(3)?,
-                config: serde_json::from_str(&config_str).unwrap_or_default(),
-                max_duration_seconds: row.get(5)?,
-                max_retries: row.get(6)?,
-                retry_delay_seconds: row.get(7)?,
-                concurrency_policy: row.get(8)?,
-                tags: serde_json::from_str(&tags_str).unwrap_or_default(),
-                agent_id: row.get(10)?,
-                enabled: row.get(11)?,
-                created_at: row.get(12)?,
-                updated_at: row.get(13)?,
-                project_id: row.get(14)?,
-              })
-            }
-          )
-          .map_err(|e| e.to_string())?;
-
-        Ok((task, run_id, log_path))
-      }
-    ).await
-    .map_err(|e| e.to_string())??;
+    app.repos
+        .runs()
+        .create_manual_run(&run_id, &task, None, &log_path, &now)
+        .await?;
 
     let run_id_clone = run_id.clone();
     tx.send(RunRequest {

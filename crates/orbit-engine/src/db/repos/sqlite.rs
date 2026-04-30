@@ -1569,6 +1569,45 @@ impl RunRepo for SqliteRepos {
         .await
     }
 
+    async fn create_manual_run(
+        &self,
+        run_id: &str,
+        task: &Task,
+        schedule_id: Option<&str>,
+        log_path: &str,
+        created_at: &str,
+    ) -> Result<(), String> {
+        let tenant_id = self.tenant_id();
+        let run_id = run_id.to_string();
+        let task_id = task.id.clone();
+        let agent_id = task.agent_id.clone();
+        let schedule_id = schedule_id.map(String::from);
+        let log_path = log_path.to_string();
+        let project_id = task.project_id.clone();
+        let created_at = created_at.to_string();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger,
+                                   log_path, retry_count, metadata, project_id, created_at,
+                                   tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, 'pending', 'manual', ?5, 0, '{}', ?6, ?7, ?8)",
+                params![
+                    run_id,
+                    task_id,
+                    schedule_id,
+                    agent_id,
+                    log_path,
+                    project_id,
+                    created_at,
+                    tenant_id,
+                ],
+            )
+            .err_str()?;
+            Ok(())
+        })
+        .await
+    }
+
     async fn create_retry_run(
         &self,
         run_id: &str,

@@ -90,101 +90,66 @@ pub async fn trigger_task(
 }
 
 async fn trigger_task_inner(task_id: String, app: &AppContext) -> Result<String, String> {
-    let pool = app.db.0.clone();
     let tx = app.executor_tx.0.clone();
 
-    tokio::task
-    ::spawn_blocking(move || {
-      let conn = pool.get().map_err(|e| e.to_string())?;
+    let mut task = app
+        .repos
+        .tasks()
+        .get(&task_id)
+        .await?
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if !task.enabled {
+        return Err(format!("task not enabled: {task_id}"));
+    }
 
-      let mut task = conn
-        .query_row(
-          "SELECT id, name, description, kind, config, max_duration_seconds, max_retries,
-                        retry_delay_seconds, concurrency_policy, tags, agent_id,
-                        enabled, created_at, updated_at, project_id
-                 FROM tasks
-                WHERE id = ?1
-                  AND enabled = 1
-                  AND tenant_id = COALESCE((SELECT tenant_id FROM tasks WHERE id = ?1), 'local')",
-          rusqlite::params![task_id],
-          |row| {
-            let cfg: String = row.get(4)?;
-            let tags: String = row.get(9)?;
-            Ok(Task {
-              id: row.get(0)?,
-              name: row.get(1)?,
-              description: row.get(2)?,
-              kind: row.get(3)?,
-              config: serde_json::from_str(&cfg).unwrap_or(serde_json::Value::Null),
-              max_duration_seconds: row.get(5)?,
-              max_retries: row.get(6)?,
-              retry_delay_seconds: row.get(7)?,
-              concurrency_policy: row.get(8)?,
-              tags: serde_json::from_str(&tags).unwrap_or_default(),
-              agent_id: row.get(10)?,
-              enabled: row.get::<_, bool>(11)?,
-              created_at: row.get(12)?,
-              updated_at: row.get(13)?,
-              project_id: row.get(14)?,
-            })
-          }
-        )
-        .map_err(|e| format!("task not found: {}", e))?;
-
-      // If the task belongs to a project, inject the project workspace as the default CWD
-      // for shell_command and script_file tasks that don't already have a working directory.
-      if let Some(ref project_id) = task.project_id.clone() {
+    // If the task belongs to a project, inject the project workspace as the default CWD
+    // for shell_command and script_file tasks that don't already have a working directory.
+    if let Some(ref project_id) = task.project_id.clone() {
         let project_cwd = workspace::project_workspace_dir(project_id)
-          .to_string_lossy()
-          .to_string();
+            .to_string_lossy()
+            .to_string();
         match task.kind.as_str() {
-          "shell_command" | "script_file" => {
-            if let Some(cfg_obj) = task.config.as_object_mut() {
-              if !cfg_obj.contains_key("workingDirectory")
-                || cfg_obj["workingDirectory"].is_null()
-              {
-                cfg_obj.insert(
-                  "workingDirectory".to_string(),
-                  serde_json::Value::String(project_cwd),
-                );
-              }
+            "shell_command" | "script_file" => {
+                if let Some(cfg_obj) = task.config.as_object_mut() {
+                    if !cfg_obj.contains_key("workingDirectory")
+                        || cfg_obj["workingDirectory"].is_null()
+                    {
+                        cfg_obj.insert(
+                            "workingDirectory".to_string(),
+                            serde_json::Value::String(project_cwd),
+                        );
+                    }
+                }
             }
-          }
-          _ => {}
+            _ => {}
         }
-      }
+    }
 
-      let run_id = Ulid::new().to_string();
-      let now = chrono::Utc::now().to_rfc3339();
-      let log_path = format!(
+    let run_id = Ulid::new().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let log_path = format!(
         "{}/.orbit/logs/{}.log",
         std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
         run_id
-      );
+    );
 
-      conn
-        .execute(
-          "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, metadata, project_id, created_at, tenant_id)
-             VALUES (?1, ?2, NULL, ?3, 'pending', 'manual', ?4, 0, '{}', ?5, ?6, COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2), 'local'))",
-          rusqlite::params![run_id, task_id, task.agent_id, log_path, task.project_id, now]
-        )
-        .map_err(|e| e.to_string())?;
+    app.repos
+        .runs()
+        .create_manual_run(&run_id, &task, None, &log_path, &now)
+        .await?;
 
-      tx
-        .send(RunRequest {
-          run_id: run_id.clone(),
-          task,
-          schedule_id: None,
-          _trigger: "manual".to_string(),
-          retry_count: 0,
-          _parent_run_id: None,
-          chain_depth: 0,
-        })
-        .map_err(|e| e.to_string())?;
+    tx.send(RunRequest {
+        run_id: run_id.clone(),
+        task,
+        schedule_id: None,
+        _trigger: "manual".to_string(),
+        retry_count: 0,
+        _parent_run_id: None,
+        chain_depth: 0,
+    })
+    .map_err(|e| e.to_string())?;
 
-      Ok(run_id)
-    }).await
-    .map_err(|e| e.to_string())?
+    Ok(run_id)
 }
 
 mod http {
@@ -250,8 +215,8 @@ mod http {
             cloud_delete!(cloud, "tasks", a.id);
             Ok(serde_json::Value::Null)
         });
-        // trigger_task inserts into `runs` and sends to the executor channel,
-        // so it still goes through the coordinator path rather than TaskRepo.
+        // trigger_task creates a pending run through `RunRepo` and then sends
+        // it to the executor channel, so it remains a coordinator path.
         reg.register("trigger_task", |ctx, args| async move {
             let a: TriggerArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
             let r = trigger_task_inner(a.task_id, &ctx).await?;

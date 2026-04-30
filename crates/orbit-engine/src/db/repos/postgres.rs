@@ -1596,6 +1596,34 @@ impl RunRepo for PgRepos {
         Ok(())
     }
 
+    async fn create_manual_run(
+        &self,
+        run_id: &str,
+        task: &Task,
+        schedule_id: Option<&str>,
+        log_path: &str,
+        created_at: &str,
+    ) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger,
+                               log_path, retry_count, metadata, project_id, created_at,
+                               tenant_id)
+             VALUES ($1,$2,$3,$4,'pending','manual',$5,0,'{}',$6,$7,$8)",
+        )
+        .bind(run_id)
+        .bind(&task.id)
+        .bind(schedule_id)
+        .bind(&task.agent_id)
+        .bind(log_path)
+        .bind(&task.project_id)
+        .bind(created_at)
+        .bind(self.tenant_id())
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
     async fn create_retry_run(
         &self,
         run_id: &str,
