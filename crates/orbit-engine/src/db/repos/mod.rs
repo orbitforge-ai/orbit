@@ -230,6 +230,16 @@ pub trait RunRepo: Send + Sync {
         log_path: &str,
         created_at: &str,
     ) -> Result<(), String>;
+    async fn create_retry_run(
+        &self,
+        run_id: &str,
+        task: &Task,
+        schedule_id: Option<&str>,
+        log_path: &str,
+        retry_count: i64,
+        parent_run_id: &str,
+        created_at: &str,
+    ) -> Result<(), String>;
     async fn recover_orphans(
         &self,
         finished_at: &str,

@@ -437,7 +437,8 @@ impl ExecutorEngine {
                                 )
                                 .await;
                                 // Schedule retry if needed
-                                schedule_retry_if_needed(req, &db, &tx, host.clone()).await;
+                                schedule_retry_if_needed(req, repos.as_ref(), &tx, host.clone())
+                                    .await;
                             });
                         }
                         Err(_) => {
@@ -505,7 +506,7 @@ impl ExecutorEngine {
                             host.as_ref(),
                         )
                         .await;
-                        schedule_retry_if_needed(req, &db, &tx, host.clone()).await;
+                        schedule_retry_if_needed(req, repos.as_ref(), &tx, host.clone()).await;
                     });
                 }
                 // "allow" | "queue" — natural semaphore behavior
@@ -548,7 +549,7 @@ impl ExecutorEngine {
                             host.as_ref(),
                         )
                         .await;
-                        schedule_retry_if_needed(req, &db, &tx, host.clone()).await;
+                        schedule_retry_if_needed(req, repos.as_ref(), &tx, host.clone()).await;
                     });
                 }
             }
@@ -792,28 +793,18 @@ async fn run_one(
 /// Schedule a retry run if the task has retries remaining.
 async fn schedule_retry_if_needed(
     req: RunRequest,
-    db: &DbPool,
+    repos: &dyn Repos,
     tx: &mpsc::UnboundedSender<RunRequest>,
     host: RuntimeHostHandle,
 ) {
-    let conn = match db.get() {
-        Ok(c) => c,
-        Err(_) => {
-            return;
-        }
-    };
-
     // Only retry if last run ended in failure
-    let state: Option<String> = conn
-        .query_row(
-            "SELECT state
-               FROM runs
-              WHERE id = ?1
-                AND tenant_id = COALESCE((SELECT tenant_id FROM runs WHERE id = ?1), 'local')",
-            rusqlite::params![req.run_id],
-            |row| row.get(0),
-        )
-        .ok();
+    let state = repos
+        .runs()
+        .get(&req.run_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|run| run.state);
 
     if state.as_deref() != Some("failure") {
         return;
@@ -845,23 +836,20 @@ async fn schedule_retry_if_needed(
         std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
         retry_run_id
     );
-
-    let result = conn.execute(
-    "INSERT INTO runs (id, task_id, schedule_id, agent_id, state, trigger, log_path, retry_count, parent_run_id, metadata, created_at, tenant_id)
-         VALUES (?1, ?2, ?3, ?4, 'pending', 'retry', ?5, ?6, ?7, '{}', ?8, COALESCE((SELECT tenant_id FROM tasks WHERE id = ?2), 'local'))",
-    rusqlite::params![
-      retry_run_id,
-      req.task.id,
-      req.schedule_id,
-      req.task.agent_id,
-      log_path,
-      req.retry_count + 1,
-      req.run_id,
-      now
-    ]
-  );
-
-    if let Err(e) = result {
+    let retry_count = req.retry_count + 1;
+    if let Err(e) = repos
+        .runs()
+        .create_retry_run(
+            &retry_run_id,
+            &req.task,
+            req.schedule_id.as_deref(),
+            &log_path,
+            retry_count,
+            &req.run_id,
+            &now,
+        )
+        .await
+    {
         error!("failed to create retry run record: {}", e);
         return;
     }
@@ -871,7 +859,7 @@ async fn schedule_retry_if_needed(
         task: req.task,
         schedule_id: req.schedule_id,
         _trigger: "retry".to_string(),
-        retry_count: req.retry_count + 1,
+        retry_count,
         _parent_run_id: Some(req.run_id),
         chain_depth: req.chain_depth,
     };
