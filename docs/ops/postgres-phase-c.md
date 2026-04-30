@@ -48,6 +48,31 @@ current per-tenant repo pool model. Phase D JWT work should move request-scoped
 traffic to transaction-local `SET LOCAL app.tenant_id = <jwt tenant>` once the
 shim carries an authenticated session into every repo call.
 
+## Shim Authentication
+
+`orbit-server` defaults to loopback dev-token auth:
+
+```sh
+cargo run -p orbit-server
+```
+
+Cloud/self-host deployments can opt into JWT auth:
+
+```sh
+export ORBIT_SHIM_AUTH_MODE=jwt
+export ORBIT_JWT_HS256_SECRET=...
+export ORBIT_JWT_ISSUER=orbit-control        # optional
+export ORBIT_JWT_AUDIENCE=orbit-engine       # optional
+export ORBIT_TENANT_ID=tenant_dev            # required for Postgres; optional tenant check for SQLite
+cargo run -p orbit-server
+```
+
+JWT claims must include `sub`, `tenant_id`, and `exp`. When
+`ORBIT_TENANT_ID` is set, the shim rejects tokens whose `tenant_id` does not
+match the configured tenant. This is a Phase D foundation: HS256 is enough for
+local control-plane integration and self-host smoke tests; production SaaS
+should move to JWKS-backed asymmetric verification before public launch.
+
 ## Phase C Boundary
 
 When `ORBIT_DB_BACKEND=postgres`, `orbit-server` wires the selected `PgRepos`

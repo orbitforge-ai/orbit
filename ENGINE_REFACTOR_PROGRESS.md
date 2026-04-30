@@ -153,3 +153,11 @@ Per-file remaining direct `DbPool` command arguments are zero. Audit note: this 
 - `cargo check --workspace` clean
 - `cargo build -p orbit-server` clean
 - `cargo test --workspace` not yet wired for repo regression — write the RLS cross-tenant test as part of B.5.
+
+---
+
+## D. Control plane / cloud auth foundation (Phase D)
+
+- `[done]` Shim JWT auth foundation: `ORBIT_SHIM_AUTH_MODE=jwt` enables HS256 bearer-token verification for HTTP and WebSocket shim traffic; tokens require `sub`, `tenant_id`, and `exp`, with optional issuer/audience validation and `ORBIT_TENANT_ID` tenant-match enforcement.
+- `[next]` Request-scoped tenant context: carry verified JWT claims through shim request handling and move Postgres tenant binding from per-pool `SET app.tenant_id` to transaction-local `SET LOCAL app.tenant_id`.
+- `[next]` Control-plane v0 service: issue short-lived access JWTs, expose tenant discovery, and add the first provision/resume endpoints.

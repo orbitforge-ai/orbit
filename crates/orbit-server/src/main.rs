@@ -35,7 +35,8 @@ use orbit_engine::executor::permissions::PermissionRegistry;
 use orbit_engine::plugins::PluginManager;
 use orbit_engine::runtime_host::headless_host;
 use orbit_engine::scheduler::SchedulerEngine;
-use orbit_engine::shim;
+use orbit_engine::shim::auth::{JwtConfig, JwtVerifier};
+use orbit_engine::shim::{self, auth::BindMode};
 use tokio::sync::mpsc;
 
 fn init_tracing() {
@@ -71,6 +72,16 @@ enum DbBackendConfig {
         database_url: String,
         tenant_id: String,
         migrations_url: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ShimAuthConfig {
+    LoopbackToken,
+    Jwt {
+        hs256_secret: String,
+        issuer: Option<String>,
+        audience: Option<String>,
     },
 }
 
@@ -141,6 +152,60 @@ fn db_backend_from(get: impl Fn(&str) -> Option<String>) -> Result<DbBackendConf
     }
 }
 
+fn shim_auth_config_from_env() -> Result<ShimAuthConfig> {
+    shim_auth_config_from(|key| std::env::var(key).ok())
+}
+
+fn shim_auth_config_from(get: impl Fn(&str) -> Option<String>) -> Result<ShimAuthConfig> {
+    let mode = non_empty_env(&get, "ORBIT_SHIM_AUTH_MODE")
+        .unwrap_or_else(|| "loopback".to_string())
+        .to_ascii_lowercase();
+    match mode.as_str() {
+        "loopback" | "loopback_token" | "dev" => Ok(ShimAuthConfig::LoopbackToken),
+        "jwt" => {
+            let hs256_secret = non_empty_env(&get, "ORBIT_JWT_HS256_SECRET").ok_or_else(|| {
+                anyhow::anyhow!("ORBIT_JWT_HS256_SECRET is required when ORBIT_SHIM_AUTH_MODE=jwt")
+            })?;
+            Ok(ShimAuthConfig::Jwt {
+                hs256_secret,
+                issuer: non_empty_env(&get, "ORBIT_JWT_ISSUER"),
+                audience: non_empty_env(&get, "ORBIT_JWT_AUDIENCE"),
+            })
+        }
+        other => Err(anyhow::anyhow!(
+            "unsupported ORBIT_SHIM_AUTH_MODE '{other}'; expected 'loopback' or 'jwt'"
+        )),
+    }
+}
+
+fn shim_bind_mode(
+    data_dir: &std::path::Path,
+    expected_tenant_id: Option<String>,
+) -> Result<BindMode> {
+    match shim_auth_config_from_env()? {
+        ShimAuthConfig::LoopbackToken => {
+            let dev_token_path = data_dir.join("dev_token");
+            BindMode::loopback_with_file(dev_token_path)
+                .map_err(|e| anyhow::anyhow!("shim token init failed: {e}"))
+        }
+        ShimAuthConfig::Jwt {
+            hs256_secret,
+            issuer,
+            audience,
+        } => {
+            let verifier = JwtVerifier::hs256(JwtConfig {
+                hs256_secret,
+                issuer,
+                audience,
+                expected_tenant_id,
+            })
+            .map_err(|e| anyhow::anyhow!("JWT verifier init failed: {e}"))?;
+            tracing::info!("using JWT shim authentication");
+            Ok(BindMode::Jwt { verifier })
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
@@ -181,7 +246,13 @@ async fn main() -> Result<()> {
 
     // Repository facade. Local SQLite is the default engine state; Postgres is
     // an explicit shared-runtime/cloud option for the repo-backed command surface.
-    let repos: Arc<dyn Repos> = match db_backend_from_env()? {
+    let db_backend = db_backend_from_env()?;
+    let expected_tenant_id = match &db_backend {
+        DbBackendConfig::Postgres { tenant_id, .. } => Some(tenant_id.clone()),
+        DbBackendConfig::Sqlite => non_empty_env(&|key| std::env::var(key).ok(), "ORBIT_TENANT_ID"),
+    };
+
+    let repos: Arc<dyn Repos> = match db_backend {
         DbBackendConfig::Sqlite => {
             tracing::info!("using local SQLite repository backend");
             Arc::new(SqliteRepos::new(db_pool.clone()))
@@ -231,9 +302,7 @@ async fn main() -> Result<()> {
     let ctx = Arc::new(ctx);
 
     // ── Shim ────────────────────────────────────────────────────────────────
-    let dev_token_path = data_dir.join("dev_token");
-    let mode = shim::auth::BindMode::loopback_with_file(dev_token_path)
-        .map_err(|e| anyhow::anyhow!("shim token init failed: {e}"))?;
+    let mode = shim_bind_mode(&data_dir, expected_tenant_id)?;
     let registry = shim::registry::build();
 
     let addr = shim::start(ctx.clone(), registry, mode, port)
@@ -279,7 +348,7 @@ async fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{db_backend_from, DbBackendConfig};
+    use super::{db_backend_from, shim_auth_config_from, DbBackendConfig, ShimAuthConfig};
 
     fn env(entries: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
         let entries = entries
@@ -355,5 +424,36 @@ mod tests {
         ]))
         .unwrap_err();
         assert!(err.to_string().contains("ORBIT_POSTGRES_MIGRATIONS_URL"));
+    }
+
+    #[test]
+    fn shim_auth_defaults_to_loopback() {
+        let config = shim_auth_config_from(env(&[])).unwrap();
+        assert_eq!(config, ShimAuthConfig::LoopbackToken);
+    }
+
+    #[test]
+    fn shim_auth_jwt_requires_secret() {
+        let err = shim_auth_config_from(env(&[("ORBIT_SHIM_AUTH_MODE", "jwt")])).unwrap_err();
+        assert!(err.to_string().contains("ORBIT_JWT_HS256_SECRET"));
+    }
+
+    #[test]
+    fn shim_auth_jwt_reads_optional_issuer_and_audience() {
+        let config = shim_auth_config_from(env(&[
+            ("ORBIT_SHIM_AUTH_MODE", "jwt"),
+            ("ORBIT_JWT_HS256_SECRET", "secret"),
+            ("ORBIT_JWT_ISSUER", "orbit-control"),
+            ("ORBIT_JWT_AUDIENCE", "orbit-engine"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            config,
+            ShimAuthConfig::Jwt {
+                hs256_secret: "secret".to_string(),
+                issuer: Some("orbit-control".to_string()),
+                audience: Some("orbit-engine".to_string()),
+            }
+        );
     }
 }
