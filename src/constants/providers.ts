@@ -1,6 +1,7 @@
 export const LLM_PROVIDERS = [
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'minimax', label: 'MiniMax' },
+  { value: 'vercel', label: 'Vercel AI Gateway' },
   { value: 'claude-cli', label: 'Claude CLI (local)' },
   { value: 'codex-cli', label: 'Codex CLI (local)' },
 ];
@@ -22,12 +23,14 @@ export const MODEL_OPTIONS: Record<string, { label: string; value: string }[]> =
     { label: 'MiniMax M2.5', value: 'MiniMax-M2.5' },
     { label: 'MiniMax M2.5 Highspeed', value: 'MiniMax-M2.5-highspeed' },
   ],
+  vercel: [{ label: 'OpenAI GPT-5.5', value: 'openai/gpt-5.5' }],
   'claude-cli': [
     { label: 'Claude Sonnet 4.6 (via CLI)', value: 'claude-sonnet-4-6' },
     { label: 'Claude Opus 4.7 (via CLI)', value: 'claude-opus-4-7' },
     { label: 'Claude Haiku 4.5 (via CLI)', value: 'claude-haiku-4-5-20251001' },
   ],
   'codex-cli': [
+    { label: 'GPT-5.5 (Codex CLI)', value: 'gpt-5.5' },
     { label: 'GPT-5.4 (Codex CLI)', value: 'gpt-5.4' },
     { label: 'GPT-5.4 mini (Codex CLI)', value: 'gpt-5.4-mini' },
     { label: 'GPT-5.3 Codex (Codex CLI)', value: 'gpt-5.3-codex' },
@@ -42,6 +45,7 @@ export const MODEL_OPTIONS: Record<string, { label: string; value: string }[]> =
 export const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
   anthropic: 'claude-sonnet-4-6',
   minimax: 'MiniMax-M2.7',
+  vercel: 'openai/gpt-5.5',
   'claude-cli': 'claude-sonnet-4-6',
   'codex-cli': 'gpt-5.4',
 };

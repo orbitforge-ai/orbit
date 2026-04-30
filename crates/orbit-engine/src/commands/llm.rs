@@ -7,6 +7,7 @@ use crate::executor::cli_common;
 use crate::executor::engine::RunRequest;
 use crate::executor::keychain;
 use crate::executor::llm_provider::is_cli_provider;
+use crate::executor::vercel::{self, VercelGatewayModelOption};
 use crate::models::task::CreateTask;
 
 #[tauri::command]
@@ -118,6 +119,14 @@ pub async fn get_provider_status(provider: String) -> Result<ProviderStatus, Str
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+pub async fn list_vercel_gateway_models() -> Result<Vec<VercelGatewayModelOption>, String> {
+    let api_key = tokio::task::spawn_blocking(|| keychain::retrieve_api_key("vercel").ok())
+        .await
+        .map_err(|e| e.to_string())?;
+    vercel::list_gateway_models(api_key).await
+}
+
 /// Trigger an autonomous agent loop run.
 /// Creates an ephemeral agent_loop task and dispatches it to the executor.
 #[tauri::command]
@@ -222,6 +231,10 @@ mod http {
         reg.register("get_provider_status", |_ctx, args| async move {
             let a: ProviderArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
             let r = get_provider_status(a.provider).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("list_vercel_gateway_models", |_ctx, _args| async move {
+            let r = list_vercel_gateway_models().await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("trigger_agent_loop", |ctx, args| async move {

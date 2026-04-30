@@ -10,9 +10,10 @@ import { projectsApi } from '../../api/projects';
 import { AgentWorkspaceConfig, Project, ProjectSummary } from '../../types';
 import { CollapsibleSection } from '../../components/CollapsibleSection';
 import { AgentIdentitySection } from './AgentIdentitySection';
-import { MODEL_OPTIONS, LLM_PROVIDERS, DEFAULT_MODEL_BY_PROVIDER } from '../../constants/providers';
+import { LLM_PROVIDERS } from '../../constants/providers';
 import { TOOL_CATEGORIES } from '../../constants/tools';
 import { useApiKeyStatus } from '../../hooks/useApiKeyStatus';
+import { defaultModelForProvider, useAllProviderModelOptions } from '../../hooks/useProviderModels';
 import { useUiStore } from '../../store/uiStore';
 import { useSettingsStore } from '../../store/settingsStore';
 
@@ -69,6 +70,7 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
   }, [loadedConfig]);
 
   const { data: hasKey = false } = useApiKeyStatus(config?.provider ?? '');
+  const providerModelOptions = useAllProviderModelOptions();
 
   async function handleSave() {
     if (!config) return;
@@ -105,7 +107,7 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
     return <div className="p-6 text-muted text-sm">Loading configuration...</div>;
   }
 
-  const models = MODEL_OPTIONS[config.provider] ?? [];
+  const models = providerModelOptions[config.provider] ?? [];
 
   return (
     <div className="p-6 space-y-6 h-full overflow-y-auto">
@@ -118,11 +120,13 @@ export const ConfigTab = forwardRef<{ triggerSave: () => void }, ConfigTabProps>
             <SimpleSelect
               value={config.provider}
               onValueChange={(value) => {
-                const newModels = MODEL_OPTIONS[value] ?? [];
+                const newModels = providerModelOptions[value] ?? [];
                 const currentModelValid = newModels.some((m) => m.value === config.model);
                 updateConfig({
                   provider: value,
-                  ...(!currentModelValid && { model: DEFAULT_MODEL_BY_PROVIDER[value] ?? newModels[0]?.value ?? config.model }),
+                  ...(!currentModelValid && {
+                    model: defaultModelForProvider(value, newModels) || config.model,
+                  }),
                 });
               }}
               className="bg-background px-3 py-2"

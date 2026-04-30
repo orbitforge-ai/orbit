@@ -6,7 +6,8 @@ import { ArrowDown, Box, Check, ChevronDown, FolderOpen, Loader2, Shield } from 
 import { chatApi } from '../../api/chat';
 import { workspaceApi } from '../../api/workspace';
 import { useUiStore } from '../../store/uiStore';
-import { DEFAULT_MODEL_BY_PROVIDER, MODEL_OPTIONS, LLM_PROVIDERS } from '../../constants/providers';
+import { LLM_PROVIDERS } from '../../constants/providers';
+import { defaultModelForProvider, useAllProviderModelOptions } from '../../hooks/useProviderModels';
 import { AgentIdentityConfig, ChatDraft, ChatModelOverride, ContentBlock } from '../../types';
 import { DisplayMessage, DisplayBlock } from '../../components/chat/types';
 import { chatMessagesToDisplay } from '../../components/chat/utils';
@@ -77,6 +78,7 @@ export function ChatPanel({
   const [modelPinned, setModelPinned] = useState(false);
   const [modelHoverState, setModelHoverState] = useState<{ x: number; y: number } | null>(null);
   const [queuedTurn, setQueuedTurn] = useState<QueuedTurn | null>(null);
+  const providerModelOptions = useAllProviderModelOptions();
 
   const prevScrollHeightRef = useRef(0);
   const prevScrollTopRef = useRef(0);
@@ -524,7 +526,14 @@ export function ChatPanel({
       resolvedOverride?.provider ?? agentConfig?.provider ?? null;
     const currentModelValue =
       resolvedOverride?.model ??
-      (agentConfig ? agentConfig.model : currentProviderValue ? DEFAULT_MODEL_BY_PROVIDER[currentProviderValue] : null);
+      (agentConfig
+        ? agentConfig.model
+        : currentProviderValue
+          ? defaultModelForProvider(
+              currentProviderValue,
+              providerModelOptions[currentProviderValue] ?? []
+            )
+          : null);
     if (!currentProviderValue || !currentModelValue) {
       return (
         <button
@@ -540,7 +549,7 @@ export function ChatPanel({
     }
 
     const currentProvider = LLM_PROVIDERS.find((provider) => provider.value === currentProviderValue);
-    const currentOption = (MODEL_OPTIONS[currentProviderValue] ?? []).find(
+    const currentOption = (providerModelOptions[currentProviderValue] ?? []).find(
       (option) => option.value === currentModelValue
     );
     const currentLabel = currentOption?.label ?? currentModelValue;
@@ -592,7 +601,7 @@ export function ChatPanel({
                     <p className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted">
                       {provider.label}
                     </p>
-                    {(MODEL_OPTIONS[provider.value] ?? []).map((option) => {
+                    {(providerModelOptions[provider.value] ?? []).map((option) => {
                       const active =
                         currentProviderValue === provider.value &&
                         currentModelValue === option.value;
@@ -658,7 +667,7 @@ export function ChatPanel({
         })()}
       </>
     );
-  }, [agentConfig, modelHoverState, modelPinned, selectedModelOverride, streaming]);
+  }, [agentConfig, modelHoverState, modelPinned, providerModelOptions, selectedModelOverride, streaming]);
 
   return (
     <div className="flex flex-col h-full">

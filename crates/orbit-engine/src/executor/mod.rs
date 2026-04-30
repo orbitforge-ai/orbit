@@ -35,4 +35,5 @@ pub mod session_worktree;
 pub mod skills;
 pub mod state_machine;
 pub mod tools;
+pub mod vercel;
 pub mod workspace;

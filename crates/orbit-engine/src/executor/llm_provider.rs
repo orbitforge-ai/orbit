@@ -16,6 +16,7 @@ use crate::executor::mcp_server::McpServerHandle;
 use crate::executor::mcp_server::McpSession;
 use crate::executor::minimax::MiniMaxProvider;
 use crate::executor::permissions::PermissionRegistry;
+use crate::executor::vercel::{self, VercelProvider};
 
 /// A provider name routes through a local CLI binary rather than an HTTP API.
 /// Central list so call sites don't duplicate the literal names.
@@ -253,9 +254,16 @@ pub fn model_context_window(provider_name: &str, model: &str) -> u32 {
                 200_000
             }
         },
+        "vercel" => vercel::cached_model_context_window(model).unwrap_or_else(|| {
+            warn!(
+                "Unknown Vercel Gateway model '{}' - falling back to 200k context window",
+                model
+            );
+            200_000
+        }),
         other => {
             warn!(
-                "Unknown provider '{}' for model '{}' — falling back to 200k context window",
+                "Unknown provider '{}' for model '{}' - falling back to 200k context window",
                 other, model
             );
             200_000
@@ -290,6 +298,7 @@ pub fn model_supports_images(provider_name: &str, model: &str) -> bool {
                 | "MiniMax-M2.1-highspeed"
                 | "MiniMax-M2"
         ),
+        "vercel" => vercel::cached_model_supports_images(model),
         // CLI providers: image support is disabled in v1 until end-to-end
         // verification through the MCP bridge is completed.
         "claude-cli" | "codex-cli" => false,
@@ -407,6 +416,7 @@ pub fn create_provider(
     match provider_name {
         "anthropic" => Ok(Box::new(AnthropicProvider::new(api_key))),
         "minimax" => Ok(Box::new(MiniMaxProvider::new(api_key))),
+        "vercel" => Ok(Box::new(VercelProvider::new(api_key))),
         // CLI providers: the bare factory returns a tool-less provider. Agent
         // call sites that need the Orbit tool catalog exposed to the CLI should
         // use `create_provider_with_mcp` (or construct the CLI provider
@@ -469,6 +479,7 @@ pub fn create_provider_with_mcp(
     match provider_name {
         "anthropic" => Ok(Box::new(AnthropicProvider::new(api_key))),
         "minimax" => Ok(Box::new(MiniMaxProvider::new(api_key))),
+        "vercel" => Ok(Box::new(VercelProvider::new(api_key))),
         #[cfg(feature = "desktop")]
         "claude-cli" => {
             let provider = match wiring {
@@ -503,8 +514,8 @@ pub fn create_provider_with_mcp(
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_text_response, model_context_window, model_supports_images, ContentBlock,
-        LlmResponse, StopReason, Usage,
+        create_provider, extract_text_response, model_context_window, model_supports_images,
+        ContentBlock, LlmResponse, StopReason, Usage,
     };
 
     #[test]
@@ -535,6 +546,12 @@ mod tests {
             model_context_window("unknown-provider", "unknown-model"),
             200_000
         );
+    }
+
+    #[test]
+    fn provider_factory_supports_vercel() {
+        assert!(create_provider("vercel", "test-key".to_string()).is_ok());
+        assert!(create_provider("not-a-provider", "test-key".to_string()).is_err());
     }
 
     #[test]

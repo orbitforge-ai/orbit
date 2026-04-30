@@ -7,6 +7,7 @@
     "dev": "vite",
     "dev:browser": "VITE_TRANSPORT_MODE=http vite --port 1430 --strictPort",
     "build": "tsc && vite build",
+    "server:dev": "cargo watch -w crates/orbit-engine -w crates/orbit-server -x \"run -p orbit-server\"",
     "preview": "vite preview",
     "clean": "cd src-tauri && cargo clean && cd -",
     "tauri": "tauri",

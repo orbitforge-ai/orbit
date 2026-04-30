@@ -7,6 +7,11 @@ export type ProviderStatus = {
   message: string | null;
 };
 
+export type ModelOption = {
+  label: string;
+  value: string;
+};
+
 export const llmApi = {
   setApiKey: (provider: string, key: string): Promise<void> =>
     invoke('set_api_key', { provider, key }),
@@ -17,6 +22,8 @@ export const llmApi = {
 
   getProviderStatus: (provider: string): Promise<ProviderStatus> =>
     invoke('get_provider_status', { provider }),
+
+  listVercelGatewayModels: (): Promise<ModelOption[]> => invoke('list_vercel_gateway_models'),
 
   triggerAgentLoop: (agentId: string, goal: string): Promise<string> =>
     invoke('trigger_agent_loop', { agentId, goal }),

@@ -392,6 +392,7 @@ pub fn run() {
             commands::llm::has_api_key,
             commands::llm::delete_api_key,
             commands::llm::get_provider_status,
+            commands::llm::list_vercel_gateway_models,
             commands::llm::trigger_agent_loop,
             // Bus
             commands::bus::list_bus_messages,
