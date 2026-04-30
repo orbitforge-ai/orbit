@@ -265,8 +265,9 @@ pub fn run() {
             }
 
             // Start execution engine (now takes tx clone for retry scheduling)
-            let engine = ExecutorEngine::new(
+            let engine = ExecutorEngine::new_with_repos(
                 db_pool.clone(),
+                repos.clone(),
                 executor_rx,
                 executor_tx.clone(),
                 runtime_host.clone(),
@@ -280,8 +281,9 @@ pub fn run() {
             tauri::async_runtime::spawn(async move { engine.run().await });
 
             // Start scheduler engine
-            let scheduler = SchedulerEngine::new(
+            let scheduler = SchedulerEngine::new_with_repos(
                 db_pool,
+                repos,
                 ExecutorTx(executor_tx),
                 runtime_host.clone(),
                 log_dir,

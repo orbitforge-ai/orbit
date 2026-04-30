@@ -1,8 +1,10 @@
 # Postgres Phase C Runbook
 
 Phase C adds an optional shared-runtime Postgres backend for repo-backed command
-paths. Local mode remains the default and primary runtime: desktop and the
-headless server use SQLite unless Postgres is explicitly selected.
+paths and the background executor/scheduler state transitions that already flow
+through the repo facade. Local mode remains the default and primary runtime:
+desktop and the headless server use SQLite unless Postgres is explicitly
+selected.
 
 ## Runtime Modes
 
@@ -46,6 +48,24 @@ current per-tenant repo pool model. Phase D JWT work should move request-scoped
 traffic to transaction-local `SET LOCAL app.tenant_id = <jwt tenant>` once the
 shim carries an authenticated session into every repo call.
 
+## Phase C Boundary
+
+When `ORBIT_DB_BACKEND=postgres`, `orbit-server` wires the selected `PgRepos`
+instance into `AppContext`, the executor, the scheduler, trigger matching, and
+workflow orchestration. That means repo-backed command surfaces, workflow run
+persistence, schedule polling/advancement, run state transitions, retry/bus
+run creation, trigger subscription reconciliation, trigger dispatch matching,
+and trigger-to-workflow execution use Postgres under the configured tenant.
+
+The remaining direct `DbPool` callers are an explicit local-runtime sidecar:
+workspace files/config, installed plugin metadata/runtime internals, chat and
+session loop internals, schedule-tool helper internals, and workflow node
+internals that operate on local process state. Those paths continue to use the
+SQLite database under `ORBIT_DATA_DIR`, even when the repo backend is Postgres.
+Do not treat that sidecar as shared multi-tenant data; migrate a path behind a
+repo/native backend trait before depending on it for cross-device or shared
+runtime behavior.
+
 ## Local Mode Contract
 
 - Desktop and default `orbit-server` mode use SQLite under the Orbit data dir.
@@ -54,9 +74,9 @@ shim carries an authenticated session into every repo call.
 - Cloud sync is optional and no-ops when no cloud client is configured.
 - Postgres is an accessory deployment backend and never runs unless
   `ORBIT_DB_BACKEND=postgres` is set.
-- The current Postgres path covers repo-backed command surfaces; executor,
-  scheduler, plugin, and workspace internals still use local SQLite engine
-  state until those subsystems are moved behind repo/native backend traits.
+- In Postgres mode, shared engine state is limited to paths that use the repo
+  facade. Local-runtime sidecar paths continue to use SQLite and are not part
+  of the shared Postgres contract.
 
 ## RLS Contract
 

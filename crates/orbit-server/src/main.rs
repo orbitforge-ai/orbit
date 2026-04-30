@@ -213,7 +213,7 @@ async fn main() -> Result<()> {
     // ── AppContext ──────────────────────────────────────────────────────────
     let ctx = AppContext::new(
         db_pool,
-        repos,
+        repos.clone(),
         auth_state,
         cloud_state,
         active_user,
@@ -243,8 +243,9 @@ async fn main() -> Result<()> {
     tracing::info!(%addr, "orbit-server bound");
 
     let log_dir = data_dir.join("logs");
-    let engine = ExecutorEngine::new(
+    let engine = ExecutorEngine::new_with_repos(
         ctx.db.clone(),
+        repos.clone(),
         executor_rx,
         ctx.executor_tx.0.clone(),
         runtime_host.clone(),
@@ -257,8 +258,9 @@ async fn main() -> Result<()> {
     );
     tokio::spawn(async move { engine.run().await });
 
-    let scheduler = SchedulerEngine::new(
+    let scheduler = SchedulerEngine::new_with_repos(
         ctx.db.clone(),
+        repos,
         ctx.executor_tx.clone(),
         runtime_host.clone(),
         log_dir,
