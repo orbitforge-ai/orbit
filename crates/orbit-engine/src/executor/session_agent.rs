@@ -239,6 +239,7 @@ pub async fn run_session_loop(
 ) -> Result<String, String> {
     let mut cumulative_input_tokens: u32 = 0;
     let mut cumulative_output_tokens: u32 = 0;
+    let mut latest_call_input_tokens: u32 = 0;
     let mut iteration: u32 = 0;
     let mut finish_summary: Option<String> = None;
     let mut auto_continue_count: u32 = 0;
@@ -266,6 +267,7 @@ pub async fn run_session_loop(
                 iteration,
             )
             .await?;
+            latest_call_input_tokens = response.usage.input_tokens;
             cumulative_input_tokens += response.usage.input_tokens;
             cumulative_output_tokens += response.usage.output_tokens;
             if let Some(summary) = extract_text_summary(&response.content) {
@@ -318,6 +320,7 @@ pub async fn run_session_loop(
             iteration,
         )
         .await?;
+        latest_call_input_tokens = response.usage.input_tokens;
         cumulative_input_tokens += response.usage.input_tokens;
         cumulative_output_tokens += response.usage.output_tokens;
 
@@ -534,12 +537,14 @@ pub async fn run_session_loop(
     emit_chat_context_update(
         app,
         session_id,
-        cumulative_input_tokens,
+        latest_call_input_tokens,
+        Some(cumulative_input_tokens),
         cumulative_output_tokens,
         context_window,
     );
     update_session_execution_state(db, session_id, "success", finish_summary.clone(), None).await?;
-    update_last_input_tokens(db, session_id, cumulative_input_tokens).await;
+    update_session_token_usage(db, session_id, latest_call_input_tokens, cumulative_input_tokens)
+        .await;
 
     // Post-session memory extraction
     if ws_config.memory_enabled {
@@ -564,7 +569,7 @@ pub async fn run_session_loop(
     }
 
     let threshold = compaction::effective_threshold(ws_config);
-    if compaction::should_compact(cumulative_input_tokens, context_window, threshold) {
+    if compaction::should_compact(latest_call_input_tokens, context_window, threshold) {
         // Circuit breaker: skip auto-compaction if too many recent failures
         let db_check = DbPool(db.0.clone());
         let circuit_open = compaction::is_circuit_open(&db_check, session_id).unwrap_or(false);
@@ -759,7 +764,12 @@ pub async fn finalize_cancelled_session(db: &DbPool, session_id: &str) -> String
     "cancelled".to_string()
 }
 
-async fn update_last_input_tokens(db: &DbPool, session_id: &str, input_tokens: u32) {
+async fn update_session_token_usage(
+    db: &DbPool,
+    session_id: &str,
+    prompt_input_tokens: u32,
+    turn_input_tokens: u32,
+) {
     let pool = db.0.clone();
     let session_id = session_id.to_string();
     let _ = tokio::task::spawn_blocking(move || {
@@ -767,10 +777,13 @@ async fn update_last_input_tokens(db: &DbPool, session_id: &str, input_tokens: u
             let now = chrono::Utc::now().to_rfc3339();
             let _ = conn.execute(
                 "UPDATE chat_sessions
-                    SET last_input_tokens = ?1, updated_at = ?2
-                  WHERE id = ?3
-                    AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?3), 'local')",
-                rusqlite::params![input_tokens, now, session_id],
+                    SET last_input_tokens = ?1,
+                        last_prompt_input_tokens = ?1,
+                        last_turn_input_tokens = ?2,
+                        updated_at = ?3
+                  WHERE id = ?4
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?4), 'local')",
+                rusqlite::params![prompt_input_tokens, turn_input_tokens, now, session_id],
             );
         }
     })

@@ -1005,6 +1005,7 @@ async fn do_llm_chat_headless(
         host.as_ref(),
         session_id,
         response.usage.input_tokens,
+        Some(response.usage.input_tokens),
         response.usage.output_tokens,
         context_window,
     );
@@ -1018,7 +1019,10 @@ async fn do_llm_chat_headless(
                 let now = chrono::Utc::now().to_rfc3339();
                 let _ = conn.execute(
                     "UPDATE chat_sessions
-                        SET last_input_tokens = ?1, updated_at = ?2
+                        SET last_input_tokens = ?1,
+                            last_prompt_input_tokens = ?1,
+                            last_turn_input_tokens = ?1,
+                            updated_at = ?2
                       WHERE id = ?3
                         AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?3), 'local')",
                     rusqlite::params![input_tokens, now, sid],
@@ -1180,6 +1184,7 @@ async fn do_llm_chat(
 
     let mut cumulative_input_tokens: u32 = 0;
     let mut cumulative_output_tokens: u32 = 0;
+    let mut latest_call_input_tokens: u32 = 0;
     let mut iteration: u32 = 0;
 
     loop {
@@ -1226,6 +1231,7 @@ async fn do_llm_chat(
         )
         .await?;
 
+        latest_call_input_tokens = response.usage.input_tokens;
         cumulative_input_tokens += response.usage.input_tokens;
         cumulative_output_tokens += response.usage.output_tokens;
 
@@ -1426,7 +1432,8 @@ async fn do_llm_chat(
     emit_chat_context_update(
         app,
         session_id,
-        cumulative_input_tokens,
+        latest_call_input_tokens,
+        Some(cumulative_input_tokens),
         cumulative_output_tokens,
         context_window,
     );
@@ -1435,16 +1442,20 @@ async fn do_llm_chat(
     {
         let pool = pool.clone();
         let sid = session_id.to_string();
-        let input_tokens = cumulative_input_tokens;
+        let prompt_input_tokens = latest_call_input_tokens;
+        let turn_input_tokens = cumulative_input_tokens;
         let _ = tokio::task::spawn_blocking(move || {
             if let Ok(conn) = pool.get() {
                 let now = chrono::Utc::now().to_rfc3339();
                 let _ = conn.execute(
           "UPDATE chat_sessions
-              SET last_input_tokens = ?1, updated_at = ?2
-            WHERE id = ?3
-              AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?3), 'local')",
-          rusqlite::params![input_tokens, now, sid],
+              SET last_input_tokens = ?1,
+                  last_prompt_input_tokens = ?1,
+                  last_turn_input_tokens = ?2,
+                  updated_at = ?3
+            WHERE id = ?4
+              AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?4), 'local')",
+          rusqlite::params![prompt_input_tokens, turn_input_tokens, now, sid],
         );
             }
         })
@@ -1468,7 +1479,7 @@ async fn do_llm_chat(
 
     // Check if compaction is needed
     let threshold = compaction::effective_threshold(&ws_config);
-    if compaction::should_compact(cumulative_input_tokens, context_window, threshold) {
+    if compaction::should_compact(latest_call_input_tokens, context_window, threshold) {
         // Circuit breaker: skip auto-compaction if too many recent failures
         let db_check = db.clone();
         let circuit_open = compaction::is_circuit_open(&db_check, session_id).unwrap_or(false);
@@ -1481,7 +1492,7 @@ async fn do_llm_chat(
             info!(
                 session_id = session_id,
                 "Context usage {:.1}% exceeds threshold {:.0}%, triggering compaction",
-                ((cumulative_input_tokens as f64) / (context_window as f64)) * 100.0,
+                ((latest_call_input_tokens as f64) / (context_window as f64)) * 100.0,
                 threshold * 100.0
             );
 
@@ -1624,6 +1635,7 @@ async fn respond_to_user_question_impl(
 #[serde(rename_all = "camelCase")]
 pub struct ContextUsage {
     pub input_tokens: u32,
+    pub turn_input_tokens: Option<u32>,
     pub context_window_size: u32,
     pub usage_percent: f64,
 }
@@ -1650,7 +1662,6 @@ async fn get_context_usage_impl(
     app: &AppContext,
 ) -> Result<ContextUsage, String> {
     let usage = app.repos.chat().token_usage(&session_id).await?;
-    let last_input_tokens = usage.last_input_tokens;
     let agent_id = usage.agent_id;
 
     let mut ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
@@ -1659,7 +1670,11 @@ async fn get_context_usage_impl(
         ws_config.model = model_override.model;
     }
     let context_window = compaction::effective_context_window(&ws_config);
-    let input_tokens = last_input_tokens.unwrap_or(0);
+    let (input_tokens, turn_input_tokens) = context_input_tokens_from_usage(
+        usage.last_input_tokens,
+        usage.last_prompt_input_tokens,
+        usage.last_turn_input_tokens,
+    );
 
     let usage_percent = if context_window > 0 {
         ((input_tokens as f64) / (context_window as f64)) * 100.0
@@ -1669,9 +1684,21 @@ async fn get_context_usage_impl(
 
     Ok(ContextUsage {
         input_tokens,
+        turn_input_tokens,
         context_window_size: context_window,
         usage_percent,
     })
+}
+
+fn context_input_tokens_from_usage(
+    last_input_tokens: Option<u32>,
+    last_prompt_input_tokens: Option<u32>,
+    last_turn_input_tokens: Option<u32>,
+) -> (u32, Option<u32>) {
+    (
+        last_prompt_input_tokens.or(last_input_tokens).unwrap_or(0),
+        last_turn_input_tokens.or(last_input_tokens),
+    )
 }
 
 // ─── Manual Compaction ──────────────────────────────────────────────────────
@@ -1940,8 +1967,8 @@ pub use http::register as register_http;
 #[cfg(test)]
 mod tests {
     use super::{
-        can_cancel_chat_session, sanitize_history_for_provider, ChatMessage, ContentBlock,
-        INTERRUPTED_TOOL_CALL_ERROR,
+        can_cancel_chat_session, context_input_tokens_from_usage, sanitize_history_for_provider,
+        ChatMessage, ContentBlock, INTERRUPTED_TOOL_CALL_ERROR,
     };
 
     #[test]
@@ -2032,5 +2059,18 @@ mod tests {
         assert!(can_cancel_chat_session("sub_agent"));
         assert!(can_cancel_chat_session("pulse"));
         assert!(!can_cancel_chat_session("unknown"));
+    }
+
+    #[test]
+    fn context_usage_prefers_prompt_tokens_and_falls_back_to_legacy_tokens() {
+        assert_eq!(
+            context_input_tokens_from_usage(Some(21_000), Some(7_000), Some(21_000)),
+            (7_000, Some(21_000))
+        );
+        assert_eq!(
+            context_input_tokens_from_usage(Some(9_000), None, None),
+            (9_000, Some(9_000))
+        );
+        assert_eq!(context_input_tokens_from_usage(None, None, None), (0, None));
     }
 }

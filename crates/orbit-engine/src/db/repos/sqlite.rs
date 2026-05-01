@@ -3204,12 +3204,16 @@ impl ChatRepo for SqliteRepos {
         let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
-                "SELECT last_input_tokens, agent_id FROM chat_sessions WHERE id = ?1 AND tenant_id = ?2",
+                "SELECT last_input_tokens, last_prompt_input_tokens, last_turn_input_tokens, agent_id
+                   FROM chat_sessions
+                  WHERE id = ?1 AND tenant_id = ?2",
                 params![session_id, tenant_id],
                 |row| {
                     Ok(ChatSessionTokenUsage {
                         last_input_tokens: row.get(0)?,
-                        agent_id: row.get(1)?,
+                        last_prompt_input_tokens: row.get(1)?,
+                        last_turn_input_tokens: row.get(2)?,
+                        agent_id: row.get(3)?,
                     })
                 },
             )

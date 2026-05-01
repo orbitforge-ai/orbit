@@ -271,6 +271,8 @@ async fn sync_compaction_to_cloud(
             &session_id,
             serde_json::json!({
                 "last_input_tokens": estimated_tokens,
+                "last_prompt_input_tokens": estimated_tokens,
+                "last_turn_input_tokens": estimated_tokens,
                 "updated_at": updated_at,
             }),
         )
@@ -581,7 +583,10 @@ async fn perform_compaction_inner(
         // Update session with estimated remaining tokens
         tx.execute(
             "UPDATE chat_sessions
-                SET last_input_tokens = ?1, updated_at = ?2
+                SET last_input_tokens = ?1,
+                    last_prompt_input_tokens = ?1,
+                    last_turn_input_tokens = ?1,
+                    updated_at = ?2
               WHERE id = ?3
                 AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?3), 'local')",
             rusqlite::params![est, now, sid],
@@ -623,7 +628,7 @@ async fn perform_compaction_inner(
         estimated_tokens
     );
 
-    emit_chat_context_update(app, session_id, estimated_tokens, 0, context_window);
+    emit_chat_context_update(app, session_id, estimated_tokens, Some(estimated_tokens), 0, context_window);
 
     // Post-compaction memory extraction from the summary
     if ws_config.memory_enabled {
@@ -682,7 +687,10 @@ async fn perform_compaction_inner(
 
 #[cfg(test)]
 mod tests {
-    use super::{select_messages_for_compaction, summary_created_at, summary_message_token_count};
+    use super::{
+        select_messages_for_compaction, should_compact, summary_created_at,
+        summary_message_token_count,
+    };
     use crate::executor::llm_provider::{ChatMessage, ContentBlock};
 
     fn text_message(text: &str) -> ChatMessage {
@@ -737,5 +745,16 @@ mod tests {
             (summary.len() as u32) / 4
         );
         assert_eq!(summary_message_token_count(summary, 17), 17);
+    }
+
+    #[test]
+    fn compaction_threshold_uses_prompt_sized_input() {
+        let context_window = 10_000;
+        let threshold = 0.65;
+        let current_prompt_tokens = 4_000;
+        let cumulative_turn_tokens = 12_000;
+
+        assert!(!should_compact(current_prompt_tokens, context_window, threshold));
+        assert!(should_compact(cumulative_turn_tokens, context_window, threshold));
     }
 }

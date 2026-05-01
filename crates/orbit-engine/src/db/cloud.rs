@@ -1196,7 +1196,8 @@ fn read_agent_conversations(
 fn read_chat_sessions(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<Value>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, agent_id, title, archived, last_input_tokens, session_type,
+            "SELECT id, agent_id, title, archived, last_input_tokens,
+                    last_prompt_input_tokens, last_turn_input_tokens, session_type,
                     parent_session_id, source_bus_message_id, chain_depth,
                     execution_state, finish_summary, terminal_error,
                     created_at, updated_at, project_id, allow_sub_agents,
@@ -1215,20 +1216,22 @@ fn read_chat_sessions(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<
                 "title": row.get::<_, String>(2)?,
                 "archived": archived,
                 "last_input_tokens": row.get::<_, Option<i64>>(4)?,
-                "session_type": row.get::<_, String>(5)?,
-                "parent_session_id": row.get::<_, Option<String>>(6)?,
-                "source_bus_message_id": row.get::<_, Option<String>>(7)?,
-                "chain_depth": row.get::<_, i64>(8)?,
-                "execution_state": row.get::<_, Option<String>>(9)?,
-                "finish_summary": row.get::<_, Option<String>>(10)?,
-                "terminal_error": row.get::<_, Option<String>>(11)?,
-                "created_at": row.get::<_, String>(12)?,
-                "updated_at": row.get::<_, String>(13)?,
-                "project_id": row.get::<_, Option<String>>(14)?,
-                "allow_sub_agents": row.get::<_, bool>(15)?,
-                "worktree_name": row.get::<_, Option<String>>(16)?,
-                "worktree_branch": row.get::<_, Option<String>>(17)?,
-                "worktree_path": row.get::<_, Option<String>>(18)?,
+                "last_prompt_input_tokens": row.get::<_, Option<i64>>(5)?,
+                "last_turn_input_tokens": row.get::<_, Option<i64>>(6)?,
+                "session_type": row.get::<_, String>(7)?,
+                "parent_session_id": row.get::<_, Option<String>>(8)?,
+                "source_bus_message_id": row.get::<_, Option<String>>(9)?,
+                "chain_depth": row.get::<_, i64>(10)?,
+                "execution_state": row.get::<_, Option<String>>(11)?,
+                "finish_summary": row.get::<_, Option<String>>(12)?,
+                "terminal_error": row.get::<_, Option<String>>(13)?,
+                "created_at": row.get::<_, String>(14)?,
+                "updated_at": row.get::<_, String>(15)?,
+                "project_id": row.get::<_, Option<String>>(16)?,
+                "allow_sub_agents": row.get::<_, bool>(17)?,
+                "worktree_name": row.get::<_, Option<String>>(18)?,
+                "worktree_branch": row.get::<_, Option<String>>(19)?,
+                "worktree_path": row.get::<_, Option<String>>(20)?,
             }))
         })
         .map_err(|e| e.to_string())?
@@ -1843,15 +1846,16 @@ fn write_chat_sessions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<
     for r in rows {
         conn.execute(
             "INSERT OR REPLACE INTO chat_sessions
-             (id, agent_id, title, archived, last_input_tokens, session_type,
+             (id, agent_id, title, archived, last_input_tokens,
+              last_prompt_input_tokens, last_turn_input_tokens, session_type,
               parent_session_id, source_bus_message_id, chain_depth,
               execution_state, finish_summary, terminal_error,
               created_at, updated_at, project_id, allow_sub_agents,
               worktree_name, worktree_branch, worktree_path, tenant_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,
-                     COALESCE((SELECT tenant_id FROM projects WHERE id = ?15),
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,
+                     COALESCE((SELECT tenant_id FROM projects WHERE id = ?17),
                               (SELECT tenant_id FROM agents WHERE id = ?2),
-                              (SELECT tenant_id FROM chat_sessions WHERE id = ?7),
+                              (SELECT tenant_id FROM chat_sessions WHERE id = ?9),
                               'local'))",
             rusqlite::params![
                 str_val(&r, "id"),
@@ -1859,6 +1863,12 @@ fn write_chat_sessions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<
                 str_val(&r, "title"),
                 bool_val(&r, "archived"),
                 r["last_input_tokens"].as_i64(),
+                r["last_prompt_input_tokens"]
+                    .as_i64()
+                    .or_else(|| r["last_input_tokens"].as_i64()),
+                r["last_turn_input_tokens"]
+                    .as_i64()
+                    .or_else(|| r["last_input_tokens"].as_i64()),
                 str_val(&r, "session_type"),
                 opt_str(&r, "parent_session_id"),
                 opt_str(&r, "source_bus_message_id"),

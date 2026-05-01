@@ -510,6 +510,33 @@ fn reaction_hint_for_text(text: &str) -> Option<(&'static str, &'static str)> {
     None
 }
 
+fn is_low_signal_reaction_text(text: &str) -> bool {
+    let tokens: Vec<String> = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter_map(|part| {
+            let token = part.trim().to_lowercase();
+            if token.is_empty() {
+                None
+            } else {
+                Some(token)
+            }
+        })
+        .collect();
+
+    if tokens.is_empty() || tokens.len() > 3 {
+        return false;
+    }
+
+    let greetings = ["hey", "hi", "hello", "yo", "sup", "howdy"];
+    if !greetings.contains(&tokens[0].as_str()) {
+        return false;
+    }
+
+    tokens[1..]
+        .iter()
+        .all(|token| matches!(token.as_str(), "there" | "you" | "ya" | "yall" | "all" | "jeeves"))
+}
+
 #[async_trait::async_trait]
 impl ContextStage for BasePromptStage {
     async fn process(
@@ -686,6 +713,16 @@ impl ContextStage for BasePromptStage {
             let mut tools = agent_tools::build_tool_definitions(&request.allowed_tools, None);
             if !request.allow_sub_agents {
                 tools.retain(|t| t.name != "spawn_sub_agents");
+            }
+            if request.mode != ContextMode::Chat
+                || request.session_type.as_deref() != Some("user_chat")
+                || request
+                    .existing_messages
+                    .as_deref()
+                    .and_then(latest_user_text)
+                    .is_some_and(is_low_signal_reaction_text)
+            {
+                tools.retain(|t| t.name != "react_to_message");
             }
             let has_task = tools.iter().any(|t| t.name == "task");
             let has_work_item = tools.iter().any(|t| t.name == "work_item");
@@ -894,7 +931,12 @@ impl ContextStage for BasePromptStage {
                     })
                     .collect();
 
-                if !eligible.is_empty() {
+                let latest_is_low_signal = eligible
+                    .first()
+                    .and_then(|(_, _, text)| text.as_deref())
+                    .is_some_and(is_low_signal_reaction_text);
+
+                if !eligible.is_empty() && !latest_is_low_signal {
                     context_section.push('\n');
                     context_section.push_str(REACT_TO_MESSAGE_GUIDANCE);
                     if let Some((message_id, _preview, Some(full_text))) = eligible.first() {
@@ -937,7 +979,8 @@ impl ContextStage for BasePromptStage {
 #[cfg(test)]
 mod tests {
     use super::{
-        compose_system_prompt, reaction_hint_for_text, GUARDRAIL_PROMPT, REACT_TO_MESSAGE_GUIDANCE,
+        compose_system_prompt, is_low_signal_reaction_text, reaction_hint_for_text,
+        GUARDRAIL_PROMPT, REACT_TO_MESSAGE_GUIDANCE,
     };
 
     #[test]
@@ -996,6 +1039,23 @@ mod tests {
                 "The user is inviting curiosity or thoughtful consideration."
             ))
         );
+    }
+
+    #[test]
+    fn simple_greetings_are_low_signal_for_reactions() {
+        for text in ["Hey!", "hi", "hello there", "yo Jeeves"] {
+            assert!(is_low_signal_reaction_text(text), "{text}");
+        }
+
+        for text in [
+            "thank you",
+            "you’re the best",
+            "we did it",
+            "I love you jeeves",
+            "hey can you inspect this bug?",
+        ] {
+            assert!(!is_low_signal_reaction_text(text), "{text}");
+        }
     }
 }
 
@@ -1108,6 +1168,10 @@ impl ContextStage for ToolResolutionStage {
                 // react_to_message is only available in user_chat sessions
                 if request.mode != ContextMode::Chat
                     || request.session_type.as_deref() != Some("user_chat")
+                {
+                    tools.retain(|t| t.name != "react_to_message");
+                } else if latest_user_text(&snapshot.messages)
+                    .is_some_and(is_low_signal_reaction_text)
                 {
                     tools.retain(|t| t.name != "react_to_message");
                 }

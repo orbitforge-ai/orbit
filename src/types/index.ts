@@ -924,6 +924,7 @@ export interface AgentToolResultPayload {
 export interface ChatContextUpdatePayload {
   sessionId: string;
   inputTokens: number;
+  turnInputTokens?: number | null;
   outputTokens: number;
   contextWindowSize: number;
   usagePercent: number;
@@ -932,6 +933,7 @@ export interface ChatContextUpdatePayload {
 
 export interface ContextUsage {
   inputTokens: number;
+  turnInputTokens?: number | null;
   contextWindowSize: number;
   usagePercent: number;
 }

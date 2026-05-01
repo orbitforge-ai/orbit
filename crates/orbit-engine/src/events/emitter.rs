@@ -94,6 +94,7 @@ pub struct AgentToolResultPayload {
 pub struct ChatContextUpdatePayload {
     pub session_id: String,
     pub input_tokens: u32,
+    pub turn_input_tokens: Option<u32>,
     pub output_tokens: u32,
     pub context_window_size: u32,
     pub usage_percent: f64,
@@ -345,6 +346,7 @@ pub fn emit_chat_context_update(
     app: &tauri::AppHandle,
     session_id: &str,
     input_tokens: u32,
+    turn_input_tokens: Option<u32>,
     output_tokens: u32,
     context_window_size: u32,
 ) {
@@ -356,6 +358,7 @@ pub fn emit_chat_context_update(
     let payload = ChatContextUpdatePayload {
         session_id: session_id.to_string(),
         input_tokens,
+        turn_input_tokens,
         output_tokens,
         context_window_size,
         usage_percent,
@@ -371,6 +374,7 @@ pub fn emit_chat_context_update_to_host(
     host: &dyn RuntimeHost,
     session_id: &str,
     input_tokens: u32,
+    turn_input_tokens: Option<u32>,
     output_tokens: u32,
     context_window_size: u32,
 ) {
@@ -382,6 +386,7 @@ pub fn emit_chat_context_update_to_host(
     let payload = ChatContextUpdatePayload {
         session_id: session_id.to_string(),
         input_tokens,
+        turn_input_tokens,
         output_tokens,
         context_window_size,
         usage_percent,

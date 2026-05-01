@@ -34,6 +34,7 @@ const MIGRATION_28: &str = include_str!("migrations/0028_project_boards.sql");
 const MIGRATION_29: &str = include_str!("migrations/0029_board_scoped_default_column.sql");
 const MIGRATION_30: &str = include_str!("migrations/0030_work_item_events.sql");
 const MIGRATION_31: &str = include_str!("migrations/0031_tenant_id.sql");
+const MIGRATION_32: &str = include_str!("migrations/0032_prompt_turn_token_usage.sql");
 
 /// Newtype wrapper — stored as Tauri managed state.
 /// The compatibility `Pool` wraps `sqlx::SqlitePool`, which is Arc-based
@@ -226,6 +227,11 @@ pub fn init(data_dir: PathBuf) -> Result<DbPool, Box<dyn std::error::Error>> {
         conn.execute_batch(MIGRATION_31)?;
         conn.execute_batch("PRAGMA user_version = 31;")?;
         info!("Applied migration 31 (tenant_id on every table)");
+    }
+    if version < 32 {
+        conn.execute_batch(MIGRATION_32)?;
+        conn.execute_batch("PRAGMA user_version = 32;")?;
+        info!("Applied migration 32 (prompt vs turn token usage)");
     }
 
     info!("Database initialised at {:?}", db_path);

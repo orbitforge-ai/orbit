@@ -232,6 +232,8 @@ create table if not exists chat_sessions (
   title text not null default 'New Chat',
   archived boolean not null default false,
   last_input_tokens bigint,
+  last_prompt_input_tokens bigint,
+  last_turn_input_tokens bigint,
   session_type text not null default 'user_chat',
   parent_session_id text,
   source_bus_message_id text,

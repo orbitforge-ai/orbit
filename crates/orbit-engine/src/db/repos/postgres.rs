@@ -2468,12 +2468,20 @@ impl ChatRepo for PgRepos {
     }
 
     async fn token_usage(&self, session_id: &str) -> Result<ChatSessionTokenUsage, String> {
-        let row = sqlx::query("SELECT last_input_tokens, agent_id FROM chat_sessions WHERE id = $1 AND tenant_id = $2")
+        let row = sqlx::query(
+            "SELECT last_input_tokens, last_prompt_input_tokens, last_turn_input_tokens, agent_id
+               FROM chat_sessions
+              WHERE id = $1 AND tenant_id = $2",
+        )
             .bind(session_id).bind(self.tenant_id()).fetch_one(&self.pool).await.map_err(db_err)?;
         let tokens: Option<i64> = row.try_get(0).map_err(db_err)?;
+        let prompt_tokens: Option<i64> = row.try_get(1).map_err(db_err)?;
+        let turn_tokens: Option<i64> = row.try_get(2).map_err(db_err)?;
         Ok(ChatSessionTokenUsage {
             last_input_tokens: tokens.map(|value| value as u32),
-            agent_id: row.try_get(1).map_err(db_err)?,
+            last_prompt_input_tokens: prompt_tokens.map(|value| value as u32),
+            last_turn_input_tokens: turn_tokens.map(|value| value as u32),
+            agent_id: row.try_get(3).map_err(db_err)?,
         })
     }
 }

@@ -92,5 +92,7 @@ pub struct MessageReactionRow {
 #[serde(rename_all = "camelCase")]
 pub struct ChatSessionTokenUsage {
     pub last_input_tokens: Option<u32>,
+    pub last_prompt_input_tokens: Option<u32>,
+    pub last_turn_input_tokens: Option<u32>,
     pub agent_id: String,
 }

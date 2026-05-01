@@ -32,6 +32,7 @@ export function ContextGauge({
   onCompacted,
 }: ContextGaugeProps) {
   const [inputTokens, setInputTokens] = useState(0);
+  const [turnInputTokens, setTurnInputTokens] = useState<number | null>(null);
   const [contextWindow, setContextWindow] = useState(0);
   const [usagePercent, setUsagePercent] = useState(0);
   const [compacting, setCompacting] = useState(false);
@@ -43,6 +44,7 @@ export function ContextGauge({
   async function refreshContextUsage() {
     const usage = await chatApi.getContextUsage(sessionId, modelOverride);
     setInputTokens(usage.inputTokens);
+    setTurnInputTokens(usage.turnInputTokens ?? null);
     setContextWindow(usage.contextWindowSize);
     setUsagePercent(usage.usagePercent);
   }
@@ -57,6 +59,7 @@ export function ContextGauge({
     const unsub = onChatContextUpdate((payload) => {
       if (payload.sessionId !== sessionId) return;
       setInputTokens(payload.inputTokens);
+      setTurnInputTokens(payload.turnInputTokens ?? null);
       setContextWindow(payload.contextWindowSize);
       setUsagePercent(payload.usagePercent);
     });
@@ -161,9 +164,18 @@ export function ContextGauge({
         ? compactionSkipped
         : compactionFailed
           ? `Compaction failed${failureReason ? `: ${failureReason}` : ''} — click to retry`
-          : usagePercent >= 65
-            ? `${formatTokens(inputTokens)} / ${formatTokens(contextWindow)} tokens (${usagePercent.toFixed(1)}%) — auto-compaction may be in progress, or click to compact manually`
-            : `${formatTokens(inputTokens)} / ${formatTokens(contextWindow)} tokens (${usagePercent.toFixed(1)}%) — click to compact`;
+          : (() => {
+              const base = `${formatTokens(inputTokens)} / ${formatTokens(contextWindow)} prompt tokens (${usagePercent.toFixed(1)}%)`;
+              const turn =
+                turnInputTokens != null && turnInputTokens !== inputTokens
+                  ? `; ${formatTokens(turnInputTokens)} input tokens used across the last turn`
+                  : '';
+              const action =
+                usagePercent >= 65
+                  ? ' — auto-compaction may be in progress, or click to compact manually'
+                  : ' — click to compact';
+              return `${base}${turn}${action}`;
+            })();
 
   const label = compacting
     ? 'Compacting context…'

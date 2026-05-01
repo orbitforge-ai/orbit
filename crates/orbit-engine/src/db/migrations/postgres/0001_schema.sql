@@ -193,6 +193,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     title TEXT NOT NULL,
     archived BOOLEAN NOT NULL DEFAULT false,
     last_input_tokens BIGINT,
+    last_prompt_input_tokens BIGINT,
+    last_turn_input_tokens BIGINT,
     session_type TEXT NOT NULL DEFAULT 'user_chat',
     parent_session_id TEXT REFERENCES chat_sessions(id) ON DELETE SET NULL,
     source_bus_message_id TEXT REFERENCES bus_messages(id) ON DELETE SET NULL,
@@ -211,6 +213,14 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     updated_at TEXT NOT NULL,
     tenant_id TEXT NOT NULL
 );
+
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS last_prompt_input_tokens BIGINT;
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS last_turn_input_tokens BIGINT;
+UPDATE chat_sessions
+   SET last_prompt_input_tokens = COALESCE(last_prompt_input_tokens, last_input_tokens),
+       last_turn_input_tokens = COALESCE(last_turn_input_tokens, last_input_tokens)
+ WHERE last_input_tokens IS NOT NULL
+   AND (last_prompt_input_tokens IS NULL OR last_turn_input_tokens IS NULL);
 
 DO $$
 BEGIN
