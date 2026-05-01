@@ -105,6 +105,13 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
   const hasPrimaryContent = primaryBlocks.length > 0;
   const hasThinking = visibleThinkingBlocks.length > 0;
   const hasTools = toolBlocks.length > 0;
+  const hasStreamingText = primaryBlocks.some(
+    (block) => block.kind === 'text' && block.isStreaming
+  );
+  const hasBlockingPrompt = primaryBlocks.some(
+    (block) => block.kind === 'permission_prompt' || block.kind === 'user_question_prompt'
+  );
+  const showStandaloneActivity = message.isStreaming && !hasStreamingText && !hasBlockingPrompt;
   const allowItemDetails = true;
   const showChipOnlyBubble = !hasPrimaryContent && (hasThinking || hasTools);
   const showTimestamp = Boolean(message.timestamp && !message.isStreaming && !showChipOnlyBubble);
@@ -112,7 +119,7 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
     hasPrimaryContent ||
     hasThinking ||
     hasTools ||
-    (message.blocks.length === 0 && message.isStreaming) ||
+    showStandaloneActivity ||
     !!message.linkedRunId;
 
   useEffect(() => {
@@ -289,7 +296,7 @@ export function MessageBubble({ message, agentId }: MessageBubbleProps) {
               allowDetails={allowItemDetails}
             />
           )}
-          {message.blocks.length === 0 && message.isStreaming && <TypingIndicator />}
+          {showStandaloneActivity && <TypingIndicator />}
           {message.linkedRunId && !message.isStreaming && (
             <button
               onClick={() => {

@@ -15,6 +15,8 @@ use crate::executor::llm_provider::{
 const VERCEL_CHAT_COMPLETIONS_URL: &str = "https://ai-gateway.vercel.sh/v1/chat/completions";
 const VERCEL_MODELS_URL: &str = "https://ai-gateway.vercel.sh/v1/models";
 const VERCEL_FALLBACK_MODEL: &str = "openai/gpt-5.4";
+const VERCEL_REASONING_EFFORT: &str = "medium";
+const VERCEL_REASONING_SUMMARY: &str = "auto";
 
 static MODEL_METADATA_CACHE: OnceLock<Mutex<BTreeMap<String, VercelModelMetadata>>> =
     OnceLock::new();
@@ -102,6 +104,42 @@ pub fn cached_model_supports_images(model: &str) -> bool {
         .and_then(|cache| cache.get(model).cloned())
         .map(|metadata| metadata.tags.iter().any(|tag| tag == "vision"))
         .unwrap_or(false)
+}
+
+fn cached_model_supports_reasoning(model: &str) -> bool {
+    model_cache()
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(model).cloned())
+        .map(|metadata| metadata.tags.iter().any(|tag| tag == "reasoning"))
+        .unwrap_or(false)
+}
+
+fn inferred_model_supports_reasoning(model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    model.starts_with("openai/gpt-5")
+        || model.starts_with("openai/o3")
+        || model.starts_with("openai/o4")
+        || model.starts_with("openai/gpt-oss")
+        || model.starts_with("anthropic/claude-opus-4")
+        || model.starts_with("anthropic/claude-sonnet-4")
+        || model.starts_with("anthropic/claude-haiku-4")
+        || model.starts_with("google/gemini-2.5")
+        || model.starts_with("google/gemini-3")
+        || model.starts_with("vertex/gemini-2.5")
+        || model.starts_with("vertex/gemini-3")
+}
+
+fn model_supports_reasoning(model: &str) -> bool {
+    cached_model_supports_reasoning(model) || inferred_model_supports_reasoning(model)
+}
+
+fn is_openai_reasoning_model(model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    model.starts_with("openai/gpt-5")
+        || model.starts_with("openai/o3")
+        || model.starts_with("openai/o4")
+        || model.starts_with("openai/gpt-oss")
 }
 
 fn cache_models(models: &[VercelModel]) {
@@ -406,7 +444,30 @@ impl VercelProvider {
             body["tool_choice"] = json!("auto");
         }
 
+        Self::apply_reasoning_options(&mut body, &config.model);
         body
+    }
+
+    fn apply_reasoning_options(body: &mut Value, model: &str) {
+        if !model_supports_reasoning(model) {
+            return;
+        }
+
+        // Vercel's Chat Completions API maps this normalized shape to each
+        // provider's native thinking/reasoning controls.
+        body["reasoning"] = json!({
+            "enabled": true,
+            "effort": VERCEL_REASONING_EFFORT,
+        });
+
+        if is_openai_reasoning_model(model) {
+            body["providerOptions"] = json!({
+                "openai": {
+                    "reasoningEffort": VERCEL_REASONING_EFFORT,
+                    "reasoningSummary": VERCEL_REASONING_SUMMARY,
+                },
+            });
+        }
     }
 
     async fn parse_sse_stream(
@@ -419,6 +480,7 @@ impl VercelProvider {
         let mut stream = response.bytes_stream();
         let mut buffer = String::new();
         let mut text = String::new();
+        let mut reasoning = String::new();
         let mut usage = Usage::default();
         let mut finish_reason: Option<String> = None;
         let mut tool_calls: BTreeMap<u64, PartialToolCall> = BTreeMap::new();
@@ -449,6 +511,7 @@ impl VercelProvider {
                     Self::apply_stream_event(
                         &event,
                         &mut text,
+                        &mut reasoning,
                         &mut tool_calls,
                         &mut finish_reason,
                         &mut usage,
@@ -461,6 +524,18 @@ impl VercelProvider {
         }
 
         let mut content = Vec::new();
+        if !reasoning.is_empty() {
+            emit_agent_content_block(
+                app,
+                run_id,
+                iteration,
+                "thinking",
+                json!({ "type": "thinking", "thinking": reasoning.clone() }),
+            );
+            content.push(ContentBlock::Thinking {
+                thinking: reasoning,
+            });
+        }
         if !text.is_empty() {
             content.push(ContentBlock::Text { text });
         }
@@ -480,6 +555,7 @@ impl VercelProvider {
     fn apply_stream_event(
         event: &Value,
         text: &mut String,
+        reasoning: &mut String,
         tool_calls: &mut BTreeMap<u64, PartialToolCall>,
         finish_reason: &mut Option<String>,
         usage: &mut Usage,
@@ -487,8 +563,21 @@ impl VercelProvider {
         run_id: &str,
         iteration: u32,
     ) {
-        let (text_chunks, tool_input_deltas) =
-            Self::accumulate_stream_event(event, text, tool_calls, finish_reason, usage);
+        let (text_chunks, reasoning_chunks, tool_input_deltas) =
+            Self::accumulate_stream_event(event, text, reasoning, tool_calls, finish_reason, usage);
+
+        for chunk in reasoning_chunks {
+            emit_agent_content_block(
+                app,
+                run_id,
+                iteration,
+                "thinking_delta",
+                json!({
+                    "type": "thinking_delta",
+                    "thinking": chunk,
+                }),
+            );
+        }
 
         for chunk in text_chunks {
             emit_agent_llm_chunk(app, run_id, &chunk, iteration);
@@ -514,11 +603,13 @@ impl VercelProvider {
     fn accumulate_stream_event(
         event: &Value,
         text: &mut String,
+        reasoning: &mut String,
         tool_calls: &mut BTreeMap<u64, PartialToolCall>,
         finish_reason: &mut Option<String>,
         usage: &mut Usage,
-    ) -> (Vec<String>, Vec<ToolInputDelta>) {
+    ) -> (Vec<String>, Vec<String>, Vec<ToolInputDelta>) {
         let mut text_chunks = Vec::new();
+        let mut reasoning_chunks = Vec::new();
         let mut tool_input_deltas = Vec::new();
 
         Self::parse_usage(event.get("usage"), usage);
@@ -534,6 +625,11 @@ impl VercelProvider {
                     text.push_str(chunk);
                     text_chunks.push(chunk.to_string());
                 }
+            }
+
+            for chunk in Self::reasoning_delta_chunks(delta) {
+                reasoning.push_str(&chunk);
+                reasoning_chunks.push(chunk);
             }
 
             for tool_call in delta["tool_calls"].as_array().into_iter().flatten() {
@@ -556,7 +652,50 @@ impl VercelProvider {
             }
         }
 
-        (text_chunks, tool_input_deltas)
+        (text_chunks, reasoning_chunks, tool_input_deltas)
+    }
+
+    fn reasoning_delta_chunks(delta: &Value) -> Vec<String> {
+        if let Some(reasoning) = delta["reasoning"].as_str() {
+            if !reasoning.is_empty() {
+                return vec![reasoning.to_string()];
+            }
+        }
+
+        Self::extract_reasoning_details(delta.get("reasoning_details"))
+    }
+
+    fn extract_reasoning_details(value: Option<&Value>) -> Vec<String> {
+        value
+            .and_then(Value::as_array)
+            .map(|details| {
+                details
+                    .iter()
+                    .filter_map(|detail| {
+                        detail["text"]
+                            .as_str()
+                            .or_else(|| detail["summary"].as_str())
+                            .filter(|text| !text.is_empty())
+                            .map(str::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn extract_message_reasoning(message: &Value) -> Option<String> {
+        if let Some(reasoning) = message["reasoning"].as_str() {
+            if !reasoning.is_empty() {
+                return Some(reasoning.to_string());
+            }
+        }
+
+        let details = Self::extract_reasoning_details(message.get("reasoning_details"));
+        if details.is_empty() {
+            None
+        } else {
+            Some(details.join(""))
+        }
     }
 
     fn finalize_tool_calls(
@@ -615,6 +754,12 @@ impl VercelProvider {
             .ok_or_else(|| "Vercel response had no choices".to_string())?;
         let message = &choice["message"];
         let mut content = Vec::new();
+
+        if let Some(reasoning) = Self::extract_message_reasoning(message) {
+            content.push(ContentBlock::Thinking {
+                thinking: reasoning,
+            });
+        }
 
         if let Some(text) = message["content"].as_str() {
             if !text.is_empty() {
@@ -817,7 +962,7 @@ mod tests {
                     "name": "Claude Sonnet 4.6",
                     "owned_by": "anthropic",
                     "type": "language",
-                    "tags": ["tool-use"],
+                    "tags": ["reasoning", "tool-use"],
                     "context_window": 1000000
                 },
                 {
@@ -847,6 +992,9 @@ mod tests {
         );
         assert_eq!(cached_model_context_window("openai/gpt-5.4"), Some(200000));
         assert!(cached_model_supports_images("openai/gpt-5.4"));
+        assert!(cached_model_supports_reasoning(
+            "anthropic/claude-sonnet-4.6"
+        ));
     }
 
     #[test]
@@ -859,7 +1007,10 @@ mod tests {
             inferred_model_context_window("anthropic/claude-sonnet-4.6"),
             Some(1_000_000)
         );
-        assert_eq!(inferred_model_context_window("openai/gpt-5.5"), Some(200_000));
+        assert_eq!(
+            inferred_model_context_window("openai/gpt-5.5"),
+            Some(200_000)
+        );
         assert_eq!(inferred_model_context_window("unknown/model"), None);
     }
 
@@ -914,6 +1065,31 @@ mod tests {
         );
         assert_eq!(body["messages"][3]["role"], "tool");
         assert_eq!(body["tools"][0]["function"]["name"], "status");
+        assert_eq!(body["reasoning"]["enabled"], true);
+        assert_eq!(body["reasoning"]["effort"], VERCEL_REASONING_EFFORT);
+        assert_eq!(
+            body["providerOptions"]["openai"]["reasoningEffort"],
+            VERCEL_REASONING_EFFORT
+        );
+        assert_eq!(
+            body["providerOptions"]["openai"]["reasoningSummary"],
+            VERCEL_REASONING_SUMMARY
+        );
+    }
+
+    #[test]
+    fn omits_reasoning_options_for_models_without_reasoning_support() {
+        let config = LlmConfig {
+            model: "openai/gpt-4.1".to_string(),
+            max_tokens: 1000,
+            temperature: None,
+            system_prompt: String::new(),
+        };
+
+        let body = VercelProvider::request_body(&config, &[], &[]);
+
+        assert!(body.get("reasoning").is_none());
+        assert!(body.get("providerOptions").is_none());
     }
 
     #[test]
@@ -959,6 +1135,7 @@ mod tests {
     #[test]
     fn assembles_streaming_tool_call_arguments() {
         let mut text = String::new();
+        let mut reasoning = String::new();
         let mut tool_calls = BTreeMap::new();
         let mut finish_reason = None;
         let mut usage = Usage::default();
@@ -967,6 +1144,7 @@ mod tests {
             "choices": [
                 {
                     "delta": {
+                        "reasoning": "Thinking",
                         "content": "Reading",
                         "tool_calls": [
                             {
@@ -1006,19 +1184,22 @@ mod tests {
             }
         });
 
-        let (text_chunks, input_deltas) = VercelProvider::accumulate_stream_event(
+        let (text_chunks, reasoning_chunks, input_deltas) = VercelProvider::accumulate_stream_event(
             &first,
             &mut text,
+            &mut reasoning,
             &mut tool_calls,
             &mut finish_reason,
             &mut usage,
         );
         assert_eq!(text_chunks, vec!["Reading".to_string()]);
+        assert_eq!(reasoning_chunks, vec!["Thinking".to_string()]);
         assert_eq!(input_deltas.len(), 1);
 
         VercelProvider::accumulate_stream_event(
             &second,
             &mut text,
+            &mut reasoning,
             &mut tool_calls,
             &mut finish_reason,
             &mut usage,
@@ -1026,11 +1207,43 @@ mod tests {
 
         let call = tool_calls.get(&0).expect("tool call should be assembled");
         assert_eq!(text, "Reading");
+        assert_eq!(reasoning, "Thinking");
         assert_eq!(call.id, "call_123");
         assert_eq!(call.name, "read_file");
         assert_eq!(call.arguments, "{\"path\":\"README.md\"}");
         assert_eq!(finish_reason.as_deref(), Some("tool_calls"));
         assert_eq!(usage.input_tokens, 11);
         assert_eq!(usage.output_tokens, 7);
+    }
+
+    #[test]
+    fn parses_non_streaming_reasoning() {
+        let value = json!({
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "reasoning": "I should explain the result.",
+                        "content": "Done."
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5
+            }
+        });
+
+        let response = VercelProvider::parse_complete_response(value).expect("response parses");
+
+        assert!(matches!(
+            &response.content[0],
+            ContentBlock::Thinking { thinking } if thinking == "I should explain the result."
+        ));
+        assert!(matches!(
+            &response.content[1],
+            ContentBlock::Text { text } if text == "Done."
+        ));
     }
 }

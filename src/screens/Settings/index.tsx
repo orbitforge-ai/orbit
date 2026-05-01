@@ -916,8 +916,8 @@ export function Settings({ onClose }: SettingsProps = {}) {
                 <div>
                   <label className="text-sm font-medium text-white">Show agent thoughts</label>
                   <p className="text-xs text-muted mt-1">
-                    Off hides thought chips completely. On shows them as collapsed chips you can
-                    expand inline when needed.
+                    Shows model-provided reasoning summaries as collapsed chips you can expand
+                    inline when needed.
                   </p>
                 </div>
                 <Switch.Root

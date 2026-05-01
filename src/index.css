@@ -331,9 +331,9 @@ body {
 
 /* ─── Streaming chip ────────────────────────────────────────────────────── */
 
-@keyframes streaming-pill-orbit {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
+@keyframes streaming-pill-trace {
+  from { offset-distance: 0%; }
+  to   { offset-distance: 100%; }
 }
 
 .streaming-status-pill {
@@ -342,30 +342,45 @@ body {
   overflow: visible;
 }
 
-.streaming-status-pill__orbit {
+.streaming-status-pill__trace {
   position: absolute;
-  inset: -2px;
+  inset: -1px;
+  border-radius: inherit;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.streaming-status-pill__trace::before {
+  content: '';
+  position: absolute;
+  width: 1px;
+  height: 1px;
   border-radius: 9999px;
+  background: transparent;
+  box-shadow:
+    0 0 10px 5px rgba(199, 210, 254, 0.22),
+    0 0 22px 10px rgba(129, 140, 248, 0.1);
+  opacity: 0.78;
+  offset-path: inset(0 round 9999px);
+  offset-anchor: center;
+  offset-rotate: 0deg;
+  animation: streaming-pill-trace 2.8s linear infinite;
+}
+
+.streaming-status-pill__trace::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
   padding: 1px;
   background:
-    conic-gradient(
-      from 0deg,
-      transparent 0deg,
-      transparent 286deg,
-      rgba(129, 140, 248, 0.04) 304deg,
-      rgba(129, 140, 248, 0.12) 320deg,
-      rgba(165, 180, 252, 0.28) 336deg,
-      rgba(224, 231, 255, 0.6) 346deg,
-      rgba(165, 180, 252, 0.24) 354deg,
-      rgba(129, 140, 248, 0.08) 360deg
+    linear-gradient(
+      90deg,
+      rgba(129, 140, 248, 0.08),
+      rgba(224, 231, 255, 0.2),
+      rgba(129, 140, 248, 0.08)
     );
-  opacity: 0.82;
-  pointer-events: none;
-  animation: streaming-pill-orbit 2.2s linear infinite;
-  filter:
-    blur(0.35px)
-    drop-shadow(0 0 2px rgba(224, 231, 255, 0.2))
-    drop-shadow(0 0 5px rgba(129, 140, 248, 0.16));
+  opacity: 0.2;
   -webkit-mask:
     linear-gradient(#fff 0 0) content-box,
     linear-gradient(#fff 0 0);
@@ -377,7 +392,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .streaming-status-pill__orbit {
+  .streaming-status-pill__trace::before {
     animation-duration: 4s;
   }
 }

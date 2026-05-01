@@ -9,7 +9,7 @@ use crate::executor::channels::ChannelConfig;
 use crate::executor::workspace::{AgentWorkspaceConfig, PermissionRule};
 
 /// Current schema version for the global settings file.
-pub const GLOBAL_SETTINGS_VERSION: u32 = 2;
+pub const GLOBAL_SETTINGS_VERSION: u32 = 3;
 
 const DEFAULT_ALLOWED_TOOLS: &[&str] = &[
     "shell_command",
@@ -52,7 +52,7 @@ pub struct ChatDisplaySettings {
 impl Default for ChatDisplaySettings {
     fn default() -> Self {
         Self {
-            show_agent_thoughts: false,
+            show_agent_thoughts: true,
             show_verbose_tool_details: false,
         }
     }

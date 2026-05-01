@@ -13,12 +13,13 @@ import {
 const SHOW_AGENT_THOUGHTS_KEY = 'orbit:showAgentThoughts';
 const SHOW_VERBOSE_TOOL_DETAILS_KEY = 'orbit:showVerboseToolDetails';
 const LEGACY_IMPORT_DONE_KEY = 'orbit:chatDisplayMigratedToGlobal';
+const CURRENT_SETTINGS_VERSION = 3;
 
 function defaultSettings(): GlobalSettings {
   return {
-    version: 1,
+    version: CURRENT_SETTINGS_VERSION,
     chatDisplay: {
-      showAgentThoughts: false,
+      showAgentThoughts: true,
       showVerboseToolDetails: false,
     },
     agentDefaults: {
@@ -96,7 +97,7 @@ function syncedFromSettings(settings: GlobalSettings) {
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
   settings: defaultSettings(),
-  showAgentThoughts: false,
+  showAgentThoughts: true,
   showVerboseToolDetails: false,
   loaded: false,
   loading: false,
@@ -109,6 +110,18 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       const remote = await globalSettingsApi.get();
       const legacy = readLegacyChatDisplay();
       let merged = remote;
+      let shouldPersist = false;
+      if (remote.version < CURRENT_SETTINGS_VERSION) {
+        merged = {
+          ...merged,
+          version: CURRENT_SETTINGS_VERSION,
+          chatDisplay: {
+            ...merged.chatDisplay,
+            showAgentThoughts: true,
+          },
+        };
+        shouldPersist = true;
+      }
       if (legacy) {
         // Legacy values win only if the remote is still at its built-in
         // defaults — we don't want to overwrite settings the user has
@@ -119,16 +132,19 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           remoteDisplay.showVerboseToolDetails === false;
         if (remoteIsDefault) {
           merged = {
-            ...remote,
-            chatDisplay: { ...remoteDisplay, ...legacy },
+            ...merged,
+            chatDisplay: { ...merged.chatDisplay, ...legacy },
           };
-          try {
-            merged = await globalSettingsApi.update(merged);
-          } catch (err) {
-            console.warn('Failed to persist migrated chat-display settings', err);
-          }
+          shouldPersist = true;
         }
         markLegacyImportDone();
+      }
+      if (shouldPersist) {
+        try {
+          merged = await globalSettingsApi.update(merged);
+        } catch (err) {
+          console.warn('Failed to persist migrated chat-display settings', err);
+        }
       }
       set({
         ...syncedFromSettings(merged),
