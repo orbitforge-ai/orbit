@@ -40,7 +40,9 @@ export const SelectContent = forwardRef<
         )}
         {...rest}
       >
-        <RadixSelect.Viewport className="p-1">{children}</RadixSelect.Viewport>
+        <RadixSelect.Viewport className="max-h-[min(320px,var(--radix-select-content-available-height))] overflow-y-auto p-1">
+          {children}
+        </RadixSelect.Viewport>
       </RadixSelect.Content>
     </RadixSelect.Portal>
   );
