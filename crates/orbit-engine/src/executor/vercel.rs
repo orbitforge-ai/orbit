@@ -71,6 +71,30 @@ pub fn cached_model_context_window(model: &str) -> Option<u32> {
     })
 }
 
+/// Infer context windows for known Vercel Gateway model families when the
+/// live model metadata cache has not been populated in this process yet.
+pub fn inferred_model_context_window(model: &str) -> Option<u32> {
+    if model.starts_with("google/gemini-") {
+        return Some(1_000_000);
+    }
+
+    if model.starts_with("anthropic/claude-opus-4.")
+        || model.starts_with("anthropic/claude-sonnet-4.")
+    {
+        return Some(1_000_000);
+    }
+
+    if model.starts_with("openai/gpt-5.")
+        || model.starts_with("xai/grok-")
+        || model.starts_with("deepseek/")
+        || model.starts_with("minimax/")
+    {
+        return Some(200_000);
+    }
+
+    None
+}
+
 pub fn cached_model_supports_images(model: &str) -> bool {
     model_cache()
         .lock()
@@ -823,6 +847,20 @@ mod tests {
         );
         assert_eq!(cached_model_context_window("openai/gpt-5.4"), Some(200000));
         assert!(cached_model_supports_images("openai/gpt-5.4"));
+    }
+
+    #[test]
+    fn infers_context_windows_for_known_gateway_model_families() {
+        assert_eq!(
+            inferred_model_context_window("google/gemini-3.1-flash-lite-preview"),
+            Some(1_000_000)
+        );
+        assert_eq!(
+            inferred_model_context_window("anthropic/claude-sonnet-4.6"),
+            Some(1_000_000)
+        );
+        assert_eq!(inferred_model_context_window("openai/gpt-5.5"), Some(200_000));
+        assert_eq!(inferred_model_context_window("unknown/model"), None);
     }
 
     #[test]

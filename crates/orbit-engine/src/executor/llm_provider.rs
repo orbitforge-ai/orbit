@@ -254,13 +254,15 @@ pub fn model_context_window(provider_name: &str, model: &str) -> u32 {
                 200_000
             }
         },
-        "vercel" => vercel::cached_model_context_window(model).unwrap_or_else(|| {
-            warn!(
-                "Unknown Vercel Gateway model '{}' - falling back to 200k context window",
-                model
-            );
-            200_000
-        }),
+        "vercel" => vercel::cached_model_context_window(model)
+            .or_else(|| vercel::inferred_model_context_window(model))
+            .unwrap_or_else(|| {
+                warn!(
+                    "Unknown Vercel Gateway model '{}' - falling back to 200k context window",
+                    model
+                );
+                200_000
+            }),
         other => {
             warn!(
                 "Unknown provider '{}' for model '{}' - falling back to 200k context window",
