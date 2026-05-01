@@ -225,6 +225,15 @@ export interface UpdateProjectWorkflow {
   graph?: WorkflowGraph;
 }
 
+export type FsWatchEventType = 'created' | 'modified' | 'deleted';
+
+export interface FsWatchTriggerConfig {
+  paths: string[];
+  events: FsWatchEventType[];
+  includeGlobs?: string[];
+  excludeGlobs?: string[];
+}
+
 export type RuleOperator =
   | 'equals'
   | 'notEquals'
@@ -278,6 +287,7 @@ export const RULE_OPERATORS: RuleOperator[] = [
 export const KNOWN_NODE_TYPES = [
   'trigger.manual',
   'trigger.schedule',
+  'trigger.fs-watch',
   'agent.run',
   'logic.if',
   'code.bash.run',

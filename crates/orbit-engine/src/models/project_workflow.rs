@@ -145,6 +145,7 @@ pub const RULE_OPERATORS: &[&str] = &[
 pub const KNOWN_NODE_TYPES: &[&str] = &[
     "trigger.manual",
     "trigger.schedule",
+    "trigger.fs-watch",
     "agent.run",
     "logic.if",
     "code.bash.run",

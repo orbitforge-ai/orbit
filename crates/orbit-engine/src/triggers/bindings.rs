@@ -7,16 +7,14 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use serde_json::json;
-
 use crate::db::repos::{sqlite::SqliteRepos, Repos};
 use crate::db::DbPool;
 use crate::executor::workspace;
 use crate::models::channel_binding::ChannelBinding;
 use crate::models::trigger_event::TriggerEventPayload;
 use crate::runtime_host::RuntimeHostHandle;
-use crate::workflows::WorkflowOrchestrator;
+use async_trait::async_trait;
+use serde_json::json;
 
 use super::dispatcher::DispatchBindings;
 
@@ -93,52 +91,12 @@ impl DispatchBindings for ProductionBindings {
     }
 
     fn run_workflow_from_event(&self, workflow_id: &str, event: &TriggerEventPayload) {
-        // Preserve the UI/event-log signal, then start the actual workflow
-        // run on the runtime orchestrator.
-        self.host.emit_json(
-            "trigger:workflow",
-            json!({
-                "workflowId": workflow_id,
-                "event": event,
-            }),
-        );
-        let orchestrator = WorkflowOrchestrator::new_with_repos(
+        super::workflow_spawn::spawn_workflow_run(
             self.db.clone(),
             self.repos.clone(),
             self.host.clone(),
-        );
-        let workflow_id = workflow_id.to_string();
-        let workflow_id_for_task = workflow_id.clone();
-        let trigger_kind = event.kind.clone();
-        let trigger_kind_for_task = trigger_kind.clone();
-        let trigger_data = serde_json::to_value(event).unwrap_or_else(|_| json!({}));
-        tokio::spawn(async move {
-            match orchestrator
-                .start_run(
-                    workflow_id_for_task.clone(),
-                    &trigger_kind_for_task,
-                    trigger_data,
-                )
-                .await
-            {
-                Ok(run) => tracing::info!(
-                    run_id = run.id,
-                    workflow_id = workflow_id_for_task,
-                    trigger_kind = trigger_kind_for_task,
-                    "trigger dispatch → workflow run started"
-                ),
-                Err(error) => tracing::warn!(
-                    workflow_id = workflow_id_for_task,
-                    trigger_kind = trigger_kind_for_task,
-                    error = %error,
-                    "trigger dispatch → workflow run failed to start"
-                ),
-            }
-        });
-        tracing::info!(
-            workflow_id,
-            event_id = %event.event_id,
-            "trigger dispatch → workflow"
+            workflow_id.to_string(),
+            event,
         );
     }
 

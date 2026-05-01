@@ -51,6 +51,7 @@ fn log_dir() -> PathBuf {
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(
             Builder::new()
@@ -458,6 +459,7 @@ pub fn run() {
             commands::work_item_events::list_work_item_events,
             // Project workflows
             commands::project_workflows::list_project_workflows,
+            commands::project_workflows::list_enabled_project_workflow_triggers,
             commands::project_workflows::get_project_workflow,
             commands::project_workflows::create_project_workflow,
             commands::project_workflows::update_project_workflow,
@@ -510,6 +512,7 @@ pub fn run() {
             commands::triggers::set_agent_listen_bindings,
             commands::triggers::plugin_list_channels,
             commands::triggers::list_trigger_capable_plugins,
+            commands::triggers::emit_fs_trigger_event,
             // Terminal (PTY)
             commands::terminals::open_terminal,
             commands::terminals::write_terminal,

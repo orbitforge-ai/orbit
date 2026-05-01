@@ -37,7 +37,7 @@ use crate::models::project_board::{
 use crate::models::project_board_column::ProjectBoardColumn;
 use crate::models::project_workflow::{
     CreateProjectWorkflow, ProjectWorkflow, RuleNode, UpdateProjectWorkflow, WorkflowEdge,
-    WorkflowGraph, KNOWN_NODE_TYPES, RULE_OPERATORS,
+    WorkflowGraph, WorkflowNode, KNOWN_NODE_TYPES, RULE_OPERATORS,
 };
 use crate::models::run::{Run, RunState, RunSummary};
 use crate::models::schedule::{CreateSchedule, RecurringConfig, Schedule};
@@ -2008,6 +2008,28 @@ impl WorkflowRunRepo for SqliteRepos {
         })
         .await
         .err_str()?
+    }
+
+    async fn has_active_for_workflow(&self, workflow_id: &str) -> Result<bool, String> {
+        let workflow_id = workflow_id.to_string();
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
+            let active: i64 = conn
+                .query_row(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM workflow_runs
+                        WHERE workflow_id = ?1
+                          AND tenant_id = ?2
+                          AND status IN ('queued', 'running')
+                        LIMIT 1
+                    )",
+                    params![workflow_id, tenant_id],
+                    |row| row.get(0),
+                )
+                .err_str()?;
+            Ok(active != 0)
+        })
+        .await
     }
 
     async fn get_with_steps(&self, run_id: &str) -> Result<WorkflowRunWithSteps, String> {
@@ -4500,6 +4522,9 @@ fn validate_project_workflow_graph(graph: &WorkflowGraph) -> Result<(), String> 
                 }
             }
         }
+        if node.node_type == "trigger.fs-watch" {
+            validate_project_workflow_fs_watch_config(node)?;
+        }
     }
 
     let mut incoming: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
@@ -4559,6 +4584,52 @@ fn validate_project_workflow_graph(graph: &WorkflowGraph) -> Result<(), String> 
     Ok(())
 }
 
+fn validate_project_workflow_fs_watch_config(node: &WorkflowNode) -> Result<(), String> {
+    let path_count = node
+        .data
+        .get("paths")
+        .and_then(|value| value.as_array())
+        .map(|paths: &Vec<serde_json::Value>| {
+            paths
+                .iter()
+                .filter_map(|value| value.as_str())
+                .filter(|path: &&str| !path.trim().is_empty())
+                .count()
+        })
+        .unwrap_or(0);
+    if path_count == 0 {
+        return Err(format!(
+            "workflow: fs-watch trigger '{}' must watch at least one path",
+            node.id
+        ));
+    }
+
+    let events = node
+        .data
+        .get("events")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let event_count = events
+        .iter()
+        .filter_map(|value| value.as_str())
+        .filter(|event: &&str| matches!(*event, "created" | "modified" | "deleted"))
+        .count();
+    if event_count == 0 {
+        return Err(format!(
+            "workflow: fs-watch trigger '{}' must select at least one event type",
+            node.id
+        ));
+    }
+    if event_count != events.len() {
+        return Err(format!(
+            "workflow: fs-watch trigger '{}' has an unsupported event type",
+            node.id
+        ));
+    }
+    Ok(())
+}
+
 fn is_valid_workflow_reference_key(value: &str) -> bool {
     if value == "trigger" || value == "__aliases" || value.starts_with('-') || value.ends_with('-')
     {
@@ -4608,6 +4679,13 @@ fn derive_project_workflow_trigger(
     fallback_kind: Option<&str>,
     fallback_config: Option<&serde_json::Value>,
 ) -> (String, serde_json::Value) {
+    if let Some(node) = graph
+        .nodes
+        .iter()
+        .find(|node| node.node_type == "trigger.fs-watch")
+    {
+        return ("trigger.fs-watch".to_string(), node.data.clone());
+    }
     if let Some(node) = graph
         .nodes
         .iter()
@@ -4666,6 +4744,7 @@ fn project_workflow_node_label(node_type: &str) -> String {
     match node_type {
         "trigger.manual" => "Run now".to_string(),
         "trigger.schedule" => "Schedule".to_string(),
+        "trigger.fs-watch" => "Watch files".to_string(),
         "agent.run" => "Run agent".to_string(),
         "logic.if" => "If / branch".to_string(),
         "code.bash.run" => "Code Bash".to_string(),

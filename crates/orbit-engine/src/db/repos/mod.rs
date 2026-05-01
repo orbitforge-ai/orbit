@@ -407,6 +407,7 @@ pub trait WorkflowRunRepo: Send + Sync {
         project_id: &str,
         limit: i64,
     ) -> Result<Vec<crate::models::workflow_run::WorkflowRunSummary>, String>;
+    async fn has_active_for_workflow(&self, workflow_id: &str) -> Result<bool, String>;
     async fn get_with_steps(
         &self,
         run_id: &str,

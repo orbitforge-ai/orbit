@@ -82,7 +82,9 @@ enum NodeExecutorKind {
 
 fn route_node_type(node_type: &str) -> Option<NodeExecutorKind> {
     match node_type {
-        "trigger.manual" | "trigger.schedule" => Some(NodeExecutorKind::Trigger),
+        "trigger.manual" | "trigger.schedule" | "trigger.fs-watch" => {
+            Some(NodeExecutorKind::Trigger)
+        }
         "agent.run" => Some(NodeExecutorKind::Agent),
         "logic.if" => Some(NodeExecutorKind::Logic),
         "code.bash.run" | "code.script.run" => Some(NodeExecutorKind::Code),
@@ -126,6 +128,7 @@ mod tests {
         let cases = [
             ("trigger.manual", Some(NodeExecutorKind::Trigger)),
             ("trigger.schedule", Some(NodeExecutorKind::Trigger)),
+            ("trigger.fs-watch", Some(NodeExecutorKind::Trigger)),
             ("agent.run", Some(NodeExecutorKind::Agent)),
             ("logic.if", Some(NodeExecutorKind::Logic)),
             ("code.bash.run", Some(NodeExecutorKind::Code)),

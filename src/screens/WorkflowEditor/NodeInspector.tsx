@@ -3,14 +3,25 @@ import type { ComponentPropsWithoutRef } from 'react';
 import MonacoEditor from '@monaco-editor/react';
 import { useQuery } from '@tanstack/react-query';
 import { Node } from '@xyflow/react';
-import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
+import {
+  AlertCircle,
+  ChevronDown,
+  ChevronRight,
+  FilePlus,
+  FolderPlus,
+  RefreshCw,
+  X,
+} from 'lucide-react';
 import { Checkbox, Input, SimpleSelect, Textarea } from '../../components/ui';
 import { pluginsApi, type PluginManifest } from '../../api/plugins';
 import { workflowRunsApi } from '../../api/workflowRuns';
 import { agentsApi } from '../../api/agents';
 import { projectsApi } from '../../api/projects';
+import { open as openDialog } from '../../lib/dialog';
 import {
   Agent,
+  FsWatchEventType,
+  FsWatchTriggerConfig,
   ProjectBoardColumn,
   RuleGroup,
   RuleNode,
@@ -37,6 +48,11 @@ import { RuleBuilder } from './RuleBuilder';
 import { ruleToSentence } from './ruleSentence';
 import { getWorkflowScheduleConfig } from './scheduleConfig';
 import { toast } from '../../store/toastStore';
+import {
+  fsWatcherManager,
+  normalizeFsPath,
+  type FsWatchIssue,
+} from '../../services/fsWatcher';
 
 interface Props {
   directParentNodeIds: string[];
@@ -230,6 +246,10 @@ export function NodeInspector({
                 <ScheduleInspector data={data} onUpdate={update} />
               )}
 
+              {node.type === 'trigger.fs-watch' && (
+                <FsWatchInspector workflowId={workflowId} data={data} onUpdate={update} />
+              )}
+
               {node.type === 'agent.run' && <AgentRunInspector data={data} onUpdate={update} />}
 
               {node.type === 'logic.if' && <LogicIfInspector data={data} onUpdate={update} />}
@@ -304,6 +324,201 @@ function ScheduleInspector({
       />
     </div>
   );
+}
+
+const FS_WATCH_EVENT_OPTIONS: Array<{ value: FsWatchEventType; label: string }> = [
+  { value: 'created', label: 'Created' },
+  { value: 'modified', label: 'Modified' },
+  { value: 'deleted', label: 'Deleted' },
+];
+
+function FsWatchInspector({
+  workflowId,
+  data,
+  onUpdate,
+}: {
+  workflowId: string;
+  data: Record<string, unknown>;
+  onUpdate: (patch: Record<string, unknown>) => void;
+}) {
+  const config = normalizeInspectorFsWatchConfig(data);
+  const issues = useFsWatchIssues(workflowId);
+  const issueByPath = useMemo(() => {
+    const map = new Map<string, FsWatchIssue>();
+    for (const issue of issues) {
+      map.set(normalizeFsPath(issue.path), issue);
+    }
+    return map;
+  }, [issues]);
+
+  const setPaths = (paths: string[]) => onUpdate({ paths: uniquePaths(paths) });
+  const addPath = async (directory: boolean) => {
+    const selected = await openDialog({ directory, multiple: false });
+    const selectedPath = Array.isArray(selected) ? selected[0] : selected;
+    if (typeof selectedPath !== 'string' || !selectedPath.trim()) {
+      return;
+    }
+    setPaths([...config.paths, selectedPath]);
+  };
+  const toggleEvent = (eventType: FsWatchEventType, checked: boolean) => {
+    const next = checked
+      ? [...new Set([...config.events, eventType])]
+      : config.events.filter((event) => event !== eventType);
+    onUpdate({ events: next });
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <label className="text-[11px] uppercase tracking-wider text-muted">Paths</label>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => void addPath(false)}
+              className="flex items-center gap-1 rounded border border-edge px-2 py-1 text-[10px] text-muted hover:text-white hover:bg-edge/30"
+            >
+              <FilePlus size={12} />
+              File
+            </button>
+            <button
+              type="button"
+              onClick={() => void addPath(true)}
+              className="flex items-center gap-1 rounded border border-edge px-2 py-1 text-[10px] text-muted hover:text-white hover:bg-edge/30"
+            >
+              <FolderPlus size={12} />
+              Folder
+            </button>
+          </div>
+        </div>
+        {config.paths.length === 0 ? (
+          <p className="text-[10px] text-red-300">Add at least one path.</p>
+        ) : (
+          <ul className="space-y-1">
+            {config.paths.map((path) => {
+              const normalized = normalizeFsPath(path);
+              const issue = issueByPath.get(normalized);
+              return (
+                <li
+                  key={normalized}
+                  className="rounded border border-edge bg-surface/60 px-2 py-1.5"
+                >
+                  <div className="flex items-start gap-2">
+                    <span className="min-w-0 flex-1 break-all font-mono text-[10px] text-white">
+                      {path}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPaths(config.paths.filter((p) => p !== path))}
+                      className="shrink-0 rounded p-0.5 text-muted hover:text-red-300"
+                      aria-label="Remove path"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                  {issue && (
+                    <div
+                      className={`mt-1 flex items-start gap-1 text-[10px] ${
+                        issue.kind === 'fs:watch-error' ? 'text-red-300' : 'text-amber-300'
+                      }`}
+                    >
+                      <AlertCircle size={11} className="mt-0.5 shrink-0" />
+                      <span>{issue.message || 'Path not available on this device'}</span>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Events</label>
+        <div className="grid grid-cols-3 gap-2">
+          {FS_WATCH_EVENT_OPTIONS.map((option) => (
+            <Checkbox
+              key={option.value}
+              checked={config.events.includes(option.value)}
+              onCheckedChange={(checked) => toggleEvent(option.value, checked === true)}
+              label={option.label}
+              labelClassName="text-[11px] text-muted"
+            />
+          ))}
+        </div>
+        {config.events.length === 0 && (
+          <p className="text-[10px] text-red-300">Select at least one event.</p>
+        )}
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Include globs</label>
+        <Textarea
+          value={config.includeGlobs.join('\n')}
+          onChange={(event) =>
+            onUpdate({ includeGlobs: parseLineList(event.currentTarget.value) })
+          }
+          placeholder="**/*.md"
+          rows={3}
+          className={`${TEMPLATE_FIELD_CLASSNAME} resize-none`}
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-[11px] uppercase tracking-wider text-muted">Exclude globs</label>
+        <Textarea
+          value={config.excludeGlobs.join('\n')}
+          onChange={(event) =>
+            onUpdate({ excludeGlobs: parseLineList(event.currentTarget.value) })
+          }
+          placeholder={'node_modules/**\n.git/**'}
+          rows={3}
+          className={`${TEMPLATE_FIELD_CLASSNAME} resize-none`}
+        />
+      </div>
+    </div>
+  );
+}
+
+function useFsWatchIssues(workflowId: string): FsWatchIssue[] {
+  const [issues, setIssues] = useState(() => fsWatcherManager.getIssues(workflowId));
+  useEffect(() => {
+    setIssues(fsWatcherManager.getIssues(workflowId));
+    return fsWatcherManager.subscribeIssues(() => {
+      setIssues(fsWatcherManager.getIssues(workflowId));
+    });
+  }, [workflowId]);
+  return issues;
+}
+
+function normalizeInspectorFsWatchConfig(data: Record<string, unknown>): Required<FsWatchTriggerConfig> {
+  return {
+    paths: asStringArray(data.paths),
+    events: asStringArray(data.events).filter(isFsWatchEventType),
+    includeGlobs: asStringArray(data.includeGlobs),
+    excludeGlobs: asStringArray(data.excludeGlobs),
+  };
+}
+
+function parseLineList(value: string): string[] {
+  return value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function uniquePaths(paths: string[]): string[] {
+  return [...new Set(paths.map(normalizeFsPath).filter(Boolean))];
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function isFsWatchEventType(value: string): value is FsWatchEventType {
+  return value === 'created' || value === 'modified' || value === 'deleted';
 }
 
 function AgentRunInspector({

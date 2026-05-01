@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
-import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
+import { QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { listen } from './api/transport';
+import { queryClient } from './queryClient';
 import { Sidebar } from './components/Sidebar';
 import { useUiStore } from './store/uiStore';
 import { useAuthStore } from './store/authStore';
@@ -30,15 +31,6 @@ import { AuthScreen } from './screens/Auth';
 import { BootScreen } from './components/BootScreen';
 import { BottomBar } from './components/BottomBar';
 import { ToastContainer } from './components/Toast';
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      staleTime: 5_000,
-    },
-  },
-});
 
 function toChatStreamId(runId: string | null | undefined, sessionId?: string | null) {
   if (runId?.startsWith('chat:')) return runId;

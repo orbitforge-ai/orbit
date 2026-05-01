@@ -65,6 +65,9 @@ importers:
       '@tauri-apps/plugin-dialog':
         specifier: ~2.7.0
         version: 2.7.0
+      '@tauri-apps/plugin-fs':
+        specifier: ~2.5.0
+        version: 2.5.0
       '@tauri-apps/plugin-log':
         specifier: 2.8.0
         version: 2.8.0
@@ -113,6 +116,9 @@ importers:
       '@tiptap/suggestion':
         specifier: ^3.22.4
         version: 3.22.4(@tiptap/core@3.22.4(@tiptap/pm@3.22.4))(@tiptap/pm@3.22.4)
+      '@types/picomatch':
+        specifier: ^4.0.3
+        version: 4.0.3
       '@xterm/addon-fit':
         specifier: ^0.10.0
         version: 0.10.0(@xterm/xterm@5.5.0)
@@ -137,6 +143,9 @@ importers:
       lucide-react:
         specifier: ^1.7.0
         version: 1.7.0(react@19.2.4)
+      picomatch:
+        specifier: ^4.0.4
+        version: 4.0.4
       react:
         specifier: ^19.1.0
         version: 19.2.4
@@ -1367,6 +1376,9 @@ packages:
   '@tauri-apps/plugin-dialog@2.7.0':
     resolution: {integrity: sha512-4nS/hfGMGCXiAS3LtVjH9AgsSAPJeG/7R+q8agTFqytjnMa4Zq95Bq8WzVDkckpanX+yyRHXnRtrKXkANKDHvw==}
 
+  '@tauri-apps/plugin-fs@2.5.0':
+    resolution: {integrity: sha512-c83kbz61AK+rKjhS+je9+stIO27nXj7p9cqeg36TwkIUtxpCFTttlHHtqon6h6FN54cXjyAjlMPOJcW3mwE5XQ==}
+
   '@tauri-apps/plugin-log@2.8.0':
     resolution: {integrity: sha512-a+7rOq3MJwpTOLLKbL8d0qGZ85hgHw5pNOWusA9o3cf7cEgtYHiGY/+O8fj8MvywQIGqFv0da2bYQDlrqLE7rw==}
 
@@ -1605,6 +1617,9 @@ packages:
 
   '@types/node@20.19.39':
     resolution: {integrity: sha512-orrrD74MBUyK8jOAD/r0+lfa1I2MO6I+vAkmAWzMYbCcgrN4lCrmK52gRFQq/JRxfYPfonkr4b0jcY7Olqdqbw==}
+
+  '@types/picomatch@4.0.3':
+    resolution: {integrity: sha512-iG0T6+nYJ9FAPmx9SsUlnwcq1ZVRuCXcVEvWnntoPlrOpwtSTKNDC9uVAxTsC3PUvJ+99n4RpAcNgBbHX3JSnQ==}
 
   '@types/react-dom@19.2.3':
     resolution: {integrity: sha512-jp2L/eY6fn+KgVVQAOqYItbF0VY/YApe5Mz2F0aykSO8gx31bYCZyvSeYxCHKvzHG5eZjc+zyaS5BrBWya2+kQ==}
@@ -2499,6 +2514,10 @@ packages:
     resolution: {integrity: sha512-V7+vQEJ06Z+c5tSye8S+nHUfI51xoXIXjHQ99cQtKUkQqqO1kO/KCJUfZXuB47h/YBlDhah2H3hdUGXn8ie0oA==}
     engines: {node: '>=8.6'}
 
+  picomatch@4.0.4:
+    resolution: {integrity: sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A==}
+    engines: {node: '>=12'}
+
   pino-abstract-transport@1.2.0:
     resolution: {integrity: sha512-Guhh8EZfPCfH+PMXAb6rKOjGQEoy0xlAIn+irODG5kgfYV+BQ0rGYYWTIel3P5mmyXqkYkPmdIkywsn6QKUR1Q==}
 
@@ -3198,14 +3217,13 @@ snapshots:
       picocolors: 1.1.1
       sisteransi: 1.0.5
 
-  '@covector/apply@0.10.0(mocha@10.8.2)':
+  '@covector/apply@0.10.0':
     dependencies:
       '@covector/files': 0.8.0
       effection: 2.0.8(mocha@10.8.2)
       semver: 7.7.4
     transitivePeerDependencies:
       - encoding
-      - mocha
 
   '@covector/assemble@0.12.0(mocha@10.8.2)':
     dependencies:
@@ -3223,7 +3241,7 @@ snapshots:
       - mocha
       - supports-color
 
-  '@covector/changelog@0.12.0(mocha@10.8.2)':
+  '@covector/changelog@0.12.0':
     dependencies:
       '@covector/files': 0.8.0
       effection: 2.0.8(mocha@10.8.2)
@@ -3233,12 +3251,11 @@ snapshots:
       unified: 9.2.2
     transitivePeerDependencies:
       - encoding
-      - mocha
       - supports-color
 
   '@covector/command@0.8.0(mocha@10.8.2)':
     dependencies:
-      '@effection/process': 2.1.4(mocha@10.8.2)
+      '@effection/process': 2.1.4
       effection: 2.0.8(mocha@10.8.2)
     transitivePeerDependencies:
       - encoding
@@ -3314,8 +3331,10 @@ snapshots:
     dependencies:
       effection: 2.0.8(mocha@10.8.2)
       mocha: 10.8.2
+    transitivePeerDependencies:
+      - encoding
 
-  '@effection/process@2.1.4(mocha@10.8.2)':
+  '@effection/process@2.1.4':
     dependencies:
       cross-spawn: 7.0.6
       ctrlc-windows: 2.2.0
@@ -3323,7 +3342,6 @@ snapshots:
       shellwords: 0.1.1
     transitivePeerDependencies:
       - encoding
-      - mocha
 
   '@effection/stream@2.0.6':
     dependencies:
@@ -4119,6 +4137,10 @@ snapshots:
     dependencies:
       '@tauri-apps/api': 2.10.1
 
+  '@tauri-apps/plugin-fs@2.5.0':
+    dependencies:
+      '@tauri-apps/api': 2.10.1
+
   '@tauri-apps/plugin-log@2.8.0':
     dependencies:
       '@tauri-apps/api': 2.10.1
@@ -4393,6 +4415,8 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
+  '@types/picomatch@4.0.3': {}
+
   '@types/react-dom@19.2.3(@types/react@19.2.14)':
     dependencies:
       '@types/react': 19.2.14
@@ -4599,9 +4623,9 @@ snapshots:
   covector@0.12.4(mocha@10.8.2):
     dependencies:
       '@clack/prompts': 0.7.0
-      '@covector/apply': 0.10.0(mocha@10.8.2)
+      '@covector/apply': 0.10.0
       '@covector/assemble': 0.12.0(mocha@10.8.2)
-      '@covector/changelog': 0.12.0(mocha@10.8.2)
+      '@covector/changelog': 0.12.0
       '@covector/command': 0.8.0(mocha@10.8.2)
       '@covector/files': 0.8.0
       effection: 2.0.8(mocha@10.8.2)
@@ -5504,6 +5528,8 @@ snapshots:
   picocolors@1.1.1: {}
 
   picomatch@2.3.2: {}
+
+  picomatch@4.0.4: {}
 
   pino-abstract-transport@1.2.0:
     dependencies:

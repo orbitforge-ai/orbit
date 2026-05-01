@@ -15,6 +15,8 @@ export function TriggerNode({ data, type, selected }: NodeProps) {
   const description =
     type === 'trigger.schedule'
       ? describeWorkflowSchedule((data as Record<string, unknown>) ?? {})
+      : type === 'trigger.fs-watch'
+        ? describeFsWatchTrigger((data as Record<string, unknown>) ?? {})
       : (data as { description?: string }).description ?? 'Trigger';
   return (
     <div
@@ -32,6 +34,21 @@ export function TriggerNode({ data, type, selected }: NodeProps) {
       <Handle type="source" position={Position.Right} className="!bg-accent" />
     </div>
   );
+}
+
+function describeFsWatchTrigger(data: Record<string, unknown>): string {
+  const paths = Array.isArray(data.paths)
+    ? data.paths.filter(
+        (path): path is string => typeof path === 'string' && path.trim().length > 0,
+      )
+    : [];
+  const events = Array.isArray(data.events)
+    ? data.events.filter(
+        (event): event is string => typeof event === 'string' && event.trim().length > 0,
+      )
+    : [];
+  const pathLabel = paths.length === 1 ? '1 path' : `${paths.length} paths`;
+  return `${pathLabel} · ${events.length ? events.join(', ') : 'no events'}`;
 }
 
 export function AgentNode({ id, data, type, selected }: NodeProps) {
@@ -320,6 +337,7 @@ export function IntegrationNode({ id, data, type, selected }: NodeProps) {
 export const nodeTypes = {
   'trigger.manual': TriggerNode,
   'trigger.schedule': TriggerNode,
+  'trigger.fs-watch': TriggerNode,
   'agent.run': AgentNode,
   'board.work_item.create': WorkItemNode,
   'board.proposal.enqueue': ProposalQueueNode,

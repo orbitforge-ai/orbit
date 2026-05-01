@@ -9,6 +9,9 @@ export const projectWorkflowsApi = {
   list: (projectId: string): Promise<ProjectWorkflow[]> =>
     invoke('list_project_workflows', { projectId }),
 
+  listEnabledTriggers: (): Promise<ProjectWorkflow[]> =>
+    invoke('list_enabled_project_workflow_triggers'),
+
   get: (id: string): Promise<ProjectWorkflow> =>
     invoke('get_project_workflow', { id }),
 

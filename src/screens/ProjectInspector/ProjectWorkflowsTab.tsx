@@ -89,7 +89,15 @@ export function ProjectWorkflowsTab({ projectId }: { projectId: string }) {
           {workflows.map((workflow) => (
             <li
               key={workflow.id}
-              className="group flex items-center gap-3 px-4 py-3 hover:bg-surface transition-colors"
+              role="button"
+              tabIndex={0}
+              onClick={() => openWorkflowEditor(workflow.id)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                openWorkflowEditor(workflow.id);
+              }}
+              className="group flex cursor-pointer items-center gap-3 px-4 py-3 hover:bg-surface focus:bg-surface focus:outline-none transition-colors"
             >
               <div className="w-8 h-8 rounded-lg bg-accent/15 flex items-center justify-center shrink-0">
                 <WorkflowIcon size={14} className="text-accent-hover" />
@@ -118,31 +126,37 @@ export function ProjectWorkflowsTab({ projectId }: { projectId: string }) {
                   trigger: {workflow.triggerKind} · {workflow.graph.nodes.length} nodes
                 </p>
               </div>
-              <Checkbox
-                checked={workflow.enabled}
-                onCheckedChange={(checked) =>
-                  enableMutation.mutate({ id: workflow.id, enabled: checked === true })
-                }
-                label="Enabled"
-                labelClassName="text-xs text-muted"
-              />
-              <button
-                onClick={() => openWorkflowEditor(workflow.id)}
-                className="p-1.5 rounded-md text-muted hover:text-white hover:bg-surface transition-colors"
-                title="Open editor"
+              <div
+                className="flex items-center gap-2"
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
               >
-                <Pencil size={14} />
-              </button>
-              <button
-                onClick={async () => {
-                  if (!(await confirm(`Delete workflow "${workflow.name}"?`))) return;
-                  deleteMutation.mutate(workflow.id);
-                }}
-                className="p-1.5 rounded-md text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors"
-                title="Delete workflow"
-              >
-                <Trash2 size={14} />
-              </button>
+                <Checkbox
+                  checked={workflow.enabled}
+                  onCheckedChange={(checked) =>
+                    enableMutation.mutate({ id: workflow.id, enabled: checked === true })
+                  }
+                  label="Enabled"
+                  labelClassName="text-xs text-muted"
+                />
+                <button
+                  onClick={() => openWorkflowEditor(workflow.id)}
+                  className="p-1.5 rounded-md text-muted hover:text-white hover:bg-surface transition-colors"
+                  title="Open editor"
+                >
+                  <Pencil size={14} />
+                </button>
+                <button
+                  onClick={async () => {
+                    if (!(await confirm(`Delete workflow "${workflow.name}"?`))) return;
+                    deleteMutation.mutate(workflow.id);
+                  }}
+                  className="p-1.5 rounded-md text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                  title="Delete workflow"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             </li>
           ))}
         </ul>

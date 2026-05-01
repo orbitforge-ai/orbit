@@ -1,6 +1,7 @@
 import {
   Bot,
   FileCode,
+  FolderOpen,
   GitBranch,
   Globe,
   KanbanSquare,
@@ -13,7 +14,7 @@ import {
   Terminal,
   Timer,
 } from 'lucide-react';
-import type { WorkflowNodeType } from '../../types';
+import type { FsWatchTriggerConfig, WorkflowNodeType } from '../../types';
 import { DEFAULT_WORKFLOW_SCHEDULE } from './scheduleConfig';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -59,6 +60,18 @@ export const NODE_REGISTRY: NodeMeta[] = [
     group: 'Triggers',
     icon: Timer,
     defaultData: DEFAULT_WORKFLOW_SCHEDULE as unknown as Record<string, unknown>,
+  },
+  {
+    type: 'trigger.fs-watch',
+    label: 'Watch files',
+    group: 'Triggers',
+    icon: FolderOpen,
+    defaultData: ({
+      paths: [],
+      events: ['created', 'modified', 'deleted'],
+      includeGlobs: [],
+      excludeGlobs: [],
+    } satisfies FsWatchTriggerConfig) as unknown as Record<string, unknown>,
   },
   {
     type: 'agent.run',

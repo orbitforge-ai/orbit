@@ -92,6 +92,9 @@ pub fn validate_graph(graph: &WorkflowGraph) -> Result<(), String> {
                 }
             }
         }
+        if node.node_type == "trigger.fs-watch" {
+            validate_fs_watch_config(node)?;
+        }
     }
 
     // Per-target incoming edge count + per-source outgoing edge count for logic.if
@@ -149,6 +152,52 @@ pub fn validate_graph(graph: &WorkflowGraph) -> Result<(), String> {
         }
     }
 
+    Ok(())
+}
+
+fn validate_fs_watch_config(node: &WorkflowNode) -> Result<(), String> {
+    let path_count = node
+        .data
+        .get("paths")
+        .and_then(|value| value.as_array())
+        .map(|paths: &Vec<Value>| {
+            paths
+                .iter()
+                .filter_map(|value| value.as_str())
+                .filter(|path: &&str| !path.trim().is_empty())
+                .count()
+        })
+        .unwrap_or(0);
+    if path_count == 0 {
+        return Err(format!(
+            "workflow: fs-watch trigger '{}' must watch at least one path",
+            node.id
+        ));
+    }
+
+    let events = node
+        .data
+        .get("events")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let event_count = events
+        .iter()
+        .filter_map(|value| value.as_str())
+        .filter(|event: &&str| matches!(*event, "created" | "modified" | "deleted"))
+        .count();
+    if event_count == 0 {
+        return Err(format!(
+            "workflow: fs-watch trigger '{}' must select at least one event type",
+            node.id
+        ));
+    }
+    if event_count != events.len() {
+        return Err(format!(
+            "workflow: fs-watch trigger '{}' has an unsupported event type",
+            node.id
+        ));
+    }
     Ok(())
 }
 
@@ -246,6 +295,12 @@ pub fn workflow_node_default_data(node_type: &str) -> Option<Value> {
             "timezone": "UTC",
             "missedRunPolicy": "skip",
         }),
+        "trigger.fs-watch" => json!({
+            "paths": [],
+            "events": ["created", "modified", "deleted"],
+            "includeGlobs": [],
+            "excludeGlobs": [],
+        }),
         "agent.run" => json!({
             "agentId": "",
             "promptTemplate": "",
@@ -320,6 +375,7 @@ fn node_type_label(node_type: &str) -> String {
     match node_type {
         "trigger.manual" => "Run now".to_string(),
         "trigger.schedule" => "Schedule".to_string(),
+        "trigger.fs-watch" => "Watch files".to_string(),
         "agent.run" => "Run agent".to_string(),
         "logic.if" => "If / branch".to_string(),
         "code.bash.run" => "Code · Bash".to_string(),
@@ -508,6 +564,13 @@ pub async fn list_project_workflows(
 }
 
 #[tauri::command]
+pub async fn list_enabled_project_workflow_triggers(
+    app: tauri::State<'_, AppContext>,
+) -> Result<Vec<ProjectWorkflow>, String> {
+    app.repos.project_workflows().list_enabled_triggers().await
+}
+
+#[tauri::command]
 pub async fn get_project_workflow(
     id: String,
     app: tauri::State<'_, AppContext>,
@@ -629,6 +692,17 @@ mod http {
                 .await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
+        reg.register(
+            "list_enabled_project_workflow_triggers",
+            |ctx, _args| async move {
+                let r = ctx
+                    .repos
+                    .project_workflows()
+                    .list_enabled_triggers()
+                    .await?;
+                serde_json::to_value(r).map_err(|e| e.to_string())
+            },
+        );
         reg.register("get_project_workflow", |ctx, args| async move {
             let a: IdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
             let r = ctx.repos.project_workflows().get(&a.id).await?;

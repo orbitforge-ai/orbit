@@ -113,6 +113,32 @@ function flowToWorkflow(nodes: Node[], edges: Edge[]): WorkflowGraph {
   };
 }
 
+function validateWorkflowForSave(nodes: Node[]): string | null {
+  for (const node of nodes) {
+    if (node.type !== 'trigger.fs-watch') {
+      continue;
+    }
+    const data = ((node.data as Record<string, unknown>) ?? {}) as Record<string, unknown>;
+    const paths = arrayOfStrings(data.paths).filter((path) => path.trim().length > 0);
+    if (paths.length === 0) {
+      return 'Watch files triggers need at least one path.';
+    }
+    const events = arrayOfStrings(data.events).filter((event) =>
+      event === 'created' || event === 'modified' || event === 'deleted',
+    );
+    if (events.length === 0) {
+      return 'Watch files triggers need at least one event type.';
+    }
+  }
+  return null;
+}
+
+function arrayOfStrings(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
 function getUpstreamNodes(nodes: Node[], edges: Edge[], selectedNodeId: string | null): Node[] {
   if (!selectedNodeId) {
     return [];
@@ -333,6 +359,7 @@ function Editor({ workflowId }: { workflowId: string }) {
       selectedNode ? nodeHasLinkedOutputs(selectedNode, nodesWithDownstreamLinks) : false,
     [nodesWithDownstreamLinks, selectedNode],
   );
+  const saveValidationError = useMemo(() => validateWorkflowForSave(nodes), [nodes]);
 
   const markDirty = useCallback(() => setDirty(true), []);
 
@@ -638,8 +665,12 @@ function Editor({ workflowId }: { workflowId: string }) {
     if (!workflow || !dirty || saveMutation.isPending) {
       return;
     }
+    if (saveValidationError) {
+      setSaveError(saveValidationError);
+      return;
+    }
     saveMutation.mutate();
-  }, [dirty, saveMutation, workflow]);
+  }, [dirty, saveMutation, saveValidationError, workflow]);
 
   const runMutation = useMutation({
     mutationFn: () => workflowRunsApi.start(workflowId, {}),
@@ -772,6 +803,7 @@ function Editor({ workflowId }: { workflowId: string }) {
         <button
           onClick={handleSave}
           disabled={!dirty || saveMutation.isPending}
+          title={saveValidationError ?? undefined}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Save size={12} />

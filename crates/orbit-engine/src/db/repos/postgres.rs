@@ -2473,7 +2473,11 @@ impl ChatRepo for PgRepos {
                FROM chat_sessions
               WHERE id = $1 AND tenant_id = $2",
         )
-            .bind(session_id).bind(self.tenant_id()).fetch_one(&self.pool).await.map_err(db_err)?;
+        .bind(session_id)
+        .bind(self.tenant_id())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db_err)?;
         let tokens: Option<i64> = row.try_get(0).map_err(db_err)?;
         let prompt_tokens: Option<i64> = row.try_get(1).map_err(db_err)?;
         let turn_tokens: Option<i64> = row.try_get(2).map_err(db_err)?;
@@ -3293,6 +3297,24 @@ impl WorkflowRunRepo for PgRepos {
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()
             .map_err(db_err)
+    }
+
+    async fn has_active_for_workflow(&self, workflow_id: &str) -> Result<bool, String> {
+        let row = sqlx::query(
+            "SELECT EXISTS(
+                SELECT 1 FROM workflow_runs
+                WHERE workflow_id = $1
+                  AND tenant_id = $2
+                  AND status IN ('queued', 'running')
+                LIMIT 1
+            )",
+        )
+        .bind(workflow_id)
+        .bind(self.tenant_id())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db_err)?;
+        row.try_get(0).map_err(db_err)
     }
 
     async fn get_with_steps(&self, run_id: &str) -> Result<WorkflowRunWithSteps, String> {
