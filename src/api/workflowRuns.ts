@@ -1,5 +1,5 @@
 import { invoke } from './transport';
-import { WorkflowRun, WorkflowRunSummary, WorkflowRunWithSteps } from '../types';
+import { WorkflowRun, WorkflowRunSummary, WorkflowRunView, WorkflowRunWithSteps } from '../types';
 
 export const workflowRunsApi = {
   start: (
@@ -25,6 +25,9 @@ export const workflowRunsApi = {
 
   get: (runId: string): Promise<WorkflowRunWithSteps> =>
     invoke('get_workflow_run', { runId }),
+
+  getView: (runId: string): Promise<WorkflowRunView> =>
+    invoke('get_workflow_run_view', { runId }),
 
   cancel: (runId: string): Promise<void> =>
     invoke('cancel_workflow_run', { runId }),

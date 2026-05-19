@@ -7,7 +7,11 @@
 use serde_json::Value;
 
 use crate::app_context::AppContext;
-use crate::models::workflow_run::{WorkflowRun, WorkflowRunSummary, WorkflowRunWithSteps};
+use crate::models::chat::ChatMessageRow;
+use crate::models::workflow_run::{
+    WorkflowRun, WorkflowRunAgentSession, WorkflowRunChatMessage, WorkflowRunSummary,
+    WorkflowRunView, WorkflowRunWithSteps,
+};
 use crate::workflows::WorkflowOrchestrator;
 
 #[tauri::command]
@@ -60,6 +64,66 @@ pub async fn get_workflow_run(
     app: tauri::State<'_, AppContext>,
 ) -> Result<WorkflowRunWithSteps, String> {
     app.repos.workflow_runs().get_with_steps(&run_id).await
+}
+
+#[tauri::command]
+pub async fn get_workflow_run_view(
+    run_id: String,
+    app: tauri::State<'_, AppContext>,
+) -> Result<WorkflowRunView, String> {
+    get_workflow_run_view_impl(run_id, app.inner()).await
+}
+
+pub async fn get_workflow_run_view_impl(
+    run_id: String,
+    app: &AppContext,
+) -> Result<WorkflowRunView, String> {
+    let detail = app.repos.workflow_runs().get_with_steps(&run_id).await?;
+    let sessions = app
+        .repos
+        .chat()
+        .list_workflow_agent_sessions(&run_id)
+        .await?;
+    let mut agent_sessions = Vec::with_capacity(sessions.len());
+
+    for session in sessions {
+        let messages = app
+            .repos
+            .chat()
+            .get_messages(&session.id, 0, 0)
+            .await?
+            .messages
+            .into_iter()
+            .map(hydrate_workflow_run_message)
+            .collect();
+
+        agent_sessions.push(WorkflowRunAgentSession {
+            node_id: session.workflow_node_id.unwrap_or_default(),
+            session_id: session.id,
+            agent_id: session.agent_id,
+            execution_state: session.execution_state,
+            finish_summary: session.finish_summary,
+            terminal_error: session.terminal_error,
+            messages,
+        });
+    }
+
+    Ok(WorkflowRunView {
+        run: detail.run,
+        steps: detail.steps,
+        agent_sessions,
+    })
+}
+
+fn hydrate_workflow_run_message(row: ChatMessageRow) -> WorkflowRunChatMessage {
+    let content = serde_json::from_str(&row.content_json).unwrap_or_default();
+    WorkflowRunChatMessage {
+        id: Some(row.id),
+        role: row.role,
+        content,
+        created_at: row.created_at,
+        is_compacted: row.is_compacted,
+    }
 }
 
 #[tauri::command]
@@ -139,6 +203,11 @@ mod http {
         reg.register("get_workflow_run", |ctx, args| async move {
             let a: RunIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
             let r = ctx.repos.workflow_runs().get_with_steps(&a.run_id).await?;
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("get_workflow_run_view", |ctx, args| async move {
+            let a: RunIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let r = get_workflow_run_view_impl(a.run_id, ctx.as_ref()).await?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("cancel_workflow_run", |ctx, args| async move {

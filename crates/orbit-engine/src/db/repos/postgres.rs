@@ -351,7 +351,7 @@ const CHAT_SESSION_SELECT: &str =
     cs.parent_session_id, cs.source_bus_message_id, cs.chain_depth, cs.execution_state,
     cs.finish_summary, cs.terminal_error, bm.from_agent_id, a.name, src.id, src.title,
     cs.created_at::text, cs.updated_at::text, cs.project_id, cs.worktree_name, cs.worktree_branch,
-    cs.worktree_path
+    cs.worktree_path, cs.workflow_run_id, cs.workflow_node_id
     FROM chat_sessions cs
     LEFT JOIN bus_messages bm ON bm.id = cs.source_bus_message_id AND bm.tenant_id = cs.tenant_id
     LEFT JOIN agents a ON a.id = bm.from_agent_id AND a.tenant_id = cs.tenant_id
@@ -380,6 +380,8 @@ fn map_chat_session_row(row: &PgRow) -> Result<ChatSession, sqlx::Error> {
         worktree_name: row.try_get(18)?,
         worktree_branch: row.try_get(19)?,
         worktree_path: row.try_get(20)?,
+        workflow_run_id: row.try_get(21)?,
+        workflow_node_id: row.try_get(22)?,
     })
 }
 
@@ -2250,6 +2252,25 @@ impl ChatRepo for PgRepos {
         })
     }
 
+    async fn list_workflow_agent_sessions(
+        &self,
+        workflow_run_id: &str,
+    ) -> Result<Vec<ChatSession>, String> {
+        let rows = sqlx::query(&format!(
+            "{} WHERE cs.workflow_run_id = $1 AND cs.tenant_id = $2 ORDER BY cs.created_at ASC",
+            CHAT_SESSION_SELECT
+        ))
+        .bind(workflow_run_id)
+        .bind(self.tenant_id())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        rows.iter()
+            .map(map_chat_session_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_err)
+    }
+
     async fn create_session(
         &self,
         agent_id: String,
@@ -2291,6 +2312,8 @@ impl ChatRepo for PgRepos {
             worktree_name: None,
             worktree_branch: None,
             worktree_path: None,
+            workflow_run_id: None,
+            workflow_node_id: None,
         })
     }
 

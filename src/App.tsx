@@ -24,6 +24,7 @@ import { AgentInspector } from './screens/AgentInspector';
 import { TaskEdit } from './screens/TaskEdit';
 import { ProjectInspector } from './screens/ProjectInspector';
 import { WorkflowEditor } from './screens/WorkflowEditor';
+import { WorkflowRunViewer } from './screens/WorkflowRunViewer';
 import { Memory } from './screens/Memory';
 import { Plugins } from './screens/Plugins';
 import { Settings } from './screens/Settings';
@@ -155,6 +156,7 @@ function AppContent() {
       agents: <AgentInspector />,
       projects: <ProjectInspector />,
       'workflow-editor': <WorkflowEditor />,
+      'workflow-run-viewer': <WorkflowRunViewer />,
       memory: <Memory />,
       plugins: <Plugins />,
       'task-edit': <TaskEdit />,

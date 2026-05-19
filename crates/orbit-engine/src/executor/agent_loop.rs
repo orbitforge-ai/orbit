@@ -654,6 +654,10 @@ async fn execute_agent_loop_internal(
     let memory_path = format!("memory/conversation_{}.json", run_id);
     let _ = workspace::write_workspace_file(agent_id, &memory_path, &conversation_json);
 
+    if let Some(session_id) = session_id.as_deref() {
+        persist_workflow_session_messages(db, session_id, &messages);
+    }
+
     save_conversation_to_db(
         db,
         agent_id,
@@ -726,6 +730,7 @@ pub async fn run_agent_loop(
 
 pub(crate) async fn run_agent_loop_for_workflow(
     run_id: &str,
+    workflow_node_id: &str,
     agent_id: &str,
     cfg: &AgentLoopConfig,
     log_path: &PathBuf,
@@ -745,6 +750,7 @@ pub(crate) async fn run_agent_loop_for_workflow(
         db,
         agent_id,
         run_id,
+        Some(workflow_node_id),
         project_id,
         &cfg.goal,
         user_question_registry.cloned(),
@@ -804,6 +810,7 @@ async fn create_workflow_loop_session(
     db: &DbPool,
     agent_id: &str,
     run_id: &str,
+    workflow_node_id: Option<&str>,
     project_id: Option<&str>,
     goal: &str,
     user_question_registry: Option<UserQuestionRegistry>,
@@ -811,6 +818,7 @@ async fn create_workflow_loop_session(
     let session_id = ulid::Ulid::new().to_string();
     let agent_id = agent_id.to_string();
     let run_id = run_id.to_string();
+    let workflow_node_id = workflow_node_id.map(str::to_string);
     let project_id = project_id.map(str::to_string);
     let goal_for_db = goal.to_string();
     let goal_for_message = goal.to_string();
@@ -824,14 +832,17 @@ async fn create_workflow_loop_session(
             "INSERT INTO chat_sessions (
                id, agent_id, title, archived, session_type, parent_session_id, source_bus_message_id,
                chain_depth, execution_state, finish_summary, terminal_error, created_at, updated_at,
-               project_id, allow_sub_agents, worktree_name, worktree_branch, worktree_path, tenant_id
-             ) VALUES (?1, ?2, ?3, 0, 'workflow', NULL, NULL, 0, 'running', NULL, NULL, ?4, ?4, ?5, 1, NULL, NULL, NULL, COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local'))",
+               project_id, allow_sub_agents, worktree_name, worktree_branch, worktree_path,
+               workflow_run_id, workflow_node_id, tenant_id
+             ) VALUES (?1, ?2, ?3, 0, 'workflow', NULL, NULL, 0, 'running', NULL, NULL, ?4, ?4, ?5, 1, NULL, NULL, NULL, ?6, ?7, COALESCE((SELECT tenant_id FROM agents WHERE id = ?2), 'local'))",
             rusqlite::params![
                 session_id_for_db,
                 agent_id,
                 format!("Workflow run {}", run_id),
                 now,
                 project_id,
+                run_id,
+                workflow_node_id,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -1511,6 +1522,56 @@ fn save_conversation_to_db(
         now
       ]
     );
+    }
+}
+
+fn persist_workflow_session_messages(db: &DbPool, session_id: &str, messages: &[ChatMessage]) {
+    if let Ok(conn) = db.get() {
+        let tenant_id: String = conn
+            .query_row(
+                "SELECT tenant_id FROM chat_sessions WHERE id = ?1",
+                rusqlite::params![session_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "local".to_string());
+        let now = chrono::Utc::now();
+        let tx = match conn.transaction() {
+            Ok(tx) => tx,
+            Err(_) => return,
+        };
+
+        let _ = tx.execute(
+            "DELETE FROM chat_messages WHERE session_id = ?1 AND tenant_id = ?2",
+            rusqlite::params![session_id, tenant_id],
+        );
+
+        for (index, message) in messages.iter().enumerate() {
+            let content = match serde_json::to_string(&message.content) {
+                Ok(content) => content,
+                Err(_) => continue,
+            };
+            let created_at = message.created_at.clone().unwrap_or_else(|| {
+                (now + chrono::Duration::milliseconds(index as i64)).to_rfc3339()
+            });
+            let _ = tx.execute(
+                "INSERT INTO chat_messages (id, session_id, role, content, created_at, tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    ulid::Ulid::new().to_string(),
+                    session_id,
+                    message.role,
+                    content,
+                    created_at,
+                    tenant_id,
+                ],
+            );
+        }
+
+        let _ = tx.execute(
+            "UPDATE chat_sessions SET updated_at = ?1 WHERE id = ?2 AND tenant_id = ?3",
+            rusqlite::params![chrono::Utc::now().to_rfc3339(), session_id, tenant_id],
+        );
+        let _ = tx.commit();
     }
 }
 

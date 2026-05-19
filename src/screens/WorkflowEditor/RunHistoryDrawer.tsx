@@ -73,10 +73,12 @@ function StatusIcon({
 export function RunHistoryDrawer({
   workflowId,
   focusRunId,
+  onOpenRun,
   onClose,
 }: {
   workflowId: string;
   focusRunId?: string | null;
+  onOpenRun?: (runId: string) => void;
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -210,6 +212,7 @@ export function RunHistoryDrawer({
                 nowMs={nowMs}
                 onCancel={() => cancelMutation.mutate(detail.id)}
                 cancelling={cancelMutation.isPending}
+                onOpenRun={onOpenRun}
               />
             )}
           </div>
@@ -224,11 +227,13 @@ function RunDetail({
   nowMs,
   onCancel,
   cancelling,
+  onOpenRun,
 }: {
   detail: WorkflowRunWithSteps;
   nowMs: number;
   onCancel: () => void;
   cancelling: boolean;
+  onOpenRun?: (runId: string) => void;
 }) {
   const isActive = detail.status === 'queued' || detail.status === 'running';
 
@@ -239,6 +244,15 @@ function RunDetail({
         <span className="text-base font-semibold text-white capitalize">{detail.status}</span>
         <span className="text-[10px] text-muted font-mono">{detail.id.slice(-12)}</span>
         <div className="flex-1" />
+        {onOpenRun && (
+          <button
+            onClick={() => onOpenRun(detail.id)}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-md border border-edge hover:bg-edge/30 text-white text-xs font-medium transition-colors"
+          >
+            <ChevronRight size={12} />
+            View graph
+          </button>
+        )}
         {isActive && (
           <button
             onClick={onCancel}

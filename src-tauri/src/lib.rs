@@ -470,6 +470,7 @@ pub fn run() {
             commands::workflow_runs::list_workflow_runs,
             commands::workflow_runs::list_project_workflow_runs,
             commands::workflow_runs::get_workflow_run,
+            commands::workflow_runs::get_workflow_run_view,
             commands::workflow_runs::cancel_workflow_run,
             // Users
             commands::users::list_users,

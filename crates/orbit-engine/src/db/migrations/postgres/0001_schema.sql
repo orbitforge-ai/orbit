@@ -207,6 +207,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     worktree_name TEXT,
     worktree_branch TEXT,
     worktree_path TEXT,
+    workflow_run_id TEXT,
+    workflow_node_id TEXT,
     compaction_failure_count BIGINT NOT NULL DEFAULT 0,
     compaction_last_failure_at TEXT,
     created_at TEXT NOT NULL,
@@ -506,6 +508,7 @@ CREATE INDEX IF NOT EXISTS idx_bus_subs_source ON bus_subscriptions(tenant_id, s
 CREATE INDEX IF NOT EXISTS idx_bus_subs_subscriber ON bus_subscriptions(tenant_id, subscriber_agent_id);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_agent ON chat_sessions(tenant_id, agent_id);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_project ON chat_sessions(tenant_id, project_id);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_workflow_run_node ON chat_sessions(tenant_id, workflow_run_id, workflow_node_id);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(tenant_id, session_id, created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_message_reactions_session ON message_reactions(tenant_id, session_id);
 CREATE INDEX IF NOT EXISTS idx_active_session_skills_session ON active_session_skills(tenant_id, session_id, activated_at);

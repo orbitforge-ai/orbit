@@ -380,12 +380,14 @@ pub fn get_column_by_id_sync(
 pub fn current_board_revision_sync(
     conn: &rusqlite::Connection,
     project_id: &str,
+    board_id: &str,
 ) -> Result<Option<String>, String> {
     conn.query_row(
         "SELECT MAX(updated_at) FROM project_board_columns
          WHERE project_id = ?1
+           AND board_id = ?2
            AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')",
-        params![project_id],
+        params![project_id, board_id],
         |row| row.get(0),
     )
     .optional()
@@ -396,10 +398,11 @@ pub fn current_board_revision_sync(
 fn ensure_expected_revision(
     conn: &rusqlite::Connection,
     project_id: &str,
+    board_id: &str,
     expected_revision: Option<&str>,
 ) -> Result<(), String> {
     if let Some(expected_revision) = expected_revision {
-        let current = current_board_revision_sync(conn, project_id)?;
+        let current = current_board_revision_sync(conn, project_id, board_id)?;
         if current.as_deref() != Some(expected_revision) {
             return Err(
                 "board columns changed since you loaded them; refresh and try again".into(),
@@ -746,6 +749,7 @@ async fn update_project_board_column_inner(
         ensure_expected_revision(
             &conn,
             &existing.project_id,
+            &existing.board_id,
             payload.expected_revision.as_deref(),
         )?;
         let now = chrono::Utc::now().to_rfc3339();
@@ -833,6 +837,7 @@ async fn delete_project_board_column_inner(
         ensure_expected_revision(
             &conn,
             &existing.project_id,
+            &existing.board_id,
             payload.expected_revision.as_deref(),
         )?;
         let columns =
@@ -955,8 +960,13 @@ async fn reorder_project_board_columns_inner(
     let columns =
         tokio::task::spawn_blocking(move || -> Result<Vec<ProjectBoardColumn>, String> {
             let conn = pool.get().map_err(|e| e.to_string())?;
-            ensure_expected_revision(&conn, &project_id, payload.expected_revision.as_deref())?;
             let board = resolve_board_sync(&conn, &project_id, payload.board_id.as_deref())?;
+            ensure_expected_revision(
+                &conn,
+                &project_id,
+                &board.id,
+                payload.expected_revision.as_deref(),
+            )?;
             let existing = list_project_board_columns_sync(&conn, &project_id, Some(&board.id))?;
             if existing.len() != payload.ordered_ids.len() {
                 return Err("reorder must include every board column exactly once".into());

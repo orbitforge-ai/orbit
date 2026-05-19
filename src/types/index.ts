@@ -355,6 +355,20 @@ export interface WorkflowRunWithSteps extends WorkflowRun {
   steps: WorkflowRunStep[];
 }
 
+export interface WorkflowRunAgentSession {
+  nodeId: string;
+  sessionId: string;
+  agentId: string;
+  executionState: string | null;
+  finishSummary: string | null;
+  terminalError: string | null;
+  messages: ChatMessage[];
+}
+
+export interface WorkflowRunView extends WorkflowRunWithSteps {
+  agentSessions: WorkflowRunAgentSession[];
+}
+
 // ─── Memory ──────────────────────────────────────────────────────────────────
 
 export type MemoryType = 'user' | 'feedback' | 'project' | 'reference';
@@ -542,7 +556,7 @@ export interface ChatSession {
   agentId: string;
   title: string;
   archived: boolean;
-  sessionType: 'user_chat' | 'bus_message' | 'sub_agent' | 'pulse';
+  sessionType: 'user_chat' | 'bus_message' | 'sub_agent' | 'pulse' | 'workflow';
   parentSessionId: string | null;
   sourceBusMessageId: string | null;
   chainDepth: number;
@@ -567,6 +581,8 @@ export interface ChatSession {
   createdAt: string;
   updatedAt: string;
   projectId?: string | null;
+  workflowRunId?: string | null;
+  workflowNodeId?: string | null;
 }
 
 export interface ChatDraft {

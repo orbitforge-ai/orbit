@@ -2749,7 +2749,8 @@ const CHAT_SESSION_SELECT: &str = "SELECT cs.id, cs.agent_id, cs.title, cs.archi
                 bm.from_agent_id, a.name,
                 src.id, src.title,
                 cs.created_at, cs.updated_at, cs.project_id,
-                cs.worktree_name, cs.worktree_branch, cs.worktree_path
+                cs.worktree_name, cs.worktree_branch, cs.worktree_path,
+                cs.workflow_run_id, cs.workflow_node_id
          FROM chat_sessions cs
          LEFT JOIN bus_messages bm ON bm.id = cs.source_bus_message_id AND bm.tenant_id = cs.tenant_id
          LEFT JOIN agents a ON a.id = bm.from_agent_id AND a.tenant_id = cs.tenant_id
@@ -2778,6 +2779,8 @@ fn map_chat_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatSession
         worktree_name: row.get(18)?,
         worktree_branch: row.get(19)?,
         worktree_path: row.get(20)?,
+        workflow_run_id: row.get(21)?,
+        workflow_node_id: row.get(22)?,
     })
 }
 
@@ -2905,6 +2908,29 @@ impl ChatRepo for SqliteRepos {
         .await
     }
 
+    async fn list_workflow_agent_sessions(
+        &self,
+        workflow_run_id: &str,
+    ) -> Result<Vec<ChatSession>, String> {
+        let workflow_run_id = workflow_run_id.to_string();
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "{} WHERE cs.workflow_run_id = ?1 AND cs.tenant_id = ?2 ORDER BY cs.created_at ASC",
+                    CHAT_SESSION_SELECT
+                ))
+                .err_str()?;
+            let rows = stmt
+                .query_map(params![workflow_run_id, tenant_id], map_chat_session_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
     async fn create_session(
         &self,
         agent_id: String,
@@ -2950,6 +2976,8 @@ impl ChatRepo for SqliteRepos {
                 worktree_name: None,
                 worktree_branch: None,
                 worktree_path: None,
+                workflow_run_id: None,
+                workflow_node_id: None,
             })
         })
         .await

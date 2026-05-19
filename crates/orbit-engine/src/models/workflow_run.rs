@@ -54,3 +54,34 @@ pub struct WorkflowRunWithSteps {
     pub run: WorkflowRun,
     pub steps: Vec<WorkflowRunStep>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowRunAgentSession {
+    pub node_id: String,
+    pub session_id: String,
+    pub agent_id: String,
+    pub execution_state: Option<String>,
+    pub finish_summary: Option<String>,
+    pub terminal_error: Option<String>,
+    pub messages: Vec<WorkflowRunChatMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowRunChatMessage {
+    pub id: Option<String>,
+    pub role: String,
+    pub content: Vec<crate::executor::llm_provider::ContentBlock>,
+    pub created_at: Option<String>,
+    #[serde(rename = "isCompacted")]
+    pub is_compacted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowRunView {
+    #[serde(flatten)]
+    pub run: WorkflowRun,
+    pub steps: Vec<WorkflowRunStep>,
+    pub agent_sessions: Vec<WorkflowRunAgentSession>,
+}

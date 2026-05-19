@@ -26,6 +26,8 @@ pub struct ChatSession {
     pub worktree_name: Option<String>,
     pub worktree_branch: Option<String>,
     pub worktree_path: Option<String>,
+    pub workflow_run_id: Option<String>,
+    pub workflow_node_id: Option<String>,
 }
 
 /// A chat message as stored on disk. The content payload is kept as the raw

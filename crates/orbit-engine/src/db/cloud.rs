@@ -394,6 +394,8 @@ impl SupabaseClient {
                 "worktree_name": cs.worktree_name,
                 "worktree_branch": cs.worktree_branch,
                 "worktree_path": cs.worktree_path,
+                "workflow_run_id": cs.workflow_run_id,
+                "workflow_node_id": cs.workflow_node_id,
                 "created_at": cs.created_at,
                 "updated_at": cs.updated_at,
             }),
@@ -1201,7 +1203,8 @@ fn read_chat_sessions(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<
                     parent_session_id, source_bus_message_id, chain_depth,
                     execution_state, finish_summary, terminal_error,
                     created_at, updated_at, project_id, allow_sub_agents,
-                    worktree_name, worktree_branch, worktree_path
+                    worktree_name, worktree_branch, worktree_path,
+                    workflow_run_id, workflow_node_id
              FROM chat_sessions
              WHERE tenant_id = 'local'",
         )
@@ -1232,6 +1235,8 @@ fn read_chat_sessions(conn: &rusqlite::Connection, user_id: &str) -> Result<Vec<
                 "worktree_name": row.get::<_, Option<String>>(18)?,
                 "worktree_branch": row.get::<_, Option<String>>(19)?,
                 "worktree_path": row.get::<_, Option<String>>(20)?,
+                "workflow_run_id": row.get::<_, Option<String>>(21)?,
+                "workflow_node_id": row.get::<_, Option<String>>(22)?,
             }))
         })
         .map_err(|e| e.to_string())?
@@ -1851,8 +1856,8 @@ fn write_chat_sessions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<
               parent_session_id, source_bus_message_id, chain_depth,
               execution_state, finish_summary, terminal_error,
               created_at, updated_at, project_id, allow_sub_agents,
-              worktree_name, worktree_branch, worktree_path, tenant_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,
+              worktree_name, worktree_branch, worktree_path, workflow_run_id, workflow_node_id, tenant_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,
                      COALESCE((SELECT tenant_id FROM projects WHERE id = ?17),
                               (SELECT tenant_id FROM agents WHERE id = ?2),
                               (SELECT tenant_id FROM chat_sessions WHERE id = ?9),
@@ -1883,6 +1888,8 @@ fn write_chat_sessions(conn: &rusqlite::Connection, rows: Vec<Value>) -> Result<
                 opt_str(&r, "worktree_name"),
                 opt_str(&r, "worktree_branch"),
                 opt_str(&r, "worktree_path"),
+                opt_str(&r, "workflow_run_id"),
+                opt_str(&r, "workflow_node_id"),
             ],
         )
         .map_err(|e| e.to_string())?;

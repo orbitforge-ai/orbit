@@ -459,6 +459,11 @@ pub trait ChatRepo: Send + Sync {
         offset: i64,
     ) -> Result<ChatMessageRows, String>;
 
+    async fn list_workflow_agent_sessions(
+        &self,
+        workflow_run_id: &str,
+    ) -> Result<Vec<ChatSession>, String>;
+
     async fn create_session(
         &self,
         agent_id: String,

@@ -12,6 +12,7 @@ type Screen =
   | 'schedule-builder'
   | 'task-edit'
   | 'workflow-editor'
+  | 'workflow-run-viewer'
   | 'plugins'
   | 'plugin-entities'
   | 'settings';
@@ -69,6 +70,7 @@ interface UiStore {
   selectedAgentId: string | null;
   selectedProjectId: string | null;
   selectedWorkflowId: string | null;
+  selectedWorkflowRunId: string | null;
   pendingChatSessionId: string | null;
   logPanelOpen: boolean;
   agentTab: AgentTab;
@@ -86,6 +88,8 @@ interface UiStore {
   selectProject: (id: string | null) => void;
   openWorkflowEditor: (workflowId: string) => void;
   closeWorkflowEditor: () => void;
+  openWorkflowRunViewer: (runId: string) => void;
+  closeWorkflowRunViewer: () => void;
   openAgentChat: (agentId: string, sessionId?: string | null) => void;
   clearPendingChatSession: () => void;
   setLogPanelOpen: (open: boolean) => void;
@@ -103,6 +107,7 @@ export const useUiStore = create<UiStore>((set) => ({
   selectedAgentId: getPersistedAgentId(),
   selectedProjectId: getPersistedProjectId(),
   selectedWorkflowId: null,
+  selectedWorkflowRunId: null,
   pendingChatSessionId: null,
   logPanelOpen: false,
   agentTab: 'chat' as AgentTab,
@@ -178,6 +183,18 @@ export const useUiStore = create<UiStore>((set) => ({
       selectedWorkflowId: null,
       screen: 'projects',
       projectTab: 'workflows',
+    }),
+  openWorkflowRunViewer: (runId) =>
+    set({
+      selectedWorkflowRunId: runId,
+      screen: 'workflow-run-viewer',
+      settingsOpen: false,
+    }),
+  closeWorkflowRunViewer: () =>
+    set({
+      selectedWorkflowRunId: null,
+      screen: 'projects',
+      projectTab: 'history',
     }),
   clearPendingChatSession: () => set({ pendingChatSessionId: null }),
   setLogPanelOpen: (open) => set({ logPanelOpen: open }),

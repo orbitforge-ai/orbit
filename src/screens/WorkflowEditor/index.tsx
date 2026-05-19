@@ -275,7 +275,7 @@ export function WorkflowEditor() {
 }
 
 function Editor({ workflowId }: { workflowId: string }) {
-  const { closeWorkflowEditor } = useUiStore();
+  const { closeWorkflowEditor, openWorkflowRunViewer } = useUiStore();
   const queryClient = useQueryClient();
   const { screenToFlowPosition } = useReactFlow();
   const canvasHostRef = useRef<HTMLDivElement | null>(null);
@@ -677,7 +677,8 @@ function Editor({ workflowId }: { workflowId: string }) {
     onSuccess: (run) => {
       setRunError(null);
       setRunDrawerFocusRunId(run.id);
-      setRunDrawerOpen(true);
+      setRunDrawerOpen(false);
+      openWorkflowRunViewer(run.id);
       queryClient.invalidateQueries({ queryKey: ['workflow-runs', workflowId] });
       queryClient.invalidateQueries({ queryKey: ['workflow-run', run.id] });
     },
@@ -899,6 +900,7 @@ function Editor({ workflowId }: { workflowId: string }) {
         <RunHistoryDrawer
           workflowId={workflowId}
           focusRunId={runDrawerFocusRunId}
+          onOpenRun={openWorkflowRunViewer}
           onClose={() => {
             setRunDrawerOpen(false);
             setRunDrawerFocusRunId(null);

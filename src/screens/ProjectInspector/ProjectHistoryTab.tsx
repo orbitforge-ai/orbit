@@ -51,7 +51,7 @@ function formatWorkflowDuration(run: WorkflowRunSummary): string {
 }
 
 export function ProjectHistoryTab({ projectId }: { projectId: string }) {
-  const { navigate, openWorkflowEditor, selectRun } = useUiStore();
+  const { navigate, openWorkflowRunViewer, selectRun } = useUiStore();
 
   const { data: runs = [], isLoading: runsLoading } = useQuery<RunSummary[]>({
     queryKey: ['runs', 'project', projectId],
@@ -127,7 +127,7 @@ export function ProjectHistoryTab({ projectId }: { projectId: string }) {
                 navigate('history');
                 return;
               }
-              openWorkflowEditor(entry.run.workflowId);
+              openWorkflowRunViewer(entry.run.id);
             }}
             className="flex items-center gap-3 px-4 py-3 hover:bg-surface cursor-pointer transition-colors"
           >

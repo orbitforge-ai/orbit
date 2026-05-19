@@ -98,6 +98,7 @@ pub(super) async fn execute(ctx: &NodeExecutionContext<'_>) -> Result<NodeOutcom
     let log_path = workflow_agent_log_path(&agent_id, ctx.workflow_id, &ctx.node.id);
     let outcome = agent_loop::run_agent_loop_for_workflow(
         ctx.run_id,
+        &ctx.node.id,
         &agent_id,
         &run_cfg,
         &log_path,

@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext,
@@ -40,13 +46,7 @@ import { workItemsApi } from '../../api/workItems';
 import { cn } from '../../lib/cn';
 import { toast } from '../../store/toastStore';
 import { useUiStore } from '../../store/uiStore';
-import {
-  Agent,
-  ProjectBoard,
-  ProjectBoardColumn,
-  WorkItem,
-  WorkItemStatus,
-} from '../../types';
+import { Agent, ProjectBoard, ProjectBoardColumn, WorkItem, WorkItemStatus } from '../../types';
 import { ProjectBoardCard } from './ProjectBoardCard';
 import { WorkItemModal } from './WorkItemModal/WorkItemModal';
 import { Input, SimpleSelect } from '../../components/ui';
@@ -100,7 +100,7 @@ function currentBoardRevision(columns: ProjectBoardColumn[]): string | undefined
 function resolveColumnIdForItem(
   item: WorkItem,
   columns: ProjectBoardColumn[],
-  columnById: Map<string, ProjectBoardColumn>,
+  columnById: Map<string, ProjectBoardColumn>
 ): string | null {
   if (item.columnId && columnById.has(item.columnId)) {
     return item.columnId;
@@ -135,7 +135,7 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor),
+    useSensor(KeyboardSensor)
   );
 
   const { data: boards = [] } = useQuery<ProjectBoard[]>({
@@ -151,7 +151,7 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
 
   const activeBoard = useMemo(
     () => boards.find((b) => b.id === selectedBoardId) ?? null,
-    [boards, selectedBoardId],
+    [boards, selectedBoardId]
   );
 
   const { data: items = [], isLoading } = useQuery<WorkItem[]>({
@@ -170,10 +170,12 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
   });
 
   const agentById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
-  const columnById = useMemo(() => new Map(columns.map((column) => [column.id, column])), [columns]);
+  const columnById = useMemo(
+    () => new Map(columns.map((column) => [column.id, column])),
+    [columns]
+  );
   const boardRevision = currentBoardRevision(columns);
-  const defaultColumnId =
-    columns.find((column) => column.isDefault)?.id ?? columns[0]?.id ?? null;
+  const defaultColumnId = columns.find((column) => column.isDefault)?.id ?? columns[0]?.id ?? null;
 
   const itemsByColumn = useMemo(() => {
     const groups = new Map<string, WorkItem[]>();
@@ -219,8 +221,8 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
                 status: role ?? item.status,
                 position: position ?? item.position,
               }
-            : item,
-        ),
+            : item
+        )
       );
       return { previous };
     },
@@ -287,7 +289,7 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
         projectId,
         orderedIds,
         selectedBoardId ?? undefined,
-        boardRevision,
+        boardRevision
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project-board-columns', projectId] });
@@ -343,13 +345,8 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
   });
 
   const updateBoardMutation = useMutation({
-    mutationFn: ({
-      id,
-      payload,
-    }: {
-      id: string;
-      payload: { name?: string; prefix?: string };
-    }) => projectsApi.updateBoard(id, payload),
+    mutationFn: ({ id, payload }: { id: string; payload: { name?: string; prefix?: string } }) =>
+      projectsApi.updateBoard(id, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project-boards', projectId] });
       setEditingBoard(null);
@@ -447,7 +444,9 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
       return;
     }
 
-    const columnItems = (itemsByColumn.get(targetColumnId) ?? []).filter((item) => item.id !== activeCardId);
+    const columnItems = (itemsByColumn.get(targetColumnId) ?? []).filter(
+      (item) => item.id !== activeCardId
+    );
     let position: number | undefined;
     if (targetCardId) {
       const idx = columnItems.findIndex((item) => item.id === targetCardId);
@@ -506,7 +505,7 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
   }
 
   const draggingItem = draggingCardId
-    ? items.find((item) => item.id === draggingCardId) ?? null
+    ? (items.find((item) => item.id === draggingCardId) ?? null)
     : null;
 
   if (isLoading) {
@@ -562,14 +561,20 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
             onPointerLeave={(event) => endPan(event.pointerId)}
             className={cn(
               'flex-1 overflow-x-auto overflow-y-hidden',
-              isPanning ? 'cursor-grabbing' : 'cursor-grab',
+              isPanning ? 'cursor-grabbing' : 'cursor-grab'
             )}
           >
             {columns.length === 0 ? (
               <div className="flex h-full items-center justify-center p-6">
                 <button
                   data-pan-disabled="true"
-                  onClick={() => createColumnMutation.mutate({ name: 'Backlog', role: 'backlog', isDefault: true })}
+                  onClick={() =>
+                    createColumnMutation.mutate({
+                      name: 'Backlog',
+                      role: 'backlog',
+                      isDefault: true,
+                    })
+                  }
                   className="rounded-xl border border-dashed border-edge px-5 py-6 text-sm text-muted transition-colors hover:border-accent hover:text-white"
                 >
                   Create your first board column
@@ -621,7 +626,7 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
                               boardPrefix={activeBoard?.prefix ?? null}
                               assignee={
                                 item.assigneeAgentId
-                                  ? agentById.get(item.assigneeAgentId) ?? null
+                                  ? (agentById.get(item.assigneeAgentId) ?? null)
                                   : null
                               }
                               onClick={() => setOpenItemId(item.id)}
@@ -630,7 +635,9 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
                         ))}
                         {columnItems.length === 0 && (
                           <div className="rounded-lg border border-dashed border-edge px-3 py-4 text-center text-[11px] text-muted">
-                            {defaultColumnId === column.id ? 'Add a card or drop one here' : 'Drop cards here'}
+                            {defaultColumnId === column.id
+                              ? 'Add a card or drop one here'
+                              : 'Drop cards here'}
                           </div>
                         )}
                       </BoardColumn>
@@ -650,7 +657,7 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
                 boardPrefix={activeBoard?.prefix ?? null}
                 assignee={
                   draggingItem.assigneeAgentId
-                    ? agentById.get(draggingItem.assigneeAgentId) ?? null
+                    ? (agentById.get(draggingItem.assigneeAgentId) ?? null)
                     : null
                 }
                 onClick={() => {}}
@@ -756,15 +763,11 @@ function BoardColumn({
   onDelete: () => void;
   children: React.ReactNode;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
   const { setNodeRef: setDropRef, isOver } = useDroppable({ id: columnDropId(column.id) });
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: columnDragId(column.id) });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: columnDragId(column.id),
+  });
   const style = transform
     ? {
         transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
@@ -778,7 +781,7 @@ function BoardColumn({
       style={style}
       className={cn(
         'flex w-72 shrink-0 flex-col rounded-xl border border-edge bg-panel',
-        isDragging && 'opacity-60',
+        isDragging && 'opacity-60'
       )}
     >
       <div className="flex items-center justify-between gap-2 border-b border-edge px-3 py-2">
@@ -828,10 +831,7 @@ function BoardColumn({
           {column.role && (
             <span
               data-pan-disabled="true"
-              className={cn(
-                'rounded-full px-1.5 py-0.5 text-[10px]',
-                roleTone(column.role),
-              )}
+              className={cn('rounded-full px-1.5 py-0.5 text-[10px]', roleTone(column.role))}
             >
               {roleLabel(column.role)}
             </span>
@@ -839,7 +839,7 @@ function BoardColumn({
         </div>
         <div className="flex items-center gap-1">
           <span className="text-[10px] text-muted tabular-nums">{count}</span>
-          <DropdownMenu.Root>
+          <DropdownMenu.Root open={menuOpen} onOpenChange={setMenuOpen}>
             <DropdownMenu.Trigger asChild>
               <button
                 type="button"
@@ -879,15 +879,23 @@ function BoardColumn({
                   </DropdownMenu.Item>
                 ))}
                 <DropdownMenu.Separator className="my-1 h-px bg-edge" />
-                <DropdownMenu.Item
-                  className="cursor-pointer rounded px-2 py-1.5 text-xs text-red-300 outline-none hover:bg-red-500/10"
-                  onSelect={onDelete}
+                <button
+                  type="button"
+                  data-pan-disabled="true"
+                  className="flex w-full cursor-pointer items-center rounded px-2 py-1.5 text-left text-xs text-red-300 outline-none transition-colors hover:bg-red-500/10"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setMenuOpen(false);
+                    onDelete();
+                  }}
                 >
                   <span className="inline-flex items-center gap-2">
                     <Trash2 size={12} />
                     Delete
                   </span>
-                </DropdownMenu.Item>
+                </button>
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
@@ -895,7 +903,10 @@ function BoardColumn({
       </div>
       <div
         ref={setDropRef}
-        className={cn('flex-1 space-y-2 overflow-y-auto p-2 transition-colors', isOver && 'bg-accent/5')}
+        className={cn(
+          'flex-1 space-y-2 overflow-y-auto p-2 transition-colors',
+          isOver && 'bg-accent/5'
+        )}
       >
         {children}
       </div>
@@ -987,8 +998,24 @@ function DeleteColumnDialog({
   onConfirm: (destinationColumnId?: string) => void;
 }) {
   const [destinationColumnId, setDestinationColumnId] = useState('');
+  const destinationOptions = useMemo(
+    () => (column ? columns.filter((candidate) => candidate.id !== column.id) : []),
+    [column, columns]
+  );
+  const canDelete = !!column && destinationOptions.length > 0;
+  const needsDestination = itemCount > 0;
+
+  useEffect(() => {
+    if (!needsDestination) {
+      setDestinationColumnId('');
+      return;
+    }
+    if (!destinationOptions.some((option) => option.id === destinationColumnId)) {
+      setDestinationColumnId(destinationOptions[0]?.id ?? '');
+    }
+  }, [destinationColumnId, destinationOptions, needsDestination]);
+
   if (!column) return null;
-  const destinationOptions = columns.filter((candidate) => candidate.id !== column.id);
 
   return (
     <div
@@ -1000,18 +1027,23 @@ function DeleteColumnDialog({
       <div className="w-full max-w-md rounded-2xl border border-edge bg-panel p-4 shadow-2xl">
         <h4 className="text-sm font-semibold text-white">Delete column</h4>
         <p className="mt-2 text-xs text-muted">
-          {itemCount > 0
-            ? `Move ${itemCount} card${itemCount === 1 ? '' : 's'} out of ${column.name} before deleting it.`
-            : `Delete ${column.name}?`}
+          {!canDelete
+            ? 'This is the last column on the board, so it cannot be deleted.'
+            : itemCount > 0
+              ? `Move ${itemCount} card${itemCount === 1 ? '' : 's'} out of ${column.name} before deleting it.`
+              : `Delete ${column.name}?`}
         </p>
-        {itemCount > 0 && (
+        {needsDestination && canDelete && (
           <div className="mt-3">
             <SimpleSelect
               value={destinationColumnId}
               onValueChange={setDestinationColumnId}
               placeholder="Choose destination column…"
               className="bg-background px-3 py-2"
-              options={destinationOptions.map((option) => ({ value: option.id, label: option.name }))}
+              options={destinationOptions.map((option) => ({
+                value: option.id,
+                label: option.name,
+              }))}
             />
           </div>
         )}
@@ -1024,7 +1056,7 @@ function DeleteColumnDialog({
           </button>
           <button
             onClick={() => onConfirm(destinationColumnId || undefined)}
-            disabled={itemCount > 0 && !destinationColumnId}
+            disabled={!canDelete || (needsDestination && !destinationColumnId)}
             className="rounded-lg bg-red-500 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-400 disabled:opacity-50"
           >
             Delete column
@@ -1281,8 +1313,8 @@ function DeleteBoardDialog({
       <div className="w-full max-w-md rounded-2xl border border-edge bg-panel p-4 shadow-2xl">
         <h4 className="text-sm font-semibold text-white">Delete board</h4>
         <p className="mt-2 text-xs text-muted">
-          Move work items and columns out of {board.name} before deleting it. Existing items will
-          be re-parented to the selected destination board.
+          Move work items and columns out of {board.name} before deleting it. Existing items will be
+          re-parented to the selected destination board.
         </p>
         <div className="mt-3">
           <SimpleSelect
