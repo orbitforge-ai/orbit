@@ -140,6 +140,7 @@ Do not search for them via MCP resource discovery; call the function tools direc
 When in doubt, use the namespaced MCP form `mcp__orbit__<tool_name>`.\n\
 Important examples:\n\
 - Project backlog / kanban updates: `mcp__orbit__work_item`\n\
+- Project board/column setup: `mcp__orbit__workspace_board`\n\
 - Workflow edits/runs: `mcp__orbit__workflow`\n\
 - File reads/writes: `mcp__orbit__read_file`, `mcp__orbit__write_file`, `mcp__orbit__edit_file`\n\
 - Shell commands: `mcp__orbit__shell_command`\n\

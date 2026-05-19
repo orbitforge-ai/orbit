@@ -712,7 +712,7 @@ impl ContextStage for BasePromptStage {
         };
 
         // Tool names from actual resolved definitions (matches what the LLM receives)
-        let (tool_names, has_task, has_work_item) = {
+        let (tool_names, has_task, has_work_item, has_workspace_board) = {
             let mut tools = agent_tools::build_tool_definitions(&request.allowed_tools, None);
             if !request.allow_sub_agents {
                 tools.retain(|t| t.name != "spawn_sub_agents");
@@ -729,12 +729,13 @@ impl ContextStage for BasePromptStage {
             }
             let has_task = tools.iter().any(|t| t.name == "task");
             let has_work_item = tools.iter().any(|t| t.name == "work_item");
+            let has_workspace_board = tools.iter().any(|t| t.name == "workspace_board");
             let tool_names = tools
                 .iter()
                 .map(|t| t.name.clone())
                 .collect::<Vec<_>>()
                 .join(", ");
-            (tool_names, has_task, has_work_item)
+            (tool_names, has_task, has_work_item, has_workspace_board)
         };
 
         let identity_summary =
@@ -801,7 +802,7 @@ impl ContextStage for BasePromptStage {
             let has_spawn = request.allow_sub_agents && tool_names.contains("spawn_sub_agents");
             let has_send_message = tool_names.contains("send_message");
 
-            if has_spawn || has_send_message || (has_task && has_work_item) {
+            if has_spawn || has_send_message || (has_task && has_work_item) || has_workspace_board {
                 context_section.push_str("\n### Tool guidance\n");
             }
 
@@ -811,6 +812,12 @@ impl ContextStage for BasePromptStage {
                 );
                 context_section.push_str(
                     "- **board movement**: Before moving a persistent card, call `work_item` with `action: \"board_guide\"` and follow the board's `movementGuide`. Moving a card changes only its column; use explicit `block`, `unblock`, `complete`, or `claim` actions to change lifecycle status.\n"
+                );
+            }
+
+            if has_workspace_board {
+                context_section.push_str(
+                    "- **workspace_board**: Use this to manage boards, role-free columns, defaults, ordering, and movement guides. Do not use it for work item lifecycle status changes.\n"
                 );
             }
 

@@ -35,6 +35,7 @@ pub mod web_fetch;
 pub mod web_search;
 pub mod work_item;
 pub mod workflow;
+pub mod workspace_board;
 pub mod worktree;
 pub mod write_file;
 pub mod yield_turn;

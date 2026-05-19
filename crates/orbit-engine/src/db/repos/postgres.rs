@@ -1877,6 +1877,37 @@ impl ProjectBoardRepo for PgRepos {
             .ok_or_else(|| format!("board '{id}' not found"))
     }
 
+    async fn set_default(&self, id: &str) -> Result<Vec<ProjectBoard>, String> {
+        let tenant_id = self.tenant_id();
+        let existing = ProjectBoardRepo::get(self, id)
+            .await?
+            .ok_or_else(|| format!("board '{id}' not found"))?;
+        let now = now();
+
+        sqlx::query(
+            "UPDATE project_boards SET is_default = false, updated_at = $1
+             WHERE project_id = $2 AND tenant_id = $3",
+        )
+        .bind(&now)
+        .bind(&existing.project_id)
+        .bind(&tenant_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        sqlx::query(
+            "UPDATE project_boards SET is_default = true, updated_at = $1
+             WHERE id = $2 AND tenant_id = $3",
+        )
+        .bind(&now)
+        .bind(id)
+        .bind(&tenant_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+
+        ProjectBoardRepo::list(self, &existing.project_id).await
+    }
+
     async fn delete(&self, id: &str, payload: DeleteProjectBoard) -> Result<(), String> {
         let tenant_id = self.tenant_id();
         let existing = ProjectBoardRepo::get(self, id)

@@ -523,7 +523,7 @@ pub async fn create_project_board_column(
     create_project_board_column_inner(payload, &app).await
 }
 
-async fn create_project_board_column_inner(
+pub(crate) async fn create_project_board_column_inner(
     payload: CreateProjectBoardColumn,
     app: &AppContext,
 ) -> Result<ProjectBoardColumn, String> {
@@ -625,7 +625,7 @@ pub async fn update_project_board_column(
     update_project_board_column_inner(id, payload, &app).await
 }
 
-async fn update_project_board_column_inner(
+pub(crate) async fn update_project_board_column_inner(
     id: String,
     payload: UpdateProjectBoardColumn,
     app: &AppContext,
@@ -699,7 +699,7 @@ pub async fn delete_project_board_column(
     delete_project_board_column_inner(id, payload, &app).await
 }
 
-async fn delete_project_board_column_inner(
+pub(crate) async fn delete_project_board_column_inner(
     id: String,
     payload: DeleteProjectBoardColumn,
     app: &AppContext,
@@ -819,7 +819,7 @@ pub async fn reorder_project_board_columns(
     reorder_project_board_columns_inner(project_id, payload, &app).await
 }
 
-async fn reorder_project_board_columns_inner(
+pub(crate) async fn reorder_project_board_columns_inner(
     project_id: String,
     payload: ReorderProjectBoardColumns,
     app: &AppContext,

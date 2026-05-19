@@ -633,6 +633,12 @@ pub fn classify_tool_call(
         // risk. Classified safe — no user prompt.
         "work_item" => (RiskLevel::AutoAllow, String::new()),
 
+        "workspace_board" => match input["action"].as_str().unwrap_or("list") {
+            "delete_board" => (RiskLevel::Prompt, "Delete workspace board".to_string()),
+            "delete_column" => (RiskLevel::Prompt, "Delete board column".to_string()),
+            _ => (RiskLevel::AutoAllow, String::new()),
+        },
+
         "schedule" => match input["action"].as_str().unwrap_or("list") {
             "list" | "preview" | "pulse_get" => (RiskLevel::AutoAllow, String::new()),
             action => (RiskLevel::Prompt, format!("Schedule action: {}", action)),
@@ -1313,6 +1319,18 @@ mod tests {
         let input = serde_json::json!({"action": "list"});
         let (risk, _) = classify_tool_call("task", &input, "normal");
         assert_eq!(risk, RiskLevel::AutoAllow);
+
+        let input = serde_json::json!({"action": "update_movement_guide"});
+        let (risk, _) = classify_tool_call("workspace_board", &input, "normal");
+        assert_eq!(risk, RiskLevel::AutoAllow);
+
+        let input = serde_json::json!({"action": "delete_board"});
+        let (risk, _) = classify_tool_call("workspace_board", &input, "normal");
+        assert_eq!(risk, RiskLevel::Prompt);
+
+        let input = serde_json::json!({"action": "delete_column"});
+        let (risk, _) = classify_tool_call("workspace_board", &input, "normal");
+        assert_eq!(risk, RiskLevel::Prompt);
 
         let input = serde_json::json!({"action": "preview"});
         let (risk, _) = classify_tool_call("schedule", &input, "normal");

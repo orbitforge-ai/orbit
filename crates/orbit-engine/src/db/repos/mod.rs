@@ -561,6 +561,7 @@ pub trait ProjectBoardRepo: Send + Sync {
         id: &str,
         payload: crate::models::project_board::UpdateProjectBoard,
     ) -> Result<ProjectBoard, String>;
+    async fn set_default(&self, id: &str) -> Result<Vec<ProjectBoard>, String>;
     async fn delete(
         &self,
         id: &str,

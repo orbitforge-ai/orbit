@@ -2333,6 +2333,51 @@ impl ProjectBoardRepo for SqliteRepos {
         .await
     }
 
+    async fn set_default(&self, id: &str) -> Result<Vec<ProjectBoard>, String> {
+        let id = id.to_string();
+        let tenant_id = self.tenant_id();
+        self.with_conn_mut(move |conn| {
+            let existing: ProjectBoard = conn
+                .query_row(
+                    &format!("SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards WHERE id = ?1 AND tenant_id = ?2"),
+                    params![id, tenant_id],
+                    map_project_board_row,
+                )
+                .optional()
+                .err_str()?
+                .ok_or_else(|| format!("board '{}' not found", id))?;
+            let now = chrono::Utc::now().to_rfc3339();
+            let tx = conn.transaction().err_str()?;
+            tx.execute(
+                "UPDATE project_boards SET is_default = 0, updated_at = ?1
+                 WHERE project_id = ?2 AND tenant_id = ?3",
+                params![&now, &existing.project_id, &tenant_id],
+            )
+            .err_str()?;
+            tx.execute(
+                "UPDATE project_boards SET is_default = 1, updated_at = ?1
+                 WHERE id = ?2 AND tenant_id = ?3",
+                params![&now, &id, &tenant_id],
+            )
+            .err_str()?;
+            tx.commit().err_str()?;
+
+            let sql = format!(
+                "SELECT {PROJECT_BOARD_COLUMNS} FROM project_boards \
+                 WHERE project_id = ?1 AND tenant_id = ?2 \
+                 ORDER BY is_default DESC, position ASC, created_at ASC"
+            );
+            let mut stmt = conn.prepare(&sql).err_str()?;
+            let rows: Vec<ProjectBoard> = stmt
+                .query_map(params![&existing.project_id, &tenant_id], map_project_board_row)
+                .err_str()?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await
+    }
+
     async fn delete(&self, id: &str, payload: DeleteProjectBoard) -> Result<(), String> {
         let id = id.to_string();
         let tenant_id = self.tenant_id();

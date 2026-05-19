@@ -24,6 +24,7 @@ fn all_tools() -> Vec<Box<dyn ToolHandler>> {
         Box::new(tools::config::ConfigTool),
         Box::new(tools::task::TaskTool),
         Box::new(tools::work_item::WorkItemTool),
+        Box::new(tools::workspace_board::WorkspaceBoardTool),
         Box::new(tools::workflow::WorkflowTool),
         Box::new(tools::schedule::ScheduleTool),
         Box::new(tools::worktree::WorktreeTool),
@@ -141,6 +142,7 @@ pub async fn execute_tool(
 #[cfg(test)]
 mod tests {
     use super::build_tool_definitions;
+    use serde_json::Value;
 
     #[test]
     fn finish_is_always_exposed_even_if_not_in_allowed_list() {
@@ -155,5 +157,22 @@ mod tests {
     fn react_to_message_is_always_exposed_even_if_not_in_allowed_list() {
         let defs = build_tool_definitions(&["read_file".to_string()], None);
         assert!(defs.iter().any(|tool| tool.name == "react_to_message"));
+    }
+
+    #[test]
+    fn workspace_board_is_exposed_and_role_free() {
+        let defs = build_tool_definitions(&["workspace_board".to_string()], None);
+        let tool = defs
+            .iter()
+            .find(|tool| tool.name == "workspace_board")
+            .expect("workspace_board definition");
+        assert!(!tool.description.contains("role."));
+        let properties = tool
+            .input_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("workspace_board properties");
+        assert!(!properties.contains_key("role"));
+        assert!(properties.contains_key("movement_guide"));
     }
 }

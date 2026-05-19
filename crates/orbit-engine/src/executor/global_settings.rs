@@ -25,6 +25,7 @@ const DEFAULT_ALLOWED_TOOLS: &[&str] = &[
     "config",
     "task",
     "work_item",
+    "workspace_board",
     "schedule",
     "worktree",
     "session_history",
@@ -359,6 +360,18 @@ impl MergedAgentConfig {
             effective_allowed.push("work_item".to_string());
         }
 
+        if effective_allowed.iter().any(|tool| tool == "work_item")
+            && !effective_allowed
+                .iter()
+                .any(|tool| tool == "workspace_board")
+            && !agent
+                .disabled_tools
+                .iter()
+                .any(|tool| tool == "workspace_board")
+        {
+            effective_allowed.push("workspace_board".to_string());
+        }
+
         Self {
             agent,
             allowed_tools: effective_allowed,
@@ -400,6 +413,9 @@ mod tests {
         assert!(defaults.allowed_tools.contains(&"read_file".to_string()));
         assert!(defaults.allowed_tools.contains(&"message".to_string()));
         assert!(defaults.allowed_tools.contains(&"work_item".to_string()));
+        assert!(defaults
+            .allowed_tools
+            .contains(&"workspace_board".to_string()));
         assert!(!defaults.allowed_tools.contains(&"finish".to_string()));
         assert!(!defaults
             .allowed_tools
@@ -435,6 +451,7 @@ mod tests {
         let merged = MergedAgentConfig::build_with_global(agent, global);
         assert!(merged.allowed_tools.iter().any(|t| t == "task"));
         assert!(merged.allowed_tools.iter().any(|t| t == "work_item"));
+        assert!(merged.allowed_tools.iter().any(|t| t == "workspace_board"));
     }
 
     #[test]
@@ -446,5 +463,29 @@ mod tests {
         let merged = MergedAgentConfig::build_with_global(agent, global);
         assert!(merged.allowed_tools.iter().any(|t| t == "task"));
         assert!(!merged.allowed_tools.iter().any(|t| t == "work_item"));
+        assert!(!merged.allowed_tools.iter().any(|t| t == "workspace_board"));
+    }
+
+    #[test]
+    fn merged_config_backfills_workspace_board_for_legacy_work_item_access() {
+        let mut global = GlobalSettings::default();
+        global.agent_defaults.allowed_tools =
+            vec!["work_item".to_string(), "read_file".to_string()];
+        let agent = AgentWorkspaceConfig::default();
+        let merged = MergedAgentConfig::build_with_global(agent, global);
+        assert!(merged.allowed_tools.iter().any(|t| t == "work_item"));
+        assert!(merged.allowed_tools.iter().any(|t| t == "workspace_board"));
+    }
+
+    #[test]
+    fn merged_config_respects_disabled_workspace_board_even_when_backfilling() {
+        let mut global = GlobalSettings::default();
+        global.agent_defaults.allowed_tools =
+            vec!["work_item".to_string(), "read_file".to_string()];
+        let mut agent = AgentWorkspaceConfig::default();
+        agent.disabled_tools = vec!["workspace_board".to_string()];
+        let merged = MergedAgentConfig::build_with_global(agent, global);
+        assert!(merged.allowed_tools.iter().any(|t| t == "work_item"));
+        assert!(!merged.allowed_tools.iter().any(|t| t == "workspace_board"));
     }
 }
