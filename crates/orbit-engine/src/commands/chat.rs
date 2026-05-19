@@ -833,7 +833,7 @@ pub async fn send_chat_message_impl(
     })
 }
 
-const MAX_CHAT_TOOL_ITERATIONS: u32 = 10;
+const MAX_CHAT_TOOL_ITERATIONS: u32 = 50;
 
 /// Save a chat message to the DB.
 async fn save_chat_message(
