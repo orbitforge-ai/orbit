@@ -45,6 +45,9 @@ export const workItemsApi = {
   block: (id: string, reason: string): Promise<WorkItem> =>
     invoke('block_work_item', { id, reason }),
 
+  unblock: (id: string, newStatus: WorkItemStatus): Promise<WorkItem> =>
+    invoke('unblock_work_item', { id, newStatus }),
+
   complete: (id: string): Promise<WorkItem> =>
     invoke('complete_work_item', { id }),
 

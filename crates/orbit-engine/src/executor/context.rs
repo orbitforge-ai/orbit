@@ -532,9 +532,12 @@ fn is_low_signal_reaction_text(text: &str) -> bool {
         return false;
     }
 
-    tokens[1..]
-        .iter()
-        .all(|token| matches!(token.as_str(), "there" | "you" | "ya" | "yall" | "all" | "jeeves"))
+    tokens[1..].iter().all(|token| {
+        matches!(
+            token.as_str(),
+            "there" | "you" | "ya" | "yall" | "all" | "jeeves"
+        )
+    })
 }
 
 #[async_trait::async_trait]
@@ -805,6 +808,9 @@ impl ContextStage for BasePromptStage {
             if has_task && has_work_item {
                 context_section.push_str(
                     "- **work_item vs task**: Use `work_item` for user-requested project tasks, board cards, backlog items, bugs, stories, or any persistent work that should show up on the project's kanban board. Use `task` only for your own temporary session-local checklist when breaking your current work into steps.\n"
+                );
+                context_section.push_str(
+                    "- **board movement**: Before moving a persistent card, call `work_item` with `action: \"board_guide\"` and follow the board's `movementGuide`. Moving a card changes only its column; use explicit `block`, `unblock`, `complete`, or `claim` actions to change lifecycle status.\n"
                 );
             }
 

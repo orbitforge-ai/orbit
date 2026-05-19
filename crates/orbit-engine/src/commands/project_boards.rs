@@ -9,23 +9,46 @@
 use crate::app_context::AppContext;
 use crate::db::cloud::CloudClientState;
 use crate::models::project_board::{
-    CreateProjectBoard, DeleteProjectBoard, ProjectBoard, UpdateProjectBoard,
+    parse_board_movement_guide, CreateProjectBoard, DeleteProjectBoard, ProjectBoard,
+    UpdateProjectBoard,
 };
 use rusqlite::{params, OptionalExtension};
 
 const BOARD_SELECT: &str =
-    "id, project_id, name, prefix, position, is_default, created_at, updated_at";
+    "id, project_id, name, prefix, movement_guide, position, is_default, created_at, updated_at";
+
+fn cloud_upsert_board(cloud: &CloudClientState, board: ProjectBoard) {
+    if let Some(client) = cloud.get() {
+        tokio::spawn(async move {
+            if let Err(e) = client.upsert_project_board(&board).await {
+                tracing::warn!("cloud upsert project_board: {}", e);
+            }
+        });
+    }
+}
+
+fn cloud_delete_board(cloud: &CloudClientState, id: String) {
+    if let Some(client) = cloud.get() {
+        tokio::spawn(async move {
+            if let Err(e) = client.delete_by_id("project_boards", &id).await {
+                tracing::warn!("cloud delete project_board: {}", e);
+            }
+        });
+    }
+}
 
 pub(crate) fn map_project_board(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectBoard> {
+    let movement_guide_json: Option<String> = row.get(4)?;
     Ok(ProjectBoard {
         id: row.get(0)?,
         project_id: row.get(1)?,
         name: row.get(2)?,
         prefix: row.get(3)?,
-        position: row.get(4)?,
-        is_default: row.get::<_, bool>(5)?,
-        created_at: row.get(6)?,
-        updated_at: row.get(7)?,
+        movement_guide: parse_board_movement_guide(movement_guide_json.as_deref()),
+        position: row.get(5)?,
+        is_default: row.get::<_, bool>(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
     })
 }
 
@@ -143,9 +166,11 @@ pub async fn list_project_boards(
 pub async fn create_project_board(
     payload: CreateProjectBoard,
     app: tauri::State<'_, AppContext>,
-    _cloud: tauri::State<'_, CloudClientState>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<ProjectBoard, String> {
-    app.repos.project_boards().create(payload).await
+    let board = app.repos.project_boards().create(payload).await?;
+    cloud_upsert_board(&cloud, board.clone());
+    Ok(board)
 }
 
 #[tauri::command]
@@ -153,9 +178,11 @@ pub async fn update_project_board(
     id: String,
     payload: UpdateProjectBoard,
     app: tauri::State<'_, AppContext>,
-    _cloud: tauri::State<'_, CloudClientState>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<ProjectBoard, String> {
-    app.repos.project_boards().update(&id, payload).await
+    let board = app.repos.project_boards().update(&id, payload).await?;
+    cloud_upsert_board(&cloud, board.clone());
+    Ok(board)
 }
 
 #[tauri::command]
@@ -163,9 +190,11 @@ pub async fn delete_project_board(
     id: String,
     payload: DeleteProjectBoard,
     app: tauri::State<'_, AppContext>,
-    _cloud: tauri::State<'_, CloudClientState>,
+    cloud: tauri::State<'_, CloudClientState>,
 ) -> Result<(), String> {
-    app.repos.project_boards().delete(&id, payload).await
+    app.repos.project_boards().delete(&id, payload).await?;
+    cloud_delete_board(&cloud, id);
+    Ok(())
 }
 
 mod http {
@@ -203,16 +232,19 @@ mod http {
         reg.register("create_project_board", |ctx, args| async move {
             let a: CreateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
             let r = ctx.repos.project_boards().create(a.payload).await?;
+            cloud_upsert_board(&ctx.cloud, r.clone());
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("update_project_board", |ctx, args| async move {
             let a: UpdateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
             let r = ctx.repos.project_boards().update(&a.id, a.payload).await?;
+            cloud_upsert_board(&ctx.cloud, r.clone());
             serde_json::to_value(r).map_err(|e| e.to_string())
         });
         reg.register("delete_project_board", |ctx, args| async move {
             let a: DeleteArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
             ctx.repos.project_boards().delete(&a.id, a.payload).await?;
+            cloud_delete_board(&ctx.cloud, a.id);
             Ok(serde_json::Value::Null)
         });
     }

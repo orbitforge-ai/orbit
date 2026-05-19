@@ -7,7 +7,6 @@ pub struct ProjectBoardColumn {
     pub project_id: String,
     pub board_id: String,
     pub name: String,
-    pub role: Option<String>,
     pub is_default: bool,
     pub position: f64,
     pub created_at: String,
@@ -20,7 +19,6 @@ pub struct CreateProjectBoardColumn {
     pub project_id: String,
     pub board_id: Option<String>,
     pub name: String,
-    pub role: Option<String>,
     pub is_default: Option<bool>,
     pub position: Option<f64>,
 }
@@ -29,8 +27,6 @@ pub struct CreateProjectBoardColumn {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateProjectBoardColumn {
     pub name: Option<String>,
-    #[serde(default)]
-    pub role: Option<Option<String>>,
     pub is_default: Option<bool>,
     pub position: Option<f64>,
     pub expected_revision: Option<String>,

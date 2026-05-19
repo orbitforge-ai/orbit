@@ -10,7 +10,6 @@ use rusqlite::{params, OptionalExtension};
 use std::collections::HashSet;
 use ulid::Ulid;
 
-use crate::commands::project_board_columns::validate_board_role;
 use crate::commands::work_item_events::{event_kind, insert_event, Actor};
 use crate::db::repos::{
     AgentRepo, BusMessageRepo, BusSubscriptionRepo, ChatRepo, ChatSessionListFilter,
@@ -32,6 +31,7 @@ use crate::models::project::{
     CreateProject, Project, ProjectAgent, ProjectAgentWithMeta, ProjectSummary, UpdateProject,
 };
 use crate::models::project_board::{
+    board_movement_guide_json, default_board_movement_guide_json, parse_board_movement_guide,
     CreateProjectBoard, DeleteProjectBoard, ProjectBoard, UpdateProjectBoard,
 };
 use crate::models::project_board_column::ProjectBoardColumn;
@@ -2129,18 +2129,20 @@ impl WorkflowSeenItemRepo for SqliteRepos {
 // ── Project boards ──────────────────────────────────────────────────────────
 
 const PROJECT_BOARD_COLUMNS: &str =
-    "id, project_id, name, prefix, position, is_default, created_at, updated_at";
+    "id, project_id, name, prefix, movement_guide, position, is_default, created_at, updated_at";
 
 fn map_project_board_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectBoard> {
+    let movement_guide_json: Option<String> = row.get(4)?;
     Ok(ProjectBoard {
         id: row.get(0)?,
         project_id: row.get(1)?,
         name: row.get(2)?,
         prefix: row.get(3)?,
-        position: row.get(4)?,
-        is_default: row.get::<_, bool>(5)?,
-        created_at: row.get(6)?,
-        updated_at: row.get(7)?,
+        movement_guide: parse_board_movement_guide(movement_guide_json.as_deref()),
+        position: row.get(5)?,
+        is_default: row.get::<_, bool>(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
     })
 }
 
@@ -2233,10 +2235,20 @@ impl ProjectBoardRepo for SqliteRepos {
                 .err_str()?;
             let position = next_position + 1024.0;
 
+            let movement_guide_json = default_board_movement_guide_json();
             conn.execute(
-                "INSERT INTO project_boards (id, project_id, name, prefix, position, is_default, created_at, updated_at, tenant_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6, ?7)",
-                params![id, payload.project_id, name, prefix, position, now, tenant_id],
+                "INSERT INTO project_boards (id, project_id, name, prefix, movement_guide, position, is_default, created_at, updated_at, tenant_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?7, ?8)",
+                params![
+                    id,
+                    payload.project_id,
+                    name,
+                    prefix,
+                    movement_guide_json,
+                    position,
+                    now,
+                    tenant_id
+                ],
             )
             .err_str()?;
 
@@ -2301,6 +2313,14 @@ impl ProjectBoardRepo for SqliteRepos {
                     )
                     .err_str()?;
                 }
+            }
+            if let Some(movement_guide) = payload.movement_guide.as_ref() {
+                let movement_guide_json = board_movement_guide_json(movement_guide)?;
+                conn.execute(
+                    "UPDATE project_boards SET movement_guide = ?1, updated_at = ?2 WHERE id = ?3 AND tenant_id = ?4",
+                    params![movement_guide_json, &now, &id, &tenant_id],
+                )
+                .err_str()?;
             }
 
             conn.query_row(
@@ -3331,7 +3351,7 @@ fn resolve_work_item_target_column(
     tenant_id: &str,
     board_id: Option<&str>,
     column_id: Option<&str>,
-    status: Option<&str>,
+    _status: Option<&str>,
 ) -> Result<ProjectBoardColumn, String> {
     if let Some(column_id) = column_id {
         let column = conn
@@ -3360,31 +3380,7 @@ fn resolve_work_item_target_column(
                 ));
             }
         }
-        if let Some(status) = status {
-            validate_board_role(Some(status))?;
-            if let Some(role) = column.role.as_deref() {
-                if role != status {
-                    return Err(format!(
-                        "board column '{}' has role '{}' which does not match status '{}'",
-                        column_id, role, status
-                    ));
-                }
-            }
-        }
         return Ok(column);
-    }
-
-    if let Some(status) = status {
-        validate_board_role(Some(status))?;
-        if let Some(column) =
-            get_work_item_column_by_role(conn, project_id, tenant_id, board_id, status)?
-        {
-            return Ok(column);
-        }
-        return Err(format!(
-            "project '{}' has no board column for role '{}'",
-            project_id, status
-        ));
     }
 
     if let Some(default_column) =
@@ -3400,21 +3396,12 @@ fn resolve_work_item_target_column(
 }
 
 fn resolve_work_item_create_status(
-    column: &ProjectBoardColumn,
+    _column: &ProjectBoardColumn,
     requested_status: Option<&str>,
 ) -> String {
-    column
-        .role
-        .clone()
-        .or_else(|| requested_status.map(str::to_string))
+    requested_status
+        .map(str::to_string)
         .unwrap_or_else(|| "backlog".to_string())
-}
-
-fn resolve_work_item_move_status(column: &ProjectBoardColumn, current_status: &str) -> String {
-    column
-        .role
-        .clone()
-        .unwrap_or_else(|| current_status.to_string())
 }
 
 fn resolve_work_item_next_column(
@@ -3494,41 +3481,6 @@ fn get_work_item_default_column(
                      WHERE project_id = ?1 AND tenant_id = ?2 AND is_default = 1 LIMIT 1"
                 ),
                 params![project_id, tenant_id],
-                map_project_board_column_row,
-            )
-            .optional()
-            .err_str(),
-    }
-}
-
-fn get_work_item_column_by_role(
-    conn: &rusqlite::Connection,
-    project_id: &str,
-    tenant_id: &str,
-    board_id: Option<&str>,
-    role: &str,
-) -> Result<Option<ProjectBoardColumn>, String> {
-    match effective_work_item_board_id(conn, project_id, tenant_id, board_id)? {
-        Some(board) => conn
-            .query_row(
-                &format!(
-                    "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns \
-                     WHERE project_id = ?1 AND board_id = ?2 AND tenant_id = ?3 AND role = ?4 \
-                     ORDER BY position ASC LIMIT 1"
-                ),
-                params![project_id, board, tenant_id, role],
-                map_project_board_column_row,
-            )
-            .optional()
-            .err_str(),
-        None => conn
-            .query_row(
-                &format!(
-                    "SELECT {PROJECT_BOARD_COLUMN_COLUMNS} FROM project_board_columns \
-                     WHERE project_id = ?1 AND tenant_id = ?2 AND role = ?3 \
-                     ORDER BY position ASC LIMIT 1"
-                ),
-                params![project_id, tenant_id, role],
                 map_project_board_column_row,
             )
             .optional()
@@ -3919,29 +3871,15 @@ impl WorkItemRepo for SqliteRepos {
                     map_work_item_repo_row,
                 )
                 .err_str()?;
-            let column = resolve_work_item_target_column(
-                conn,
-                &before.project_id,
-                &tenant_id,
-                before.board_id.as_deref(),
-                None,
-                Some("in_progress"),
-            )?;
-            let column_id = column.id.clone();
-            let status = column
-                .role
-                .clone()
-                .unwrap_or_else(|| "in_progress".to_string());
             conn.execute(
                 "UPDATE work_items
                     SET assignee_agent_id = ?1,
-                        column_id = ?2,
-                        status = ?3,
+                        status = 'in_progress',
                         blocked_reason = NULL,
-                        started_at = COALESCE(started_at, ?4),
-                        updated_at = ?4
-                  WHERE id = ?5 AND tenant_id = ?6",
-                params![&agent_id, &column_id, &status, &now, &id, &tenant_id],
+                        started_at = COALESCE(started_at, ?2),
+                        updated_at = ?2
+                  WHERE id = ?3 AND tenant_id = ?4",
+                params![&agent_id, &now, &id, &tenant_id],
             )
             .err_str()?;
 
@@ -3954,20 +3892,6 @@ impl WorkItemRepo for SqliteRepos {
                     serde_json::json!({
                         "fromAgentId": before.assignee_agent_id,
                         "toAgentId": agent_id,
-                    }),
-                )?;
-            }
-            if before.column_id.as_deref() != Some(column_id.as_str()) {
-                insert_event(
-                    conn,
-                    &id,
-                    Actor::System,
-                    event_kind::COLUMN_CHANGED,
-                    serde_json::json!({
-                        "fromColumnId": before.column_id,
-                        "toColumnId": column_id,
-                        "toColumnName": column.name,
-                        "reason": "claim",
                     }),
                 )?;
             }
@@ -4017,31 +3941,10 @@ impl WorkItemRepo for SqliteRepos {
                 )?,
             };
             let column_id = column.id.clone();
-            let status = resolve_work_item_move_status(&column, &before.status);
-
-            if status == "blocked" {
-                let reason_ok: bool = conn
-                    .query_row(
-                        "SELECT blocked_reason IS NOT NULL AND length(blocked_reason) > 0
-                           FROM work_items WHERE id = ?1 AND tenant_id = ?2",
-                        params![&id, &tenant_id],
-                        |row| row.get(0),
-                    )
-                    .err_str()?;
-                if !reason_ok {
-                    return Err(
-                        "work_item: moving to 'blocked' requires a non-empty blocked_reason; use block() first"
-                            .into(),
-                    );
-                }
-            }
-
             let position = match position {
                 Some(p) => p,
                 None => {
-                    if before.status == status
-                        && before.column_id.as_deref() == Some(column_id.as_str())
-                    {
+                    if before.column_id.as_deref() == Some(column_id.as_str()) {
                         before.position
                     } else {
                         let max: Option<f64> = conn
@@ -4058,37 +3961,13 @@ impl WorkItemRepo for SqliteRepos {
                 }
             };
 
-            let started_at_expr = if before.status != "in_progress" && status == "in_progress" {
-                "COALESCE(started_at, ?4)"
-            } else {
-                "started_at"
-            };
-            let completed_at_expr = if status == "done" || status == "cancelled" {
-                "?4"
-            } else {
-                "completed_at"
-            };
-            let blocked_reason_expr = if before.status == "blocked" && status != "blocked" {
-                "NULL"
-            } else {
-                "blocked_reason"
-            };
-
-            let sql = format!(
+            conn.execute(
                 "UPDATE work_items
                     SET column_id = ?1,
-                        status = ?2,
-                        position = ?3,
-                        started_at = {},
-                        completed_at = {},
-                        blocked_reason = {},
-                        updated_at = ?5
-                  WHERE id = ?4 AND tenant_id = ?6",
-                started_at_expr, completed_at_expr, blocked_reason_expr
-            );
-            conn.execute(
-                &sql,
-                params![&column_id, &status, position, &id, &now, &tenant_id],
+                        position = ?2,
+                        updated_at = ?3
+                  WHERE id = ?4 AND tenant_id = ?5",
+                params![&column_id, position, &now, &id, &tenant_id],
             )
                 .err_str()?;
 
@@ -4100,29 +3979,9 @@ impl WorkItemRepo for SqliteRepos {
                     event_kind::COLUMN_CHANGED,
                     serde_json::json!({
                         "fromColumnId": before.column_id,
-                        "fromStatus": before.status,
                         "toColumnId": column_id,
                         "toColumnName": column.name,
-                        "toStatus": status,
                     }),
-                )?;
-            }
-            if status == "done" && before.status != "done" {
-                insert_event(
-                    conn,
-                    &id,
-                    Actor::System,
-                    event_kind::COMPLETED,
-                    serde_json::json!({ "via": "move" }),
-                )?;
-            }
-            if before.status == "blocked" && status != "blocked" {
-                insert_event(
-                    conn,
-                    &id,
-                    Actor::System,
-                    event_kind::UNBLOCKED,
-                    serde_json::json!({ "via": "move" }),
                 )?;
             }
 
@@ -4189,28 +4048,11 @@ impl WorkItemRepo for SqliteRepos {
         let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
-            let (project_id, board_id): (String, Option<String>) = conn
-                .query_row(
-                    "SELECT project_id, board_id FROM work_items WHERE id = ?1 AND tenant_id = ?2",
-                    params![&id, &tenant_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .err_str()?;
-            let column = resolve_work_item_target_column(
-                conn,
-                &project_id,
-                &tenant_id,
-                board_id.as_deref(),
-                None,
-                Some("blocked"),
-            )?;
-            let column_id = column.id;
-            let status = column.role.unwrap_or_else(|| "blocked".to_string());
             conn.execute(
                 "UPDATE work_items
-                    SET column_id = ?1, status = ?2, blocked_reason = ?3, updated_at = ?4
-                  WHERE id = ?5 AND tenant_id = ?6",
-                params![&column_id, &status, &reason, &now, &id, &tenant_id],
+                    SET status = 'blocked', blocked_reason = ?1, updated_at = ?2
+                  WHERE id = ?3 AND tenant_id = ?4",
+                params![&reason, &now, &id, &tenant_id],
             )
             .err_str()?;
             insert_event(
@@ -4235,31 +4077,13 @@ impl WorkItemRepo for SqliteRepos {
         let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
-            let (project_id, board_id): (String, Option<String>) = conn
-                .query_row(
-                    "SELECT project_id, board_id FROM work_items WHERE id = ?1 AND tenant_id = ?2",
-                    params![&id, &tenant_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .err_str()?;
-            let column = resolve_work_item_target_column(
-                conn,
-                &project_id,
-                &tenant_id,
-                board_id.as_deref(),
-                None,
-                Some(&status),
-            )?;
-            let column_id = column.id;
-            let resolved_status = column.role.unwrap_or(status);
             conn.execute(
                 "UPDATE work_items
-                    SET column_id = ?1,
-                        status = ?2,
+                    SET status = ?1,
                         blocked_reason = NULL,
-                        updated_at = ?3
-                  WHERE id = ?4 AND tenant_id = ?5",
-                params![&column_id, &resolved_status, &now, &id, &tenant_id],
+                        updated_at = ?2
+                  WHERE id = ?3 AND tenant_id = ?4",
+                params![&status, &now, &id, &tenant_id],
             )
             .err_str()?;
             insert_event(
@@ -4267,7 +4091,7 @@ impl WorkItemRepo for SqliteRepos {
                 &id,
                 Actor::System,
                 event_kind::UNBLOCKED,
-                serde_json::json!({ "toStatus": resolved_status }),
+                serde_json::json!({ "toStatus": status }),
             )?;
             conn.query_row(
                 &format!("SELECT {WORK_ITEM_REPO_COLUMNS} FROM work_items WHERE id = ?1 AND tenant_id = ?2"),
@@ -4284,32 +4108,14 @@ impl WorkItemRepo for SqliteRepos {
         let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             let now = chrono::Utc::now().to_rfc3339();
-            let (project_id, board_id): (String, Option<String>) = conn
-                .query_row(
-                    "SELECT project_id, board_id FROM work_items WHERE id = ?1 AND tenant_id = ?2",
-                    params![&id, &tenant_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .err_str()?;
-            let column = resolve_work_item_target_column(
-                conn,
-                &project_id,
-                &tenant_id,
-                board_id.as_deref(),
-                None,
-                Some("done"),
-            )?;
-            let column_id = column.id;
-            let status = column.role.unwrap_or_else(|| "done".to_string());
             conn.execute(
                 "UPDATE work_items
-                    SET column_id = ?1,
-                        status = ?2,
-                        completed_at = ?3,
+                    SET status = 'done',
+                        completed_at = ?1,
                         blocked_reason = NULL,
-                        updated_at = ?3
-                  WHERE id = ?4 AND tenant_id = ?5",
-                params![&column_id, &status, &now, &id, &tenant_id],
+                        updated_at = ?1
+                  WHERE id = ?2 AND tenant_id = ?3",
+                params![&now, &id, &tenant_id],
             )
             .err_str()?;
             insert_event(
@@ -5280,7 +5086,7 @@ impl ProjectWorkflowRepo for SqliteRepos {
 // checks, and cross-table re-parenting.
 
 const PROJECT_BOARD_COLUMN_COLUMNS: &str =
-    "id, project_id, board_id, name, role, is_default, position, created_at, updated_at";
+    "id, project_id, board_id, name, is_default, position, created_at, updated_at";
 
 fn map_project_board_column_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectBoardColumn> {
     Ok(ProjectBoardColumn {
@@ -5288,11 +5094,10 @@ fn map_project_board_column_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Pro
         project_id: row.get(1)?,
         board_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
         name: row.get(3)?,
-        role: row.get(4)?,
-        is_default: row.get::<_, bool>(5)?,
-        position: row.get(6)?,
-        created_at: row.get(7)?,
-        updated_at: row.get(8)?,
+        is_default: row.get::<_, bool>(4)?,
+        position: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
     })
 }
 
@@ -5367,5 +5172,205 @@ impl ProjectBoardColumnRepo for SqliteRepos {
             .err_str()
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::connection;
+
+    struct SeededRepo {
+        repos: SqliteRepos,
+        dir: std::path::PathBuf,
+        project_id: String,
+        board_id: String,
+        todo_column_id: String,
+        done_column_id: String,
+    }
+
+    impl Drop for SeededRepo {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn temp_dir(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("orbit-{label}-{}", Ulid::new()))
+    }
+
+    fn setup_seeded_repo(label: &str) -> SeededRepo {
+        let dir = temp_dir(label);
+        let pool = connection::init(dir.clone()).expect("database initializes");
+        let repos = SqliteRepos::new(pool.clone());
+        let project_id = Ulid::new().to_string();
+        let board_id = Ulid::new().to_string();
+        let todo_column_id = Ulid::new().to_string();
+        let done_column_id = Ulid::new().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        {
+            let conn = pool.get().expect("sqlite connection");
+            conn.execute(
+                "INSERT INTO projects (id, name, description, created_at, updated_at, tenant_id)
+                 VALUES (?1, 'Test project', NULL, ?2, ?2, 'local')",
+                params![project_id, now],
+            )
+            .expect("insert project");
+            conn.execute(
+                "INSERT INTO project_boards (
+                    id, project_id, name, prefix, movement_guide, position, is_default, created_at, updated_at, tenant_id
+                 ) VALUES (?1, ?2, 'Main', 'MAIN', ?3, 1024.0, 1, ?4, ?4, 'local')",
+                params![
+                    board_id,
+                    project_id,
+                    default_board_movement_guide_json(),
+                    now
+                ],
+            )
+            .expect("insert board");
+            conn.execute(
+                "INSERT INTO project_board_columns (
+                    id, project_id, board_id, name, is_default, position, created_at, updated_at, tenant_id
+                 ) VALUES (?1, ?2, ?3, 'Todo', 1, 1024.0, ?4, ?4, 'local')",
+                params![todo_column_id, project_id, board_id, now],
+            )
+            .expect("insert todo column");
+            conn.execute(
+                "INSERT INTO project_board_columns (
+                    id, project_id, board_id, name, is_default, position, created_at, updated_at, tenant_id
+                 ) VALUES (?1, ?2, ?3, 'Done', 0, 2048.0, ?4, ?4, 'local')",
+                params![done_column_id, project_id, board_id, now],
+            )
+            .expect("insert done column");
+        }
+
+        SeededRepo {
+            repos,
+            dir,
+            project_id,
+            board_id,
+            todo_column_id,
+            done_column_id,
+        }
+    }
+
+    fn create_test_item(seed: &SeededRepo) -> CreateWorkItem {
+        CreateWorkItem {
+            project_id: seed.project_id.clone(),
+            board_id: Some(seed.board_id.clone()),
+            title: "Test card".to_string(),
+            description: None,
+            kind: Some("task".to_string()),
+            column_id: Some(seed.todo_column_id.clone()),
+            status: Some("todo".to_string()),
+            priority: Some(1),
+            assignee_agent_id: None,
+            created_by_agent_id: None,
+            parent_work_item_id: None,
+            position: None,
+            labels: Some(vec![]),
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn migration_shape_removes_board_column_role_and_status() {
+        let seed = setup_seeded_repo("migration-shape");
+        let conn = seed.repos.pool.get().expect("sqlite connection");
+
+        let column_names = |table: &str| {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .expect("pragma prepares");
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .expect("pragma runs")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("column names collect")
+        };
+
+        let board_column_fields = column_names("project_board_columns");
+        assert!(!board_column_fields.iter().any(|name| name == "role"));
+        assert!(!board_column_fields.iter().any(|name| name == "status"));
+        assert!(board_column_fields.iter().any(|name| name == "board_id"));
+
+        let board_fields = column_names("project_boards");
+        assert!(board_fields.iter().any(|name| name == "movement_guide"));
+    }
+
+    #[tokio::test]
+    async fn work_item_movement_and_lifecycle_actions_are_decoupled() {
+        let seed = setup_seeded_repo("movement-lifecycle");
+        let item = seed
+            .repos
+            .work_items()
+            .create(create_test_item(&seed))
+            .await
+            .expect("create work item");
+
+        let moved = seed
+            .repos
+            .work_items()
+            .move_item(&item.id, Some(seed.done_column_id.clone()), Some(2048.0))
+            .await
+            .expect("move work item");
+        assert_eq!(
+            moved.column_id.as_deref(),
+            Some(seed.done_column_id.as_str())
+        );
+        assert_eq!(moved.status, "todo");
+        assert!(moved.completed_at.is_none());
+        assert!(moved.blocked_reason.is_none());
+
+        let claimed = seed
+            .repos
+            .work_items()
+            .claim(&item.id, "default")
+            .await
+            .expect("claim work item");
+        assert_eq!(
+            claimed.column_id.as_deref(),
+            Some(seed.done_column_id.as_str())
+        );
+        assert_eq!(claimed.status, "in_progress");
+        assert_eq!(claimed.assignee_agent_id.as_deref(), Some("default"));
+
+        let blocked = seed
+            .repos
+            .work_items()
+            .block(&item.id, "Waiting on review".to_string())
+            .await
+            .expect("block work item");
+        assert_eq!(
+            blocked.column_id.as_deref(),
+            Some(seed.done_column_id.as_str())
+        );
+        assert_eq!(blocked.status, "blocked");
+        assert_eq!(blocked.blocked_reason.as_deref(), Some("Waiting on review"));
+
+        let unblocked = seed
+            .repos
+            .work_items()
+            .unblock(&item.id, "review".to_string())
+            .await
+            .expect("unblock work item");
+        assert_eq!(
+            unblocked.column_id.as_deref(),
+            Some(seed.done_column_id.as_str())
+        );
+        assert_eq!(unblocked.status, "review");
+        assert!(unblocked.blocked_reason.is_none());
+
+        let completed = seed
+            .repos
+            .work_items()
+            .complete(&item.id)
+            .await
+            .expect("complete work item");
+        assert_eq!(
+            completed.column_id.as_deref(),
+            Some(seed.done_column_id.as_str())
+        );
+        assert_eq!(completed.status, "done");
+        assert!(completed.completed_at.is_some());
     }
 }

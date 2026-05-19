@@ -29,6 +29,7 @@ use crate::models::project::{
     CreateProject, Project, ProjectAgent, ProjectAgentWithMeta, ProjectSummary, UpdateProject,
 };
 use crate::models::project_board::{
+    board_movement_guide_json, default_board_movement_guide_json, parse_board_movement_guide,
     CreateProjectBoard, DeleteProjectBoard, ProjectBoard, UpdateProjectBoard,
 };
 use crate::models::project_board_column::ProjectBoardColumn;
@@ -275,23 +276,25 @@ fn map_user_row(row: &PgRow) -> Result<User, sqlx::Error> {
 }
 
 const PROJECT_BOARD_COLUMNS: &str =
-    "id, project_id, name, prefix, position, is_default, created_at::text, updated_at::text";
+    "id, project_id, name, prefix, movement_guide, position, is_default, created_at::text, updated_at::text";
 
 fn map_project_board_row(row: &PgRow) -> Result<ProjectBoard, sqlx::Error> {
+    let movement_guide_json: Option<String> = row.try_get(4)?;
     Ok(ProjectBoard {
         id: row.try_get(0)?,
         project_id: row.try_get(1)?,
         name: row.try_get(2)?,
         prefix: row.try_get(3)?,
-        position: row.try_get(4)?,
-        is_default: bool_row(row, 5)?,
-        created_at: row.try_get(6)?,
-        updated_at: row.try_get(7)?,
+        movement_guide: parse_board_movement_guide(movement_guide_json.as_deref()),
+        position: row.try_get(5)?,
+        is_default: bool_row(row, 6)?,
+        created_at: row.try_get(7)?,
+        updated_at: row.try_get(8)?,
     })
 }
 
 const PROJECT_BOARD_COLUMN_COLUMNS: &str =
-    "id, project_id, board_id, name, role, is_default, position, created_at::text, updated_at::text";
+    "id, project_id, board_id, name, is_default, position, created_at::text, updated_at::text";
 
 fn map_project_board_column_row(row: &PgRow) -> Result<ProjectBoardColumn, sqlx::Error> {
     Ok(ProjectBoardColumn {
@@ -299,11 +302,10 @@ fn map_project_board_column_row(row: &PgRow) -> Result<ProjectBoardColumn, sqlx:
         project_id: row.try_get(1)?,
         board_id: row.try_get::<Option<String>, _>(2)?.unwrap_or_default(),
         name: row.try_get(3)?,
-        role: row.try_get(4)?,
-        is_default: bool_row(row, 5)?,
-        position: row.try_get(6)?,
-        created_at: row.try_get(7)?,
-        updated_at: row.try_get(8)?,
+        is_default: bool_row(row, 4)?,
+        position: row.try_get(5)?,
+        created_at: row.try_get(6)?,
+        updated_at: row.try_get(7)?,
     })
 }
 
@@ -1814,10 +1816,17 @@ impl ProjectBoardRepo for PgRepos {
         let id = Ulid::new().to_string();
         let now = now();
         sqlx::query(
-            "INSERT INTO project_boards (id, project_id, name, prefix, position, is_default, created_at, updated_at, tenant_id)
-             VALUES ($1,$2,$3,$4,$5,false,$6,$6,$7)",
+            "INSERT INTO project_boards (id, project_id, name, prefix, movement_guide, position, is_default, created_at, updated_at, tenant_id)
+             VALUES ($1,$2,$3,$4,$5,$6,false,$7,$7,$8)",
         )
-        .bind(&id).bind(payload.project_id).bind(name).bind(prefix).bind(position + 1024.0).bind(now).bind(&tenant_id)
+        .bind(&id)
+        .bind(payload.project_id)
+        .bind(name)
+        .bind(prefix)
+        .bind(default_board_movement_guide_json())
+        .bind(position + 1024.0)
+        .bind(now)
+        .bind(&tenant_id)
         .execute(&self.pool).await.map_err(db_err)?;
         ProjectBoardRepo::get(self, &id)
             .await?
@@ -1852,6 +1861,16 @@ impl ProjectBoardRepo for PgRepos {
             }
             sqlx::query("UPDATE project_boards SET prefix = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4")
                 .bind(prefix).bind(&now).bind(id).bind(&tenant_id).execute(&self.pool).await.map_err(db_err)?;
+        }
+        if let Some(movement_guide) = payload.movement_guide {
+            sqlx::query("UPDATE project_boards SET movement_guide = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4")
+                .bind(board_movement_guide_json(&movement_guide)?)
+                .bind(&now)
+                .bind(id)
+                .bind(&tenant_id)
+                .execute(&self.pool)
+                .await
+                .map_err(db_err)?;
         }
         ProjectBoardRepo::get(self, id)
             .await?
@@ -2602,7 +2621,7 @@ impl WorkItemRepo for PgRepos {
         let now = now();
         let labels = serde_json::to_string(&payload.labels.unwrap_or_default()).map_err(db_err)?;
         let metadata = json_string(&payload.metadata.unwrap_or_else(|| serde_json::json!({})))?;
-        let status = payload.status.unwrap_or_else(|| "todo".to_string());
+        let status = payload.status.unwrap_or_else(|| "backlog".to_string());
         let kind = payload.kind.unwrap_or_else(|| "task".to_string());
         sqlx::query(
             "INSERT INTO work_items (
@@ -2713,8 +2732,22 @@ impl WorkItemRepo for PgRepos {
 
     async fn claim(&self, id: &str, agent_id: &str) -> Result<WorkItem, String> {
         let tenant_id = self.tenant_id();
-        sqlx::query("UPDATE work_items SET assignee_agent_id = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4")
-            .bind(agent_id).bind(now()).bind(id).bind(&tenant_id).execute(&self.pool).await.map_err(db_err)?;
+        sqlx::query(
+            "UPDATE work_items
+             SET assignee_agent_id = $1,
+                 status = 'in_progress',
+                 blocked_reason = NULL,
+                 started_at = COALESCE(started_at, $2),
+                 updated_at = $2
+             WHERE id = $3 AND tenant_id = $4",
+        )
+        .bind(agent_id)
+        .bind(now())
+        .bind(id)
+        .bind(&tenant_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
         insert_work_item_event(
             &self.pool,
             &tenant_id,
@@ -2735,22 +2768,14 @@ impl WorkItemRepo for PgRepos {
         position: Option<f64>,
     ) -> Result<WorkItem, String> {
         let tenant_id = self.tenant_id();
-        let status: Option<String> = if let Some(column_id) = column_id.as_deref() {
-            sqlx::query_scalar("SELECT COALESCE(role, name) FROM project_board_columns WHERE id = $1 AND tenant_id = $2")
-                .bind(column_id).bind(&tenant_id).fetch_optional(&self.pool).await.map_err(db_err)?
-        } else {
-            None
-        };
         sqlx::query(
             "UPDATE work_items
              SET column_id = COALESCE($1, column_id),
-                 status = COALESCE($2, status),
-                 position = COALESCE($3, position),
-                 updated_at = $4
-             WHERE id = $5 AND tenant_id = $6",
+                 position = COALESCE($2, position),
+                 updated_at = $3
+             WHERE id = $4 AND tenant_id = $5",
         )
         .bind(column_id)
-        .bind(status)
         .bind(position)
         .bind(now())
         .bind(id)
@@ -2841,8 +2866,17 @@ impl WorkItemRepo for PgRepos {
     async fn complete(&self, id: &str) -> Result<WorkItem, String> {
         let tenant_id = self.tenant_id();
         let completed_at = now();
-        sqlx::query("UPDATE work_items SET status = 'done', completed_at = $1, updated_at = $1 WHERE id = $2 AND tenant_id = $3")
-            .bind(&completed_at).bind(id).bind(&tenant_id).execute(&self.pool).await.map_err(db_err)?;
+        sqlx::query(
+            "UPDATE work_items
+             SET status = 'done', completed_at = $1, blocked_reason = NULL, updated_at = $1
+             WHERE id = $2 AND tenant_id = $3",
+        )
+        .bind(&completed_at)
+        .bind(id)
+        .bind(&tenant_id)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
         insert_work_item_event(
             &self.pool,
             &tenant_id,

@@ -69,7 +69,6 @@ export const projectsApi = {
     projectId: string;
     boardId?: string;
     name: string;
-    role?: ProjectBoardColumn['role'];
     isDefault?: boolean;
     position?: number;
   }): Promise<ProjectBoardColumn> => invoke('create_project_board_column', { payload }),
@@ -78,7 +77,6 @@ export const projectsApi = {
     id: string,
     payload: {
       name?: string;
-      role?: ProjectBoardColumn['role'];
       isDefault?: boolean;
       position?: number;
       expectedRevision?: string;

@@ -451,6 +451,7 @@ pub fn run() {
             commands::work_items::move_work_item,
             commands::work_items::reorder_work_items,
             commands::work_items::block_work_item,
+            commands::work_items::unblock_work_item,
             commands::work_items::complete_work_item,
             commands::work_items::list_work_item_comments,
             commands::work_items::create_work_item_comment,

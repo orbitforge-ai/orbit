@@ -37,8 +37,10 @@ import {
   MoreHorizontal,
   Pencil,
   Plus,
+  Route,
   Star,
   Trash2,
+  X,
 } from 'lucide-react';
 import { agentsApi } from '../../api/agents';
 import { projectsApi } from '../../api/projects';
@@ -46,7 +48,7 @@ import { workItemsApi } from '../../api/workItems';
 import { cn } from '../../lib/cn';
 import { toast } from '../../store/toastStore';
 import { useUiStore } from '../../store/uiStore';
-import { Agent, ProjectBoard, ProjectBoardColumn, WorkItem, WorkItemStatus } from '../../types';
+import { Agent, BoardMovementGuide, ProjectBoard, ProjectBoardColumn, WorkItem } from '../../types';
 import { ProjectBoardCard } from './ProjectBoardCard';
 import { WorkItemModal } from './WorkItemModal/WorkItemModal';
 import { Input, SimpleSelect } from '../../components/ui';
@@ -54,16 +56,6 @@ import { Input, SimpleSelect } from '../../components/ui';
 const CARD_DRAG_PREFIX = 'work-item:';
 const COLUMN_DROP_PREFIX = 'column-drop:';
 const COLUMN_DRAG_PREFIX = 'board-column:';
-const ROLE_OPTIONS: Array<{ value: WorkItemStatus | null; label: string }> = [
-  { value: null, label: 'No role' },
-  { value: 'backlog', label: 'Backlog' },
-  { value: 'todo', label: 'Todo' },
-  { value: 'in_progress', label: 'In Progress' },
-  { value: 'blocked', label: 'Blocked' },
-  { value: 'review', label: 'Review' },
-  { value: 'done', label: 'Done' },
-  { value: 'cancelled', label: 'Cancelled' },
-];
 
 function cardDragId(id: string): string {
   return `${CARD_DRAG_PREFIX}${id}`;
@@ -105,7 +97,7 @@ function resolveColumnIdForItem(
   if (item.columnId && columnById.has(item.columnId)) {
     return item.columnId;
   }
-  return columns.find((column) => column.role === item.status)?.id ?? columns[0]?.id ?? null;
+  return columns[0]?.id ?? null;
 }
 
 export function ProjectBoardTab({ projectId }: { projectId: string }) {
@@ -129,6 +121,7 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
   const [boardFormOpen, setBoardFormOpen] = useState(false);
   const [editingBoard, setEditingBoard] = useState<ProjectBoard | null>(null);
   const [deleteBoardState, setDeleteBoardState] = useState<ProjectBoard | null>(null);
+  const [movementGuideBoard, setMovementGuideBoard] = useState<ProjectBoard | null>(null);
 
   const selectedBoardIdByProject = useUiStore((state) => state.selectedBoardIdByProject);
   const setSelectedBoard = useUiStore((state) => state.setSelectedBoard);
@@ -206,10 +199,9 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
     }: {
       id: string;
       columnId: string;
-      role: ProjectBoardColumn['role'];
       position?: number;
     }) => workItemsApi.move(id, columnId, position),
-    onMutate: async ({ id, columnId, role, position }) => {
+    onMutate: async ({ id, columnId, position }) => {
       await queryClient.cancelQueries({ queryKey: workItemsKey });
       const previous = queryClient.getQueryData<WorkItem[]>([...workItemsKey]);
       queryClient.setQueryData<WorkItem[]>([...workItemsKey], (old = []) =>
@@ -218,7 +210,6 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
             ? {
                 ...item,
                 columnId,
-                status: role ?? item.status,
                 position: position ?? item.position,
               }
             : item
@@ -237,18 +228,9 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
     },
   });
 
-  const blockMutation = useMutation({
-    mutationFn: ({ id, reason }: { id: string; reason: string }) => workItemsApi.block(id, reason),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['work-items', projectId] });
-    },
-    onError: (error) => toast.error('Failed to block card', error),
-  });
-
   const createColumnMutation = useMutation({
     mutationFn: (payload: {
       name: string;
-      role?: ProjectBoardColumn['role'];
       isDefault?: boolean;
       position?: number;
     }) =>
@@ -345,11 +327,17 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
   });
 
   const updateBoardMutation = useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload: { name?: string; prefix?: string } }) =>
-      projectsApi.updateBoard(id, payload),
+    mutationFn: ({
+      id,
+      payload,
+    }: {
+      id: string;
+      payload: Parameters<typeof projectsApi.updateBoard>[1];
+    }) => projectsApi.updateBoard(id, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project-boards', projectId] });
       setEditingBoard(null);
+      setMovementGuideBoard(null);
     },
     onError: (error) => toast.error('Failed to update board', error),
   });
@@ -437,13 +425,6 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
     const targetColumn = columnById.get(targetColumnId);
     if (!card || !targetColumn) return;
 
-    if (targetColumn.role === 'blocked') {
-      const reason = window.prompt('Why is this card blocked?');
-      if (!reason?.trim()) return;
-      blockMutation.mutate({ id: activeCardId, reason: reason.trim() });
-      return;
-    }
-
     const columnItems = (itemsByColumn.get(targetColumnId) ?? []).filter(
       (item) => item.id !== activeCardId
     );
@@ -458,10 +439,8 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
     }
 
     const currentColumnId = resolveColumnIdForItem(card, columns, columnById);
-    const currentRole = columnById.get(currentColumnId ?? '')?.role ?? null;
     if (
       currentColumnId === targetColumnId &&
-      currentRole === targetColumn.role &&
       (position === undefined || Math.abs(position - card.position) < 0.0001)
     ) {
       return;
@@ -470,7 +449,6 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
     moveMutation.mutate({
       id: activeCardId,
       columnId: targetColumnId,
-      role: targetColumn.role,
       position,
     });
   }
@@ -535,6 +513,10 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
               onSelect={(boardId) => setSelectedBoard(projectId, boardId)}
               onCreate={() => setBoardFormOpen(true)}
               onRename={(board) => setEditingBoard(board)}
+              onEditMovementGuide={(board) => {
+                setSelectedBoard(projectId, board.id);
+                setMovementGuideBoard(board);
+              }}
               onDelete={(board) => setDeleteBoardState(board)}
             />
             <button
@@ -571,7 +553,6 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
                   onClick={() =>
                     createColumnMutation.mutate({
                       name: 'Backlog',
-                      role: 'backlog',
                       isDefault: true,
                     })
                   }
@@ -602,12 +583,6 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
                           setEditingColumnId(null);
                           setEditingTitle('');
                         }}
-                        onSetRole={(role) =>
-                          updateColumnMutation.mutate({
-                            id: column.id,
-                            payload: { role, expectedRevision: boardRevision },
-                          })
-                        }
                         onSetDefault={() =>
                           updateColumnMutation.mutate({
                             id: column.id,
@@ -706,6 +681,21 @@ export function ProjectBoardTab({ projectId }: { projectId: string }) {
         />
       )}
 
+      {movementGuideBoard && (
+        <MovementGuideDialog
+          board={movementGuideBoard}
+          columns={columns}
+          isPending={updateBoardMutation.isPending}
+          onCancel={() => setMovementGuideBoard(null)}
+          onSubmit={(movementGuide) =>
+            updateBoardMutation.mutate({
+              id: movementGuideBoard.id,
+              payload: { movementGuide },
+            })
+          }
+        />
+      )}
+
       {deleteBoardState && (
         <DeleteBoardDialog
           board={deleteBoardState}
@@ -745,7 +735,6 @@ function BoardColumn({
   onBeginEditing,
   onFinishEditing,
   onCancelEditing,
-  onSetRole,
   onSetDefault,
   onDelete,
   children,
@@ -758,7 +747,6 @@ function BoardColumn({
   onBeginEditing: () => void;
   onFinishEditing: () => void;
   onCancelEditing: () => void;
-  onSetRole: (role: ProjectBoardColumn['role']) => void;
   onSetDefault: () => void;
   onDelete: () => void;
   children: React.ReactNode;
@@ -828,14 +816,6 @@ function BoardColumn({
               <Star size={10} className="inline" />
             </span>
           )}
-          {column.role && (
-            <span
-              data-pan-disabled="true"
-              className={cn('rounded-full px-1.5 py-0.5 text-[10px]', roleTone(column.role))}
-            >
-              {roleLabel(column.role)}
-            </span>
-          )}
         </div>
         <div className="flex items-center gap-1">
           <span className="text-[10px] text-muted tabular-nums">{count}</span>
@@ -868,16 +848,6 @@ function BoardColumn({
                 >
                   Set as default
                 </DropdownMenu.Item>
-                <DropdownMenu.Separator className="my-1 h-px bg-edge" />
-                {ROLE_OPTIONS.map((option) => (
-                  <DropdownMenu.Item
-                    key={option.label}
-                    className="cursor-pointer rounded px-2 py-1.5 text-xs text-white outline-none hover:bg-edge"
-                    onSelect={() => onSetRole(option.value)}
-                  >
-                    Role: {option.label}
-                  </DropdownMenu.Item>
-                ))}
                 <DropdownMenu.Separator className="my-1 h-px bg-edge" />
                 <button
                   type="button"
@@ -1074,6 +1044,7 @@ function BoardPicker({
   onSelect,
   onCreate,
   onRename,
+  onEditMovementGuide,
   onDelete,
 }: {
   boards: ProjectBoard[];
@@ -1082,6 +1053,7 @@ function BoardPicker({
   onSelect: (boardId: string) => void;
   onCreate: () => void;
   onRename: (board: ProjectBoard) => void;
+  onEditMovementGuide: (board: ProjectBoard) => void;
   onDelete: (board: ProjectBoard) => void;
 }) {
   const active = boards.find((b) => b.id === selectedBoardId) ?? null;
@@ -1164,6 +1136,15 @@ function BoardPicker({
                         </span>
                       </DropdownMenu.Item>
                       <DropdownMenu.Item
+                        className="cursor-pointer rounded px-2 py-1.5 text-xs text-white outline-none hover:bg-edge"
+                        onSelect={() => onEditMovementGuide(board)}
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          <Route size={11} />
+                          Movement guide
+                        </span>
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
                         className="cursor-pointer rounded px-2 py-1.5 text-xs text-red-300 outline-none hover:bg-red-500/10"
                         onSelect={() => onDelete(board)}
                         disabled={boards.length <= 1}
@@ -1190,6 +1171,275 @@ function BoardPicker({
         </Select.Content>
       </Select.Portal>
     </Select.Root>
+  );
+}
+
+function defaultMovementGuide(): BoardMovementGuide {
+  return {
+    version: 1,
+    summary: '',
+    columnRules: [],
+    transitions: [],
+    agentInstructions: '',
+  };
+}
+
+function MovementGuideDialog({
+  board,
+  columns,
+  isPending,
+  onCancel,
+  onSubmit,
+}: {
+  board: ProjectBoard;
+  columns: ProjectBoardColumn[];
+  isPending: boolean;
+  onCancel: () => void;
+  onSubmit: (movementGuide: BoardMovementGuide) => void;
+}) {
+  const [summary, setSummary] = useState('');
+  const [agentInstructions, setAgentInstructions] = useState('');
+  const [columnRules, setColumnRules] = useState<BoardMovementGuide['columnRules']>([]);
+  const [transitions, setTransitions] = useState<BoardMovementGuide['transitions']>([]);
+
+  const columnOptions = columns.map((column) => ({ value: column.id, label: column.name }));
+
+  useEffect(() => {
+    const guide = board.movementGuide ?? defaultMovementGuide();
+    const existingRules = new Map(guide.columnRules.map((rule) => [rule.columnId, rule]));
+    const columnIds = new Set(columns.map((column) => column.id));
+    setSummary(guide.summary);
+    setAgentInstructions(guide.agentInstructions);
+    setColumnRules(
+      columns.map((column) => ({
+        columnId: column.id,
+        purpose: existingRules.get(column.id)?.purpose ?? '',
+        moveWhen: existingRules.get(column.id)?.moveWhen ?? '',
+      }))
+    );
+    setTransitions(
+      guide.transitions.filter(
+        (transition) =>
+          columnIds.has(transition.fromColumnId) && columnIds.has(transition.toColumnId)
+      )
+    );
+  }, [board, columns]);
+
+  function updateColumnRule(
+    columnId: string,
+    field: 'purpose' | 'moveWhen',
+    value: string
+  ) {
+    setColumnRules((rules) =>
+      rules.map((rule) => (rule.columnId === columnId ? { ...rule, [field]: value } : rule))
+    );
+  }
+
+  function updateTransition(
+    index: number,
+    patch: Partial<BoardMovementGuide['transitions'][number]>
+  ) {
+    setTransitions((rows) =>
+      rows.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row))
+    );
+  }
+
+  function addTransition() {
+    const firstColumn = columns[0]?.id ?? '';
+    const secondColumn = columns[1]?.id ?? firstColumn;
+    setTransitions((rows) => [
+      ...rows,
+      { fromColumnId: firstColumn, toColumnId: secondColumn, when: '' },
+    ]);
+  }
+
+  function handleSubmit() {
+    onSubmit({
+      version: 1,
+      summary: summary.trim(),
+      columnRules: columnRules.map((rule) => ({
+        columnId: rule.columnId,
+        purpose: rule.purpose.trim(),
+        moveWhen: rule.moveWhen.trim(),
+      })),
+      transitions: transitions
+        .filter((transition) => transition.fromColumnId && transition.toColumnId)
+        .map((transition) => ({
+          fromColumnId: transition.fromColumnId,
+          toColumnId: transition.toColumnId,
+          when: transition.when.trim(),
+        })),
+      agentInstructions: agentInstructions.trim(),
+    });
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl border border-edge bg-panel shadow-2xl">
+        <div className="flex items-center justify-between border-b border-edge px-4 py-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <Route size={15} className="text-emerald-400" />
+            <h4 className="truncate text-sm font-semibold text-white">Movement guide</h4>
+            <span className="rounded bg-edge px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted">
+              {board.prefix}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded p-1 text-muted transition-colors hover:bg-edge hover:text-white"
+            aria-label="Close movement guide"
+          >
+            <X size={14} />
+          </button>
+        </div>
+
+        <div className="flex-1 space-y-4 overflow-y-auto p-4">
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-[10px] uppercase tracking-wider text-muted">
+                Summary
+              </span>
+              <textarea
+                value={summary}
+                onChange={(event) => setSummary(event.target.value)}
+                className="min-h-28 w-full resize-y rounded-lg border border-edge bg-background px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-muted focus:border-accent"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[10px] uppercase tracking-wider text-muted">
+                Agent instructions
+              </span>
+              <textarea
+                value={agentInstructions}
+                onChange={(event) => setAgentInstructions(event.target.value)}
+                className="min-h-28 w-full resize-y rounded-lg border border-edge bg-background px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-muted focus:border-accent"
+              />
+            </label>
+          </div>
+
+          <div>
+            <h5 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+              Column notes
+            </h5>
+            <div className="space-y-2">
+              {columns.map((column) => {
+                const rule = columnRules.find((candidate) => candidate.columnId === column.id);
+                return (
+                  <div
+                    key={column.id}
+                    className="grid gap-2 rounded-lg border border-edge bg-background/50 p-2 md:grid-cols-[10rem_1fr_1fr]"
+                  >
+                    <div className="flex items-center gap-2 text-xs font-semibold text-white">
+                      <KanbanSquare size={12} className="text-emerald-400" />
+                      <span className="truncate">{column.name}</span>
+                    </div>
+                    <Input
+                      value={rule?.purpose ?? ''}
+                      onChange={(event) =>
+                        updateColumnRule(column.id, 'purpose', event.target.value)
+                      }
+                      placeholder="Purpose"
+                      className="bg-panel px-3 py-2 text-xs"
+                    />
+                    <Input
+                      value={rule?.moveWhen ?? ''}
+                      onChange={(event) =>
+                        updateColumnRule(column.id, 'moveWhen', event.target.value)
+                      }
+                      placeholder="Move when"
+                      className="bg-panel px-3 py-2 text-xs"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h5 className="text-xs font-semibold uppercase tracking-wide text-muted">
+                Transitions
+              </h5>
+              <button
+                type="button"
+                onClick={addTransition}
+                disabled={columns.length === 0}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-edge px-2 py-1 text-xs text-muted transition-colors hover:text-white disabled:opacity-50"
+              >
+                <Plus size={12} />
+                Add transition
+              </button>
+            </div>
+            <div className="space-y-2">
+              {transitions.map((transition, index) => (
+                <div
+                  key={`${transition.fromColumnId}:${transition.toColumnId}:${index}`}
+                  className="grid gap-2 rounded-lg border border-edge bg-background/50 p-2 md:grid-cols-[11rem_11rem_1fr_2rem]"
+                >
+                  <SimpleSelect
+                    value={transition.fromColumnId}
+                    onValueChange={(value) => updateTransition(index, { fromColumnId: value })}
+                    placeholder="From"
+                    className="bg-panel px-3 py-2 text-xs"
+                    options={columnOptions}
+                  />
+                  <SimpleSelect
+                    value={transition.toColumnId}
+                    onValueChange={(value) => updateTransition(index, { toColumnId: value })}
+                    placeholder="To"
+                    className="bg-panel px-3 py-2 text-xs"
+                    options={columnOptions}
+                  />
+                  <Input
+                    value={transition.when}
+                    onChange={(event) => updateTransition(index, { when: event.target.value })}
+                    placeholder="When"
+                    className="bg-panel px-3 py-2 text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setTransitions((rows) => rows.filter((_, rowIndex) => rowIndex !== index))
+                    }
+                    className="flex h-9 items-center justify-center rounded text-muted transition-colors hover:bg-red-500/10 hover:text-red-300"
+                    aria-label="Remove transition"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+              {transitions.length === 0 && (
+                <div className="rounded-lg border border-dashed border-edge px-3 py-4 text-center text-[11px] text-muted">
+                  No transitions
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-edge px-4 py-3">
+          <button
+            onClick={onCancel}
+            className="rounded-lg border border-edge px-3 py-1.5 text-xs text-muted transition-colors hover:text-white"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={isPending}
+            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1342,27 +1592,4 @@ function DeleteBoardDialog({
       </div>
     </div>
   );
-}
-
-function roleLabel(role: WorkItemStatus): string {
-  return role.replace(/_/g, ' ');
-}
-
-function roleTone(role: WorkItemStatus): string {
-  switch (role) {
-    case 'todo':
-      return 'bg-secondary/10 text-secondary';
-    case 'in_progress':
-      return 'bg-blue-500/10 text-blue-300';
-    case 'blocked':
-      return 'bg-red-500/10 text-red-300';
-    case 'review':
-      return 'bg-amber-500/10 text-amber-300';
-    case 'done':
-      return 'bg-emerald-500/10 text-emerald-300';
-    case 'cancelled':
-      return 'bg-edge text-muted';
-    default:
-      return 'bg-edge text-muted';
-  }
 }

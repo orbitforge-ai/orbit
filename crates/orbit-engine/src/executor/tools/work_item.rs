@@ -22,13 +22,14 @@ impl ToolHandler for WorkItemTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: self.name().to_string(),
-            description: "Manipulate the project kanban board. Work items are persistent, project-scoped cards visible to every agent assigned to the project. When a user asks to create, update, or track a task for the project, prefer this tool over the session-local `task` tool. Actions: list, get, create, update, delete, claim, move, block, unblock, complete, comment, list_comments. `project_id` is inferred from the current session when omitted. When moving a card, do not try to change `status` directly: pass `column_id` for an explicit destination, or omit it to advance to the next board column.".to_string(),
+            description: "Manipulate the project kanban board. Work items are persistent, project-scoped cards visible to every agent assigned to the project. When a user asks to create, update, or track a task for the project, prefer this tool over the session-local `task` tool. Actions: board_guide, list, get, create, update, delete, claim, move, block, unblock, complete, comment, list_comments. `project_id` is inferred from the current session when omitted. Before moving a card, call board_guide and follow its movementGuide. Moving only changes `column_id` and position; use block, unblock, complete, or claim for lifecycle status changes.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "enum": [
+                            "board_guide",
                             "list", "get", "create", "update", "delete", "claim",
                             "move", "block", "unblock", "complete",
                             "comment", "list_comments"
@@ -36,12 +37,13 @@ impl ToolHandler for WorkItemTool {
                         "description": "Action to perform"
                     },
                     "project_id": { "type": "string", "description": "Target project. Defaults to the current session's project when omitted." },
+                    "board_id": { "type": "string", "description": "Target board for board_guide, create, list, or move context. Defaults to the project's default board when omitted." },
                     "id": { "type": "string", "description": "Work item ID (required for per-item actions)." },
                     "title": { "type": "string", "description": "Card title (create/update)." },
                     "description": { "type": "string", "description": "Markdown body (create/update)." },
                     "kind": { "type": "string", "enum": ["task", "bug", "story", "spike", "chore"], "description": "Card kind." },
                     "priority": { "type": "integer", "minimum": 0, "maximum": 3, "description": "0 (low) .. 3 (urgent)." },
-                    "status": { "type": "string", "enum": ["backlog", "todo", "in_progress", "blocked", "review", "done", "cancelled"], "description": "Status filter for list, or an optional create hint used to resolve the default board column." },
+                    "status": { "type": "string", "enum": ["backlog", "todo", "in_progress", "blocked", "review", "done", "cancelled"], "description": "Lifecycle status filter for list, or optional lifecycle status for create. It does not choose a board column." },
                     "column_id": { "type": "string", "description": "Explicit board column id for create, move, or list filtering. For move, omit this to advance to the next board column." },
                     "assignee": { "type": "string", "description": "Filter by assignee agent id when listing. Use 'me' for self, or 'none' for unassigned." },
                     "parent_id": { "type": "string", "description": "Parent work item id (for subtasks)." },
@@ -72,9 +74,54 @@ impl ToolHandler for WorkItemTool {
             .ok_or("work_item: missing 'action' field")?;
 
         match action {
+            "board_guide" => {
+                let project_id = resolve_project_id(ctx, input, None).await?;
+                enforce_project_scope(ctx, &project_id).await?;
+                let requested_board_id = input["board_id"].as_str();
+                let boards = repos.project_boards().list(&project_id).await?;
+                let board = match requested_board_id {
+                    Some(board_id) => boards
+                        .iter()
+                        .find(|candidate| candidate.id == board_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            format!(
+                                "work_item: board '{}' not found in project '{}'",
+                                board_id, project_id
+                            )
+                        })?,
+                    None => boards
+                        .iter()
+                        .find(|candidate| candidate.is_default)
+                        .or_else(|| boards.first())
+                        .cloned()
+                        .ok_or_else(|| {
+                            format!("work_item: project '{}' has no boards", project_id)
+                        })?,
+                };
+                let columns = repos
+                    .project_board_columns()
+                    .list(&project_id, Some(board.id.clone()))
+                    .await?;
+                let result = serde_json::to_string_pretty(&json!({
+                    "status": "ok",
+                    "project_id": project_id,
+                    "board": {
+                        "id": board.id,
+                        "name": board.name,
+                        "prefix": board.prefix,
+                        "isDefault": board.is_default,
+                    },
+                    "columns": columns,
+                    "movementGuide": board.movement_guide,
+                }))
+                .map_err(|e| format!("work_item: serialize: {}", e))?;
+                Ok((result, false))
+            }
             "list" => {
                 let project_id = resolve_project_id(ctx, input, None).await?;
                 enforce_project_scope(ctx, &project_id).await?;
+                let board_id = input["board_id"].as_str().map(String::from);
                 let status = input["status"].as_str().map(String::from);
                 let column_id = input["column_id"].as_str().map(String::from);
                 let kind = input["kind"].as_str().map(String::from);
@@ -88,6 +135,7 @@ impl ToolHandler for WorkItemTool {
                 let items = list_work_items(
                     ctx,
                     &project_id,
+                    board_id,
                     status,
                     column_id,
                     kind,
@@ -119,11 +167,12 @@ impl ToolHandler for WorkItemTool {
                 let labels = parse_labels(input.get("labels"))?;
                 let status = input["status"].as_str().map(String::from);
                 let column_id = input["column_id"].as_str().map(String::from);
+                let board_id = input["board_id"].as_str().map(String::from);
                 let item = repos
                     .work_items()
                     .create(CreateWorkItem {
                         project_id,
-                        board_id: None,
+                        board_id,
                         title: title.to_string(),
                         description,
                         kind: Some(kind),
@@ -447,6 +496,7 @@ fn spawn_cloud_delete(ctx: &ToolExecutionContext, id: &str) {
 async fn list_work_items(
     ctx: &ToolExecutionContext,
     project_id: &str,
+    board_id: Option<String>,
     status: Option<String>,
     column_id: Option<String>,
     kind: Option<String>,
@@ -457,7 +507,7 @@ async fn list_work_items(
         .repos
         .as_ref()
         .ok_or("work_item: no repositories available")?;
-    let mut items = repos.work_items().list(project_id, None).await?;
+    let mut items = repos.work_items().list(project_id, board_id).await?;
     if let Some(column_id) = column_id {
         items.retain(|item| item.column_id.as_deref() == Some(column_id.as_str()));
     }

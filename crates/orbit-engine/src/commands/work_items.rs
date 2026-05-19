@@ -158,6 +158,19 @@ pub async fn block_work_item(
 }
 
 #[tauri::command]
+pub async fn unblock_work_item(
+    id: String,
+    new_status: String,
+    app: tauri::State<'_, crate::app_context::AppContext>,
+) -> Result<WorkItem, String> {
+    let cloud = app.cloud.clone();
+    let item = app.repos.work_items().unblock(&id, new_status).await?;
+
+    cloud_upsert_work_item!(cloud, item);
+    Ok(item)
+}
+
+#[tauri::command]
 pub async fn complete_work_item(
     id: String,
     app: tauri::State<'_, crate::app_context::AppContext>,
@@ -283,6 +296,12 @@ mod http {
     }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
+    struct UnblockArgs {
+        id: String,
+        new_status: String,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
     struct WorkItemIdArgs {
         work_item_id: String,
     }
@@ -372,6 +391,13 @@ mod http {
             let a: BlockArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
             let cloud = ctx.cloud.clone();
             let r = ctx.repos.work_items().block(&a.id, a.reason).await?;
+            cloud_upsert_work_item!(cloud, r);
+            serde_json::to_value(r).map_err(|e| e.to_string())
+        });
+        reg.register("unblock_work_item", |ctx, args| async move {
+            let a: UnblockArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let cloud = ctx.cloud.clone();
+            let r = ctx.repos.work_items().unblock(&a.id, a.new_status).await?;
             cloud_upsert_work_item!(cloud, r);
             serde_json::to_value(r).map_err(|e| e.to_string())
         });

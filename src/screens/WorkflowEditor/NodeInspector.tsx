@@ -98,7 +98,7 @@ const WORK_ITEM_ACTION_OPTIONS = [
   { value: 'list', label: 'List' },
   { value: 'get', label: 'Get by ID' },
   { value: 'update', label: 'Update' },
-  { value: 'move', label: 'Move status' },
+  { value: 'move', label: 'Move card' },
   { value: 'block', label: 'Block' },
   { value: 'complete', label: 'Complete' },
   { value: 'comment', label: 'Comment' },
@@ -847,7 +847,6 @@ function WorkItemInspector({
           onValueChange={(v) =>
             onUpdate({
               action: v,
-              ...(v === 'move' ? { status: '' } : {}),
             })
           }
           className={SELECT_FIELD_CLASSNAME}
@@ -912,7 +911,7 @@ function WorkItemInspector({
                     ? 'Any column'
                     : action === 'move'
                       ? 'Select a destination column'
-                      : 'Resolve from status/default',
+                      : 'Default column',
               },
               ...boardColumns.map((column) => ({ value: column.id, label: column.name })),
             ]}
@@ -955,7 +954,7 @@ function WorkItemInspector({
                 options={
                   action === 'list'
                     ? [
-                        { value: 'all', label: 'All columns' },
+                        { value: 'all', label: 'All statuses' },
                         ...ALL_STATUS_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
                       ]
                     : CREATE_STATUS_OPTIONS.map((o) => ({

@@ -61,8 +61,8 @@ export function Sidebar({
 
   const currentColumnId = useMemo(() => {
     if (item.columnId) return item.columnId;
-    return columns.find((c) => c.role === item.status)?.id ?? '';
-  }, [item.columnId, item.status, columns]);
+    return columns[0]?.id ?? '';
+  }, [item.columnId, columns]);
 
   const claimMutation = useMutation({
     mutationFn: ({ agentId }: { agentId: string }) => workItemsApi.claim(item.id, agentId),
@@ -106,7 +106,7 @@ export function Sidebar({
         </div>
       </Row>
 
-      <Row label="Status">
+      <Row label="Column">
         <SimpleSelect
           value={currentColumnId}
           onValueChange={(v) => v && onColumnChange(v)}

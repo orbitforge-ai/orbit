@@ -628,7 +628,14 @@ async fn perform_compaction_inner(
         estimated_tokens
     );
 
-    emit_chat_context_update(app, session_id, estimated_tokens, Some(estimated_tokens), 0, context_window);
+    emit_chat_context_update(
+        app,
+        session_id,
+        estimated_tokens,
+        Some(estimated_tokens),
+        0,
+        context_window,
+    );
 
     // Post-compaction memory extraction from the summary
     if ws_config.memory_enabled {
@@ -754,7 +761,15 @@ mod tests {
         let current_prompt_tokens = 4_000;
         let cumulative_turn_tokens = 12_000;
 
-        assert!(!should_compact(current_prompt_tokens, context_window, threshold));
-        assert!(should_compact(cumulative_turn_tokens, context_window, threshold));
+        assert!(!should_compact(
+            current_prompt_tokens,
+            context_window,
+            threshold
+        ));
+        assert!(should_compact(
+            cumulative_turn_tokens,
+            context_window,
+            threshold
+        ));
     }
 }

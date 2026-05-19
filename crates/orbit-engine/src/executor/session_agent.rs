@@ -543,8 +543,13 @@ pub async fn run_session_loop(
         context_window,
     );
     update_session_execution_state(db, session_id, "success", finish_summary.clone(), None).await?;
-    update_session_token_usage(db, session_id, latest_call_input_tokens, cumulative_input_tokens)
-        .await;
+    update_session_token_usage(
+        db,
+        session_id,
+        latest_call_input_tokens,
+        cumulative_input_tokens,
+    )
+    .await;
 
     // Post-session memory extraction
     if ws_config.memory_enabled {

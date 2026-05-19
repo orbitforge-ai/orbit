@@ -65,25 +65,23 @@ export function WorkItemModal({
     mutationFn: ({ reason }: { reason: string }) => workItemsApi.block(workItemId, reason),
     onSuccess: invalidate,
   });
+  const unblockMutation = useMutation({
+    mutationFn: ({ status }: { status: 'todo' }) => workItemsApi.unblock(workItemId, status),
+    onSuccess: invalidate,
+  });
   const completeMutation = useMutation({
     mutationFn: () => workItemsApi.complete(workItemId),
     onSuccess: invalidate,
   });
 
-  async function handleColumnChange(nextColumnId: string) {
-    const nextColumn = columns.find((c) => c.id === nextColumnId);
-    if (!nextColumn) return;
-    if (nextColumn.role === 'blocked') {
-      const reason = window.prompt('Why is this card blocked?');
-      if (!reason || !reason.trim()) return;
-      blockMutation.mutate({ reason: reason.trim() });
-      return;
-    }
-    if (nextColumn.role === 'done') {
-      completeMutation.mutate();
-      return;
-    }
+  function handleColumnChange(nextColumnId: string) {
     moveMutation.mutate({ columnId: nextColumnId });
+  }
+
+  function handleBlock() {
+    const reason = window.prompt('Why is this card blocked?');
+    if (!reason?.trim()) return;
+    blockMutation.mutate({ reason: reason.trim() });
   }
 
   async function guardedClose(): Promise<boolean> {
@@ -117,6 +115,8 @@ export function WorkItemModal({
             onTitleChange={editor.setTitle}
             onTitleCommit={editor.commitTitle}
             onComplete={() => completeMutation.mutate()}
+            onBlock={handleBlock}
+            onUnblock={() => unblockMutation.mutate({ status: 'todo' })}
             onClose={async () => {
               if (await guardedClose()) onClose();
             }}

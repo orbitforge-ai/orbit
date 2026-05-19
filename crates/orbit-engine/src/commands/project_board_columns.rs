@@ -1,5 +1,6 @@
 use crate::app_context::AppContext;
 use crate::commands::project_boards::{get_default_board_sync, resolve_board_sync};
+use crate::models::project_board::default_board_movement_guide_json;
 use crate::models::project_board_column::{
     CreateProjectBoardColumn, DeleteProjectBoardColumn, ProjectBoardColumn,
     ReorderProjectBoardColumns, UpdateProjectBoardColumn,
@@ -8,18 +9,8 @@ use rusqlite::{params, OptionalExtension};
 use serde_json::Value;
 use ulid::Ulid;
 
-pub const LEGACY_BOARD_ROLES: &[&str] = &[
-    "backlog",
-    "todo",
-    "in_progress",
-    "blocked",
-    "review",
-    "done",
-    "cancelled",
-];
-
 const COLUMN_SELECT: &str =
-    "id, project_id, board_id, name, role, is_default, position, created_at, updated_at";
+    "id, project_id, board_id, name, is_default, position, created_at, updated_at";
 
 macro_rules! cloud_upsert_board_column {
     ($cloud:expr, $column:expr) => {
@@ -50,7 +41,7 @@ macro_rules! cloud_delete {
 #[derive(Debug, Clone, Copy)]
 pub struct BoardPresetColumn {
     pub name: &'static str,
-    pub role: Option<&'static str>,
+    pub slug: &'static str,
     pub is_default: bool,
 }
 
@@ -59,59 +50,59 @@ pub fn board_preset_columns(preset_id: Option<&str>) -> Vec<BoardPresetColumn> {
         "lean" => vec![
             BoardPresetColumn {
                 name: "Inbox",
-                role: Some("backlog"),
+                slug: "inbox",
                 is_default: true,
             },
             BoardPresetColumn {
                 name: "In Progress",
-                role: Some("in_progress"),
+                slug: "in_progress",
                 is_default: false,
             },
             BoardPresetColumn {
                 name: "Review",
-                role: Some("review"),
+                slug: "review",
                 is_default: false,
             },
             BoardPresetColumn {
                 name: "Done",
-                role: Some("done"),
+                slug: "done",
                 is_default: false,
             },
         ],
         _ => vec![
             BoardPresetColumn {
                 name: "Backlog",
-                role: Some("backlog"),
+                slug: "backlog",
                 is_default: true,
             },
             BoardPresetColumn {
                 name: "Todo",
-                role: Some("todo"),
+                slug: "todo",
                 is_default: false,
             },
             BoardPresetColumn {
                 name: "In Progress",
-                role: Some("in_progress"),
+                slug: "in_progress",
                 is_default: false,
             },
             BoardPresetColumn {
                 name: "Blocked",
-                role: Some("blocked"),
+                slug: "blocked",
                 is_default: false,
             },
             BoardPresetColumn {
                 name: "Review",
-                role: Some("review"),
+                slug: "review",
                 is_default: false,
             },
             BoardPresetColumn {
                 name: "Done",
-                role: Some("done"),
+                slug: "done",
                 is_default: false,
             },
             BoardPresetColumn {
                 name: "Cancelled",
-                role: Some("cancelled"),
+                slug: "cancelled",
                 is_default: false,
             },
         ],
@@ -126,25 +117,11 @@ pub(crate) fn map_project_board_column(
         project_id: row.get(1)?,
         board_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
         name: row.get(3)?,
-        role: row.get(4)?,
-        is_default: row.get::<_, bool>(5)?,
-        position: row.get(6)?,
-        created_at: row.get(7)?,
-        updated_at: row.get(8)?,
+        is_default: row.get::<_, bool>(4)?,
+        position: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
     })
-}
-
-pub fn validate_board_role(role: Option<&str>) -> Result<(), String> {
-    match role {
-        Some(role) if !LEGACY_BOARD_ROLES.contains(&role) => {
-            Err(format!("invalid board role '{}'", role))
-        }
-        _ => Ok(()),
-    }
-}
-
-pub fn is_terminal_role(role: Option<&str>) -> bool {
-    matches!(role, Some("done" | "cancelled"))
 }
 
 fn require_project_column_sync(
@@ -186,10 +163,11 @@ pub fn ensure_project_board_columns(
         Some(board) => board,
         None => {
             let board_id = Ulid::new().to_string();
+            let movement_guide_json = default_board_movement_guide_json();
             conn.execute(
-                "INSERT INTO project_boards (id, project_id, name, prefix, position, is_default, created_at, updated_at, tenant_id)
-                 VALUES (?1, ?2, 'Default', 'MAIN', 1024.0, 1, ?3, ?3, COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
-                params![board_id, project_id, created_at],
+                "INSERT INTO project_boards (id, project_id, name, prefix, movement_guide, position, is_default, created_at, updated_at, tenant_id)
+                 VALUES (?1, ?2, 'Default', 'MAIN', ?3, 1024.0, 1, ?4, ?4, COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
+                params![board_id, project_id, movement_guide_json, created_at],
             )
             .map_err(|e| e.to_string())?;
             get_default_board_sync(conn, project_id)
@@ -201,21 +179,13 @@ pub fn ensure_project_board_columns(
     for (idx, column) in board_preset_columns(preset_id).into_iter().enumerate() {
         conn.execute(
             "INSERT INTO project_board_columns (
-                id, project_id, board_id, name, status, role, is_default, position, created_at, updated_at, tenant_id
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
+                id, project_id, board_id, name, is_default, position, created_at, updated_at, tenant_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
             params![
-                format!(
-                    "col_{}_{}",
-                    project_id,
-                    column
-                        .role
-                        .unwrap_or_else(|| if idx == 0 { "default" } else { "column" })
-                ),
+                format!("col_{}_{}", project_id, column.slug),
                 project_id,
                 board.id,
                 column.name,
-                column.role.unwrap_or("backlog"),
-                column.role,
                 column.is_default,
                 ((idx + 1) as f64) * 1024.0,
                 created_at,
@@ -314,51 +284,6 @@ pub fn get_default_column_sync(
     }
 }
 
-pub fn get_column_by_role_sync(
-    conn: &rusqlite::Connection,
-    project_id: &str,
-    board_id: Option<&str>,
-    role: &str,
-) -> Result<Option<ProjectBoardColumn>, String> {
-    let effective_board_id = match board_id {
-        Some(id) => Some(id.to_string()),
-        None => get_default_board_sync(conn, project_id)?.map(|b| b.id),
-    };
-    match effective_board_id {
-        Some(board) => conn
-            .query_row(
-                &format!(
-                    "SELECT {} FROM project_board_columns
-                     WHERE project_id = ?1
-                       AND board_id = ?2
-                       AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
-                       AND role = ?3
-                     ORDER BY position ASC LIMIT 1",
-                    COLUMN_SELECT
-                ),
-                params![project_id, board, role],
-                map_project_board_column,
-            )
-            .optional()
-            .map_err(|e| e.to_string()),
-        None => conn
-            .query_row(
-                &format!(
-                    "SELECT {} FROM project_board_columns
-                     WHERE project_id = ?1
-                       AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')
-                       AND role = ?2
-                     ORDER BY position ASC LIMIT 1",
-                    COLUMN_SELECT
-                ),
-                params![project_id, role],
-                map_project_board_column,
-            )
-            .optional()
-            .map_err(|e| e.to_string()),
-    }
-}
-
 pub fn get_column_by_id_sync(
     conn: &rusqlite::Connection,
     id: &str,
@@ -417,7 +342,7 @@ pub fn resolve_board_column_sync(
     project_id: &str,
     board_id: Option<&str>,
     column_id: Option<&str>,
-    status: Option<&str>,
+    _status: Option<&str>,
 ) -> Result<ProjectBoardColumn, String> {
     if let Some(column_id) = column_id {
         let column = get_column_by_id_sync(conn, column_id)?
@@ -436,28 +361,7 @@ pub fn resolve_board_column_sync(
                 ));
             }
         }
-        if let Some(status) = status {
-            validate_board_role(Some(status))?;
-            if let Some(role) = column.role.as_deref() {
-                if role != status {
-                    return Err(format!(
-                        "board column '{}' has role '{}' which does not match status '{}'",
-                        column_id, role, status
-                    ));
-                }
-            }
-        }
         return Ok(column);
-    }
-
-    if let Some(status) = status {
-        validate_board_role(Some(status))?;
-        return get_column_by_role_sync(conn, project_id, board_id, status)?.ok_or_else(|| {
-            format!(
-                "project '{}' has no board column for role '{}'",
-                project_id, status
-            )
-        });
     }
 
     if let Some(default_column) = get_default_column_sync(conn, project_id, board_id)? {
@@ -475,11 +379,7 @@ fn normalize_default_candidate(
     project_id: &str,
     candidate_id: &str,
 ) -> Result<ProjectBoardColumn, String> {
-    let candidate = require_project_column_sync(conn, project_id, candidate_id)?;
-    if is_terminal_role(candidate.role.as_deref()) {
-        return Err("default column cannot use a terminal role".into());
-    }
-    Ok(candidate)
+    require_project_column_sync(conn, project_id, candidate_id)
 }
 
 fn set_default_column_sync(
@@ -627,7 +527,6 @@ async fn create_project_board_column_inner(
     payload: CreateProjectBoardColumn,
     app: &AppContext,
 ) -> Result<ProjectBoardColumn, String> {
-    validate_board_role(payload.role.as_deref())?;
     let cloud = app.cloud.clone();
     let pool = app.db.0.clone();
     let column = tokio::task::spawn_blocking(move || -> Result<ProjectBoardColumn, String> {
@@ -635,9 +534,6 @@ async fn create_project_board_column_inner(
         let now = chrono::Utc::now().to_rfc3339();
         if payload.name.trim().is_empty() {
             return Err("board column name must be non-empty".into());
-        }
-        if payload.is_default.unwrap_or(false) && is_terminal_role(payload.role.as_deref()) {
-            return Err("default column cannot use a terminal role".into());
         }
         let board =
             resolve_board_sync(&conn, &payload.project_id, payload.board_id.as_deref())?;
@@ -675,9 +571,6 @@ async fn create_project_board_column_inner(
             )
             .map_err(|e| e.to_string())?;
         let is_default = payload.is_default.unwrap_or(!has_default);
-        if is_default && is_terminal_role(payload.role.as_deref()) {
-            return Err("default column cannot use a terminal role".into());
-        }
         if is_default {
             conn.execute(
                 "UPDATE project_board_columns
@@ -691,15 +584,13 @@ async fn create_project_board_column_inner(
         }
         conn.execute(
             "INSERT INTO project_board_columns (
-                id, project_id, board_id, name, status, role, is_default, position, created_at, updated_at, tenant_id
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
+                id, project_id, board_id, name, is_default, position, created_at, updated_at, tenant_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local'))",
             params![
                 id,
                 payload.project_id,
                 board_id,
                 payload.name.trim(),
-                payload.role.as_deref().unwrap_or("backlog"),
-                payload.role,
                 is_default,
                 position,
                 now,
@@ -739,7 +630,6 @@ async fn update_project_board_column_inner(
     payload: UpdateProjectBoardColumn,
     app: &AppContext,
 ) -> Result<ProjectBoardColumn, String> {
-    validate_board_role(payload.role.as_ref().and_then(|role| role.as_deref()))?;
     let cloud = app.cloud.clone();
     let pool = app.db.0.clone();
     let column = tokio::task::spawn_blocking(move || -> Result<ProjectBoardColumn, String> {
@@ -773,19 +663,6 @@ async fn update_project_board_column_inner(
                   WHERE id = ?3
                     AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?4), 'local')",
                 params![position, now, id, existing.project_id],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if let Some(role) = payload.role.as_ref() {
-            if existing.is_default && is_terminal_role(role.as_deref()) {
-                return Err("default column cannot use a terminal role".into());
-            }
-            conn.execute(
-                "UPDATE project_board_columns
-                    SET role = ?1, status = COALESCE(?1, status), updated_at = ?2
-                  WHERE id = ?3
-                    AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?4), 'local')",
-                params![role, now, id, existing.project_id],
             )
             .map_err(|e| e.to_string())?;
         }
@@ -877,19 +754,11 @@ async fn delete_project_board_column_inner(
             return Err("choose a destination column before deleting a populated column".into());
         }
 
-        if existing.is_default {
-            if let Some(destination) = destination.as_ref() {
-                if is_terminal_role(destination.role.as_deref()) {
-                    return Err("default column cannot use a terminal role".into());
-                }
-            }
-        }
-
         let default_destination = if existing.is_default {
             Some(destination.unwrap_or_else(|| {
                 columns
                     .iter()
-                    .find(|column| column.id != id && !is_terminal_role(column.role.as_deref()))
+                    .find(|column| column.id != id)
                     .cloned()
                     .unwrap_or_else(|| {
                         columns

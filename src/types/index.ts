@@ -26,11 +26,32 @@ export interface ProjectAgent {
   addedAt: string;
 }
 
+export interface BoardMovementColumnRule {
+  columnId: string;
+  purpose: string;
+  moveWhen: string;
+}
+
+export interface BoardMovementTransition {
+  fromColumnId: string;
+  toColumnId: string;
+  when: string;
+}
+
+export interface BoardMovementGuide {
+  version: 1;
+  summary: string;
+  columnRules: BoardMovementColumnRule[];
+  transitions: BoardMovementTransition[];
+  agentInstructions: string;
+}
+
 export interface ProjectBoard {
   id: string;
   projectId: string;
   name: string;
   prefix: string;
+  movementGuide: BoardMovementGuide;
   position: number;
   isDefault: boolean;
   createdAt: string;
@@ -46,6 +67,7 @@ export interface CreateProjectBoard {
 export interface UpdateProjectBoard {
   name?: string;
   prefix?: string;
+  movementGuide?: BoardMovementGuide;
 }
 
 export interface DeleteProjectBoard {
@@ -58,7 +80,6 @@ export interface ProjectBoardColumn {
   projectId: string;
   boardId: string;
   name: string;
-  role: WorkItemStatus | null;
   isDefault: boolean;
   position: number;
   createdAt: string;

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle, Hash } from 'lucide-react';
+import { AlertOctagon, CheckCircle, Hash, RotateCcw } from 'lucide-react';
 import { ModalCloseButton } from '../../../components/ui/Modal';
 import { formatWorkItemId } from '../../../lib/workItemId';
 import { cn } from '../../../lib/cn';
@@ -13,6 +13,8 @@ interface Props {
   onTitleChange: (next: string) => void;
   onTitleCommit: () => void;
   onComplete: () => void;
+  onBlock: () => void;
+  onUnblock: () => void;
   onClose: () => void;
 }
 
@@ -23,6 +25,8 @@ export function ModalHeader({
   onTitleChange,
   onTitleCommit,
   onComplete,
+  onBlock,
+  onUnblock,
   onClose,
 }: Props) {
   const [editing, setEditing] = useState(false);
@@ -83,6 +87,26 @@ export function ModalHeader({
           </button>
         )}
       </div>
+
+      {item.status === 'blocked' ? (
+        <button
+          onClick={onUnblock}
+          className="flex items-center gap-1.5 rounded-md bg-secondary/10 px-2.5 py-1 text-xs font-medium text-secondary transition-colors hover:bg-secondary/20"
+          title="Unblock"
+        >
+          <RotateCcw size={12} />
+          Unblock
+        </button>
+      ) : item.status !== 'done' ? (
+        <button
+          onClick={onBlock}
+          className="flex items-center gap-1.5 rounded-md bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-300 transition-colors hover:bg-red-500/20"
+          title="Block"
+        >
+          <AlertOctagon size={12} />
+          Block
+        </button>
+      ) : null}
 
       {item.status !== 'done' && (
         <button
