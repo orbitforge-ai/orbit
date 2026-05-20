@@ -6,11 +6,19 @@ use crate::models::project_board_column::{
     ReorderProjectBoardColumns, UpdateProjectBoardColumn,
 };
 use rusqlite::{params, OptionalExtension};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use ulid::Ulid;
 
 const COLUMN_SELECT: &str =
     "id, project_id, board_id, name, is_default, position, created_at, updated_at";
+const COLUMN_REFERENCE_KEYS: &[&str] = &[
+    "columnId",
+    "fromColumnId",
+    "toColumnId",
+    "reviewColumnId",
+    "listColumnId",
+];
+type ColumnUpdateResult = Result<(ProjectBoardColumn, Option<String>), String>;
 
 macro_rules! cloud_upsert_board_column {
     ($cloud:expr, $column:expr) => {
@@ -36,6 +44,200 @@ macro_rules! cloud_delete {
             });
         }
     };
+}
+
+pub(crate) fn slugify_column_name(name: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_separator = false;
+    for ch in name.chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            last_was_separator = false;
+        } else if !last_was_separator && !slug.is_empty() {
+            slug.push('_');
+            last_was_separator = true;
+        }
+    }
+    while slug.ends_with('_') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        "column".to_string()
+    } else {
+        slug
+    }
+}
+
+fn desired_column_id(project_id: &str, name: &str) -> String {
+    format!("col_{}_{}", project_id, slugify_column_name(name))
+}
+
+fn unique_column_id_sync(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    name: &str,
+    exclude_id: Option<&str>,
+) -> Result<String, String> {
+    let base = desired_column_id(project_id, name);
+    let mut candidate = base.clone();
+    let mut suffix = 2;
+    loop {
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT id FROM project_board_columns
+                 WHERE id = ?1
+                   AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local')",
+                params![candidate, project_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        match existing {
+            None => return Ok(candidate),
+            Some(id) if Some(id.as_str()) == exclude_id => return Ok(candidate),
+            Some(_) => {
+                candidate = format!("{}_{}", base, suffix);
+                suffix += 1;
+            }
+        }
+    }
+}
+
+fn replace_column_id_references(value: &mut Value, old_id: &str, new_id: &str) -> bool {
+    match value {
+        Value::Array(items) => {
+            let mut changed = false;
+            for item in items {
+                if replace_column_id_references(item, old_id, new_id) {
+                    changed = true;
+                }
+            }
+            changed
+        }
+        Value::Object(object) => replace_column_id_references_in_object(object, old_id, new_id),
+        _ => false,
+    }
+}
+
+fn replace_column_id_references_in_object(
+    object: &mut Map<String, Value>,
+    old_id: &str,
+    new_id: &str,
+) -> bool {
+    let mut changed = false;
+    for (key, value) in object.iter_mut() {
+        if COLUMN_REFERENCE_KEYS.contains(&key.as_str()) && value.as_str() == Some(old_id) {
+            *value = Value::String(new_id.to_string());
+            changed = true;
+        } else if replace_column_id_references(value, old_id, new_id) {
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn rewrite_json_column_references_sync(
+    tx: &rusqlite::Transaction<'_>,
+    project_id: &str,
+    old_id: &str,
+    new_id: &str,
+    now: &str,
+) -> Result<(), String> {
+    let mut board_stmt = tx
+        .prepare(
+            "SELECT id, movement_guide FROM project_boards
+             WHERE project_id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')",
+        )
+        .map_err(|e| e.to_string())?;
+    let boards = board_stmt
+        .query_map(params![project_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    drop(board_stmt);
+
+    for (board_id, movement_guide) in boards {
+        let mut guide: Value = serde_json::from_str(&movement_guide).unwrap_or(Value::Null);
+        if replace_column_id_references(&mut guide, old_id, new_id) {
+            tx.execute(
+                "UPDATE project_boards
+                    SET movement_guide = ?1, updated_at = ?2
+                  WHERE id = ?3
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?4), 'local')",
+                params![guide.to_string(), now, board_id, project_id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
+    let mut workflow_stmt = tx
+        .prepare(
+            "SELECT id, graph FROM project_workflows
+             WHERE project_id = ?1
+               AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?1), 'local')",
+        )
+        .map_err(|e| e.to_string())?;
+    let workflows = workflow_stmt
+        .query_map(params![project_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    drop(workflow_stmt);
+
+    for (workflow_id, graph) in workflows {
+        let mut graph_value: Value = serde_json::from_str(&graph).unwrap_or(Value::Null);
+        if replace_column_id_references(&mut graph_value, old_id, new_id) {
+            tx.execute(
+                "UPDATE project_workflows
+                    SET graph = ?1, updated_at = ?2
+                  WHERE id = ?3
+                    AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?4), 'local')",
+                params![graph_value.to_string(), now, workflow_id, project_id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn rename_column_id_sync(
+    conn: &mut rusqlite::Connection,
+    existing: &ProjectBoardColumn,
+    new_name: &str,
+    now: &str,
+) -> Result<String, String> {
+    let new_id = unique_column_id_sync(conn, &existing.project_id, new_name, Some(&existing.id))?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    tx.execute_batch("PRAGMA defer_foreign_keys = ON;")
+        .map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE project_board_columns
+            SET id = ?1, name = ?2, updated_at = ?3
+          WHERE id = ?4
+            AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?5), 'local')",
+        params![new_id, new_name, now, existing.id, existing.project_id],
+    )
+    .map_err(|e| e.to_string())?;
+    if new_id != existing.id {
+        tx.execute(
+            "UPDATE work_items
+                SET column_id = ?1, updated_at = ?2
+              WHERE column_id = ?3
+                AND project_id = ?4
+                AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?4), 'local')",
+            params![new_id, now, existing.id, existing.project_id],
+        )
+        .map_err(|e| e.to_string())?;
+        rewrite_json_column_references_sync(&tx, &existing.project_id, &existing.id, &new_id, now)?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(new_id)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -538,7 +740,7 @@ pub(crate) async fn create_project_board_column_inner(
         let board =
             resolve_board_sync(&conn, &payload.project_id, payload.board_id.as_deref())?;
         let board_id = board.id.clone();
-        let id = Ulid::new().to_string();
+        let id = unique_column_id_sync(&conn, &payload.project_id, payload.name.trim(), None)?;
         let position = match payload.position {
             Some(value) => value,
             None => {
@@ -632,8 +834,8 @@ pub(crate) async fn update_project_board_column_inner(
 ) -> Result<ProjectBoardColumn, String> {
     let cloud = app.cloud.clone();
     let pool = app.db.0.clone();
-    let column = tokio::task::spawn_blocking(move || -> Result<ProjectBoardColumn, String> {
-        let conn = pool.get().map_err(|e| e.to_string())?;
+    let (column, old_column_id) = tokio::task::spawn_blocking(move || -> ColumnUpdateResult {
+        let mut conn = pool.get().map_err(|e| e.to_string())?;
         let existing = get_column_by_id_sync(&conn, &id)?
             .ok_or_else(|| format!("board column '{}' not found", id))?;
         ensure_expected_revision(
@@ -643,18 +845,17 @@ pub(crate) async fn update_project_board_column_inner(
             payload.expected_revision.as_deref(),
         )?;
         let now = chrono::Utc::now().to_rfc3339();
+        let mut current_id = id.clone();
+        let mut old_column_id = None;
         if let Some(name) = payload.name.as_ref() {
             if name.trim().is_empty() {
                 return Err("board column name must be non-empty".into());
             }
-            conn.execute(
-                "UPDATE project_board_columns
-                    SET name = ?1, updated_at = ?2
-                  WHERE id = ?3
-                    AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?4), 'local')",
-                params![name.trim(), now, id, existing.project_id],
-            )
-            .map_err(|e| e.to_string())?;
+            let renamed_id = rename_column_id_sync(&mut conn, &existing, name.trim(), &now)?;
+            if renamed_id != id {
+                old_column_id = Some(id.clone());
+            }
+            current_id = renamed_id;
         }
         if let Some(position) = payload.position {
             conn.execute(
@@ -662,31 +863,41 @@ pub(crate) async fn update_project_board_column_inner(
                     SET position = ?1, updated_at = ?2
                   WHERE id = ?3
                     AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?4), 'local')",
-                params![position, now, id, existing.project_id],
+                params![position, now, current_id, existing.project_id],
             )
             .map_err(|e| e.to_string())?;
         }
         if payload.is_default == Some(true) {
-            set_default_column_sync(&conn, &existing.project_id, &existing.board_id, &id, &now)?;
+            set_default_column_sync(
+                &conn,
+                &existing.project_id,
+                &existing.board_id,
+                &current_id,
+                &now,
+            )?;
         } else if payload.is_default == Some(false) && existing.is_default {
             return Err("choose another default column before unsetting the current default".into());
         }
-        conn.query_row(
+        let column = conn.query_row(
             &format!(
                 "SELECT {} FROM project_board_columns
                  WHERE id = ?1
                    AND tenant_id = COALESCE((SELECT tenant_id FROM projects WHERE id = ?2), 'local')",
                 COLUMN_SELECT
             ),
-            params![id, existing.project_id],
+            params![current_id, existing.project_id],
             map_project_board_column,
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+        Ok((column, old_column_id))
     })
     .await
     .map_err(|e| e.to_string())??;
 
     cloud_upsert_board_column!(cloud, column);
+    if let Some(old_column_id) = old_column_id {
+        cloud_delete!(cloud, "project_board_columns", old_column_id);
+    }
     Ok(column)
 }
 
@@ -872,6 +1083,187 @@ pub(crate) async fn reorder_project_board_columns_inner(
         cloud_upsert_board_column!(cloud, column);
     }
     Ok(columns)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::connection;
+
+    struct SeededBoard {
+        dir: std::path::PathBuf,
+        pool: crate::db::DbPool,
+    }
+
+    impl Drop for SeededBoard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn setup_seeded_board(label: &str) -> SeededBoard {
+        let dir = std::env::temp_dir().join(format!("orbit-board-columns-{label}-{}", Ulid::new()));
+        let pool = connection::init(dir.clone()).expect("database initializes");
+        let now = chrono::Utc::now().to_rfc3339();
+        {
+            let conn = pool.get().expect("sqlite connection");
+            conn.execute(
+                "INSERT INTO projects (id, name, description, created_at, updated_at, tenant_id)
+                 VALUES ('project', 'Project', NULL, ?1, ?1, 'local')",
+                params![now],
+            )
+            .expect("insert project");
+            conn.execute(
+                "INSERT INTO project_boards (
+                    id, project_id, name, prefix, movement_guide, position, is_default, created_at, updated_at, tenant_id
+                 ) VALUES ('board', 'project', 'Main', 'MAIN', ?1, 1024.0, 1, ?2, ?2, 'local')",
+                params![default_board_movement_guide_json(), now],
+            )
+            .expect("insert board");
+        }
+        SeededBoard { dir, pool }
+    }
+
+    fn insert_column(conn: &rusqlite::Connection, id: &str, name: &str, position: f64) {
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO project_board_columns (
+                id, project_id, board_id, name, is_default, position, created_at, updated_at, tenant_id
+             ) VALUES (?1, 'project', 'board', ?2, 0, ?3, ?4, ?4, 'local')",
+            params![id, name, position, now],
+        )
+        .expect("insert column");
+    }
+
+    #[test]
+    fn slug_column_ids_are_readable_and_collision_safe() {
+        let seed = setup_seeded_board("slug-ids");
+        let conn = seed.pool.get().expect("sqlite connection");
+
+        assert_eq!(slugify_column_name("In Refinement"), "in_refinement");
+        assert_eq!(slugify_column_name("Ready for dev"), "ready_for_dev");
+        assert_eq!(
+            unique_column_id_sync(&conn, "project", "In Refinement", None).unwrap(),
+            "col_project_in_refinement"
+        );
+
+        insert_column(&conn, "col_project_in_refinement", "In Refinement", 1024.0);
+        assert_eq!(
+            unique_column_id_sync(&conn, "project", "In Refinement", None).unwrap(),
+            "col_project_in_refinement_2"
+        );
+    }
+
+    #[test]
+    fn rename_regenerates_column_id_and_rewrites_live_references() {
+        let seed = setup_seeded_board("rename-references");
+        let mut conn = seed.pool.get().expect("sqlite connection");
+        let now = chrono::Utc::now().to_rfc3339();
+        insert_column(&conn, "col_project_todo", "Todo", 1024.0);
+
+        conn.execute(
+            "INSERT INTO work_items (
+                id, project_id, board_id, title, description, kind, column_id, status, priority,
+                assignee_agent_id, created_by_agent_id, parent_work_item_id, position, labels,
+                metadata, blocked_reason, started_at, completed_at, created_at, updated_at, tenant_id
+             ) VALUES (
+                'item', 'project', 'board', 'Card', NULL, 'task', 'col_project_todo', 'todo', 0,
+                NULL, NULL, NULL, 1024.0, '[]', '{}', NULL, NULL, NULL, ?1, ?1, 'local'
+             )",
+            params![now],
+        )
+        .expect("insert work item");
+        conn.execute(
+            "UPDATE project_boards
+                SET movement_guide = ?1
+              WHERE id = 'board'",
+            params![serde_json::json!({
+                "version": 1,
+                "summary": "",
+                "columnRules": [
+                    { "columnId": "col_project_todo", "purpose": "Refine", "moveWhen": "Needs shape" }
+                ],
+                "transitions": [
+                    { "fromColumnId": "col_project_todo", "toColumnId": "col_project_todo", "when": "Loop" }
+                ],
+                "agentInstructions": ""
+            })
+            .to_string()],
+        )
+        .expect("update movement guide");
+        conn.execute(
+            "INSERT INTO project_workflows (
+                id, project_id, name, description, enabled, graph, trigger_kind, trigger_config,
+                version, created_at, updated_at, tenant_id
+             ) VALUES ('workflow', 'project', 'Workflow', NULL, 0, ?1, 'manual', '{}', 1, ?2, ?2, 'local')",
+            params![
+                serde_json::json!({
+                    "nodes": [
+                        {
+                            "id": "node",
+                            "data": {
+                                "columnId": "col_project_todo",
+                                "reviewColumnId": "col_project_todo",
+                                "listColumnId": "col_project_todo"
+                            }
+                        }
+                    ],
+                    "edges": [],
+                    "schemaVersion": 1
+                })
+                .to_string(),
+                now
+            ],
+        )
+        .expect("insert workflow");
+
+        let existing = get_column_by_id_sync(&conn, "col_project_todo")
+            .unwrap()
+            .expect("existing column");
+        let renamed_id =
+            rename_column_id_sync(&mut conn, &existing, "In Refinement", &now).unwrap();
+
+        assert_eq!(renamed_id, "col_project_in_refinement");
+        assert!(get_column_by_id_sync(&conn, "col_project_todo")
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            get_column_by_id_sync(&conn, "col_project_in_refinement")
+                .unwrap()
+                .expect("renamed column")
+                .name,
+            "In Refinement"
+        );
+
+        let item_column: String = conn
+            .query_row(
+                "SELECT column_id FROM work_items WHERE id = 'item'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(item_column, "col_project_in_refinement");
+
+        let movement_guide: String = conn
+            .query_row(
+                "SELECT movement_guide FROM project_boards WHERE id = 'board'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(movement_guide.contains("col_project_in_refinement"));
+        assert!(!movement_guide.contains("col_project_todo"));
+
+        let graph: String = conn
+            .query_row(
+                "SELECT graph FROM project_workflows WHERE id = 'workflow'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(graph.contains("col_project_in_refinement"));
+        assert!(!graph.contains("col_project_todo"));
+    }
 }
 
 mod http {
