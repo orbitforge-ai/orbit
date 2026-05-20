@@ -1139,6 +1139,8 @@ fn parse_chat_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatSessi
         worktree_path: row.get(16)?,
         workflow_run_id: None,
         workflow_node_id: None,
+        model_provider_override: None,
+        model_override: None,
     })
 }
 

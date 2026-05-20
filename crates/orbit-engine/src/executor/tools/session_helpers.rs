@@ -99,6 +99,8 @@ pub async fn load_owned_session(
                             worktree_path: row.get(16)?,
                             workflow_run_id: None,
                             workflow_node_id: None,
+                            model_provider_override: None,
+                            model_override: None,
                         },
                         last_input_tokens: row.get(17)?,
                     })
@@ -292,6 +294,8 @@ pub async fn list_owned_sessions(
                         worktree_path: row.get(16)?,
                         workflow_run_id: None,
                         workflow_node_id: None,
+                        model_provider_override: None,
+                        model_override: None,
                     },
                     last_input_tokens: row.get(17)?,
                     last_message_preview: last_content

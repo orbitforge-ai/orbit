@@ -209,6 +209,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     worktree_path TEXT,
     workflow_run_id TEXT,
     workflow_node_id TEXT,
+    model_provider_override TEXT,
+    model_override TEXT,
     compaction_failure_count BIGINT NOT NULL DEFAULT 0,
     compaction_last_failure_at TEXT,
     created_at TEXT NOT NULL,

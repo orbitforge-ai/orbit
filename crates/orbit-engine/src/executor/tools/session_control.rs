@@ -237,6 +237,8 @@ pub async fn load_accessible_session(
                             worktree_path: row.get(17)?,
                             workflow_run_id: None,
                             workflow_node_id: None,
+                            model_provider_override: None,
+                            model_override: None,
                         },
                         allow_sub_agents: row.get::<_, bool>(14)?,
                     })

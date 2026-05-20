@@ -477,6 +477,12 @@ pub trait ChatRepo: Send + Sync {
     async fn archive_session(&self, session_id: &str) -> Result<String, String>;
     async fn unarchive_session(&self, session_id: &str) -> Result<String, String>;
     async fn delete_session(&self, session_id: &str) -> Result<(), String>;
+    async fn set_session_model_override(
+        &self,
+        session_id: &str,
+        provider: Option<String>,
+        model: Option<String>,
+    ) -> Result<String, String>;
     async fn append_message(
         &self,
         session_id: &str,

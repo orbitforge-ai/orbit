@@ -39,6 +39,11 @@ export const chatApi = {
 
   deleteSession: (sessionId: string): Promise<void> => invoke('delete_chat_session', { sessionId }),
 
+  setSessionModelOverride: (
+    sessionId: string,
+    modelOverride: ChatModelOverride | null
+  ): Promise<void> => invoke('set_chat_session_model_override', { sessionId, modelOverride }),
+
   getMessages: (sessionId: string): Promise<ChatMessage[]> =>
     invoke<PaginatedChatMessages>('get_chat_messages', { sessionId }).then((res) => res.messages),
 
@@ -72,6 +77,8 @@ export const chatApi = {
     agentId: string;
     projectId: string | null;
     projectName: string | null;
+    modelProviderOverride: string | null;
+    modelOverride: string | null;
   }> => invoke('get_chat_session_meta', { sessionId }),
 
   cancelAgentSession: (sessionId: string): Promise<void> =>

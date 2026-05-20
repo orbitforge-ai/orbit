@@ -366,6 +366,7 @@ pub fn run() {
             commands::chat::archive_chat_session,
             commands::chat::unarchive_chat_session,
             commands::chat::delete_chat_session,
+            commands::chat::set_chat_session_model_override,
             commands::chat::get_chat_messages,
             commands::chat::send_chat_message,
             commands::chat::respond_to_user_question,

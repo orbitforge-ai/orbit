@@ -242,6 +242,8 @@ create table if not exists chat_sessions (
   finish_summary text,
   terminal_error text,
   project_id text,
+  model_provider_override text,
+  model_override text,
   created_at text not null,
   updated_at text not null,
   primary key (user_id, id)

@@ -90,6 +90,8 @@ export function draftToChatSession(draft: ChatDraft): ChatSession {
     createdAt: draft.createdAt,
     updatedAt: draft.updatedAt,
     projectId: draft.projectId,
+    modelProviderOverride: null,
+    modelOverride: null,
   };
 }
 

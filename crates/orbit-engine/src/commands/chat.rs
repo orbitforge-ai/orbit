@@ -352,6 +352,58 @@ pub async fn delete_chat_session_impl(session_id: String, app: &AppContext) -> R
     Ok(())
 }
 
+#[tauri::command]
+pub async fn set_chat_session_model_override(
+    session_id: String,
+    model_override: Option<ChatModelOverride>,
+    app: tauri::State<'_, AppContext>,
+) -> Result<(), String> {
+    set_chat_session_model_override_impl(session_id, model_override, app.inner()).await
+}
+
+pub async fn set_chat_session_model_override_impl(
+    session_id: String,
+    model_override: Option<ChatModelOverride>,
+    app: &AppContext,
+) -> Result<(), String> {
+    let (provider, model) = match model_override {
+        Some(model_override) => {
+            let provider = model_override.provider.trim().to_string();
+            let model = model_override.model.trim().to_string();
+            if provider.is_empty() || model.is_empty() {
+                return Err("model override requires provider and model".to_string());
+            }
+            (Some(provider), Some(model))
+        }
+        None => (None, None),
+    };
+
+    let now = app
+        .repos
+        .chat()
+        .set_session_model_override(&session_id, provider.clone(), model.clone())
+        .await?;
+
+    if let Some(client) = app.cloud.get() {
+        let id = session_id.clone();
+        tokio::spawn(async move {
+            let _ = client
+                .patch_by_id(
+                    "chat_sessions",
+                    &id,
+                    serde_json::json!({
+                        "model_provider_override": provider,
+                        "model_override": model,
+                        "updated_at": now,
+                    }),
+                )
+                .await;
+        });
+    }
+
+    Ok(())
+}
+
 // ─── Messages ───────────────────────────────────────────────────────────────
 
 /// A chat message with compaction metadata for the UI.
@@ -388,6 +440,8 @@ struct LoadedChatState {
     chain_depth: i64,
     session_type: String,
     execution_state: Option<String>,
+    model_provider_override: Option<String>,
+    model_override: Option<String>,
     user_msg_id: String,
     user_msg_now: String,
     user_msg_content_json: String,
@@ -567,14 +621,23 @@ pub async fn send_chat_message_impl(
             let conn = pool.get().map_err(|e| e.to_string())?;
 
             // Get session
-            let (agent_id, title, chain_depth, session_type, execution_state): (String, String, i64, String, Option<String>) = conn
+            let (agent_id, title, chain_depth, session_type, execution_state, model_provider_override, model_override): (String, String, i64, String, Option<String>, Option<String>, Option<String>) = conn
             .query_row(
-              "SELECT agent_id, title, chain_depth, session_type, execution_state
+              "SELECT agent_id, title, chain_depth, session_type, execution_state,
+                      model_provider_override, model_override
                  FROM chat_sessions
                 WHERE id = ?1
                   AND tenant_id = COALESCE((SELECT tenant_id FROM chat_sessions WHERE id = ?1), 'local')",
               rusqlite::params![sid],
-              |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+              |row| Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+              ))
             )
             .map_err(|e| format!("session not found: {}", e))?;
 
@@ -666,6 +729,8 @@ pub async fn send_chat_message_impl(
                 chain_depth,
                 session_type,
                 execution_state,
+                model_provider_override,
+                model_override,
                 user_msg_id: msg_id,
                 user_msg_now: now,
                 user_msg_content_json: content_json,
@@ -682,12 +747,21 @@ pub async fn send_chat_message_impl(
         chain_depth,
         session_type,
         execution_state,
+        model_provider_override,
+        model_override: persisted_model_override,
         user_msg_id,
         user_msg_now,
         user_msg_content_json,
     } = loaded;
 
     let db_bg = db.clone();
+    let effective_model_override =
+        model_override.or_else(
+            || match (model_provider_override, persisted_model_override) {
+                (Some(provider), Some(model)) => Some(ChatModelOverride { provider, model }),
+                _ => None,
+            },
+        );
 
     // Sync the initial user message to Supabase (was missing — only SQLite was written above)
     if let Some(client) = cloud_client.clone() {
@@ -747,7 +821,7 @@ pub async fn send_chat_message_impl(
     let perm_registry = ctx.permissions.clone();
     let question_registry = ctx.user_questions.clone();
     let mem_client = ctx.memory.as_ref().map(|s| s.client.clone());
-    let model_override_bg = model_override.clone();
+    let model_override_bg = effective_model_override.clone();
     let app_ctx = ctx.clone();
     let runtime = ctx.runtime.clone();
 
@@ -1640,7 +1714,7 @@ pub struct ContextUsage {
     pub usage_percent: f64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatModelOverride {
     pub provider: String,
@@ -1665,7 +1739,15 @@ async fn get_context_usage_impl(
     let agent_id = usage.agent_id;
 
     let mut ws_config = workspace::load_agent_config(&agent_id).unwrap_or_default();
-    if let Some(model_override) = model_override {
+    if let Some(model_override) = model_override.or_else(|| {
+        match (
+            usage.model_provider_override.clone(),
+            usage.model_override.clone(),
+        ) {
+            (Some(provider), Some(model)) => Some(ChatModelOverride { provider, model }),
+            _ => None,
+        }
+    }) {
         ws_config.provider = model_override.provider;
         ws_config.model = model_override.model;
     }
@@ -1828,6 +1910,13 @@ mod http {
     }
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
+    struct SetModelOverrideArgs {
+        session_id: String,
+        #[serde(default)]
+        model_override: Option<ChatModelOverride>,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
     struct RespondQuestionArgs {
         request_id: String,
         response: String,
@@ -1885,6 +1974,13 @@ mod http {
         reg.register("delete_chat_session", |ctx, args| async move {
             let a: SessionIdArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
             delete_chat_session_impl(a.session_id, ctx.as_ref()).await?;
+            Ok(serde_json::Value::Null)
+        });
+        reg.register("set_chat_session_model_override", |ctx, args| async move {
+            let a: SetModelOverrideArgs =
+                serde_json::from_value(args).map_err(|e| e.to_string())?;
+            set_chat_session_model_override_impl(a.session_id, a.model_override, ctx.as_ref())
+                .await?;
             Ok(serde_json::Value::Null)
         });
         reg.register("get_chat_messages", |ctx, args| async move {

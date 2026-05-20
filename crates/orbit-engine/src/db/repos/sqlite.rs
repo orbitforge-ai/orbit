@@ -2815,7 +2815,7 @@ const CHAT_SESSION_SELECT: &str = "SELECT cs.id, cs.agent_id, cs.title, cs.archi
                 src.id, src.title,
                 cs.created_at, cs.updated_at, cs.project_id,
                 cs.worktree_name, cs.worktree_branch, cs.worktree_path,
-                cs.workflow_run_id, cs.workflow_node_id
+                cs.workflow_run_id, cs.workflow_node_id, cs.model_provider_override, cs.model_override
          FROM chat_sessions cs
          LEFT JOIN bus_messages bm ON bm.id = cs.source_bus_message_id AND bm.tenant_id = cs.tenant_id
          LEFT JOIN agents a ON a.id = bm.from_agent_id AND a.tenant_id = cs.tenant_id
@@ -2846,6 +2846,8 @@ fn map_chat_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatSession
         worktree_path: row.get(20)?,
         workflow_run_id: row.get(21)?,
         workflow_node_id: row.get(22)?,
+        model_provider_override: row.get(23)?,
+        model_override: row.get(24)?,
     })
 }
 
@@ -3043,6 +3045,8 @@ impl ChatRepo for SqliteRepos {
                 worktree_path: None,
                 workflow_run_id: None,
                 workflow_node_id: None,
+                model_provider_override: None,
+                model_override: None,
             })
         })
         .await
@@ -3156,6 +3160,30 @@ impl ChatRepo for SqliteRepos {
         .await
     }
 
+    async fn set_session_model_override(
+        &self,
+        session_id: &str,
+        provider: Option<String>,
+        model: Option<String>,
+    ) -> Result<String, String> {
+        let session_id = session_id.to_string();
+        let tenant_id = self.tenant_id();
+        self.with_conn(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "UPDATE chat_sessions
+                    SET model_provider_override = ?1,
+                        model_override = ?2,
+                        updated_at = ?3
+                  WHERE id = ?4 AND tenant_id = ?5",
+                params![provider, model, &now, session_id, tenant_id],
+            )
+            .err_str()?;
+            Ok(now)
+        })
+        .await
+    }
+
     async fn append_message(
         &self,
         session_id: &str,
@@ -3228,7 +3256,7 @@ impl ChatRepo for SqliteRepos {
         self.with_conn(move |conn| {
             let sid = session_id.clone();
             conn.query_row(
-                "SELECT cs.agent_id, cs.project_id, p.name
+                "SELECT cs.agent_id, cs.project_id, p.name, cs.model_provider_override, cs.model_override
                  FROM chat_sessions cs
                  LEFT JOIN projects p ON p.id = cs.project_id AND p.tenant_id = cs.tenant_id
                  WHERE cs.id = ?1 AND cs.tenant_id = ?2",
@@ -3239,6 +3267,8 @@ impl ChatRepo for SqliteRepos {
                         agent_id: row.get(0)?,
                         project_id: row.get(1)?,
                         project_name: row.get(2)?,
+                        model_provider_override: row.get(3)?,
+                        model_override: row.get(4)?,
                     })
                 },
             )
@@ -3319,7 +3349,8 @@ impl ChatRepo for SqliteRepos {
         let tenant_id = self.tenant_id();
         self.with_conn(move |conn| {
             conn.query_row(
-                "SELECT last_input_tokens, last_prompt_input_tokens, last_turn_input_tokens, agent_id
+                "SELECT last_input_tokens, last_prompt_input_tokens, last_turn_input_tokens, agent_id,
+                        model_provider_override, model_override
                    FROM chat_sessions
                   WHERE id = ?1 AND tenant_id = ?2",
                 params![session_id, tenant_id],
@@ -3329,6 +3360,8 @@ impl ChatRepo for SqliteRepos {
                         last_prompt_input_tokens: row.get(1)?,
                         last_turn_input_tokens: row.get(2)?,
                         agent_id: row.get(3)?,
+                        model_provider_override: row.get(4)?,
+                        model_override: row.get(5)?,
                     })
                 },
             )
@@ -5417,5 +5450,64 @@ mod tests {
         );
         assert_eq!(completed.status, "done");
         assert!(completed.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn chat_session_model_override_can_be_set_and_cleared() {
+        let seed = setup_seeded_repo("chat-model-override");
+        let session = seed
+            .repos
+            .chat()
+            .create_session(
+                "default".to_string(),
+                Some("Model test".to_string()),
+                None,
+                Some(seed.project_id.clone()),
+            )
+            .await
+            .expect("create chat session");
+
+        seed.repos
+            .chat()
+            .set_session_model_override(
+                &session.id,
+                Some("vercel".to_string()),
+                Some("openai/gpt-5.4".to_string()),
+            )
+            .await
+            .expect("set model override");
+
+        let meta = seed
+            .repos
+            .chat()
+            .session_meta(&session.id)
+            .await
+            .expect("read session meta");
+        assert_eq!(meta.model_provider_override.as_deref(), Some("vercel"));
+        assert_eq!(meta.model_override.as_deref(), Some("openai/gpt-5.4"));
+
+        let usage = seed
+            .repos
+            .chat()
+            .token_usage(&session.id)
+            .await
+            .expect("read token usage");
+        assert_eq!(usage.model_provider_override.as_deref(), Some("vercel"));
+        assert_eq!(usage.model_override.as_deref(), Some("openai/gpt-5.4"));
+
+        seed.repos
+            .chat()
+            .set_session_model_override(&session.id, None, None)
+            .await
+            .expect("clear model override");
+
+        let meta = seed
+            .repos
+            .chat()
+            .session_meta(&session.id)
+            .await
+            .expect("read cleared session meta");
+        assert!(meta.model_provider_override.is_none());
+        assert!(meta.model_override.is_none());
     }
 }

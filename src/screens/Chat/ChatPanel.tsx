@@ -51,7 +51,10 @@ interface ChatPanelProps {
   sessionId?: string;
   draft?: ChatDraft | null;
   onDraftTextChange?: (text: string) => void;
-  onDraftSend?: (content: ContentBlock[], modelOverride?: ChatModelOverride | null) => Promise<void>;
+  onDraftSend?: (
+    content: ContentBlock[],
+    modelOverride?: ChatModelOverride | null
+  ) => Promise<void>;
   initialQueuedMessage?: QueuedInitialMessage | null;
   onInitialMessageHandled?: (key: string) => void;
   onInitialMessageFailed?: (key: string) => void;
@@ -86,10 +89,7 @@ export function ChatPanel({
   const isDraft = Boolean(draft && !sessionId);
   const streamId = sessionId ? `chat:${sessionId}` : null;
   const streamEntry = useLiveChatStore(
-    useCallback(
-      (state) => (streamId ? state.chatStreams[streamId] ?? null : null),
-      [streamId]
-    )
+    useCallback((state) => (streamId ? (state.chatStreams[streamId] ?? null) : null), [streamId])
   );
   const streaming = streamEntry?.isStreaming ?? false;
   const pendingPermissionRequestMap = usePermissionStore((s) => s.pending);
@@ -101,7 +101,21 @@ export function ChatPanel({
     agentIdentity?.avatarSpeakAloud ?? false
   );
   const resolvedArchetype = useMemo(
-    () => selectAvatarArchetype(agentIdentity ?? { presetId: 'balanced_assistant', identityName: 'Assistant', voice: 'neutral', vibe: '', warmth: 55, directness: 55, humor: 20, avatarEnabled: false, avatarArchetype: 'auto', avatarSpeakAloud: false }),
+    () =>
+      selectAvatarArchetype(
+        agentIdentity ?? {
+          presetId: 'balanced_assistant',
+          identityName: 'Assistant',
+          voice: 'neutral',
+          vibe: '',
+          warmth: 55,
+          directness: 55,
+          humor: 20,
+          avatarEnabled: false,
+          avatarArchetype: 'auto',
+          avatarSpeakAloud: false,
+        }
+      ),
     [agentIdentity]
   );
   const { state: avatarState, forceThinking } = useAvatarState(isDraft ? null : streamId);
@@ -116,6 +130,7 @@ export function ChatPanel({
   useEffect(() => {
     setAutoScroll(true);
     consumedInitialMessageRef.current = null;
+    setSelectedModelOverride(null);
     setModelPinned(false);
     setModelHoverState(null);
     setQueuedTurn(null);
@@ -151,24 +166,36 @@ export function ChatPanel({
   }, [currentAgentId, queryClient]);
 
   useEffect(() => {
-    const nextOverride = agentConfig
-      ? {
-          provider: agentConfig.provider,
-          model: agentConfig.model,
-        }
-      : null;
-    if (!nextOverride) return;
-    if (modelPinned && selectedModelOverride) return;
-    setSelectedModelOverride((current) => {
-      if (
-        current?.provider === nextOverride.provider &&
-        current?.model === nextOverride.model
-      ) {
-        return current;
+    if (!sessionId || !sessionMeta) return;
+    const persistedOverride =
+      sessionMeta.modelProviderOverride && sessionMeta.modelOverride
+        ? {
+            provider: sessionMeta.modelProviderOverride,
+            model: sessionMeta.modelOverride,
+          }
+        : null;
+    setSelectedModelOverride(persistedOverride);
+    setModelPinned(Boolean(persistedOverride));
+  }, [sessionId, sessionMeta?.modelProviderOverride, sessionMeta?.modelOverride]);
+
+  const persistModelOverride = useCallback(
+    async (modelOverride: ChatModelOverride | null) => {
+      setSelectedModelOverride(modelOverride);
+      setModelPinned(Boolean(modelOverride));
+
+      if (!sessionId) return;
+
+      try {
+        await chatApi.setSessionModelOverride(sessionId, modelOverride);
+        queryClient.invalidateQueries({ queryKey: ['chat-session-meta', sessionId] });
+        queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
+      } catch (err) {
+        console.error('Failed to persist chat model override:', err);
+        queryClient.invalidateQueries({ queryKey: ['chat-session-meta', sessionId] });
       }
-      return nextOverride;
-    });
-  }, [agentConfig, modelPinned, selectedModelOverride]);
+    },
+    [queryClient, sessionId]
+  );
 
   const selectProject = useUiStore((state) => state.selectProject);
   const setProjectTab = useUiStore((state) => state.setProjectTab);
@@ -394,7 +421,7 @@ export function ChatPanel({
         const resolved = await resolveMentionsToContentBlocks(content, {
           agentId: currentAgentId,
           projectId: draft?.projectId ?? null,
-          modelOverride: (modelOverride ?? selectedModelOverride) ?? null,
+          modelOverride: modelOverride ?? selectedModelOverride ?? null,
         });
         await onDraftSend(resolved, modelOverride ?? selectedModelOverride);
         return;
@@ -522,8 +549,7 @@ export function ChatPanel({
             model: agentConfig.model,
           }
         : null);
-    const currentProviderValue =
-      resolvedOverride?.provider ?? agentConfig?.provider ?? null;
+    const currentProviderValue = resolvedOverride?.provider ?? agentConfig?.provider ?? null;
     const currentModelValue =
       resolvedOverride?.model ??
       (agentConfig
@@ -548,11 +574,24 @@ export function ChatPanel({
       );
     }
 
-    const currentProvider = LLM_PROVIDERS.find((provider) => provider.value === currentProviderValue);
+    const currentProvider = LLM_PROVIDERS.find(
+      (provider) => provider.value === currentProviderValue
+    );
     const currentOption = (providerModelOptions[currentProviderValue] ?? []).find(
       (option) => option.value === currentModelValue
     );
     const currentLabel = currentOption?.label ?? currentModelValue;
+    const defaultProvider = agentConfig
+      ? LLM_PROVIDERS.find((provider) => provider.value === agentConfig.provider)
+      : null;
+    const defaultOption = agentConfig
+      ? (providerModelOptions[agentConfig.provider] ?? []).find(
+          (option) => option.value === agentConfig.model
+        )
+      : null;
+    const defaultTitle = agentConfig
+      ? `${defaultProvider?.label ?? agentConfig.provider} • ${defaultOption?.label ?? agentConfig.model}`
+      : null;
     const triggerTitle = currentProvider
       ? `${currentProvider.label} • ${currentLabel}`
       : currentLabel;
@@ -565,12 +604,8 @@ export function ChatPanel({
               type="button"
               disabled={streaming}
               aria-label="Choose reply model"
-              onMouseEnter={(event) =>
-                setModelHoverState({ x: event.clientX, y: event.clientY })
-              }
-              onMouseMove={(event) =>
-                setModelHoverState({ x: event.clientX, y: event.clientY })
-              }
+              onMouseEnter={(event) => setModelHoverState({ x: event.clientX, y: event.clientY })}
+              onMouseMove={(event) => setModelHoverState({ x: event.clientX, y: event.clientY })}
               onMouseLeave={() => setModelHoverState(null)}
               className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs transition-[border-color,background-color,color] disabled:opacity-50 ${
                 modelPinned
@@ -595,6 +630,28 @@ export function ChatPanel({
                 </p>
                 <p className="mt-1 text-xs text-secondary">{triggerTitle}</p>
               </div>
+              {agentConfig && (
+                <DropdownMenu.Item
+                  onSelect={() => {
+                    void persistModelOverride(null);
+                  }}
+                  className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10"
+                >
+                  <Box
+                    size={14}
+                    className={!selectedModelOverride ? 'text-accent-light' : 'text-muted'}
+                  />
+                  <span
+                    className={`flex-1 ${!selectedModelOverride ? 'text-accent-light font-medium' : 'text-white'}`}
+                  >
+                    Agent default
+                    {defaultTitle && (
+                      <span className="ml-1 text-xs text-muted">({defaultTitle})</span>
+                    )}
+                  </span>
+                  {!selectedModelOverride && <Check size={12} className="text-accent-light" />}
+                </DropdownMenu.Item>
+              )}
               <div className="max-h-72 overflow-y-auto py-1">
                 {LLM_PROVIDERS.map((provider) => (
                   <div key={provider.value}>
@@ -610,19 +667,17 @@ export function ChatPanel({
                         <DropdownMenu.Item
                           key={`${provider.value}::${option.value}`}
                           onSelect={() => {
-                            setSelectedModelOverride({
+                            void persistModelOverride({
                               provider: provider.value,
                               model: option.value,
                             });
-                            setModelPinned(true);
                           }}
                           className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10"
                         >
-                          <Box
-                            size={14}
-                            className={active ? 'text-accent-light' : 'text-muted'}
-                          />
-                          <span className={`flex-1 ${active ? 'text-accent-light font-medium' : 'text-white'}`}>
+                          <Box size={14} className={active ? 'text-accent-light' : 'text-muted'} />
+                          <span
+                            className={`flex-1 ${active ? 'text-accent-light font-medium' : 'text-white'}`}
+                          >
                             {option.label}
                           </span>
                           {active && <Check size={12} className="text-accent-light" />}
@@ -635,39 +690,48 @@ export function ChatPanel({
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
-        {modelHoverState && (() => {
-          const offset = 6;
-          const viewportPadding = 12;
-          const estimatedWidth = 260;
-          const estimatedHeight = 40;
-          const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 0;
-          const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 0;
+        {modelHoverState &&
+          (() => {
+            const offset = 6;
+            const viewportPadding = 12;
+            const estimatedWidth = 260;
+            const estimatedHeight = 40;
+            const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 0;
+            const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 0;
 
-          let left = modelHoverState.x + offset;
-          let top = modelHoverState.y + offset;
+            let left = modelHoverState.x + offset;
+            let top = modelHoverState.y + offset;
 
-          if (viewportWidth && left + estimatedWidth > viewportWidth - viewportPadding) {
-            left = viewportWidth - estimatedWidth - viewportPadding;
-          }
-          if (viewportHeight && top + estimatedHeight > viewportHeight - viewportPadding) {
-            top = modelHoverState.y - estimatedHeight - offset;
-          }
+            if (viewportWidth && left + estimatedWidth > viewportWidth - viewportPadding) {
+              left = viewportWidth - estimatedWidth - viewportPadding;
+            }
+            if (viewportHeight && top + estimatedHeight > viewportHeight - viewportPadding) {
+              top = modelHoverState.y - estimatedHeight - offset;
+            }
 
-          left = Math.max(viewportPadding, left);
-          top = Math.max(viewportPadding, top);
+            left = Math.max(viewportPadding, left);
+            top = Math.max(viewportPadding, top);
 
-          return (
-            <div
-              className="pointer-events-none fixed z-[60] max-w-xs rounded-lg border border-edge bg-surface/95 px-2.5 py-1.5 text-[11px] text-secondary shadow-xl backdrop-blur-sm"
-              style={{ left, top }}
-            >
-              {triggerTitle}
-            </div>
-          );
-        })()}
+            return (
+              <div
+                className="pointer-events-none fixed z-[60] max-w-xs rounded-lg border border-edge bg-surface/95 px-2.5 py-1.5 text-[11px] text-secondary shadow-xl backdrop-blur-sm"
+                style={{ left, top }}
+              >
+                {triggerTitle}
+              </div>
+            );
+          })()}
       </>
     );
-  }, [agentConfig, modelHoverState, modelPinned, providerModelOptions, selectedModelOverride, streaming]);
+  }, [
+    agentConfig,
+    modelHoverState,
+    modelPinned,
+    persistModelOverride,
+    providerModelOptions,
+    selectedModelOverride,
+    streaming,
+  ]);
 
   return (
     <div className="flex flex-col h-full">

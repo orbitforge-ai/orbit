@@ -41,7 +41,10 @@ export interface UseChatWorkspaceControllerResult {
   handleNewSession: () => void;
   handleDeleteDraft: () => void;
   handleDraftTextChange: (text: string) => void;
-  handleDraftSend: (content: ContentBlock[], modelOverride?: ChatModelOverride | null) => Promise<void>;
+  handleDraftSend: (
+    content: ContentBlock[],
+    modelOverride?: ChatModelOverride | null
+  ) => Promise<void>;
   initialQueuedMessage: QueuedInitialMessage | null;
   handleInitialMessageHandled: (key: string) => void;
   handleInitialMessageFailed: (key: string) => void;
@@ -85,7 +88,7 @@ export function useChatWorkspaceController({
     [draftScope]
   );
 
-  const selectedDraft = draftScopeKey ? drafts[draftScopeKey] ?? null : null;
+  const selectedDraft = draftScopeKey ? (drafts[draftScopeKey] ?? null) : null;
   const visibleDraft = agentId && pendingInitialSend?.agentId === agentId ? null : selectedDraft;
   const draftSession = visibleDraft ? draftToChatSession(visibleDraft) : null;
 
@@ -111,10 +114,7 @@ export function useChatWorkspaceController({
   useEffect(() => {
     if (!draftScope || !chatSessionsFetched) return;
 
-    if (
-      pendingSessionId &&
-      handledPendingSessionIdRef.current !== pendingSessionId
-    ) {
+    if (pendingSessionId && handledPendingSessionIdRef.current !== pendingSessionId) {
       handledPendingSessionIdRef.current = pendingSessionId;
       const pendingSession = chatSessions.find((session) => session.id === pendingSessionId);
       onPendingSessionHandled?.();
@@ -192,11 +192,22 @@ export function useChatWorkspaceController({
     updateDraftText(draftScope, text);
   }
 
-  async function handleDraftSend(content: ContentBlock[], modelOverride?: ChatModelOverride | null) {
+  async function handleDraftSend(
+    content: ContentBlock[],
+    modelOverride?: ChatModelOverride | null
+  ) {
     if (!agentId || !draftScope || !draftScopeKey) return;
 
     const draft = useChatDraftStore.getState().drafts[draftScopeKey] ?? ensureDraft(draftScope);
-    const session = await chatApi.createSession(agentId, undefined, undefined, projectId ?? undefined);
+    const session = await chatApi.createSession(
+      agentId,
+      undefined,
+      undefined,
+      projectId ?? undefined
+    );
+    if (modelOverride) {
+      await chatApi.setSessionModelOverride(session.id, modelOverride);
+    }
     queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
     setPendingInitialSend({
       key: `${session.id}:${Date.now()}`,

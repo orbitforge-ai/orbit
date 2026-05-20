@@ -604,6 +604,8 @@ export interface ChatSession {
   projectId?: string | null;
   workflowRunId?: string | null;
   workflowNodeId?: string | null;
+  modelProviderOverride?: string | null;
+  modelOverride?: string | null;
 }
 
 export interface ChatDraft {

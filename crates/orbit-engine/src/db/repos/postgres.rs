@@ -353,7 +353,7 @@ const CHAT_SESSION_SELECT: &str =
     cs.parent_session_id, cs.source_bus_message_id, cs.chain_depth, cs.execution_state,
     cs.finish_summary, cs.terminal_error, bm.from_agent_id, a.name, src.id, src.title,
     cs.created_at::text, cs.updated_at::text, cs.project_id, cs.worktree_name, cs.worktree_branch,
-    cs.worktree_path, cs.workflow_run_id, cs.workflow_node_id
+    cs.worktree_path, cs.workflow_run_id, cs.workflow_node_id, cs.model_provider_override, cs.model_override
     FROM chat_sessions cs
     LEFT JOIN bus_messages bm ON bm.id = cs.source_bus_message_id AND bm.tenant_id = cs.tenant_id
     LEFT JOIN agents a ON a.id = bm.from_agent_id AND a.tenant_id = cs.tenant_id
@@ -384,6 +384,8 @@ fn map_chat_session_row(row: &PgRow) -> Result<ChatSession, sqlx::Error> {
         worktree_path: row.try_get(20)?,
         workflow_run_id: row.try_get(21)?,
         workflow_node_id: row.try_get(22)?,
+        model_provider_override: row.try_get(23)?,
+        model_override: row.try_get(24)?,
     })
 }
 
@@ -2364,6 +2366,8 @@ impl ChatRepo for PgRepos {
             worktree_path: None,
             workflow_run_id: None,
             workflow_node_id: None,
+            model_provider_override: None,
+            model_override: None,
         })
     }
 
@@ -2410,6 +2414,31 @@ impl ChatRepo for PgRepos {
             .await
             .map_err(db_err)?;
         Ok(())
+    }
+
+    async fn set_session_model_override(
+        &self,
+        session_id: &str,
+        provider: Option<String>,
+        model: Option<String>,
+    ) -> Result<String, String> {
+        let updated_at = now();
+        sqlx::query(
+            "UPDATE chat_sessions
+                SET model_provider_override = $1,
+                    model_override = $2,
+                    updated_at = $3
+              WHERE id = $4 AND tenant_id = $5",
+        )
+        .bind(provider)
+        .bind(model)
+        .bind(&updated_at)
+        .bind(session_id)
+        .bind(self.tenant_id())
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(updated_at)
     }
 
     async fn append_message(
@@ -2467,7 +2496,7 @@ impl ChatRepo for PgRepos {
 
     async fn session_meta(&self, session_id: &str) -> Result<ChatSessionMeta, String> {
         let row = sqlx::query(
-            "SELECT cs.agent_id, cs.project_id, p.name
+            "SELECT cs.agent_id, cs.project_id, p.name, cs.model_provider_override, cs.model_override
              FROM chat_sessions cs
              LEFT JOIN projects p ON p.id = cs.project_id AND p.tenant_id = cs.tenant_id
              WHERE cs.id = $1 AND cs.tenant_id = $2",
@@ -2482,6 +2511,8 @@ impl ChatRepo for PgRepos {
             agent_id: row.try_get(0).map_err(db_err)?,
             project_id: row.try_get(1).map_err(db_err)?,
             project_name: row.try_get(2).map_err(db_err)?,
+            model_provider_override: row.try_get(3).map_err(db_err)?,
+            model_override: row.try_get(4).map_err(db_err)?,
         })
     }
 
@@ -2542,7 +2573,8 @@ impl ChatRepo for PgRepos {
 
     async fn token_usage(&self, session_id: &str) -> Result<ChatSessionTokenUsage, String> {
         let row = sqlx::query(
-            "SELECT last_input_tokens, last_prompt_input_tokens, last_turn_input_tokens, agent_id
+            "SELECT last_input_tokens, last_prompt_input_tokens, last_turn_input_tokens, agent_id,
+                    model_provider_override, model_override
                FROM chat_sessions
               WHERE id = $1 AND tenant_id = $2",
         )
@@ -2559,6 +2591,8 @@ impl ChatRepo for PgRepos {
             last_prompt_input_tokens: prompt_tokens.map(|value| value as u32),
             last_turn_input_tokens: turn_tokens.map(|value| value as u32),
             agent_id: row.try_get(3).map_err(db_err)?,
+            model_provider_override: row.try_get(4).map_err(db_err)?,
+            model_override: row.try_get(5).map_err(db_err)?,
         })
     }
 }

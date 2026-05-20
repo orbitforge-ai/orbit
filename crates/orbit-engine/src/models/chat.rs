@@ -28,6 +28,8 @@ pub struct ChatSession {
     pub worktree_path: Option<String>,
     pub workflow_run_id: Option<String>,
     pub workflow_node_id: Option<String>,
+    pub model_provider_override: Option<String>,
+    pub model_override: Option<String>,
 }
 
 /// A chat message as stored on disk. The content payload is kept as the raw
@@ -63,6 +65,8 @@ pub struct ChatSessionMeta {
     pub agent_id: String,
     pub project_id: Option<String>,
     pub project_name: Option<String>,
+    pub model_provider_override: Option<String>,
+    pub model_override: Option<String>,
 }
 
 /// Snapshot of a session's execution lifecycle (running / cancelled /
@@ -97,4 +101,6 @@ pub struct ChatSessionTokenUsage {
     pub last_prompt_input_tokens: Option<u32>,
     pub last_turn_input_tokens: Option<u32>,
     pub agent_id: String,
+    pub model_provider_override: Option<String>,
+    pub model_override: Option<String>,
 }
